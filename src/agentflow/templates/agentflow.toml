@@ -20,7 +20,8 @@ language = "{language}"            # "python" | "dotnet"
 [agents]
 # claude = "claude"                # override with env AGENTFLOW_CLAUDE
 # max_attempts = 3                 # implementation attempts per step before escalating
-# max_turns = 80                   # hard stop per agent run
+# max_turns = 80                   # one turn cap for all phases; default per phase:
+#                                  # TESTS 50, IMPLEMENT 80, REVIEW 40, PR 30, RETRO 30
 # permission_mode = "acceptEdits"
 
 [gates]
@@ -50,6 +51,7 @@ language = "{language}"            # "python" | "dotnet"
 # [phases.IMPLEMENT]
 # write = ["src/", "out/"]         # PreToolUse write permissions for the phase
 # tools = [...]                    # replaces the --allowedTools list for the phase
+# max_turns = 80                   # turn cap of the phase's agent runs (wins over [agents])
 
 # [roles]
 # extra_dir = ".agentflow/roles"   # <phase>.md files appended to the base role prompts

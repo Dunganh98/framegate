@@ -109,6 +109,23 @@ def summarize_denials(raw: Any, limit: int = 300) -> list[dict[str, str]]:
     return out
 
 
+#: re-runs of a non-IMPLEMENT agent that stopped at the turn cap before escalating
+TURN_CAP_RETRIES = 1
+
+
+def hit_turn_cap(res: dict[str, Any]) -> bool:
+    """True if a `claude -p` JSON result says the run stopped at --max-turns."""
+    return res.get("subtype") == "error_max_turns" or res.get("terminal_reason") == "max_turns"
+
+
+def turn_cap_note(cap: int) -> str:
+    return (
+        f"Your previous run stopped at the turn cap ({cap} turns) before it finished. Its "
+        "file changes are kept: check what is already done, then finish the rest with fewer, "
+        "larger steps (batch reads and edits, no exploratory commands)."
+    )
+
+
 class WorkflowError(Exception):
     """A user-facing error (exit code 1)."""
 
@@ -241,7 +258,7 @@ class Orchestrator:
             "--permission-mode",
             self.cfg.permission_mode,
             "--max-turns",
-            str(self.cfg.max_turns),
+            str(self.cfg.turn_cap(phase)),
             "--output-format",
             "json",
         ]
@@ -287,7 +304,19 @@ class Orchestrator:
                 self.cfg, feature, "permission_denials", phase=phase, step=step, denials=denials
             )
             self.echo(f"[{phase}] {len(denials)} tool call(s) denied (logged for the retro).")
-        if res.get("is_error"):
+        if hit_turn_cap(res):
+            cap = self.cfg.turn_cap(phase)
+            log_event(
+                self.cfg,
+                feature,
+                "max_turns",
+                phase=phase,
+                step=step,
+                cap=cap,
+                turns=res.get("num_turns"),
+            )
+            self.echo(f"[{phase}] agent run stopped at the turn cap ({cap} turns).")
+        elif res.get("is_error"):
             self.echo(f"[{phase}] agent run reported an error: {str(res.get('result'))[:500]}")
         return res
 
@@ -316,9 +345,13 @@ class Orchestrator:
                 f"Then: agentflow run {f}"
             )
         if kind == "escalation":
+            what = (
+                "stopped at the turn cap twice"
+                if waiting.get("reason") == "turn_cap"
+                else f"failed {self.cfg.max_attempts} times"
+            )
             return (
-                f"=== ESCALATION: {waiting.get('step')} failed "
-                f"{self.cfg.max_attempts} times ({f}) ===\n"
+                f"=== ESCALATION: {waiting.get('step')} {what} ({f}) ===\n"
                 f"{files}\n"
                 f"Fix the problem or clarify in {self.cfg.paths.out}/{f}/answers.md, then:\n"
                 f"  agentflow answer {f}            (retry with fresh attempts)\n"
@@ -376,13 +409,67 @@ class Orchestrator:
         task: str,
         role: str | None = None,
         step: str | None = None,
+        retry_turn_cap: bool = True,
     ) -> dict[str, Any]:
-        """Run an agent with the pending feedback, consume it, then pause on questions."""
-        res = self.run_agent(phase, feature, task, prog.get("feedback", ""), role=role, step=step)
-        prog["feedback"] = ""
-        save_progress(self.cfg, feature, prog)
-        self.check_questions(feature, prog, step)
-        return res
+        """Run an agent with the pending feedback, consume it, then pause on questions.
+        A run that stops at the turn cap is re-run once with a note, then escalated
+        (retry_turn_cap=False: the caller handles it, e.g. the step gate decides)."""
+        while True:
+            res = self.run_agent(
+                phase, feature, task, prog.get("feedback", ""), role=role, step=step
+            )
+            prog["feedback"] = ""
+            save_progress(self.cfg, feature, prog)
+            self.check_questions(feature, prog, step)
+            if not retry_turn_cap or not hit_turn_cap(res):
+                prog["turn_cap_retries"] = 0
+                save_progress(self.cfg, feature, prog)
+                return res
+            self.turn_cap_retry_or_escalate(phase, feature, prog, step)
+
+    def turn_cap_retry_or_escalate(
+        self, phase: str, feature: str, prog: dict[str, Any], step: str | None
+    ) -> None:
+        """After a run stopped at the turn cap: set the retry note, or escalate (Paused) when
+        the retry stopped at the cap too."""
+        cap = self.cfg.turn_cap(phase)
+        label = step or phase
+        retries = int(prog.get("turn_cap_retries", 0))
+        if retries < TURN_CAP_RETRIES:
+            prog["turn_cap_retries"] = retries + 1
+            prog["feedback"] = turn_cap_note(cap)
+            save_progress(self.cfg, feature, prog)
+            self.echo(f"[{label}] re-running once after the turn cap.")
+            return
+        prog["turn_cap_retries"] = 0
+        esc = self.fdir(feature) / "escalation.md"
+        esc.write_text(
+            f"# {label}: the agent stopped at the turn cap ({cap} turns) "
+            f"{retries + 1} times in a row\n\nRaise `[phases.{phase}] max_turns` in "
+            "agentflow.toml, split the work, or clarify the task in answers.md. Run logs: "
+            f"{self.cfg.paths.out}/runs/*-{feature}-{phase}.json\n",
+            encoding="utf-8",
+        )
+        log_event(
+            self.cfg,
+            feature,
+            "escalation",
+            phase=phase,
+            step=step,
+            attempts=retries + 1,
+            failed=[f"turn cap ({cap})"],
+        )
+        self.pause(
+            feature,
+            prog,
+            {
+                "kind": "escalation",
+                "reason": "turn_cap",
+                "phase": phase,
+                "step": label,
+                "files": [self.rel(esc)],
+            },
+        )
 
     # ---------- implement loop (steps and review fixes) ----------
     def implement_loop(
@@ -398,7 +485,15 @@ class Orchestrator:
             prog["attempt"] = attempt
             save_progress(self.cfg, feature, prog)
             try:
-                self.agent("IMPLEMENT", feature, prog, task, role="implement", step=label)
+                res = self.agent(
+                    "IMPLEMENT",
+                    feature,
+                    prog,
+                    task,
+                    role="implement",
+                    step=label,
+                    retry_turn_cap=False,
+                )
             except Paused:
                 prog["attempt"] = attempt - 1  # questions don't count as an attempt
                 save_progress(self.cfg, feature, prog)
@@ -422,8 +517,10 @@ class Orchestrator:
                 prog["feedback"] = ""
                 save_progress(self.cfg, feature, prog)
                 return
+            capped = turn_cap_note(self.cfg.turn_cap("IMPLEMENT")) if hit_turn_cap(res) else ""
             prog["feedback"] = (
-                f"Attempt {attempt} failed these gates. Tests and config are frozen; "
+                (capped + "\n" if capped else "")
+                + f"Attempt {attempt} failed these gates. Tests and config are frozen; "
                 f"fix {self.cfg.paths.src}/.\n{out[-6000:]}"
             )
             save_progress(self.cfg, feature, prog)

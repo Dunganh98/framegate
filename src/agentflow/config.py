@@ -68,7 +68,12 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
 LANGUAGE_SECTIONS = ("dotnet",)
 GATE_COMMAND_KEYS = ("lint", "format", "typecheck", "imports")
 MUTATION_RUNNERS = ("auto", "native", "wsl")
-PHASE_KEYS = ("write", "tools")
+PHASE_KEYS = ("write", "tools", "max_turns")
+#: --max-turns per phase when neither [phases.<P>] max_turns nor [agents] max_turns is set.
+#: From the FCSim smoke run (most turns used: TESTS 27, IMPLEMENT 18, REVIEW 8, PR 18, RETRO 48
+#: of which most were denied shell probing): RETRO and PR only read and write one file.
+DEFAULT_MAX_TURNS = {"TESTS": 50, "IMPLEMENT": 80, "REVIEW": 40, "PR": 30, "RETRO": 30}
+FALLBACK_MAX_TURNS = 80
 
 
 class ConfigError(Exception):
@@ -97,7 +102,8 @@ class Config:
     wsl_distro: str | None = None
     claude: str = "claude"
     max_attempts: int = 3
-    max_turns: int = 80
+    #: [agents] max_turns: one cap for every phase without its own (None = DEFAULT_MAX_TURNS)
+    max_turns: int | None = None
     permission_mode: str = "acceptEdits"
     diff_coverage: float = 90
     mutation_score: float = 80
@@ -112,6 +118,7 @@ class Config:
     id_pattern: str = DEFAULT_ID_PATTERN
     phase_write: dict[str, list[str]] = field(default_factory=dict)
     phase_tools: dict[str, list[str]] = field(default_factory=dict)
+    phase_max_turns: dict[str, int] = field(default_factory=dict)
     roles_extra_dir: str | None = None
     #: raw, type-checked adapter sections, e.g. {"dotnet": {"configuration": "Release"}}
     language_options: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -138,6 +145,15 @@ class Config:
 
     def spec_dir(self, feature: str) -> pathlib.Path:
         return self.root / self.paths.specs / feature
+
+    def turn_cap(self, phase: str) -> int:
+        """--max-turns of an agent run in this phase: [phases.<P>] max_turns, else
+        [agents] max_turns, else the phase default."""
+        if phase in self.phase_max_turns:
+            return self.phase_max_turns[phase]
+        if self.max_turns is not None:
+            return self.max_turns
+        return DEFAULT_MAX_TURNS.get(phase, FALLBACK_MAX_TURNS)
 
     # ---- phase permissions ----
     def write_paths(self, phase: str) -> list[str]:
@@ -227,7 +243,7 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     cfg.max_attempts = agents.get("max_attempts", cfg.max_attempts)
     cfg.max_turns = agents.get("max_turns", cfg.max_turns)
     cfg.permission_mode = agents.get("permission_mode", cfg.permission_mode)
-    if cfg.max_attempts < 1 or cfg.max_turns < 1:
+    if cfg.max_attempts < 1 or (cfg.max_turns is not None and cfg.max_turns < 1):
         raise ConfigError("[agents] max_attempts and max_turns must be >= 1")
 
     gates = data.get("gates", {})
@@ -278,6 +294,11 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
         for key, value in body.items():
             if key not in PHASE_KEYS:
                 raise ConfigError(f"[phases.{phase}] unknown key '{key}' (allowed: {PHASE_KEYS})")
+            if key == "max_turns":
+                if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                    raise ConfigError(f"[phases.{phase}] max_turns must be an int >= 1")
+                cfg.phase_max_turns[phase] = value
+                continue
             target = cfg.phase_write if key == "write" else cfg.phase_tools
             target[phase] = _str_list(f"[phases.{phase}] {key}", value)
 

@@ -75,7 +75,8 @@ def test_full_flow(demo_repo: DemoRepo) -> None:
         assert "-p" in argv and "--bare" not in argv
         assert argv[argv.index("--output-format") + 1] == "json"
         assert argv[argv.index("--permission-mode") + 1] == "acceptEdits"
-        assert argv[argv.index("--max-turns") + 1] == "80"
+        cap = {"TESTS": 50, "IMPLEMENT": 80, "REVIEW": 40, "PR": 30, "RETRO": 30}
+        assert argv[argv.index("--max-turns") + 1] == str(cap[call["phase"]])
     tests_call = r.calls()[0]
     tools = tests_call["argv"][tests_call["argv"].index("--allowedTools") + 1].split(",")
     assert "Bash(python -m pytest *)" in tools and "Write" in tools
@@ -339,3 +340,60 @@ def test_permission_denials_reach_events_and_retro(demo_repo: DemoRepo) -> None:
     assert "### D2" not in retro_input and "permission denials 1" in retro_input
     cov = [e for e in r.events() if e["kind"] == "retro_coverage"][0]
     assert cov["items"] == 1 and cov["missing"] == []
+
+
+def test_turn_cap_retry_then_done(demo_repo: DemoRepo) -> None:
+    """RETRO stops at its cap once: re-run once with a note. IMPLEMENT stops at its cap: no
+    blind re-run, the step gate decides (the files are written, so it passes)."""
+    r = demo_repo
+    r.add_toml(FAST + "\n[phases.RETRO]\nmax_turns = 7\n")
+    r.scenario(max_turns={"RETRO": 1, "IMPLEMENT": 1})
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE
+    assert r.af("approve", "demo") == 0
+    assert r.af("run", "demo") == 0
+    assert r.progress()["phase"] == "DONE"
+    retro = [c for c in r.calls() if c["phase"] == "RETRO"]
+    assert len(retro) == 2
+    assert retro[0]["argv"][retro[0]["argv"].index("--max-turns") + 1] == "7"
+    assert "stopped at the turn cap (7 turns)" in retro[1]["prompt"]
+    assert len([c for c in r.calls() if c["phase"] == "IMPLEMENT"]) == 1
+    capped = [e for e in r.events() if e["kind"] == "max_turns"]
+    assert [(e["phase"], e["cap"], e["turns"]) for e in capped] == [
+        ("IMPLEMENT", 80, 81),
+        ("RETRO", 7, 8),
+    ]
+    assert r.progress().get("turn_cap_retries") == 0
+
+
+def test_turn_cap_failed_attempt_note(demo_repo: DemoRepo) -> None:
+    """An IMPLEMENT run that stops at the cap and fails the gate: a normal failed attempt whose
+    feedback also names the turn cap."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.scenario(max_turns={"IMPLEMENT": 1}, implement_fail=1)
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE
+    assert r.af("approve", "demo") == 0
+    assert r.af("run", "demo") == 0
+    impl = [c for c in r.calls() if c["phase"] == "IMPLEMENT"]
+    assert len(impl) == 2 and "stopped at the turn cap (80 turns)" in impl[1]["prompt"]
+    assert "Attempt 1 failed these gates" in impl[1]["prompt"]
+
+
+def test_turn_cap_twice_escalates(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    r.add_toml(FAST)
+    r.scenario(max_turns={"TESTS": 2})
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_ESCALATION
+    w = r.progress()["waiting"]
+    assert (w["kind"], w["reason"], w["step"]) == ("escalation", "turn_cap", "TESTS")
+    esc = (r.root / "out/demo/escalation.md").read_text(encoding="utf-8")
+    assert "turn cap (50 turns) 2 times" in esc and "[phases.TESTS] max_turns" in esc
+    ev = [e for e in r.events() if e["kind"] == "escalation"]
+    assert ev[0]["failed"] == ["turn cap (50)"] and ev[0]["attempts"] == 2
+    assert len(r.calls()) == 2
+    assert r.af("answer", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE  # third TESTS run finishes normally
+    assert len(r.calls()) == 3

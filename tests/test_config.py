@@ -22,7 +22,9 @@ def test_defaults_match_the_guide(tmp_path: pathlib.Path) -> None:
         "specs",
         "out",
     )
-    assert cfg.max_attempts == 3 and cfg.max_turns == 80
+    assert cfg.max_attempts == 3 and cfg.max_turns is None
+    caps = {p: cfg.turn_cap(p) for p in ("TESTS", "IMPLEMENT", "REVIEW", "PR", "RETRO")}
+    assert caps == {"TESTS": 50, "IMPLEMENT": 80, "REVIEW": 40, "PR": 30, "RETRO": 30}
     assert cfg.diff_coverage == 90 and cfg.mutation_score == 80
     assert cfg.id_pattern == DEFAULT_ID_PATTERN
     assert cfg.write_paths("TESTS") == ["tests/", "out/"]
@@ -90,6 +92,8 @@ def test_env_overrides_claude(tmp_path: pathlib.Path, monkeypatch: pytest.Monkey
         ({"agents": {"max_attempts": "3"}}, "must be int"),
         ({"agents": {"max_attempts": True}}, "must be int"),
         ({"agents": {"max_turns": 0}}, ">= 1"),
+        ({"phases": {"RETRO": {"max_turns": 0}}}, "max_turns must be an int >= 1"),
+        ({"phases": {"RETRO": {"max_turns": "9"}}}, "max_turns must be an int >= 1"),
         ({"gates": {"commands": {"build": ["x"]}}}, "unknown key 'build'"),
         ({"gates": {"commands": {"lint": "ruff"}}}, "list of strings"),
         ({"phases": {"DEPLOY": {"write": []}}}, "unknown phase"),
@@ -119,3 +123,12 @@ def test_find_root_walks_up(tmp_path: pathlib.Path) -> None:
     other = tmp_path.parent / f"{tmp_path.name}-no-config"
     other.mkdir()
     assert find_root(other) is None
+
+
+def test_turn_caps(tmp_path: pathlib.Path) -> None:
+    cfg = parse_config(
+        tmp_path, {"agents": {"max_turns": 60}, "phases": {"RETRO": {"max_turns": 12}}}
+    )
+    assert cfg.turn_cap("RETRO") == 12  # phase wins
+    assert cfg.turn_cap("TESTS") == 60 and cfg.turn_cap("IMPLEMENT") == 60  # [agents] for all
+    assert parse_config(tmp_path, {"phases": {"PR": {"max_turns": 5}}}).turn_cap("PR") == 5
