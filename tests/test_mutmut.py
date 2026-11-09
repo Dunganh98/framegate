@@ -13,6 +13,7 @@ import sys
 import pytest
 
 from agentflow.adapters import mutmut_runner, wsl
+from agentflow.adapters.base import TestScope
 from agentflow.adapters.python import (
     PythonAdapter,
     collect_requirements,
@@ -182,6 +183,8 @@ if cmd == "run":
     os.makedirs("mutants/src", exist_ok=True)
     with open("run_args.txt", "w") as fh:
         fh.write(" ".join(sys.argv[2:]))
+    with open("addopts.txt", "w") as fh:
+        fh.write(os.environ.get("PYTEST_ADDOPTS", ""))
     print("\\r⠋ 0/7\\r⠼ 7/7  🎉 6 🙁 1\\n108.40 mutations/second")
     sys.exit(int(os.environ.get("FAKE_MUTMUT_RC", "0")))
 elif cmd == "results":
@@ -205,9 +208,11 @@ def fake_mutmut(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> path
     return root
 
 
-def run_fake(a: PythonAdapter, modules: list[str]) -> tuple[str, str, str]:
+def run_fake(
+    a: PythonAdapter, modules: list[str], scope: TestScope | None = None
+) -> tuple[str, str, str]:
     work = a._mutmut_dir()
-    spec = a._mutmut_spec(modules, str(a.root), str(work / "result.json"))
+    spec = a._mutmut_spec(modules, str(a.root), str(work / "result.json"), scope)
     (work / "spec.json").write_text(json.dumps(spec), encoding="utf-8")
     res = a._mutmut_finish(
         "f", modules, [sys.executable, str(work / "runner.py"), str(work / "spec.json")], "native"

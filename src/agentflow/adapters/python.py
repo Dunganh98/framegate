@@ -27,6 +27,7 @@ from agentflow.adapters.base import (
     CheckResult,
     LanguageAdapter,
     TestRun,
+    TestScope,
     diff_coverage_summary,
     incomplete_reason,
     incomplete_result,
@@ -36,7 +37,7 @@ from agentflow.adapters.base import (
 
 SKIP_MARKS = {"skip", "skipif", "xfail"}
 #: bump to force the WSL mutmut venvs to be rebuilt
-MUTMUT_ENV_VERSION = 1
+MUTMUT_ENV_VERSION = 2  # 2: pytest plugin --req-paths
 #: files whose content keys the WSL venv (besides the requirement list itself)
 LOCK_FILES = ("pyproject.toml", "uv.lock", "poetry.lock", "Pipfile.lock", "pdm.lock")
 #: mutmut 3 statuses (mutmut/stats.py); "skipped" / "not checked" don't count
@@ -218,7 +219,26 @@ class PythonAdapter(LanguageAdapter):
             cmds["imports"] = [self.tool_path("lint-imports", self.python) or "lint-imports"]
         return cmds
 
-    def coverage_checks(self, base_ref: str) -> list[Check]:
+    def scope_args(self, scope: TestScope | None) -> list[str]:
+        """pytest options selecting the tests of a scope (agentflow plugin)."""
+        if scope is None or scope.whole_suite:
+            return []
+        args = ["--req", ",".join(scope.req_ids)] if scope.req_ids else []
+        return args + (["--req-paths", ",".join(scope.paths)] if scope.paths else [])
+
+    def regression_check(self) -> Check:
+        def run() -> CheckResult:
+            timeout = self.cfg.regression_timeout
+            cmd = [self.python, "-m", "pytest", "-q", "-p", "no:cacheprovider"]
+            code, out = run_command(cmd, self.root, timeout=timeout)
+            reason = incomplete_reason(code, out, timeout) or PYTEST_INCOMPLETE.get(code, "")
+            if reason:
+                return incomplete_result(reason, out)
+            return CheckResult("PASS" if code == 0 else "FAIL", out)
+
+        return Check("regression: whole suite, no coverage", run)
+
+    def coverage_checks(self, base_ref: str, scope: TestScope | None = None) -> list[Check]:
         out_dir = self.root / self.cfg.paths.out
         xml = out_dir / "coverage.xml"
 
@@ -229,6 +249,7 @@ class PythonAdapter(LanguageAdapter):
             out_dir.mkdir(parents=True, exist_ok=True)
             xml.unlink(missing_ok=True)
             cmd = [self.python, "-m", "pytest", "-q", "-p", "no:cacheprovider"]
+            cmd += self.scope_args(scope)
             note = ""
             collect = self._has_module("pytest_cov")
             if collect:
@@ -268,9 +289,17 @@ class PythonAdapter(LanguageAdapter):
             summary = diff_coverage_summary(out, self.cfg.diff_coverage)
             return CheckResult("PASS" if code == 0 else "FAIL", out, summary=summary)
 
+        feature = scope is not None and not scope.whole_suite
         return [
-            Check("full test suite + coverage", full_suite),
-            Check(f"diff coverage >= {self.cfg.diff_coverage:g}%", diff_coverage),
+            Check(
+                "coverage run (feature tests)" if feature else "full test suite + coverage",
+                full_suite,
+            ),
+            Check(
+                f"diff coverage >= {self.cfg.diff_coverage:g}%"
+                + (" (feature tests)" if feature else ""),
+                diff_coverage,
+            ),
         ]
 
     def mutation_runner(self) -> str:
@@ -281,7 +310,11 @@ class PythonAdapter(LanguageAdapter):
         return runner
 
     def mutation_check(
-        self, feature: str, base_ref: str, changed_src: Sequence[str]
+        self,
+        feature: str,
+        base_ref: str,
+        changed_src: Sequence[str],
+        scope: TestScope | None = None,
     ) -> CheckResult:
         tool = self.cfg.mutation_tool or "mutmut"
         if tool == "none":
@@ -295,7 +328,7 @@ class PythonAdapter(LanguageAdapter):
             return CheckResult("PASS", "No changed Python source files to mutate.")
         modules = self._mutmut_modules(changed)
         if self.mutation_runner() == "wsl":
-            return self._mutmut_wsl(feature, modules)
+            return self._mutmut_wsl(feature, modules, scope)
         if os.name == "nt":
             return CheckResult(
                 "SKIPPED",
@@ -305,7 +338,7 @@ class PythonAdapter(LanguageAdapter):
         if not self._has_module("mutmut"):
             return CheckResult("SKIPPED", "SKIPPED: mutmut is not installed")
         work = self._mutmut_dir()
-        spec = self._mutmut_spec(modules, str(self.root), str(work / "result.json"))
+        spec = self._mutmut_spec(modules, str(self.root), str(work / "result.json"), scope)
         (work / "spec.json").write_text(json.dumps(spec, indent=1), encoding="utf-8")
         cmd = [self.python, str(work / "runner.py"), str(work / "spec.json")]
         return self._mutmut_finish(feature, modules, cmd, "native")
@@ -325,7 +358,9 @@ class PythonAdapter(LanguageAdapter):
         (work / "runner.py").write_text(runner.read_text(encoding="utf-8"), encoding="utf-8")
         return work
 
-    def _mutmut_spec(self, modules: Sequence[str], project: str, result: str) -> dict[str, Any]:
+    def _mutmut_spec(
+        self, modules: Sequence[str], project: str, result: str, scope: TestScope | None = None
+    ) -> dict[str, Any]:
         return {
             "project": project,
             "result": result,
@@ -334,9 +369,12 @@ class PythonAdapter(LanguageAdapter):
             "show_modules": list(modules),
             "show_limit": 50,
             "timeout": self.cfg.mutation_timeout,
+            "pytest_addopts": " ".join(self.scope_args(scope)),
         }
 
-    def _mutmut_wsl(self, feature: str, modules: Sequence[str]) -> CheckResult:
+    def _mutmut_wsl(
+        self, feature: str, modules: Sequence[str], scope: TestScope | None = None
+    ) -> CheckResult:
         distro = self.cfg.wsl_distro
         wsl_root, problem = wsl.probe(self.root, distro)
         if wsl_root is None:
@@ -352,7 +390,7 @@ class PythonAdapter(LanguageAdapter):
             return wsl.to_wsl(path, self.root, root_wsl, distro)
 
         reqs, files, stamp = self._wsl_requirements(w)
-        spec = self._mutmut_spec(modules, wsl_root, w(work / "result.json"))
+        spec = self._mutmut_spec(modules, wsl_root, w(work / "result.json"), scope)
         repo_key = hashlib.sha256(wsl_root.encode("utf-8")).hexdigest()[:16]
         spec.update(
             venv=f"~/.cache/agentflow/venvs/{repo_key}",

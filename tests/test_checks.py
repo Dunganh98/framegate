@@ -365,6 +365,7 @@ def test_gate_report_shows_summary_under_fail_and_pass(
     monkeypatch.setattr(gates, "checks", lambda *args: fake)
     rep = gates.gate_report(a, "f", "final")
     lines = rep.report.splitlines()
+    lines = lines[lines.index("[FAIL] diff coverage") :]  # after the scope header
     assert lines[:5] == [
         "[FAIL] diff coverage",
         "  Diff coverage 60%",

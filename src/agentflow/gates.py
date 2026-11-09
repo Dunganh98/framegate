@@ -9,9 +9,50 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from agentflow.adapters.base import Check, CheckResult, LanguageAdapter
+from agentflow.adapters.base import Check, CheckResult, LanguageAdapter, TestScope
 from agentflow.checks import frame_diff, mutation, test_smells, traceability
+from agentflow.specs import feature_ids
 from agentflow.state import read_reqs
+
+
+def feature_scope(adapter: LanguageAdapter, feature: str) -> TestScope:
+    """The feature's tests: its spec IDs and the review tests (if the folder exists)."""
+    cfg = adapter.cfg
+    paths = [cfg.paths.review_tests] if (cfg.root / cfg.paths.review_tests).exists() else []
+    return TestScope(sorted(feature_ids(cfg, feature)), paths)
+
+
+def final_scopes(
+    adapter: LanguageAdapter, feature: str
+) -> tuple[TestScope | None, TestScope | None]:
+    """(coverage scope, mutation scope); None = the whole suite."""
+    scope = feature_scope(adapter, feature)
+    if scope.whole_suite:
+        return None, None
+    cfg = adapter.cfg
+    return (
+        scope if cfg.coverage_scope == "feature" else None,
+        scope if cfg.mutation_scope == "feature" else None,
+    )
+
+
+def scope_lines(adapter: LanguageAdapter, feature: str, skip_mutation: bool) -> list[str]:
+    """The header of a final gate report: which tests each check used."""
+    cov, mut = final_scopes(adapter, feature)
+    whole = TestScope().describe()
+    lines = ["Test scope of the final checks:"]
+    if cov is not None:
+        lines.append(f"- regression: {whole}, once, without coverage")
+        lines.append(f"- coverage + diff coverage: {cov.describe()}")
+    else:
+        lines.append(f"- regression + coverage + diff coverage: {whole}, with coverage")
+    if not skip_mutation:
+        lines.append(f"- mutation: {(mut or TestScope()).describe()}")
+    if cov is not None or mut is not None:
+        ids = ", ".join((cov or mut or TestScope()).req_ids)
+        if ids:
+            lines.append(f"  feature spec IDs: {ids}")
+    return lines
 
 
 def checks(adapter: LanguageAdapter, feature: str, scope: str, skip_mutation: bool) -> list[Check]:
@@ -27,11 +68,15 @@ def checks(adapter: LanguageAdapter, feature: str, scope: str, skip_mutation: bo
 
         c.append(Check("tests (current + earlier steps)", step_tests))
     else:
-        c += adapter.coverage_checks(tag)
+        cov, mut = final_scopes(adapter, feature)
+        if cov is not None:
+            c.append(adapter.regression_check())
+        c += adapter.coverage_checks(tag, cov)
         c.append(Check("traceability", lambda: traceability.check(adapter, feature)))
         c.append(Check("test smells", lambda: test_smells.check(adapter, feature)))
         if not skip_mutation:
-            c.append(Check("mutation score", lambda: mutation.check(adapter, feature)))
+            name = "mutation score" + (" (feature tests)" if mut is not None else "")
+            c.append(Check(name, lambda: mutation.check(adapter, feature, mut)))
     return c
 
 
@@ -87,6 +132,10 @@ def gate_report(
     failed: list[str] = []
     skipped: list[str] = []
     outputs: dict[str, str] = {}
+    if scope == "final":
+        for line in scope_lines(adapter, feature, skip_mutation):
+            emit(line)
+        emit("")
     for check in checks(adapter, feature, scope, skip_mutation):
         try:
             res = check.run()

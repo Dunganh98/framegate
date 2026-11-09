@@ -42,6 +42,9 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "mutation_score": (int, float),
         "mutation_tool": (str,),
         "mutation_runner": (str,),
+        "coverage_scope": (str,),
+        "mutation_scope": (str,),
+        "regression_timeout": (int,),
         "coverage_timeout": (int,),
         "mutation_timeout": (int,),
         "commands": (dict,),
@@ -70,6 +73,9 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
 LANGUAGE_SECTIONS = ("dotnet",)
 GATE_COMMAND_KEYS = ("lint", "format", "typecheck", "imports")
 MUTATION_RUNNERS = ("auto", "native", "wsl")
+#: tests the final coverage / mutation runs use: the feature's tests (its spec IDs + the review
+#: tests; the whole suite then runs once more without instrumentation) or the whole suite
+GATE_SCOPES = ("feature", "suite")
 PHASE_KEYS = ("write", "tools", "max_turns")
 #: --max-turns per phase when neither [phases.<P>] max_turns nor [agents] max_turns is set.
 #: From the FCSim smoke run (most turns used: TESTS 27, IMPLEMENT 18, REVIEW 8, PR 18, RETRO 48
@@ -112,7 +118,10 @@ class Config:
     mutation_tool: str | None = None  # None -> the adapter's default tool
     #: where the mutation tool runs: auto | native | wsl (adapters that support it: python)
     mutation_runner: str = "auto"
+    coverage_scope: str = "feature"
+    mutation_scope: str = "feature"
     #: seconds per final-gate run before it is killed and reported as incomplete
+    regression_timeout: int = 3600
     coverage_timeout: int = 1800
     mutation_timeout: int = 3600
     gate_commands: dict[str, list[str]] = field(default_factory=dict)
@@ -261,7 +270,14 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
             f"[gates] mutation_runner must be one of {', '.join(MUTATION_RUNNERS)}, "
             f"got '{cfg.mutation_runner}'"
         )
-    for key in ("coverage_timeout", "mutation_timeout"):
+    for key in ("coverage_scope", "mutation_scope"):
+        value = gates.get(key, getattr(cfg, key))
+        if value not in GATE_SCOPES:
+            raise ConfigError(
+                f"[gates] {key} must be one of {', '.join(GATE_SCOPES)}, got '{value}'"
+            )
+        setattr(cfg, key, value)
+    for key in ("regression_timeout", "coverage_timeout", "mutation_timeout"):
         value = gates.get(key, getattr(cfg, key))
         if value < 1:
             raise ConfigError(f"[gates] {key} must be >= 1")

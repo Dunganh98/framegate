@@ -15,7 +15,7 @@ import shutil
 import subprocess
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import ClassVar
 
 from agentflow import procs
@@ -77,6 +77,32 @@ class TestRun:
     #: why the run was cut short (timeout, crashed host, killed, missing report or coverage
     #: file); "" = it ran to the end. An incomplete run has status "error".
     incomplete: str = ""
+
+
+@dataclass
+class TestScope:
+    """The tests a final coverage / mutation run uses: tagged with one of `req_ids` OR located
+    under one of `paths` (the review tests). Both empty = the whole suite."""
+
+    __test__ = False
+
+    req_ids: list[str] = field(default_factory=list)
+    paths: list[str] = field(default_factory=list)
+
+    @property
+    def whole_suite(self) -> bool:
+        return not self.req_ids and not self.paths
+
+    def describe(self) -> str:
+        if self.whole_suite:
+            return "the whole suite"
+        parts = []
+        if self.req_ids:
+            n = len(self.req_ids)
+            parts.append(f"tagged with the feature's {n} spec ID{'s' if n != 1 else ''}")
+        if self.paths:
+            parts.append("in " + ", ".join(p + "/" for p in self.paths))
+        return "the feature's tests (" + " or ".join(parts) + ")"
 
 
 @dataclass
@@ -275,16 +301,27 @@ class LanguageAdapter(abc.ABC):
         return checks
 
     @abc.abstractmethod
-    def coverage_checks(self, base_ref: str) -> list[Check]:
-        """Final scope: full test suite with coverage, then diff coverage against base_ref
-        (>= cfg.diff_coverage). Report SKIPPED (not FAIL) when a coverage tool is missing."""
+    def regression_check(self) -> Check:
+        """Final scope with a feature-scoped coverage run: the whole suite (the adapter's final
+        selection) once, without coverage instrumentation (cfg.regression_timeout)."""
+
+    @abc.abstractmethod
+    def coverage_checks(self, base_ref: str, scope: TestScope | None = None) -> list[Check]:
+        """Final scope: the tests of `scope` (None = the whole suite) with coverage, then diff
+        coverage against base_ref (>= cfg.diff_coverage). Report SKIPPED (not FAIL) when a
+        coverage tool is missing; a cut-short run is FAIL `ERROR: ... incomplete`."""
 
     @abc.abstractmethod
     def mutation_check(
-        self, feature: str, base_ref: str, changed_src: Sequence[str]
+        self,
+        feature: str,
+        base_ref: str,
+        changed_src: Sequence[str],
+        scope: TestScope | None = None,
     ) -> CheckResult:
-        """Mutation score on the changed source files (>= cfg.mutation_score); write survivors
-        to <out>/<feature>/mutation_survivors.md. SKIPPED with a reason if unavailable."""
+        """Mutation score on the changed source files (>= cfg.mutation_score), killing mutants
+        only with the tests of `scope` (None = the whole suite); write survivors to
+        <out>/<feature>/mutation_survivors.md. SKIPPED with a reason if unavailable."""
 
     # ---------- frame ----------
     @abc.abstractmethod

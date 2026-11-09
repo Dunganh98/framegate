@@ -62,6 +62,10 @@ def test_full_flow(demo_repo: DemoRepo) -> None:
     final = (r.root / "out/demo/final_gates.md").read_text(encoding="utf-8")
     assert "ALL GATES PASSED" in final, final
     assert "[PASS] frame diff" in final
+    assert "Test scope of the final checks:" in final
+    assert "or in tests/review/)" in final and "feature spec IDs: DEMO-E-001, DEMO-R-001" in final
+    assert "[PASS] regression: whole suite, no coverage" in final
+    assert "[PASS] coverage run (feature tests)" in final
     assert "[PASS] diff coverage" in final
     assert "  Diff coverage 100% (" in final and "threshold 90%." in final
     assert (r.root / "out/demo/pr.md").is_file()

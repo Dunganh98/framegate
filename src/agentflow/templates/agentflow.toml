@@ -30,6 +30,11 @@ language = "{language}"            # "python" | "dotnet"
 # mutation_tool = "mutmut"         # default: mutmut (python), stryker (dotnet); "none" = off
 # mutation_runner = "auto"         # python: "auto" (WSL on Windows if available, else native),
 #                                  # "native" or "wsl" (mutmut needs fork: no native Windows)
+# coverage_scope = "feature"       # final coverage on the feature's tests (spec IDs + review
+#                                  # tests) + the whole suite once without coverage; "suite" =
+#                                  # the whole suite with coverage (slow on big suites)
+# mutation_scope = "feature"       # tests the mutation run uses: "feature" | "suite"
+# regression_timeout = 3600        # seconds for the uninstrumented whole-suite run
 # coverage_timeout = 1800          # seconds per coverage run; killed -> "ERROR: test run incomplete"
 # mutation_timeout = 3600          # seconds per mutation run (same)
 

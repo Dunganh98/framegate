@@ -17,6 +17,8 @@ spec.json keys:
   stamp              venv content key; the venv is rebuilt when it changes
   requirements       requirement strings installed into the venv
   requirement_files  `-r` files installed into the venv
+  pytest_addopts     extra pytest options for every test run of mutmut (PYTEST_ADDOPTS), e.g.
+                     the feature scope `--req ID,ID --req-paths tests/review`
 
 result.json keys: ok, stage ("setup" | "run"), error, hint, setup_log, venv_reused, python,
 run_code, run_output, results (`mutmut results --all true`), shows {name: diff}, seconds.
@@ -166,6 +168,9 @@ def main(argv: list[str]) -> int:
     with open(spec_path, encoding="utf-8") as fh:
         spec = json.load(fh)
     t0 = time.time()
+    if spec.get("pytest_addopts"):
+        extra = os.environ.get("PYTEST_ADDOPTS", "")
+        os.environ["PYTEST_ADDOPTS"] = (extra + " " + spec["pytest_addopts"]).strip()
     result: dict = {"python": sys.executable}
     python = sys.executable
     if spec.get("venv"):

@@ -180,14 +180,18 @@ def test_dotnet_full_flow(dotnet_repo: DemoRepo) -> None:
         "[PASS] format",
         "[PASS] typecheck",
         "[PASS] frame diff",
-        "[PASS] full test suite + coverage",
-        "[PASS] diff coverage",
+        "[PASS] regression: whole suite, no coverage",
+        "[PASS] coverage run (feature tests)",
+        "[PASS] diff coverage >= 90% (feature tests)",
+        "  Diff coverage 100% (",
+        "- coverage + diff coverage: the feature's tests (tagged with the feature's 2 spec IDs "
+        "or in tests/Demo.Tests/Review/)",
         "[PASS] traceability",
         "[PASS] test smells",
     ):
         assert check in final, (check, final)
     if DotnetAdapter(load_config(r.root)).stryker_command():
-        assert "[PASS] mutation score" in final, final
+        assert "[PASS] mutation score (feature tests)" in final, final
         survivors = (r.root / "out/demo/mutation_survivors.md").read_text(encoding="utf-8")
         assert survivors.startswith("# Mutation survivors")
     else:

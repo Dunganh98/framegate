@@ -24,6 +24,7 @@ from agentflow.adapters.base import (
     LanguageAdapter,
     TestCase,
     TestRun,
+    TestScope,
     diff_coverage_summary,
     incomplete_reason,
     incomplete_result,
@@ -709,18 +710,40 @@ class DotnetAdapter(LanguageAdapter):
         what = "in changed files" if mode == "changed" else "(warnings = any)"
         return CheckResult("FAIL", f"{out}\nNEW WARNINGS {what}:\n{lines}")
 
-    def coverage_checks(self, base_ref: str) -> list[Check]:
+    def scope_filter(self, scope: TestScope | None, base: str) -> str:
+        """VSTest filter for the tests of a scope (IDs OR review classes) ANDed with `base`."""
+        if scope is None or scope.whole_suite:
+            return base
+        parts = [req_filter(scope.req_ids)] if scope.req_ids else []
+        classes = self.test_classes(scope.paths) if scope.paths else []
+        if classes:
+            parts.append(class_filter(classes))
+        return combine_filters("|".join(parts), base)
+
+    def regression_check(self) -> Check:
+        def run() -> CheckResult:
+            res = self._dotnet_test(
+                self.settings.final_filter, "regression", timeout=self.cfg.regression_timeout
+            )
+            if res.incomplete:
+                return incomplete_result(res.incomplete, res.output)
+            return CheckResult("PASS" if res.status == "passed" else "FAIL", res.output)
+
+        return Check("regression: whole suite, no coverage", run)
+
+    def coverage_checks(self, base_ref: str, scope: TestScope | None = None) -> list[Check]:
         cov_dir = self.root / self.cfg.paths.out / "coverage"
 
         #: why the coverage run was cut short ("" = complete; None = not run / no coverage)
         state: dict[str, str | None] = {"incomplete": None}
+        feature = scope is not None and not scope.whole_suite
 
         def full_suite() -> CheckResult:
             shutil.rmtree(cov_dir, ignore_errors=True)
             collect = self.references("coverlet.collector")
             run = self._dotnet_test(
-                self.settings.final_filter,
-                "final",
+                self.scope_filter(scope, self.settings.final_filter),
+                "coverage" if feature else "final",
                 coverage=cov_dir if collect else None,
                 timeout=self.cfg.coverage_timeout,
             )
@@ -769,8 +792,15 @@ class DotnetAdapter(LanguageAdapter):
             return CheckResult("PASS" if code == 0 else "FAIL", out, summary=summary)
 
         return [
-            Check("full test suite + coverage", full_suite),
-            Check(f"diff coverage >= {self.cfg.diff_coverage:g}%", diff_coverage),
+            Check(
+                "coverage run (feature tests)" if feature else "full test suite + coverage",
+                full_suite,
+            ),
+            Check(
+                f"diff coverage >= {self.cfg.diff_coverage:g}%"
+                + (" (feature tests)" if feature else ""),
+                diff_coverage,
+            ),
         ]
 
     def diff_cover_command(self) -> list[str] | None:
@@ -806,7 +836,11 @@ class DotnetAdapter(LanguageAdapter):
             d = d.parent
 
     def mutation_check(
-        self, feature: str, base_ref: str, changed_src: Sequence[str]
+        self,
+        feature: str,
+        base_ref: str,
+        changed_src: Sequence[str],
+        scope: TestScope | None = None,
     ) -> CheckResult:
         tool = self.cfg.mutation_tool or "stryker"
         if tool == "none":
@@ -835,7 +869,9 @@ class DotnetAdapter(LanguageAdapter):
         work = self.root / self.cfg.paths.out / feature / "stryker"
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir(parents=True, exist_ok=True)
-        config_file = self._stryker_config(work)
+        config_file = self._stryker_config(
+            work, self.scope_filter(scope, self.settings.base_filter)
+        )
         detected = undetected = 0
         survivors: list[str] = []
         logs = []
@@ -902,10 +938,11 @@ class DotnetAdapter(LanguageAdapter):
             "PASS" if score >= self.cfg.mutation_score else "FAIL", msg, summary=summary
         )
 
-    def _stryker_config(self, work: pathlib.Path) -> pathlib.Path | None:
-        """A config file carrying [dotnet] base_filter as the test-case filter, merged into the
-        project's stryker-config.json when it has one."""
-        if not self.settings.base_filter:
+    def _stryker_config(self, work: pathlib.Path, filt: str) -> pathlib.Path | None:
+        """A config file carrying `filt` (the feature scope's tests, or [dotnet] base_filter)
+        as the test-case filter, merged into the project's stryker-config.json when it has one
+        (a filter there is ANDed)."""
+        if not filt:
             return None
         data: dict[str, Any] = {}
         own = self.root / "stryker-config.json"
@@ -915,7 +952,9 @@ class DotnetAdapter(LanguageAdapter):
             except json.JSONDecodeError:
                 data = {}
         section = data.setdefault("stryker-config", {})
-        section.setdefault("test-case-filter", self.settings.base_filter)
+        section["test-case-filter"] = combine_filters(
+            str(section.get("test-case-filter") or ""), filt
+        )
         path = work / "stryker-config.json"
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         return path
