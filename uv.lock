@@ -15,6 +15,12 @@ dependencies = [
     { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
 
+[package.optional-dependencies]
+dotnet = [
+    { name = "diff-cover", version = "10.6.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "diff-cover", version = "11.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "diff-cover", version = "10.6.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -26,7 +32,11 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" }]
+requires-dist = [
+    { name = "diff-cover", marker = "extra == 'dotnet'", specifier = ">=9" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
+]
+provides-extras = ["dotnet"]
 
 [package.metadata.requires-dev]
 dev = [

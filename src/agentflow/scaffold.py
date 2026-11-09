@@ -52,12 +52,13 @@ def init(
         )
 
     gi = root / ".gitignore"
-    existing = gi.read_text(encoding="utf-8").splitlines() if gi.exists() else []
+    gi_text = gi.read_text(encoding="utf-8") if gi.exists() else ""
+    existing = gi_text.splitlines()
     wanted = [cfg.paths.out + "/", cfg.paths.phase_file, cfg.paths.reqs_file]
     wanted += adapter.gitignore_entries() if adapter is not None else []
     missing = [w for w in wanted if w not in {x.strip() for x in existing}]
     if missing:
-        prefix = "" if not existing or existing[-1] == "" else "\n"
+        prefix = "" if not gi_text or gi_text.endswith("\n") else "\n"
         with open(gi, "a", encoding="utf-8") as fh:
             fh.write(prefix + "\n".join(missing) + "\n")
 

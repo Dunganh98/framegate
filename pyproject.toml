@@ -9,6 +9,10 @@ dependencies = [
     "tomli>=2.0; python_version < '3.11'",
 ]
 
+[project.optional-dependencies]
+# the .NET adapter's diff coverage runs diff-cover from agentflow's own environment
+dotnet = ["diff-cover>=9"]
+
 [project.scripts]
 agentflow = "agentflow.cli:main"
 
@@ -33,7 +37,10 @@ packages = ["src/agentflow"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# slow tests (real dotnet builds) are deselected by default; run them with -m slow,
+# everything with -m "slow or not slow"
+addopts = "-q -m 'not slow'"
+markers = ["slow: needs a real toolchain (dotnet) and takes minutes"]
 
 [tool.ruff]
 line-length = 100
