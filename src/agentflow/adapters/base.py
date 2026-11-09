@@ -25,6 +25,21 @@ READ_TOOLS = ["Read", "Glob", "Grep"]
 WRITE_TOOLS = ["Write", "Edit", "MultiEdit"]
 GIT_READ_TOOLS = ["Bash(git diff *)", "Bash(git log *)"]
 
+
+def with_powershell(rules: Sequence[str]) -> list[str]:
+    """Each `Bash(<cmd>)` rule followed by its `PowerShell(<cmd>)` twin. On Windows, Claude Code
+    agents run commands through the PowerShell tool, which `Bash(...)` rules don't cover
+    (checked live: `PowerShell(dotnet nuget *)` allows `dotnet nuget --help`)."""
+    out: list[str] = []
+    for rule in rules:
+        out.append(rule)
+        if rule.startswith("Bash(") and rule.endswith(")"):
+            twin = "PowerShell(" + rule[len("Bash(") :]
+            if twin not in rules:
+                out.append(twin)
+    return out
+
+
 GATE_NAMES = {
     "lint": "lint",
     "format": "format",
@@ -273,7 +288,7 @@ class LanguageAdapter(abc.ABC):
             "PR": READ_TOOLS + ["Write"] + GIT_READ_TOOLS,
             "RETRO": READ_TOOLS + ["Write"],
         }
-        return list(table.get(phase, READ_TOOLS))
+        return with_powershell(table.get(phase, READ_TOOLS))
 
     @abc.abstractmethod
     def conventions_brief(self) -> str:

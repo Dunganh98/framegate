@@ -58,6 +58,12 @@ WAIT_CODES = {
 
 PHASES = ["TESTS", "IMPLEMENT", "REVIEW", "PR", "RETRO", "DONE"]
 BRIEF_PHASES = {"TESTS", "IMPLEMENT", "FIX", "REVIEW"}
+#: Only the plain command forms are pre-approved (--allowedTools); a `cd`/PATH prefix or an
+#: `&&` chain makes the permission check deny the call (seen in a live run on Windows).
+COMMAND_FORM = (
+    "- Run the commands above exactly as written, from the repository root (Bash or PowerShell "
+    "tool): no `cd`, PATH/env prefixes or `&&` chains. Other forms are denied."
+)
 
 TASKS = {
     "TESTS": "Feature '{f}': write the tests from {specs}/{f}/ and the interface stubs in {src}/. "
@@ -158,6 +164,7 @@ class Orchestrator:
         task = TASKS[kind].format(**self.placeholders(feature), **extra)
         if kind in BRIEF_PHASES:
             task += "\n\n## Conventions\n" + self.adapter.conventions_brief().strip()
+            task += "\n" + COMMAND_FORM
         return task
 
     def claude_cmd(self) -> list[str]:

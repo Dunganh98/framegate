@@ -106,3 +106,17 @@ def test_language_section_and_bools(tmp_path: pathlib.Path) -> None:
         parse_config(tmp_path, {"dotnet": {"test_projects": [1]}})
     with pytest.raises(ConfigError, match="unknown key 'bogus'"):
         parse_config(tmp_path, {"dotnet": {"bogus": 1}})
+
+
+def test_with_powershell_adds_twins_after_each_bash_rule() -> None:
+    from agentflow.adapters.base import with_powershell
+
+    rules = ["Read", "Bash(dotnet test *)", "Write", "Bash(git diff *)", "PowerShell(git diff *)"]
+    assert with_powershell(rules) == [
+        "Read",
+        "Bash(dotnet test *)",
+        "PowerShell(dotnet test *)",
+        "Write",
+        "Bash(git diff *)",
+        "PowerShell(git diff *)",
+    ]

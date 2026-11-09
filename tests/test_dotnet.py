@@ -710,10 +710,13 @@ def test_agent_tools_and_brief(tmp_path: pathlib.Path) -> None:
     a = adapter(
         tmp_path, {"base_filter": "Category!=Slow"}, paths={"review_tests": "tests/A.Tests/Review"}
     )
-    assert a.allowed_tools("IMPLEMENT")[-3:] == [
+    assert a.allowed_tools("IMPLEMENT")[-6:] == [
         "Bash(dotnet test *)",
+        "PowerShell(dotnet test *)",
         "Bash(dotnet build *)",
+        "PowerShell(dotnet build *)",
         "Bash(dotnet format *)",
+        "PowerShell(dotnet format *)",
     ]
     assert not [t for t in a.allowed_tools("TESTS") if "dotnet add" in t or "dotnet new" in t]
     brief = a.conventions_brief()

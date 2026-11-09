@@ -78,6 +78,8 @@ def test_full_flow(demo_repo: DemoRepo) -> None:
     tests_call = r.calls()[0]
     tools = tests_call["argv"][tests_call["argv"].index("--allowedTools") + 1].split(",")
     assert "Bash(python -m pytest *)" in tools and "Write" in tools
+    assert "PowerShell(python -m pytest *)" in tools
+    assert "exactly as written" in tests_call["prompt"]
     assert "Conventions" in tests_call["prompt"] and "pytest.mark.req" in tests_call["prompt"]
     assert "TEST WRITER" in tests_call["role"] and "{feature}" not in tests_call["role"]
     impl_call = r.calls()[1]
