@@ -59,10 +59,11 @@ WAIT_CODES = {
 PHASES = ["TESTS", "IMPLEMENT", "REVIEW", "PR", "RETRO", "DONE"]
 BRIEF_PHASES = {"TESTS", "IMPLEMENT", "FIX", "REVIEW"}
 #: Only the plain command forms are pre-approved (--allowedTools); a `cd`/PATH prefix or an
-#: `&&` chain makes the permission check deny the call (seen in a live run on Windows).
+#: `;`/`&&` chain makes the permission check deny the call (seen in a live run on Windows).
 COMMAND_FORM = (
     "- Run the commands above exactly as written, from the repository root (Bash or PowerShell "
-    "tool): no `cd`, PATH/env prefixes or `&&` chains. Other forms are denied."
+    "tool), one command per call: no `cd`, PATH/env prefixes, `;` or `&&` chains. Other forms "
+    "are denied."
 )
 
 TASKS = {
