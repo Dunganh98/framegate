@@ -70,6 +70,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "build_timeout": (int,),
         "test_timeout": (int,),
         "mutation_timeout": (int,),
+        "mutation_level": (str,),
     },
 }
 #: sections owned by a language adapter (stored raw in Config.language_options)

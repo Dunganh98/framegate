@@ -683,9 +683,11 @@ def test_mutation_runs_stryker_per_project(
     assert cfg == {"stryker-config": {"concurrency": 2, "test-case-filter": "Category!=Slow"}}
     survivors = (tagged / "out/f/mutation_survivors.md").read_text(encoding="utf-8")
     assert "`src/App/Calc.cs:1:1`" in survivors
-    a2 = adapter(tagged, gates={"mutation_score": 80})
+    assert "--mutation-level" not in cmd  # default: Stryker's own (Standard)
+    a2 = adapter(tagged, {"mutation_level": "Basic"}, gates={"mutation_score": 80})
     monkeypatch.setattr(a2, "stryker_command", lambda: ["dotnet-stryker"])
     assert a2.mutation_check("f", "x", ["src/App/Calc.cs"]).status == "FAIL"
+    assert seen[-1][seen[-1].index("--mutation-level") + 1] == "Basic"
 
 
 # ---------- config, agents, init ----------
@@ -701,6 +703,8 @@ def test_settings_defaults_and_validation(tmp_path: pathlib.Path) -> None:
         adapter(tmp_path, {"warnings": "loud"})
     with pytest.raises(ConfigError, match="test_timeout must be >= 1"):
         adapter(tmp_path, {"test_timeout": 0})
+    with pytest.raises(ConfigError, match="mutation_level must be one of"):
+        adapter(tmp_path, {"mutation_level": "fast"})
     keys = set(re.findall(r"^# (\w+) =", dn.CONFIG_TEMPLATE, re.M))
     assert keys == set(dn.DotnetSettings.__dataclass_fields__)
 

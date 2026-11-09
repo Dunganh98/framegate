@@ -86,6 +86,9 @@ PROPERTY_THEORY = (
     "  (the project's seeded RNG if any, else `new Random(<seed>)`)."
 )
 
+#: Stryker.NET --mutation-level values (each includes the lower ones)
+MUTATION_LEVELS = ("Basic", "Standard", "Advanced", "Complete")
+
 CONFIG_TEMPLATE = """\
 [dotnet]                           # .NET adapter; every key optional, defaults shown
 # executable = "dotnet"            # default: dotnet on PATH, else DOTNET_ROOT / Program Files
@@ -99,6 +102,8 @@ CONFIG_TEMPLATE = """\
 # build_timeout = 900              # seconds
 # test_timeout = 3600
 # mutation_timeout = 3600          # default: [gates] mutation_timeout
+# mutation_level = ""              # Stryker -l: Basic | Standard | Advanced | Complete ("" =
+#                                  # Stryker's default, Standard); Basic is faster, fewer mutants
 """
 
 
@@ -116,6 +121,8 @@ class DotnetSettings:
     test_timeout: int = 3600
     #: None = [gates] mutation_timeout
     mutation_timeout: int | None = None
+    #: Stryker --mutation-level ("" = Stryker's default, Standard)
+    mutation_level: str = ""
 
     @classmethod
     def from_options(cls, options: dict[str, Any]) -> DotnetSettings:
@@ -125,6 +132,10 @@ class DotnetSettings:
         for key in ("build_timeout", "test_timeout", "mutation_timeout"):
             if getattr(s, key) is not None and getattr(s, key) < 1:
                 raise ConfigError(f"[dotnet] {key} must be >= 1")
+        if s.mutation_level and s.mutation_level not in MUTATION_LEVELS:
+            raise ConfigError(
+                f"[dotnet] mutation_level must be one of {', '.join(MUTATION_LEVELS)} (or empty)"
+            )
         s.test_projects = [p.replace("\\", "/") for p in s.test_projects]
         return s
 
@@ -892,6 +903,8 @@ class DotnetAdapter(LanguageAdapter):
             for f in files:
                 rel = (self.root / f).resolve().relative_to(proj.parent.resolve()).as_posix()
                 cmd += ["--mutate", f"**/{rel}"]
+            if self.settings.mutation_level:
+                cmd += ["--mutation-level", self.settings.mutation_level]
             cmd += [
                 "--configuration",
                 self.settings.configuration,

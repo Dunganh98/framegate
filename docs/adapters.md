@@ -171,6 +171,7 @@ warnings for code an earlier step already built.
 | `build_timeout` | `900` | Seconds per build / format / diff-cover command |
 | `test_timeout` | `3600` | Seconds per `dotnet test` |
 | `mutation_timeout` | `[gates] mutation_timeout` (3600) | Seconds per Stryker run |
+| `mutation_level` | `""` (Stryker's default, Standard) | Stryker `--mutation-level`: `Basic` / `Standard` / `Advanced` / `Complete`. `Basic` is faster on a big project but creates fewer mutants in the changed files too (a weaker gate); see the Stryker timing below |
 
 ### Notes for a first project (checked against FCSim, read-only)
 
@@ -214,3 +215,28 @@ tests) 506 s** (~6 min of it before the first mutant test run: Stryker's own sol
 17/19 mutants killed). The feature-scoped coverage is fast; the whole-suite regression and the
 Stryker build dominate. Options: `final_filter` = the dev-loop filter (regression ~1 min, Slow +
 Gate left to CI), Stryker on a warm build. Step gates: 34 s each.
+
+### Stryker timing on FCSim (2026-11-10, Stryker.NET 5.0.0, no claude runs)
+
+Throwaway worktree of FCSim `feat/agentflow-setup` + one 3-branch `Clamp` function in
+FCSim.Core and 3 `Req`-tagged tests; warm Release build; the adapter's mutation check (feature
+scope, `test-case-filter` = `(Req=PRB-R-001)&(Category!=Slow&Category!=Gate)`).
+
+| Run | Seconds | Mutants tested / score |
+|---|---|---|
+| Adapter, as before (`--skip-version-check`, `-tp`, `--project`, `--mutate **/<file>`) | 99 | 6, 66.7% |
+| Same, right after the regression (160 s) + coverage runs (live final-gate order) | 99 | 6 |
+| `--since:<branch>` (diff mode) | 138 | 0 (the new file is untracked; diff mode still mutates the whole project) |
+| Project mode (Stryker started in the test project's folder: no solution analysis, builds only the test project) | 99 | 6 |
+| `-c 12` (concurrency, default 6) | 106 | 6 |
+| `--mutation-level Basic` (CLI / adapter with `[dotnet] mutation_level = "Basic"`) | 65 / 66 | 4, 50% |
+
+Where the 99 s go (debug log): analysis 4 s, `dotnet build FCSim.slnx` 11 s (warm), initial test
+run 1 s, mutant creation 13 s, **compiling the mutated FCSim.Core 67 s** (12 rounds: mutants in
+other files cause compile errors, Stryker rolls them back and recompiles), 6 mutant test runs
+5 s. Stryker 5.0 creates mutants for the whole project (40,273) and applies `--mutate` only
+afterwards ("37,569 removed by mutate filter"), so the compile rounds are a fixed cost per run
+that no CLI option removes without weakening the gate; there is no `--no-build`. The live 506 s
+did not reproduce on a warm build in the live order (99 s); likely a cold build or a busy machine
+(the live Stryker log is gone). Kept: the adapter's command; added the opt-in
+`[dotnet] mutation_level`.
