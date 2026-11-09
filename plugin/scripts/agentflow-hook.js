@@ -43,6 +43,19 @@ function targetDir(data) {
   return path.dirname(path.resolve(base, raw));
 }
 
+const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
+
+// Shell calls are checked only during an agentflow run: without the phase file there is nothing
+// to check, so skip starting the CLI ([paths] phase_file, default .phase).
+function phaseFileExists(config) {
+  let file = '.phase';
+  try {
+    const m = /^\s*phase_file\s*=\s*["']([^"']+)["']/m.exec(fs.readFileSync(config, 'utf8'));
+    if (m) file = m[1];
+  } catch (_) { /* default */ }
+  return fs.existsSync(path.join(path.dirname(config), file));
+}
+
 function main() {
   const event = process.argv[2];
   if (!event) {
@@ -62,6 +75,8 @@ function main() {
     if (config) break;
   }
   if (!config) return 0;
+  const shell = SHELL_TOOLS.has(data && data.tool_name);
+  if (shell && !phaseFileExists(config)) return 0;
 
   const bin = process.env.AGENTFLOW_BIN || 'agentflow';
   const r = spawnSync(bin, ['hook', event], {
@@ -76,7 +91,7 @@ function main() {
       ? `the \`${bin}\` CLI was not found on PATH`
       : `the \`${bin}\` CLI could not be started (${r.error.message})`;
     const msg = `agentflow: ${what}, but this repository is configured for agentflow (${config}).`;
-    if (event === 'pre-tool-use') {
+    if (event === 'pre-tool-use' && !shell) {
       process.stderr.write(`${msg} File writes are blocked until it works. ${INSTALL_HINT} ` +
         'Do not work around this block; tell the user.\n');
       return 2;

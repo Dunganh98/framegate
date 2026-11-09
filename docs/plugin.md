@@ -10,7 +10,7 @@ registers things. Installed **user-wide**, it stays inert in repos without `agen
 .claude-plugin/marketplace.json     # marketplace "agentflow", one entry: source "./plugin"
 plugin/
   .claude-plugin/plugin.json        # name agentflow, version 0.1.0
-  hooks/hooks.json                  # PreToolUse (Write|Edit|MultiEdit|NotebookEdit) + Stop
+  hooks/hooks.json                  # PreToolUse (Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell) + Stop
   scripts/agentflow-hook.js         # wrapper: node agentflow-hook.js <event> -> agentflow hook <event>
   skills/spec/SKILL.md              # /spec (also /agentflow:spec)
   tests/agentflow-hook.test.js      # node --test "plugin/tests/*.test.js"
@@ -63,6 +63,15 @@ Wrapper behaviour (`plugin/scripts/agentflow-hook.js`):
 - Found but CLI missing -> `pre-tool-use`: exit 2 + install hint (write blocked, Claude sees the
   reason); `stop`: exit 1 (non-blocking notice to the user; blocking Stop would only loop Claude,
   which can't install the CLI).
+- `Bash` / `PowerShell` calls: checked only during an agentflow run. Without the phase file
+  (`[paths] phase_file`, default `.phase`, read from `agentflow.toml` by a regex) the wrapper exits
+  0 without starting the CLI, so interactive sessions in an agentflow repo pay no Python start per
+  shell call. With it, `agentflow hook pre-tool-use` blocks a pipe / chain / several lines /
+  `cd` or env prefix (not in SPEC) with the reason and the alternatives
+  (`src/agentflow/hooks/shell_form.py`). CLI missing -> exit 1 (not blocked: the permission check
+  still applies).
+- The plugin loads in place from a local marketplace: the new matcher applies to sessions started
+  after the update (or `/reload-plugins`).
 
 Timeouts: PreToolUse 30 s, Stop 600 s (the Stop hook may run a full test suite).
 

@@ -1,4 +1,5 @@
-"""PreToolUse hook: enforce per-phase write permissions based on the .phase file.
+"""PreToolUse hook: enforce per-phase write permissions based on the .phase file, and the
+one-plain-command form of Bash / PowerShell calls during a run (shell_form.py).
 
 No agentflow.toml or no .phase -> normal interactive session -> everything allowed.
 Exit code 2 blocks the tool call; stderr is shown to Claude.
@@ -7,14 +8,44 @@ Exit code 2 blocks the tool call; stderr is shown to Claude.
 from __future__ import annotations
 
 import pathlib
+from typing import Any
 
 from agentflow.hooks import find_root_fast, parse_input
+from agentflow.hooks.shell_form import SHELL_TOOLS, form_problem, message
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
 
+def evaluate_shell(data: dict[str, Any]) -> tuple[int, str]:
+    """Bash / PowerShell during an agentflow run (a .phase other than SPEC): block a pipe,
+    chain or prefix with an actionable reason instead of the permission check's silent denial."""
+    command = (data.get("tool_input") or {}).get("command")
+    if not isinstance(command, str):
+        return 0, ""
+    problem = form_problem(command)
+    if problem is None:
+        return 0, ""
+    root = find_root_fast(data.get("cwd"))
+    if root is None:
+        return 0, ""
+    from agentflow.config import ConfigError, load_config
+
+    try:
+        cfg = load_config(root)
+    except ConfigError:
+        return 0, ""
+    if not cfg.phase_path.is_file():
+        return 0, ""
+    phase = cfg.phase_path.read_text(encoding="utf-8").strip()
+    if not phase or phase == "SPEC":  # the interactive spec session: the human decides
+        return 0, ""
+    return 2, message(phase, command, problem, cfg.language)
+
+
 def evaluate(stdin_text: str) -> tuple[int, str]:
     data = parse_input(stdin_text)
+    if data.get("tool_name") in SHELL_TOOLS:
+        return evaluate_shell(data)
     if data.get("tool_name") not in WRITE_TOOLS:
         return 0, ""
     root = find_root_fast(data.get("cwd"))

@@ -130,10 +130,16 @@ printed and logged (`retro_coverage` event).
 | `parked` | parked steps / review fixes (each park, incl. re-parks after a redo) |
 | `assumptions` | `- ASSUMPTION [...]` lines in `steps.md` |
 
-Hooks (called by the plugin): `agentflow hook pre-tool-use` (phase-based write protection) and
-`agentflow hook stop` (IMPLEMENT can't stop while the step's tests fail, unless it parked: an
-`out/*/park.md` exists). Both read the hook
-JSON on stdin, exit 0 silently without `agentflow.toml` or `.phase`, and block with exit 2.
+Hooks (called by the plugin): `agentflow hook pre-tool-use` (phase-based write protection, and
+the command form of Bash / PowerShell calls during a run) and `agentflow hook stop` (IMPLEMENT
+can't stop while the step's tests fail, unless it parked: an `out/*/park.md` exists). Both read
+the hook JSON on stdin, exit 0 silently without `agentflow.toml` or `.phase`, and block with exit
+2. Shell calls: only plain single commands are pre-approved, so a pipe (`dotnet test ... |
+Select-String`), a `;` / `&&` / `||` chain, several lines, or a `cd` / env-variable prefix would
+be denied by the permission check without a reason. During a run (any phase but SPEC) the hook
+blocks them first and tells the agent why and what to do instead: one command per call, and the
+command's own options (`--filter`, `--logger "console;verbosity=minimal"`, `-k`, `-q`) or the
+result file it writes to see less output. The task text says the same (`COMMAND_FORM`).
 
 Configuration: `agentflow.toml` (all keys optional; see the commented template written by
 `init`). `[agents] claude` or env `AGENTFLOW_CLAUDE` selects the claude executable;

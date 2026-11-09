@@ -190,3 +190,68 @@ def test_stop_allowed_when_parked(green_red: pathlib.Path) -> None:
 def test_stop_hook_active_allows_stop(green_red: pathlib.Path) -> None:
     set_phase(green_red, "IMPLEMENT")
     assert require_green.evaluate(stop_json(green_red, active=True)) == (0, "")
+
+
+# ---------- pre-tool-use: shell command form during a run ----------
+@pytest.mark.parametrize(
+    ("command", "problem"),
+    [
+        ("dotnet test -c Release --filter Req=A | Select-String Failed", "a pipe (|)"),
+        ("python -m pytest -q; echo done", "a chain (;)"),
+        ("git status && git diff", "a chain (&&)"),
+        ("pytest || true", "a chain (||)"),
+        ("cd src; python -m pytest", "a `cd` prefix"),
+        ("Set-Location src", "a `cd` prefix"),
+        ("PYTHONPATH=src python -m pytest", "an environment-variable prefix"),
+        ("$env:X = '1'", "an environment-variable prefix"),
+        ("python -m pytest\npython -m mypy", "several command lines"),
+        ('for id in Q1 Q2; do grep -c "$id" f.md; done', "a chain (;)"),
+    ],
+)
+def test_shell_form_problems(command: str, problem: str) -> None:
+    from agentflow.hooks.shell_form import form_problem
+
+    assert form_problem(command) == problem
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'dotnet test FCSim.slnx -c Release --filter "(Req=A|Req=B)&(Category!=Slow)"',
+        'dotnet test -c Release --logger "console;verbosity=minimal"',
+        "dotnet test -c Release --logger 'trx;LogFileName=x.trx'",
+        "dotnet build App.slnx -c Release 2>&1",
+        r'& "C:\Program Files\dotnet\dotnet.exe" test',
+        "python -m pytest -q --req DEMO-R-001\n",
+        'git commit -m "a \\" ; b"',
+        "git log --format=%H`;x",
+    ],
+)
+def test_shell_form_allowed(command: str) -> None:
+    from agentflow.hooks.shell_form import form_problem
+
+    assert form_problem(command) is None
+
+
+def test_shell_block_only_during_a_run(project: pathlib.Path) -> None:
+    piped = hook_json(project, "PowerShell", command="python -m pytest -q | Select-String x")
+    assert protect_paths.evaluate(piped) == (0, "")  # no .phase: interactive session
+    set_phase(project, "SPEC")
+    assert protect_paths.evaluate(piped) == (0, "")  # the human's spec session
+    set_phase(project, "IMPLEMENT")
+    code, msg = protect_paths.evaluate(piped)
+    assert code == 2
+    assert msg.startswith("[IMPLEMENT] Blocked: `python -m pytest -q | Select-String x` contains")
+    assert "a pipe (|)" in msg and "one command per call" in msg and "-k <expr>" in msg
+    plain = hook_json(project, "Bash", command="python -m pytest -q")
+    assert protect_paths.evaluate(plain) == (0, "")
+
+
+def test_shell_block_names_the_dotnet_options(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "agentflow.toml").write_text('[project]\nlanguage = "dotnet"\n', encoding="utf-8")
+    set_phase(tmp_path, "TESTS")
+    code, msg = protect_paths.evaluate(
+        hook_json(tmp_path, "Bash", command="dotnet test -c Release; echo $?")
+    )
+    assert code == 2 and "a chain (;)" in msg
+    assert '--logger "console;verbosity=minimal"' in msg and "--filter" in msg

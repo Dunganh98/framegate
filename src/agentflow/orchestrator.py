@@ -72,12 +72,17 @@ METRICS_HEADER = (
     "date,feature,human_rejections,escalations,questions,gate_failures,cost_usd,parked,assumptions"
 )
 BRIEF_PHASES = {"TESTS", "TEST_REVIEW", "IMPLEMENT", "FIX", "REVIEW", "TRIAGE"}
-#: Only the plain command forms are pre-approved (--allowedTools); a `cd`/PATH prefix or an
-#: `;`/`&&` chain makes the permission check deny the call (seen in a live run on Windows).
+#: Only the plain command forms are pre-approved (--allowedTools); a `cd`/PATH prefix, a pipe
+#: or a `;`/`&&` chain makes the permission check deny the call (seen in live runs on Windows:
+#: `dotnet test ... | Select-String`, `...; echo`). The PreToolUse hook blocks them with this
+#: reason too (hooks/shell_form.py).
 COMMAND_FORM = (
-    "- Run the commands above exactly as written, from the repository root (Bash or PowerShell "
-    "tool), one command per call: no `cd`, PATH/env prefixes, `;` or `&&` chains. Other forms "
-    "are denied."
+    "- Shell commands: run the commands above exactly as written, from the repository root "
+    "(Bash or PowerShell tool), **one command per call**. No pipes (`| Select-String`, "
+    "`| grep`, `| head`), no `;` / `&&` / `||` chains, no `cd` or PATH/env prefixes: those "
+    "calls are denied. To see less output, use the command's own options (test filters, "
+    "verbosity, quiet flags) or read the result file it writes with the Read tool; to search "
+    "files use Grep / Glob / Read."
 )
 NO_STOP = (
     "Nobody answers questions during the run. Where the spec is ambiguous, assume what fits the "

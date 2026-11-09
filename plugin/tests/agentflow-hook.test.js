@@ -105,3 +105,47 @@ test('agentflow.toml + CLI present: stdin is passed through, stdout/stderr and e
   const r = run('pre-tool-use', writePayload(root, 'x.py'), { cwd: root, env: { AGENTFLOW_BIN: process.execPath } });
   assert.deepStrictEqual(r, { code: 2, stdout: 'event=pre-tool-use tool=Write', stderr: 'blocked' });
 });
+
+function shellPayload(cwd, tool, command) {
+  return { session_id: 's', cwd, hook_event_name: 'PreToolUse', tool_name: tool, tool_input: { command } };
+}
+
+function fakeCli(root) {
+  fs.writeFileSync(path.join(root, 'hook'), [
+    "const d = JSON.parse(require('fs').readFileSync(0, 'utf8'));",
+    "process.stderr.write('checked ' + d.tool_name);",
+    'process.exit(2);',
+  ].join('\n'));
+}
+
+test('Bash/PowerShell without a phase file: exit 0, CLI not started', () => {
+  const root = agentflowRepo();
+  fakeCli(root);
+  for (const tool of ['Bash', 'PowerShell']) {
+    const r = run('pre-tool-use', shellPayload(root, tool, 'ls | head'), { cwd: root, env: { AGENTFLOW_BIN: process.execPath } });
+    assert.deepStrictEqual(r, { code: 0, stdout: '', stderr: '' });
+  }
+});
+
+test('Bash with the phase file (default or [paths] phase_file): the CLI checks it', () => {
+  const root = agentflowRepo();
+  fakeCli(root);
+  fs.writeFileSync(path.join(root, '.phase'), 'IMPLEMENT');
+  let r = run('pre-tool-use', shellPayload(root, 'Bash', 'ls | head'), { cwd: root, env: { AGENTFLOW_BIN: process.execPath } });
+  assert.deepStrictEqual(r, { code: 2, stdout: '', stderr: 'checked Bash' });
+  fs.writeFileSync(path.join(root, 'agentflow.toml'), '[paths]\nphase_file = "out/.phase"\n');
+  r = run('pre-tool-use', shellPayload(root, 'Bash', 'ls | head'), { cwd: root, env: { AGENTFLOW_BIN: process.execPath } });
+  assert.strictEqual(r.code, 0); // .phase is not the configured file
+  fs.mkdirSync(path.join(root, 'out'));
+  fs.writeFileSync(path.join(root, 'out', '.phase'), 'TESTS');
+  r = run('pre-tool-use', shellPayload(root, 'PowerShell', 'ls | head'), { cwd: root, env: { AGENTFLOW_BIN: process.execPath } });
+  assert.deepStrictEqual(r, { code: 2, stdout: '', stderr: 'checked PowerShell' });
+});
+
+test('Bash with a phase file but no CLI: not blocked (the permission check still applies)', () => {
+  const root = agentflowRepo();
+  fs.writeFileSync(path.join(root, '.phase'), 'IMPLEMENT');
+  const r = run('pre-tool-use', shellPayload(root, 'Bash', 'ls | head'), { cwd: root, env: MISSING });
+  assert.strictEqual(r.code, 1);
+  assert.match(r.stderr, /not found on PATH/);
+});
