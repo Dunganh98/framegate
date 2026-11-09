@@ -204,4 +204,13 @@ Stryker creates mutants for the whole project (40,273 in FCSim.Core); `--mutate`
 mutation over the full FCSim suite are not practical per feature, hence the default feature
 scope (`[gates] coverage_scope` / `mutation_scope = "feature"`): coverage and Stryker use only the
 feature's `Req` tests + review classes, the regression run is the plain suite (~1 min dev-loop
-filter, ~4-5 min every test). Not yet re-measured live with the new default.
+filter, ~4-5 min every test).
+
+Re-measured live with the feature-scoped default (three-gate smoke run 2026-11-09, toy feature,
+`final_filter = ""`): final gates 20 min 45 s, all PASS. Per check: lint 13 s, format 5 s,
+typecheck 10 s, frame diff 0.2 s, **regression (every test incl. Slow + Gate) 692 s**, coverage
+run (feature tests) 12 s, diff coverage 4 s, traceability 1.5 s, smells 2.5 s, **Stryker (feature
+tests) 506 s** (~6 min of it before the first mutant test run: Stryker's own solution build;
+17/19 mutants killed). The feature-scoped coverage is fast; the whole-suite regression and the
+Stryker build dominate. Options: `final_filter` = the dev-loop filter (regression ~1 min, Slow +
+Gate left to CI), Stryker on a warm build. Step gates: 34 s each.
