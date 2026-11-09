@@ -25,9 +25,10 @@ language = "{language}"            # "python" | "dotnet"
 [gates]
 # diff_coverage = 90
 # mutation_score = 80
-# mutation_tool = "mutmut"         # adapter default; "none" disables
+# mutation_tool = "mutmut"         # default: mutmut (python), stryker (dotnet); "none" = off
 
 # [gates.commands]                 # override the adapter's commands; [] disables one
+#                                  # (python examples; dotnet: see docs/adapters.md)
 # lint = ["ruff", "check", "{src}", "{tests}"]
 # format = ["ruff", "format", "--check", "{src}", "{tests}"]
 # typecheck = ["python", "-m", "mypy", "{src}"]

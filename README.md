@@ -47,10 +47,20 @@ Configuration: `agentflow.toml` (all keys optional; see the commented template w
 Python projects: add agentflow (pinned) to the dev dependencies; its pytest plugin provides the
 `req` marker and `--req ID,ID` selection.
 
+.NET projects (xUnit, `language = "dotnet"`, detected from a root `*.sln`/`*.slnx`/`*.csproj`):
+install agentflow with the `dotnet` extra (`pip install "agentflow[dotnet]"`, brings diff-cover)
+and Stryker.NET (`dotnet tool install -g dotnet-stryker`). Tag tests with
+`[Trait("Req", "XXX-R-001")]`; selection uses `dotnet test --filter "(Req=A|Req=B)&(<base_filter>)"`.
+Put `[paths] review_tests` inside a test project folder and set the `[dotnet]` keys
+(`base_filter`, `test_projects`, `configuration = "Release"`, ...). Details and the FCSim notes:
+docs/adapters.md.
+
 ## Development
 
 ```
 uv sync
-uv run pytest          # unit + end-to-end tests (fake claude, no API calls)
+uv run pytest          # unit + end-to-end tests (fake claude, no API calls), ~45 s
+uv run pytest -m slow  # .NET end-to-end on a real solution (needs the dotnet SDK), ~1.5 min
+uv run pytest -m "slow or not slow"   # everything
 uv run ruff check src tests ; uv run ruff format --check src tests ; uv run mypy
 ```

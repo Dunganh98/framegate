@@ -18,11 +18,12 @@ imported lazily). An adapter instance gets the loaded `Config` (`self.cfg`, `sel
 | Type | Fields | Meaning |
 |---|---|---|
 | `TestRun` | `status`, `returncode`, `output`, `cases` | `status`: `passed` / `failed` / `no_tests` / `error` (collection, build or usage problem). `cases`: per-test outcomes when a JUnit report was requested, else `None` |
-| `TestCase` | `name`, `outcome` | `outcome`: `passed` / `failed` / `error` / `skipped` |
+| `TestCase` | `name`, `outcome`, `message` | `outcome`: `passed` / `failed` / `error` / `skipped`; `message`: failure/error text ("" if none) |
 | `CheckResult` | `status`, `output` | `status`: `PASS` / `FAIL` / `SKIPPED`. SKIPPED never fails a gate but is printed and lands in `final_gates.md` (the PR role must report it) |
 | `Check` | `name`, `run()` | A named, lazily-run check for the gate runner |
 
-Helpers: `run_command(cmd, cwd)` (missing tool -> code 127, "Tool not found"),
+Helpers: `run_command(cmd, cwd, env=None, timeout=None)` (missing tool -> code 127, "Tool not
+found"; timeout -> process tree killed, code 124, "TIMEOUT: ..."),
 `command_check(name, cmd, cwd)`, `parse_junit(path)` (JUnit XML -> `TestCase` list; works for
 pytest `--junitxml` and the .NET `JunitXml.TestLogger`), `tool_path(name, near)`.
 
@@ -38,17 +39,25 @@ pytest `--junitxml` and the .NET `JunitXml.TestLogger`), `tool_path(name, near)`
 | `collect_req_tags()` | abstract | Static scan of the test sources: `{spec ID: ["file::test", ...]}`. Feeds the traceability check. Must not run or build anything |
 | `test_smells()` | abstract | Static scan: one line per test without an assertion, skipped/ignored test, inline skip |
 | `red_stub_run(req_ids, report)` | default | Runs the feature's tests with a JUnit report; the core fails the TESTS gate on any `passed` / `error` / `skipped` case or zero cases. Override if the framework needs special handling |
+| `stub_failure_problem(case)` | default | For a case that failed against the stubs: a reason why the failure doesn't count (e.g. not caused by the stub), else `None` (default: every failure counts). Listed as `FAILS FOR ANOTHER REASON THAN THE STUB` and fails the TESTS gate |
 | `default_gate_commands()` | abstract | `{"lint"|"format"|"typecheck"|"imports": [argv]}`; omit a key to skip it. `[gates.commands]` overrides per key (`[]` disables) |
 | `resolve_command(cmd)` | default | Expands `{src}`, `{tests}`, `{out}` in configured commands (python also maps a leading `python` to the project interpreter) |
-| `lint_checks()` | default | Builds the `Check`s from the merged commands |
+| `lint_checks(base_ref=None)` | default | Builds the `Check`s from the merged commands. The gate runner passes `base_ref` (= `tests-approved/<f>`) so an adapter can limit checks to the files changed since then (the .NET adapter does) |
 | `coverage_checks(base_ref)` | abstract | Final scope: full suite with coverage, then diff coverage against `base_ref` (= `tests-approved/<f>`) `>= cfg.diff_coverage`. SKIPPED (with reason) when a coverage tool is missing, but the full suite must still run |
 | `mutation_check(feature, base_ref, changed_src)` | abstract | Mutation score on `changed_src` (src files changed since the tag) `>= cfg.mutation_score`; write survivors to `<out>/<feature>/mutation_survivors.md`. SKIPPED with reason if the tool is missing/unsupported or `mutation_tool = "none"` |
 | `default_forbidden_patterns()` | abstract | Regexes forbidden in source lines added since the tag (suppressions, skips). `[frame] forbidden_patterns` replaces them |
-| `default_protected_paths()` | abstract | Dependency/build/tool-config path prefixes that must not change after the tag. Added to the core list (`tests/`, `specs/`, `.claude/`, `.agentflow/`, `CLAUDE.md`, `agentflow.toml`, CI files) and `[protected] extra` |
+| `default_protected_paths()` | abstract | Dependency/build/tool-config paths that must not change after the tag. Added to the core list (`tests/`, `specs/`, `.claude/`, `.agentflow/`, `CLAUDE.md`, `agentflow.toml`, CI files) and `[protected] extra`. Entries are prefixes; an entry containing `*`, `?` or `[` is a case-insensitive glob where `*` also matches `/` (`*.csproj` = a project file at any depth). The same holds for `[protected] paths/extra/exceptions` |
 | `test_tools()` / `lint_tools()` | abstract | `--allowedTools` rules that let an agent run tests / lint+format+typecheck (rule syntax: `Bash(<prefix> *)`) |
 | `allowed_tools(phase)` | default | Per-phase tool list: core tools (Read/Glob/Grep, Write/Edit/MultiEdit, git diff/log) + the two lists above. `[phases.<P>] tools` replaces it |
 | `conventions_brief()` | abstract | < ~1.5 KB text: how stubs look, how tests are tagged, how to run tests/lint, what is forbidden. Appended to the TESTS / IMPLEMENT / FIX / REVIEW task prompts and printed by `agentflow spec-brief <feature>` (used by the plugin's `/spec`) |
 | `ci_setup()` | default | GitHub Actions steps (YAML, 6-space indent) that install the toolchain; inserted into the CI snippet `agentflow init` prints |
+| `config_template()` | default | Commented `agentflow.toml` section(s) for the language, appended by `agentflow init` (default: none) |
+| `gitignore_entries()` | default | Extra `.gitignore` lines `init` adds: build outputs the orchestrator must never commit (it commits with `git add -A`) |
+| `init_note()` | default | Setup advice printed at the end of `init` |
+
+Adapter-owned config sections (e.g. `[dotnet]`) are declared in `config.SCHEMA` (type-checked like
+every other key, booleans allowed where declared) and listed in `config.LANGUAGE_SECTIONS`; the raw
+values land in `Config.language_options["<section>"]` and the adapter applies its own defaults.
 
 The base role prompts (`src/agentflow/roles/*.md`) never name a language; they refer to "the
 conventions brief" for tagging, property tests and forbidden patterns.
@@ -68,29 +77,70 @@ conventions brief" for tagging, property tests and forbidden patterns.
 | Protected | `pyproject.toml`, `setup.cfg`, `setup.py`, `requirements*`, `uv.lock`, `poetry.lock`, `Pipfile`, `.importlinter`, `mypy.ini`, `ruff.toml`, `.ruff.toml`, `pytest.ini`, `tox.ini`, root `conftest.py` |
 | Tools | `Bash(python -m pytest *)`, `Bash(pytest *)`, `Bash(ruff check *)`, `Bash(ruff format *)`, `Bash(python -m ruff *)`, `Bash(python -m mypy *)` |
 
-## Guidance for the .NET / xUnit adapter (`dotnet.py`, class `DotnetAdapter`)
+## .NET / xUnit adapter (`dotnet.py`, class `DotnetAdapter`)
 
-Already registered in `ADAPTERS`; until the module exists, `language = "dotnet"` gives a clear
-"adapter is not available" error (and `agentflow init --language dotnet` still scaffolds).
+Static C# parsing lives in `csharp.py` (comment- and literal-aware scanner: namespaces, classes,
+attribute lists, test methods, helper-method bodies; no build, no Roslyn).
 
-| Concern | Suggested mapping |
+| Concern | Implementation |
 |---|---|
 | `detect` | `*.sln`, `*.slnx` or `*.csproj` in the root |
+| Toolchain | `[dotnet] executable`, else `dotnet` on PATH, else `DOTNET_ROOT` / `~/.dotnet` / Program Files. Every dotnet call gets `DOTNET_CLI_UI_LANGUAGE=en`, `VSLANG=1033`, `DOTNET_NOLOGO=1`, telemetry off (English messages on localized Windows) |
+| Targets | `[dotnet] test_projects`, else the solution (`[dotnet] solution`, else the single `*.sln`/`*.slnx` in the root; several -> config error), else the test projects found under `[paths] tests` (`.csproj` mentioning `Microsoft.NET.Test.Sdk` or `IsTestProject`) |
 | Stubs | Full signatures, XML doc comments naming the IDs, body `throw new NotImplementedException();` |
-| Tagging | `[Trait("Req", "XXX-R-001")]` per ID (multiple attributes allowed) on the test method or class |
-| `run_tests` | `dotnet test --filter "Req=A\|Req=B"` (`\|` = OR in the filter syntax); `paths` -> test project(s) or `FullyQualifiedName~Review`; `fail_fast` has no direct switch (ignore or `--blame`-free run); JUnit via `--logger "junit;LogFilePath=<junit>"` (JunitXml.TestLogger) or parse TRX. Map: 0 passed, 1 failed (check the output for "No test matches" -> `no_tests`, build errors -> `error`) |
-| `collect_req_tags` | Regex over `tests/**/*.cs`: `\[Trait\("Req",\s*"(ID)"\)\]` attached to the next method/class name |
-| `test_smells` | Methods with `[Fact]`/`[Theory]` without `Assert.`/`Should`/`Throws`; `Skip =` in attributes; `[Fact(Skip=...)]` |
-| Red stubs | Default `red_stub_run` works: a `NotImplementedException` makes the test `failed`; a test that passes against the stub is reported |
-| Gates | lint: `dotnet format --verify-no-changes` (or analyzers via `dotnet build -warnaserror`); format: `dotnet format whitespace --verify-no-changes`; typecheck: `dotnet build --no-restore -warnaserror` |
-| Coverage | coverlet (`--collect:"XPlat Code Coverage"` -> Cobertura XML), then `diff-cover <cobertura.xml> --compare-branch=<base_ref>` (diff-cover reads Cobertura) or ReportGenerator |
-| Mutation | Stryker.NET: `dotnet stryker --since:<base_ref>` (or `--mutate` per changed file), threshold from `cfg.mutation_score`, survivors from the JSON report |
-| Forbidden | `#pragma warning disable`, `SuppressMessage`, `ExcludeFromCodeCoverage`, `Skip\s*=` |
-| Protected | `*.sln`, `*.slnx`, `*.csproj` (as a prefix list: `Directory.Build.props`, `Directory.Packages.props`, `global.json`, `NuGet.config`, `.editorconfig`, `stryker-config.json`; `.csproj` files under `src/` need `[protected] extra` entries or an override of `protected_paths`) |
-| Tools | `Bash(dotnet test *)`, `Bash(dotnet build *)`, `Bash(dotnet format *)` |
+| Tag + select | `[Trait("Req", "XXX-R-001")]`, one attribute per ID, on the test method or its class (string literals only). Selection: `--filter "(Req=A\|Req=B)&(<base_filter>)"` |
+| Tests | `dotnet build <target> -c <configuration>`, then `dotnet test <target> -c <configuration> --no-build --results-directory out/.dotnet/<kind> --logger trx [--filter ...]` (`build_before_test = false`: one `dotnet test` that builds). Status: any failed/errored case -> `failed`; build failure, crash without report or timeout -> `error`; no cases -> `no_tests` (VSTest exits 0 when a filter matches nothing); else `passed`. Build failures end the output with `BUILD FAILED (compile errors):` and the unique `error CSxxxx` lines (repo-relative). `fail_fast` is ignored (VSTest has no stop-on-first-failure) |
+| Reports | TRX by default: built into VSTest, so the target project needs no extra package; parsed into `Ns.Class::Method` cases with message + stack trace and, when the core asks for `junit`, rewritten as JUnit XML (`out/<f>/red_stubs.xml`). If **every** test project references `JunitXml.TestLogger`, that logger is used instead (`LogFilePath=.../{assembly}.junit.xml`) and parsed with `parse_junit` |
+| Review tests | `paths` -> the test classes declared in the `.cs` files there (static scan) -> `FullyQualifiedName~Ns.Class.` filter, ANDed with `base_filter`. `[paths] review_tests` must be inside a test project folder (e.g. `tests/App.Tests/Review`), otherwise the files are not compiled |
+| Red stubs | Default `red_stub_run`; `stub_failure_problem`: a failed case counts only if its message/stack contains `NotImplementedException` (`Assert.Throws<X>` against a stub reports it as the actual exception). A compile error gives no report -> the TESTS gate fails with the `BUILD FAILED` lines |
+| `collect_req_tags` | Scan of `[paths] tests/**/*.cs` (skipping `bin/`, `obj/`, `TestResults/`): methods with `[Fact]`/`[Theory]` (also `*Fact`/`*Theory` such as `SkippableFact`, and FsCheck `[Property]`) and their `Trait("Req", ...)` attributes plus those of the enclosing classes. Location `file::Class.Method` |
+| `test_smells` | `NO ASSERTION` (no `Assert*`, `.Should*(`, `Throws`, `Verify*(`, `Fail(` in the body, following called helper methods declared in the test sources up to 3 levels), `SKIPPED (Skip =)` on the test attribute, `EARLY RETURN` (body starts with `return;`), `TRIVIAL ASSERTION` (`Assert.True(true)` / `Assert.False(false)`), `INLINE SKIP` (`Assert.Skip*(`, `Skip.If*(`). Checked against FCSim: 887 tests, 0 findings |
+| lint | `dotnet format style <target> --verify-no-changes --include {changed}` |
+| format | `dotnet format whitespace <target> --verify-no-changes --include {changed}` |
+| typecheck | `dotnet build <target> -c <configuration> --no-incremental`; FAIL on build errors, and with `warnings = "changed"` (default) on warnings located in changed `.cs` files; `"any"` fails on every warning, `"ignore"` drops `--no-incremental` and ignores warnings |
+| Coverage | Full suite (`final_filter`) with `--collect "XPlat Code Coverage"` (coverlet.collector, part of the xUnit template; if no test project references it: suite still runs, coverage SKIPPED). Cobertura files are normalized to repo-relative posix paths (`out/coverage/normalized-N.xml`) and passed to `diff-cover --compare-branch=tests-approved/<f> --fail-under=<diff_coverage>`. diff-cover comes from agentflow's own environment (`pip install "agentflow[dotnet]"`), else `uvx --from diff-cover diff-cover`, else SKIPPED |
+| Mutation | Stryker.NET (`dotnet-stryker` on PATH or in `~/.dotnet/tools`, or a local tool in `.config/dotnet-tools.json`; else SKIPPED with `dotnet tool install -g dotnet-stryker`). One run per project owning changed `.cs` files under `src`: `dotnet-stryker -tp <test project> --project <X.csproj> --mutate **/<file> ... --configuration <cfg> -r Json -O out/<f>/stryker/<project> --break-at 0`, plus `-f` with `test-case-filter = base_filter` merged into the project's `stryker-config.json`. Score = (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage) over the changed files; survivors -> `mutation_survivors.md`. Runtime on the e2e fixture: ~15 s |
+| Forbidden | `#pragma warning disable`, `SuppressMessage`, `ExcludeFromCodeCoverage`, `Skip =`, `catch (Exception)` without a variable, `catch {`, single-line empty `catch (...) { }`. The null-forgiving `!` is allowed |
+| Protected | `*.csproj`, `*.sln`, `*.slnx`, `*Directory.Build.props`, `*Directory.Build.targets`, `*Directory.Packages.props`, `global.json`, `*NuGet.config`, `*.editorconfig`, `*.runsettings`, `.config/dotnet-tools.json`, `stryker-config.json` (globs: any depth) |
+| Tools | `Bash(dotnet test *)`, `Bash(dotnet build *)`, `Bash(dotnet format *)` (no `dotnet add` / `dotnet new`) |
 | `source_suffixes` | `(".cs",)` |
+| Brief | C# 9-safe defaults (block namespaces; the project's CLAUDE.md / LangVersion wins), Trait tagging, stub style, "fail because of the NotImplementedException", property tests as `[Theory]` + `[MemberData]` from a fixed seed (FsCheck `[Property]` only if a test project references FsCheck), the exact filtered test command, forbidden patterns |
+| `init` | Appends the `[dotnet]` section, adds `bin/`, `obj/`, `TestResults/` to `.gitignore`, prints the review-tests advice and a CI snippet with `actions/setup-dotnet@v4` (`global-json-file` when `global.json` exists, else `10.0.x`) |
 
-Note on protected `.csproj` files: protection is prefix-based, so a project file inside `src/`
-can't be listed generically. Either list the paths in `[protected] extra` at init time or let the
-adapter compute them (override `default_protected_paths()` to glob `**/*.csproj` and return the
-relative paths).
+Why lint/format only on changed files and no `-warnaserror`: an existing project usually has
+formatting drift and warnings in old code; checking the whole solution would fail every feature
+for reasons the agent may not touch. The frame (tests-approved tag) defines what the agent changed,
+so the gates hold exactly that code to the standard. `--no-incremental` makes the compiler re-emit
+warnings for code an earlier step already built.
+
+### `[dotnet]` keys
+
+| Key | Default | Meaning |
+|---|---|---|
+| `executable` | auto | Path to `dotnet` |
+| `solution` | the single `*.sln`/`*.slnx` in the root | Build target and, without `test_projects`, test target |
+| `test_projects` | `[]` (= the solution) | Test project paths; each gets its own `dotnet test` (faster than the solution when it has non-test projects) |
+| `configuration` | `"Release"` | `-c` for build, test and Stryker |
+| `base_filter` | `""` | VSTest filter ANDed into every run (agent command, step gate, Stop hook, red stubs, review tests, Stryker), e.g. `"Category!=Slow&Category!=Gate"` |
+| `final_filter` | `""` | Filter of the final full suite + coverage (`""` = every test) |
+| `build_before_test` | `true` | Build first, then `dotnet test --no-build` (clear compile-error reports) |
+| `warnings` | `"changed"` | typecheck: `"changed"` / `"any"` / `"ignore"` |
+| `build_timeout` | `900` | Seconds per build / format / diff-cover command |
+| `test_timeout` | `3600` | Seconds per `dotnet test` |
+| `mutation_timeout` | `7200` | Seconds per Stryker run |
+
+### Notes for a first project (checked against FCSim, read-only)
+
+- Detection, solution (`FCSim.slnx`) and test project (`tests/FCSim.Tests`) are found
+  automatically; coverlet.collector is referenced; no JunitXml logger -> TRX.
+- Suggested config: `[paths] review_tests = "tests/FCSim.Tests/Review"`,
+  `[dotnet] base_filter = "Category!=Slow&Category!=Gate"`,
+  `test_projects = ["tests/FCSim.Tests/FCSim.Tests.csproj"]` (avoids building the Runner for
+  every test run; the typecheck still builds the solution), and `final_filter = "Category!=Gate"`
+  if the gate tests are too slow for every feature.
+- Builds run `CopyToUnity`: `dotnet build` copies the core DLL and content into `unity/Assets`
+  (gitignored), which makes an open Unity editor reimport. The typecheck uses `--no-incremental`.
+- agentflow writes to `[paths] out` (default `out/`, gitignored): `out/<f>/`, `out/.dotnet/`,
+  `out/coverage/`, `out/runs/`. FCSim's runner also writes to `out/`; set `[paths] out` to e.g.
+  `"out/agentflow"` to keep them apart.
+- `dotnet` must be on the agents' PATH: the task prompts and allowed tools use plain `dotnet`.
