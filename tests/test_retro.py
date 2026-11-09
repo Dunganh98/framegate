@@ -64,12 +64,12 @@ def test_build_all_kinds() -> None:
         "G1",
         "D1",
     ]  # event order
-    assert ri.counts == {"Q": 4, "F": 1, "E": 1, "R": 2, "V": 2, "G": 1, "D": 1}
+    assert ri.counts == {"Q": 4, "F": 1, "E": 1, "R": 2, "V": 2, "G": 1, "D": 1, "A": 0, "P": 0}
     t = ri.text
     assert "questions 4 (3 rounds); failed attempts 1; escalations 1; human rejections 2" in t
     assert "### Q1 — TESTS\nQuestion: A?" in t and "A: yes. B: no." in t
     assert "### Q3 — IMPLEMENT / step 2 - x" in t and "aborted: the spec had to change" in t
-    assert "### Q4 — REVIEW\nQuestion: D?\nAnswer:\n~~~\n(not answered yet)" in t
+    assert "### Q4 — REVIEW\nQuestion: D?\nAnswer:\n~~~\n(not answered: the tests gate" in t
     assert "Failing checks: (not recorded)" in t  # old events without `failed`
     assert "### E1 — IMPLEMENT / s1 failed 3 attempts" in t and "(not resolved yet)" in t
     assert "### R1 — tests gate rejected\nReason: too weak" in t

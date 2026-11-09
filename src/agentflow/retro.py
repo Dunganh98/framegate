@@ -1,7 +1,8 @@
-"""Retro input: every question, failed attempt, escalation, human rejection, review finding,
-final-gate failure and permission denial of a feature, with item IDs (Q1, F1, E1, R1, V1, G1, D1)
-the RETRO agent must
-address in retro_proposals.md. Built from out/events.jsonl before the RETRO agent runs."""
+"""Retro input: every question, failed attempt, escalation (turn cap hit twice), human rejection,
+review finding, final-gate failure, permission denial, implementer assumption and parked item of a
+feature, with item IDs (Q1, F1, E1, R1, V1, G1, D1, A1, P1) the RETRO agent must address in
+retro_proposals.md. Built from out/events.jsonl (+ the assumptions in steps.md) before the RETRO
+agent runs."""
 
 from __future__ import annotations
 
@@ -17,8 +18,10 @@ ID_PREFIXES = {
     "V": "Review findings",
     "G": "Final gate failures",
     "D": "Permission denials",
+    "A": "Assumptions (implementer, from steps.md)",
+    "P": "Parked items",
 }
-ITEM_ID = re.compile(r"\b([QFERVGD])(\d+)\b")
+ITEM_ID = re.compile(r"\b([QFERVGDAP])(\d+)\b")
 
 
 @dataclass
@@ -53,8 +56,30 @@ def _block(text: str, limit: int = 1500) -> str:
     return f"~~~\n{text}\n~~~"
 
 
-def build(feature: str, events: list[dict[str, Any]], review_notes: str = "") -> RetroInput:
-    """Render retro_input.md from the feature's events (in order)."""
+def _answer_for_questions(events: list[dict[str, Any]], i: int) -> str:
+    """The human's reply to the questions event at index i: the next answer at a gate (or an
+    old-style questions answer), or an approval that left them open."""
+    for a in events[i + 1 :]:
+        kind = a.get("kind")
+        if kind == "answer" and (a.get("gate") in ("tests", "final") or a.get("waiting")):
+            if a.get("aborted"):
+                return "aborted: the spec had to change (agentflow answer --abort)"
+            return str(a.get("answer") or "(see answers.md)").strip()
+        if kind == "human_gate" and a.get("approved"):
+            return f"(not answered: the {a.get('gate')} gate was approved with it open)"
+        if kind == "tests_gate_auto" and a.get("passed"):
+            return "(not answered)"
+    return "(not answered yet)"
+
+
+def build(
+    feature: str,
+    events: list[dict[str, Any]],
+    review_notes: str = "",
+    assumptions: list[Any] | None = None,
+) -> RetroInput:
+    """Render retro_input.md from the feature's events (in order) and the implementer's
+    assumptions (report.Assumption: where, spec_id, text)."""
     sections: dict[str, list[str]] = {k: [] for k in ID_PREFIXES}
     ids: list[str] = []
 
@@ -68,24 +93,12 @@ def build(feature: str, events: list[dict[str, Any]], review_notes: str = "") ->
         kind = e.get("kind")
         if kind == "questions":
             rounds += 1
-            answer = next(
-                (
-                    a
-                    for a in events[i + 1 :]
-                    if a.get("kind") == "answer" and a.get("waiting") == "questions"
-                ),
-                None,
-            )
-            if answer is None:
-                reply = "(not answered yet)"
-            elif answer.get("aborted"):
-                reply = "aborted: the spec had to change (agentflow answer --abort)"
-            else:
-                reply = str(answer.get("answer") or "(see answers.md)").strip()
+            reply = _answer_for_questions(events, i)
+            who = f" ({e['who']})" if e.get("who") else ""
             for q in split_questions(str(e.get("questions", ""))):
                 item(
                     "Q",
-                    _where(e) or "unknown phase",
+                    (_where(e) or "unknown phase") + who,
                     [f"Question: {q}", "Answer:", _block(reply, 800)],
                 )
         elif kind == "gate" and not e.get("passed"):
@@ -94,6 +107,13 @@ def build(feature: str, events: list[dict[str, Any]], review_notes: str = "") ->
                 "F",
                 f"{_where(e)}, attempt {e.get('attempt')}",
                 [f"Failing checks: {failed}", _block(str(e.get("excerpt") or "(no excerpt)"))],
+            )
+        elif kind == "escalation" and e.get("resolution"):
+            failed = ", ".join(e.get("failed") or []) or "(not recorded)"
+            item(
+                "E",
+                f"{_where(e)} stopped at the turn cap {e.get('attempts')} times",
+                [f"Failing checks: {failed}", f"Resolution: {e['resolution']}"],
             )
         elif kind == "escalation":
             resolution = next(
@@ -120,6 +140,28 @@ def build(feature: str, events: list[dict[str, Any]], review_notes: str = "") ->
             )
         elif kind == "human_gate" and e.get("approved") is False:
             item("R", f"{e.get('gate')} gate rejected", [f"Reason: {e.get('reason')}"])
+        elif kind == "review_findings" and any(a.get("kind") == "triage" for a in events[i + 1 :]):
+            later = events[i + 1 :]
+            triage = next(a for a in later if a.get("kind") == "triage")
+            verdicts = {f.get("test"): f for f in triage.get("findings") or []}
+            fixed = any(a.get("kind") == "findings_fixed" for a in later)
+            parked = any(a.get("kind") == "parked" and a.get("item") == "finding" for a in later)
+            for name in e.get("tests") or []:
+                v = verdicts.get(name) or {}
+                verdict = str(v.get("verdict") or "VALID (no verdict line)")
+                body = [f"Triage (test reviewer): {verdict}"]
+                if v.get("reason"):
+                    body.append(f"Reason: {v['reason']}")
+                if verdict.startswith("VALID"):
+                    res = (
+                        "fixed by the implementer"
+                        if fixed
+                        else "parked (not fixed)"
+                        if parked
+                        else "(open)"
+                    )
+                    body.append(f"Resolution: {res}")
+                item("V", str(name), body)
         elif kind == "review_findings":
             decision = next(
                 (
@@ -146,6 +188,32 @@ def build(feature: str, events: list[dict[str, Any]], review_notes: str = "") ->
                 [_block(str(e.get("excerpt") or "(see final_gates.md)"))],
             )
 
+        elif kind == "parked":
+            body = [f"Kind: {e.get('item')}; reason: {e.get('reason')}"]
+            if e.get("question"):
+                body += ["Question:", _block(str(e["question"]), 800)]
+            if e.get("failed"):
+                body.append(f"Failing checks (last attempt): {', '.join(e['failed'])}")
+            if e.get("tests"):
+                body.append(f"Failing review tests: {', '.join(e['tests'])}")
+            if e.get("excerpt"):
+                body.append(_block(str(e["excerpt"]), 800))
+            redo = next(
+                (
+                    a
+                    for a in events[i + 1 :]
+                    if a.get("kind") == "redo_result" and a.get("label") == e.get("label")
+                ),
+                None,
+            )
+            res = (
+                "open (not redone)"
+                if redo is None
+                else "answered at the final gate and redone: "
+                + ("passed" if redo.get("passed") else "parked again")
+            )
+            body.append(f"Resolution: {res}")
+            item("P", f"{e.get('label')} parked ({e.get('attempts')} failed attempts)", body)
         elif kind == "permission_denials":
             for d in e.get("denials") or []:
                 item(
@@ -153,6 +221,9 @@ def build(feature: str, events: list[dict[str, Any]], review_notes: str = "") ->
                     f"{_where(e) or 'unknown phase'}: {d.get('tool', '?')} denied",
                     ["Denied call:", _block(str(d.get("input", "")), 400)],
                 )
+
+    for a in assumptions or []:
+        item("A", f"{a.where or 'steps.md'} [{a.spec_id}]", [f"Assumption: {a.text}"])
 
     counts = {k: len(v) for k, v in sections.items()}
     names = {
@@ -163,6 +234,8 @@ def build(feature: str, events: list[dict[str, Any]], review_notes: str = "") ->
         "V": f"review findings {counts['V']}",
         "G": f"final gate failures {counts['G']}",
         "D": f"permission denials {counts['D']}",
+        "A": f"assumptions {counts['A']}",
+        "P": f"parked items {counts['P']}",
     }
     out = [
         f"# Retro input: {feature}",
