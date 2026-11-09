@@ -56,6 +56,17 @@ def _has_check(fn: ast.AST) -> bool:
     return False
 
 
+def _is_skip_call(node: ast.Call) -> bool:
+    """pytest.skip(...) / skip(...), but not the @pytest.mark.skip(...) decorator (reported as
+    SKIP/XFAIL already)."""
+    f = node.func
+    if isinstance(f, ast.Attribute):
+        return f.attr == "skip" and not (
+            isinstance(f.value, ast.Attribute) and f.value.attr == "mark"
+        )
+    return isinstance(f, ast.Name) and f.id == "skip"
+
+
 class PythonAdapter(LanguageAdapter):
     name = "python"
     source_suffixes = (".py",)
@@ -166,7 +177,7 @@ class PythonAdapter(LanguageAdapter):
                         target = dec.func if isinstance(dec, ast.Call) else dec
                         if getattr(target, "attr", None) in SKIP_MARKS:
                             problems.append(f"SKIP/XFAIL: {where}")
-                if isinstance(node, ast.Call) and _call_name(node) == "skip":
+                if isinstance(node, ast.Call) and _is_skip_call(node):
                     problems.append(f"pytest.skip() call in {where_file} line {node.lineno}")
         return problems
 

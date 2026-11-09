@@ -30,7 +30,9 @@ Feature code: DEMO
 | DEMO-E-001 | a non-int argument | raises TypeError matching "ints only" |
 """
 
-DESIGN = "# Demo — Design\n\n## Public interfaces\nadd(a: int, b: int) -> int (DEMO-R-001, DEMO-E-001)\n"
+DESIGN = (
+    "# Demo — Design\n\n## Public interfaces\nadd(a: int, b: int) -> int (DEMO-R-001, DEMO-E-001)\n"
+)
 
 PLAN = """\
 # Demo — Implementation plan

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import pytest
-from conftest import DemoRepo, git
 
 from agentflow.config import load_config
 from agentflow.orchestrator import (
@@ -14,6 +13,7 @@ from agentflow.orchestrator import (
     EXIT_SPEC_CHANGE,
     Orchestrator,
 )
+from conftest import DemoRepo, git
 
 FAST = "[gates.commands]\nlint = []\nformat = []\ntypecheck = []\n"
 
@@ -80,8 +80,14 @@ def test_full_flow(demo_repo: DemoRepo) -> None:
     assert "Edit" not in pr_tools.split(",")
 
     log = git(r.root, "log", "--format=%s")
-    for msg in ("demo: spec approved", "demo: tests approved", "demo: step 1 - add",
-                "demo: review findings accepted", "demo: review fixes", "demo: workflow metrics"):
+    for msg in (
+        "demo: spec approved",
+        "demo: tests approved",
+        "demo: step 1 - add",
+        "demo: review findings accepted",
+        "demo: review fixes",
+        "demo: workflow metrics",
+    ):
         assert msg in log
     kinds = [e["kind"] for e in r.events()]
     for k in ("spec_approved", "agent_run", "waiting", "human_gate", "gate", "final_gates"):
