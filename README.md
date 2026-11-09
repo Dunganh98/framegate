@@ -37,6 +37,28 @@ PR -> RETRO -> DONE and stops at the next human gate, agent questions or escalat
 required. Run `agentflow run <f>` again after `approve` / `reject` / `answer`; it also resumes
 after an interruption.
 
+Questions and failed retries feed the retro. An agent question (`questions.md`) pauses the run
+but is not a failed attempt: it marks a spec gap. Every step-gate run is logged in
+`out/events.jsonl` (`gate`: phase, step, attempt, `failed` check names, trimmed `excerpt`), as are
+escalations (phase, step, attempts, failing checks), questions (phase, step, text), answers
+(text; also appended to `questions_archive.md` under the questions), review findings (failing
+reviewer tests) and final gates (`failed`, `skipped`). Before the RETRO agent runs, agentflow
+writes `out/<f>/retro_input.md`: counts, then every question (Q1..), failed attempt (F1..),
+escalation (E1..), human rejection (R1..), review finding (V1..) and final-gate failure (G1..).
+The retro must mention every ID in `retro_proposals.md` (a proposal, or "Not acted on" with a
+one-line reason); if IDs are missing it is re-run once with them as feedback, then a warning is
+printed and logged (`retro_coverage` event).
+
+`metrics/workflow_metrics.csv` (one row per finished feature):
+
+| Column | Meaning |
+|---|---|
+| `human_rejections` | `reject` at the tests or review gate |
+| `escalations` | steps that failed `max_attempts` times in a row |
+| `questions` | question rounds (`questions.md` files; one round can hold several questions) |
+| `gate_failures` | failed step-gate runs = failed implementation attempts (incl. review fixes; questions don't count). This is the "failed attempts" count; there is no separate column |
+| `cost_usd` | sum of `total_cost_usd` of all agent runs |
+
 Hooks (called by the plugin): `agentflow hook pre-tool-use` (phase-based write protection) and
 `agentflow hook stop` (IMPLEMENT can't stop while the step's tests fail). Both read the hook
 JSON on stdin, exit 0 silently without `agentflow.toml` or `.phase`, and block with exit 2.
