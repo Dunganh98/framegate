@@ -25,3 +25,11 @@ def test_no_stop_between_gates_in_roles() -> None:
     assert "final_facts.md" in package_text("roles", "pr.md")
     snippet = package_text("templates", "claude_md_snippet.md")
     assert "park.md" in snippet and "questions.md and stop" not in snippet
+
+
+def test_spec_updater_keeps_ids_and_marks_changes() -> None:
+    text = package_text("roles", "spec_update.md")
+    assert "Never renumber, rename or delete an existing ID" in text
+    assert "(answer ANS-2)" in text and "new ID" in text
+    for name in ("requirements.md", "design.md", "plan.md"):
+        assert name in text

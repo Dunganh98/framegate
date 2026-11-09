@@ -14,7 +14,17 @@ else:  # pragma: no cover - exercised only on 3.10
     import tomli as tomllib
 
 CONFIG_FILE = "agentflow.toml"
-PHASES = ("SPEC", "TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "TRIAGE", "PR", "RETRO")
+PHASES = (
+    "SPEC",
+    "SPEC_UPDATE",
+    "TESTS",
+    "TEST_REVIEW",
+    "IMPLEMENT",
+    "REVIEW",
+    "TRIAGE",
+    "PR",
+    "RETRO",
+)
 DEFAULT_ID_PATTERN = r"\b[A-Z][A-Z0-9]{1,9}-[REI]-\d{3}\b"
 
 # section -> key -> accepted python type(s). "phases.<PHASE>" is handled separately.
@@ -98,6 +108,7 @@ DEFAULT_MAX_TURNS = {
     "TRIAGE": 30,
     "PR": 30,
     "RETRO": 30,
+    "SPEC_UPDATE": 30,
 }
 FALLBACK_MAX_TURNS = 80
 #: --max-budget-usd per agent run when neither [phases.<P>] max_budget_usd nor
@@ -111,6 +122,7 @@ DEFAULT_MAX_BUDGET_USD = {
     "TRIAGE": 1.5,
     "PR": 1.5,
     "RETRO": 3.0,
+    "SPEC_UPDATE": 1.0,
 }
 FALLBACK_MAX_BUDGET_USD = 2.0
 
@@ -227,6 +239,8 @@ class Config:
         p = self.paths
         defaults = {
             "SPEC": [p.specs, p.src],
+            # the orchestrator reverts everything but specs/<f>/{requirements,design,plan}.md
+            "SPEC_UPDATE": [p.specs, p.out],
             "TESTS": [p.tests, p.out],
             "TEST_REVIEW": [p.out],
             "IMPLEMENT": [p.src, p.out],

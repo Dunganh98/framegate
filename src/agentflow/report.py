@@ -19,7 +19,16 @@ TRIAGE_RE = re.compile(
     r"^\s*[-*]\s*`?(.+?)`?\s*:\s*\**(VALID|INVALID)\**\s*(?:[-—–:]+\s*(.*))?$", re.I
 )
 #: phases in the order they run (rows of the cost table)
-PHASE_ORDER = ["TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "TRIAGE", "PR", "RETRO"]
+PHASE_ORDER = [
+    "SPEC_UPDATE",
+    "TESTS",
+    "TEST_REVIEW",
+    "IMPLEMENT",
+    "REVIEW",
+    "TRIAGE",
+    "PR",
+    "RETRO",
+]
 
 
 @dataclass

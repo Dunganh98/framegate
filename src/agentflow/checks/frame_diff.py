@@ -3,6 +3,11 @@
 Fails if protected paths changed (tests, specs, config, dependency and workflow files) or if
 added source lines contain suppression patterns. Tool-independent: it compares against the
 `tests-approved/<feature>` tag, so it also catches writes made through shells.
+
+One exception: answers to parked items at the final gate are written into the spec by the
+SPEC_UPDATE step (after the tests were approved). agentflow tags that commit
+`spec-update/<feature>`; a spec file of the feature that this commit changed is allowed only while
+its content is exactly the tagged one (any further edit is a frame violation again).
 """
 
 from __future__ import annotations
@@ -27,6 +32,24 @@ CORE_PROTECTED = (
 
 def approved_tag(feature: str) -> str:
     return f"tests-approved/{feature}"
+
+
+def spec_update_tag(feature: str) -> str:
+    return f"spec-update/{feature}"
+
+
+def allowed_spec_changes(cfg: Config, feature: str, untracked: set[str]) -> set[str]:
+    """Spec files of the feature changed by the tagged SPEC_UPDATE commit (since the tests were
+    approved) and still identical to that commit."""
+    tag = spec_update_tag(feature)
+    if not tag_exists(cfg, tag):
+        return set()
+    folder = f"{cfg.paths.specs}/{feature}/"
+    cand = set(git(cfg, "diff", "--name-only", approved_tag(feature), tag, "--", folder).split())
+    if not cand:
+        return set()
+    differs = set(git(cfg, "diff", "--name-only", tag, "--", *sorted(cand)).split())
+    return cand - differs - untracked
 
 
 def protected_paths(adapter: LanguageAdapter) -> list[str]:
@@ -91,12 +114,16 @@ def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
         diff = git(cfg, "diff", "-U0", tag, "--", cfg.paths.src)
     except GitError as e:
         return CheckResult("FAIL", str(e))
+    try:
+        spec_ok = allowed_spec_changes(cfg, feature, untracked)
+    except GitError as e:
+        return CheckResult("FAIL", str(e))
     protected = protected_paths(adapter)
     exceptions = cfg.frame_exceptions()
     problems = [
         f"PROTECTED PATH CHANGED: {f}"
         for f in sorted(changed)
-        if path_matches(f, protected) and not path_matches(f, exceptions)
+        if path_matches(f, protected) and not path_matches(f, exceptions) and f not in spec_ok
     ]
     added = [
         line[1:]

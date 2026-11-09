@@ -27,6 +27,10 @@ Scenario keys:
     (files are still written); the stream then has `cap` assistant messages, num_turns = cap + 1
   max_budget: {phase: n} -> the first n runs of that phase end with subtype error_max_budget_usd
   hang: phase whose first run starts a child process and sleeps (pid files in the scenario dir)
+  spec_update: what SPEC_UPDATE does with specs/demo/requirements.md: "edit" (default: marks the
+    DEMO-E-001 row with the answer reference), "new_id" (edit + a new row DEMO-E-002, added to
+    plan.md Covers; TESTS then writes a test for it), "renumber" (DEMO-E-001 -> DEMO-E-009),
+    "stray" (edit + writes specs/other/requirements.md and specs/demo/notes.md), "none"
 """
 
 import json
@@ -54,6 +58,13 @@ def test_add_returns_sum() -> None:
 def test_add_rejects_non_int() -> None:
     with pytest.raises(TypeError, match="ints only"):
         add("1", 2)
+"""
+
+TESTS_E2 = """
+
+@pytest.mark.req("DEMO-E-002")
+def test_add_zeros() -> None:
+    assert add(0, 0) == 0
 """
 
 TESTS_STEP2 = """
@@ -254,10 +265,35 @@ def main() -> int:
             phase = "-"
     req = pathlib.Path("specs/demo/requirements.md")
     two = req.is_file() and "DEMO-R-002" in req.read_text(encoding="utf-8")
+    if phase == "SPEC_UPDATE":
+        mode = scen.get("spec_update", "edit")
+        ref = re.search(r"ANS-\d+", prompt)
+        tag = f" (answer {ref.group(0) if ref else '?'})"
+        text = req.read_text(encoding="utf-8")
+        row = '| DEMO-E-001 | a non-int argument | raises TypeError matching "ints only" |'
+        if mode in ("edit", "new_id", "stray"):
+            text = text.replace(row, row[:-2] + tag + " |")
+        if mode == "new_id":
+            text = text.replace(
+                tag + " |", tag + " |\n| DEMO-E-002 | add(0, 0) | returns 0" + tag + " |"
+            )
+            plan = pathlib.Path("specs/demo/plan.md")
+            ptext = plan.read_text(encoding="utf-8")
+            plan.write_text(ptext.replace("DEMO-E-001\n", "DEMO-E-001, DEMO-E-002\n", 1), "utf-8")
+        if mode == "renumber":
+            text = text.replace("DEMO-E-001", "DEMO-E-009")
+        if mode == "stray":
+            write("specs/other/requirements.md", "# other\n")
+            write("specs/demo/notes.md", "notes\n")
+        if mode != "none":
+            req.write_text(text, encoding="utf-8")
+        write("out/demo/spec_update.md", f"- DEMO-E-001: {mode}{tag}\n")
     if phase == "TESTS":
         rel, text = lang["tests"]
         if two:
             text = text.replace("from demo import add", "from demo import add, neg") + TESTS_STEP2
+        if req.is_file() and "DEMO-E-002" in req.read_text(encoding="utf-8"):
+            text += TESTS_E2
         write(rel, text)
         write("out/demo/test_summary.md", "| DEMO-R-001 | test_add_returns_sum | sum | example |\n")
     elif phase == "TEST_REVIEW":

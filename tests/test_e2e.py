@@ -15,6 +15,8 @@ import time
 import pytest
 
 from agentflow import procs
+from agentflow.adapters import get_adapter
+from agentflow.checks import frame_diff
 from agentflow.config import load_config
 from agentflow.orchestrator import EXIT_GATE, EXIT_INTERRUPTED, Orchestrator
 from conftest import DemoRepo, git
@@ -101,22 +103,36 @@ def test_full_flow_human_mode(demo_repo: DemoRepo, capsys: pytest.CaptureFixture
     assert "Check the error message text too" in r.calls()[5]["prompt"]
     assert "## Open questions: 1" in read(r, "out/demo/tests_gate.md")
 
-    # answer: the same, with the answers; the question moves to the archive
+    # answer: the answers go into the spec (SPEC_UPDATE), then writer + reviewer re-run; the
+    # question moves to the archive; the spec diff is shown at the gate and approved with it
     assert r.af("answer", "demo") == 1  # answers.md missing
     (r.root / "out/demo/answers.md").write_text("No floats.\n", encoding="utf-8")
     assert r.af("answer", "demo") == 0
+    assert r.progress()["phase"] == "SPEC_UPDATE"
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "tests"
-    assert phases(r)[6:] == ["TESTS", "TEST_REVIEW"]
-    assert "answered the open questions" in r.calls()[6]["prompt"]
-    assert "## Open questions: 0" in read(r, "out/demo/tests_gate.md")
+    assert phases(r)[6:] == ["SPEC_UPDATE", "TESTS", "TEST_REVIEW"]
+    assert "answer reference ANS-1" in r.calls()[6]["prompt"]
+    assert "SPEC UPDATER" in r.calls()[6]["role"]
+    assert "answered the open questions" in r.calls()[7]["prompt"]
+    assert "The spec was updated from the answers (ANS-1" in r.calls()[7]["prompt"]
+    tg = read(r, "out/demo/tests_gate.md")
+    assert "## Open questions: 0" in tg
+    assert "## Spec changes from your answers\n" in tg and "(answer ANS-1) |" in tg
+    assert "- ANS-1: specs/demo/requirements.md updated" in tg
+    assert "spec changed from your answers" in r.progress()["waiting"]["message"]
+    assert "spec updated from answers ANS-1" in git(r.root, "log", "-1", "--format=%s", "HEAD~0")
     archive = read(r, "out/demo/questions_archive.md")
-    assert "Should add() accept floats?" in archive and "No floats." in archive
+    assert "Should add() accept floats?" in archive and "### Answer ANS-1" in archive
+    assert "No floats." in archive
     assert r.af("approve", "demo") == 0
     assert git(r.root, "tag", "--list", "tests-approved/demo").strip()
+    approved = git(r.root, "show", "spec-approved/demo:specs/demo/requirements.md")
+    assert "(answer ANS-1)" in approved  # the tag moved to the approved spec
+    assert [e["gate"] for e in r.events() if e["kind"] == "spec_reapproved"] == ["tests"]
 
     # IMPLEMENT (step 1: assumption; step 2 parks) -> REVIEW -> TRIAGE -> fix -> final gates -> PR
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    assert phases(r)[8:] == ["IMPLEMENT", "IMPLEMENT", "REVIEW", "TRIAGE", "IMPLEMENT", "PR"]
+    assert phases(r)[9:] == ["IMPLEMENT", "IMPLEMENT", "REVIEW", "TRIAGE", "IMPLEMENT", "PR"]
     prog = r.progress()
     assert prog["phase"] == "FINAL" and prog["completed_steps"] == [1]
     parked = prog["parked"]
@@ -131,7 +147,7 @@ def test_full_flow_human_mode(demo_repo: DemoRepo, capsys: pytest.CaptureFixture
     assert verdicts["test_add_rejects_bool"] == ("VALID", "DEMO-E-001 says ints only")
     assert verdicts["test_add_rejects_negative"] == ("DISMISSED", "the spec allows negative ints")
     assert not (r.root / "tests/review/test_review_invalid.py").exists()
-    fix = r.calls()[12]
+    fix = r.calls()[13]
     assert "currently failing tests" in fix["prompt"]
     # parked step 2's tests are red by design: the fix check leaves them out
     assert "--req DEMO-R-001,DEMO-E-001" in fix["prompt"]
@@ -191,7 +207,7 @@ def test_full_flow_human_mode(demo_repo: DemoRepo, capsys: pytest.CaptureFixture
         assert msg in log
     assert "demo: step 2 - neg" not in log
     cap = {"TESTS": 50, "TEST_REVIEW": 30, "IMPLEMENT": 80, "REVIEW": 40, "TRIAGE": 30}
-    cap.update(PR=30, RETRO=30)
+    cap.update(PR=30, RETRO=30, SPEC_UPDATE=30)
     for call in r.calls():
         argv = call["argv"]
         assert "-p" in argv and "--bare" not in argv
@@ -236,24 +252,113 @@ def test_answer_parked_redoes_only_parked_items(demo_repo: DemoRepo) -> None:
     (r.root / "out/demo/answers.md").write_text("neg(0) is 0.\n", encoding="utf-8")
     assert r.af("answer", "demo") == 0
     prog = r.progress()
-    assert prog["phase"] == "IMPLEMENT" and prog["redo_mode"] and prog["parked"] == []
+    assert prog["phase"] == "SPEC_UPDATE" and prog["redo_mode"] and prog["parked"] == []
     archive = read(r, "out/demo/questions_archive.md")
     assert "[step 2 - neg]" in archive and "neg(0) is 0." in archive
 
     n = len(r.calls())
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    assert phases(r)[n:] == ["IMPLEMENT", "PR"]  # only the parked step, no review, no tests
-    redo = r.calls()[n]
+    # the answers go into the spec first, then only the parked step: no review, no tests
+    assert phases(r)[n:] == ["SPEC_UPDATE", "IMPLEMENT", "PR"]
+    assert "at the final gate" in r.calls()[n]["prompt"]
+    redo = r.calls()[n + 1]
     assert "implement plan step 2" in redo["prompt"] and "redo of parked work" in redo["prompt"]
     prog = r.progress()
     assert prog["completed_steps"] == [1, 2] and prog["parked"] == [] and not prog["redo"]
     assert [e["passed"] for e in r.events() if e["kind"] == "redo_result"] == [True]
+    # the spec changed after tests-approved: the frame diff allows exactly the tagged update
+    assert git(r.root, "tag", "--list", "spec-update/demo").strip()
     assert "ALL GATES PASSED" in read(r, "out/demo/final_gates.md")
     assert "nothing parked" in r.progress()["waiting"]["message"]
+    assert "spec changed from your answers" in r.progress()["waiting"]["message"]
+    summary = read(r, "out/demo/final_summary.md")
+    assert "## Spec changes from your answers (generated)" in summary
+    assert "(answer ANS-1) |" in summary and "finish --no-retro) approves them" in summary
+    # frame guarantee: only the tagged spec content is allowed, any further spec edit is not
+    adapter = get_adapter(load_config(r.root))
+    assert frame_diff.check(adapter, "demo").status == "PASS"
+    for rel in ("specs/demo/requirements.md", "specs/demo/design.md"):
+        path = r.root / rel
+        orig = path.read_bytes()
+        path.write_bytes(orig + b"\nedited after the update\n")
+        res = frame_diff.check(adapter, "demo")
+        assert res.status == "FAIL" and f"PROTECTED PATH CHANGED: {rel}" in res.output
+        path.write_bytes(orig)
+    assert frame_diff.check(adapter, "demo").status == "PASS"
     finish_with_retro(r)
+    approved = git(r.root, "show", "spec-approved/demo:specs/demo/requirements.md")
+    assert "(answer ANS-1)" in approved
+    assert [e["gate"] for e in r.events() if e["kind"] == "spec_reapproved"] == ["final"]
     ri = read(r, "out/demo/retro_input.md")
     assert "### P1 — step 2 - neg" in ri
     assert "answered at the final gate and redone: passed" in ri
+
+
+def answer_first_question(r: DemoRepo) -> None:
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "tests"
+    (r.root / "out/demo/answers.md").write_text("ints only; add(0, 0) is 0.\n", encoding="utf-8")
+    assert r.af("answer", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "tests"
+
+
+def test_spec_update_new_id_gets_tests(demo_repo: DemoRepo) -> None:
+    """A new edge case from an answer gets a new ID (plan Covers updated); the test writer is told
+    to test it and the gate's ID table shows its test."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.scenario(questions_in=["TESTS"], spec_update="new_id")
+    answer_first_question(r)
+    ev = [e for e in r.events() if e["kind"] == "spec_update"][0]
+    assert ev["new_ids"] == ["DEMO-E-002"] and not ev["lost_ids"] and ev["marked"]
+    assert ev["files"] == ["specs/demo/plan.md", "specs/demo/requirements.md"]
+    writer = [c for c in r.calls() if c["phase"] == "TESTS"][1]
+    assert "New spec IDs that need tests: DEMO-E-002." in writer["prompt"]
+    tg = read(r, "out/demo/tests_gate.md")
+    assert "| DEMO-E-002 | tests/test_demo.py::test_add_zeros |" in tg
+    assert "- Traceability: PASS" in tg and "new IDs: DEMO-E-002" in tg
+    assert "DEMO-E-001, DEMO-E-002" in git(r.root, "show", "HEAD:specs/demo/plan.md")
+
+
+def test_spec_update_never_renumbers(demo_repo: DemoRepo) -> None:
+    """An update that loses an existing ID is reverted as a whole and noted at the gate."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.scenario(questions_in=["TESTS"], spec_update="renumber")
+    answer_first_question(r)
+    ev = [e for e in r.events() if e["kind"] == "spec_update"][0]
+    assert ev["lost_ids"] == ["DEMO-E-001"] and ev["files"] == []
+    assert "DEMO-E-001" in read(r, "specs/demo/requirements.md")
+    tg = read(r, "out/demo/tests_gate.md")
+    assert "## Spec changes from your answers: none" in tg
+    assert "update reverted, it removed or renumbered existing IDs: DEMO-E-001" in tg
+    assert "spec changed" not in r.progress()["waiting"]["message"]
+
+
+def test_spec_update_edits_outside_the_spec_files_undone(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    r.add_toml(FAST)
+    r.scenario(questions_in=["TESTS"], spec_update="stray")
+    answer_first_question(r)
+    assert not (r.root / "specs/other").exists() and not (r.root / "specs/demo/notes.md").exists()
+    ev = [e for e in r.events() if e["kind"] == "spec_update"][0]
+    assert ev["reverted"] == ["specs/demo/notes.md", "specs/other/requirements.md"]
+    assert ev["files"] == ["specs/demo/requirements.md"]
+    assert "edits outside the feature's spec files undone" in read(r, "out/demo/tests_gate.md")
+
+
+def test_auto_tests_gate_stops_for_a_spec_change(demo_repo: DemoRepo) -> None:
+    """[gates] tests = "auto": a spec diff from answers is never approved without the human."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.set_toml("gates", "tests", '"auto"')
+    r.scenario(questions_in=["TESTS"])
+    answer_first_question(r)
+    auto = [e for e in r.events() if e["kind"] == "tests_gate_auto"]
+    assert [a["passed"] for a in auto] == [False, False]
+    assert auto[1]["reasons"] == ["spec changed from your answers (approve the diff)"]
+    assert r.af("approve", "demo") == 0
+    assert "(answer ANS-1)" in git(r.root, "show", "spec-approved/demo:specs/demo/requirements.md")
 
 
 def test_max_attempts_parks_then_redo(demo_repo: DemoRepo) -> None:

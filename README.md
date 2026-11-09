@@ -11,10 +11,10 @@ mutation score) and never stops to ask.
 | Phase | Agent(s) | Ends with |
 |---|---|---|
 | SPEC | interactive `/spec` session | **gate 1**: `agentflow approve-spec` -> tag `spec-approved/<f>` |
-| TESTS | test writer -> mechanical checks -> **test reviewer** (`roles/test_review.md`); objections go back to the writer, at most `[agents] test_review_rounds` (2) times | **gate 2**: `out/<f>/tests_gate.md` (ID -> tests -> what it checks, check results, reviewer verdict + remaining objections, all open questions batched) -> approve (tag `tests-approved/<f>`) / reject / answer. `[gates] tests = "auto"` passes it without a stop when everything is clean |
+| TESTS | test writer -> mechanical checks -> **test reviewer** (`roles/test_review.md`); objections go back to the writer, at most `[agents] test_review_rounds` (2) times | **gate 2**: `out/<f>/tests_gate.md` (ID -> tests -> what it checks, check results, reviewer verdict + remaining objections, all open questions batched) -> approve (tag `tests-approved/<f>`) / reject / answer (answers go into the spec first: SPEC_UPDATE). `[gates] tests = "auto"` passes it without a stop when everything is clean |
 | IMPLEMENT | implementer, one fresh run per plan step | step gates green -> commit. Ambiguity: assume from the spec, log it in `steps.md`. No reasonable assumption, or `max_attempts` failed attempts: the step is **parked** (its code set aside as `out/<f>/parked/*.diff`), the run goes on |
 | REVIEW | adversarial reviewer -> **triage** by the test reviewer -> fixes | valid findings fixed (or parked), invalid ones removed with a reason; final gates |
-| PR | summary agent (`roles/pr.md`) | **gate 3**: `out/<f>/final_summary.md` -> approve (retro) / `finish --no-retro` / answer the parked questions (redo only those) |
+| PR | summary agent (`roles/pr.md`) | **gate 3**: `out/<f>/final_summary.md` -> approve (retro) / `finish --no-retro` / answer the parked questions (into the spec, then redo only those) |
 | RETRO | retro agent | `retro_proposals.md` + metrics row -> DONE |
 
 ## Parts
@@ -35,9 +35,10 @@ agentflow run <f>                           # runs to the next gate (tests, fina
 agentflow status <f>                        # which gate is waiting, and what to do
 agentflow approve <f>                       # tests gate -> implement; final gate -> retro
 agentflow reject <f> --reason "..."         # tests gate: writer + test reviewer re-run with it
-agentflow answer <f>                        # after writing out/<f>/answers.md: tests gate ->
-                                            # writer + reviewer re-run; final gate -> the next
-                                            # run redoes only the parked items
+agentflow answer <f>                        # after writing out/<f>/answers.md: the next run
+                                            # writes them into the spec (SPEC_UPDATE), then
+                                            # tests gate -> writer + reviewer re-run; final
+                                            # gate -> redoes only the parked items
 agentflow finish <f> --no-retro             # final gate -> DONE without the retro
 agentflow gates <f> --scope step|final      # the frame checks (also used in CI)
 agentflow spec-brief <f>                    # conventions for the SPEC session (used by /spec)
@@ -67,6 +68,24 @@ Between the gates nothing stops:
   (`triage.md`, `triage` event). Fixes that fail `max_attempts` times are parked.
 - The final summary (`final_summary.md`) is written from `final_facts.md` (generated from the
   run records); agentflow appends the cost / time / turns table per phase.
+
+Answers go into the spec (the spec stays the source of truth): `agentflow answer` gives the answers
+a reference `ANS-<n>` (in `questions_archive.md` and the `answer` event), and the next `run` starts
+with one SPEC_UPDATE agent run (`roles/spec_update.md`) that writes them into
+`specs/<f>/requirements.md` / `design.md` (and a new ID into the `Covers:` line of `plan.md`),
+each change marked `(answer ANS-<n>)`. agentflow then undoes edits to any other file under the
+specs folder, reverts the whole update if an ID defined in requirements.md disappeared (IDs are
+never renumbered; a new case gets a new ID, so traceability asks for its tests), and commits it
+(`<f>: spec updated from answers ANS-<n>`, `spec_update` event: files, new IDs, lost IDs, undone
+paths). The diff since `spec-approved/<f>` is shown in `tests_gate.md` (section "Spec changes from
+your answers") or appended to `final_summary.md`; approving that gate (or `finish --no-retro`)
+moves the tag `spec-approved/<f>` to it (`spec_reapproved` event). `[gates] tests = "auto"` never
+passes a gate with such a diff. At the final gate the update comes after the tests were approved:
+agentflow tags it `spec-update/<f>`, and the frame diff allows exactly the spec files that commit
+changed, as long as their content equals the tagged one (any further spec edit fails the frame
+again); new IDs there have no tests, so traceability fails at the final gate and says so.
+`approve-spec` drops the `spec-update/<f>` tag. The PreToolUse hook lets SPEC_UPDATE write only
+`specs/` and `out/`.
 
 Stopping a run: Ctrl+C, Ctrl+Break or SIGTERM kill the running agent's whole process tree (each
 agent runs in its own process group; on Windows also in a kill-on-close job object, so even a

@@ -354,6 +354,7 @@ class LanguageAdapter(abc.ABC):
             "TRIAGE": READ_TOOLS + WRITE_TOOLS + tests + GIT_READ_TOOLS,
             "PR": READ_TOOLS + ["Write"] + GIT_READ_TOOLS,
             "RETRO": READ_TOOLS + ["Write"],
+            "SPEC_UPDATE": READ_TOOLS + WRITE_TOOLS,
         }
         return with_powershell(table.get(phase, READ_TOOLS))
 
