@@ -1,0 +1,9 @@
+{
+  "name": "agentflow",
+  "version": "0.1.0",
+  "description": "Spec-driven, test-first workflow: /spec plus phase-lock (PreToolUse) and require-green (Stop) hooks that call the agentflow CLI. Inactive in repos without agentflow.toml.",
+  "author": {
+    "name": "Anh Pham"
+  },
+  "keywords": ["workflow", "tdd", "spec", "hooks"]
+}
