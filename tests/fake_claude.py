@@ -9,11 +9,15 @@ Scenario keys:
   implement_fail: number of IMPLEMENT runs that write a wrong implementation
   review_finding: true -> the reviewer writes one failing test (bool accepted as int)
   language: "python" (default) or "dotnet" (C# files for the .NET fixture, see test_dotnet_e2e)
+  retro_omit: item IDs (e.g. ["F1"]) the RETRO run leaves out of retro_proposals.md (every
+    other ID from out/demo/retro_input.md is listed under "Not acted on")
+  retro_omit_runs: how many RETRO runs omit them (default 1: the re-run fixes it)
 """
 
 import json
 import os
 import pathlib
+import re
 import sys
 
 STUB_DOC = '"""Add two integers. Serves DEMO-R-001, DEMO-E-001."""'
@@ -212,7 +216,12 @@ def main() -> int:
     elif phase == "PR":
         write("out/demo/pr.md", "# PR\nSummary.\n")
     elif phase == "RETRO":
-        write("out/demo/retro_proposals.md", "# Retro\nNone.\n")
+        inp = pathlib.Path("out/demo/retro_input.md")
+        ids = re.findall(r"^### ([QFERVG]\d+) ", inp.read_text(encoding="utf-8"), re.M)
+        if runs[phase] <= scen.get("retro_omit_runs", 1):
+            ids = [i for i in ids if i not in scen.get("retro_omit", [])]
+        body = "".join(f"- {i}: one-off\n" for i in ids) or "none\n"
+        write("out/demo/retro_proposals.md", "# Retro\n\nNot acted on:\n" + body)
     state_path.write_text(json.dumps(state), encoding="utf-8")
     result = {
         "type": "result",

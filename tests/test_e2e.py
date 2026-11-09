@@ -55,6 +55,12 @@ def test_full_flow(demo_repo: DemoRepo) -> None:
     assert "[PASS] diff coverage" in final
     assert (r.root / "out/demo/pr.md").is_file()
     assert (r.root / "out/demo/retro_proposals.md").is_file()
+    retro_input = (r.root / "out/demo/retro_input.md").read_text(encoding="utf-8")
+    assert "### V1 — " in retro_input and "test_add_rejects_bool" in retro_input
+    assert "accepted: the implementer fixed it" in retro_input
+    assert "review findings 1" in retro_input and "## Review notes" in retro_input
+    findings = [e for e in r.events() if e["kind"] == "review_findings"]
+    assert len(findings) == 1 and "test_add_rejects_bool" in findings[0]["tests"][0]
     metrics = (r.root / "metrics/workflow_metrics.csv").read_text(encoding="utf-8").splitlines()
     assert metrics[0].startswith("date,feature") and ",demo," in metrics[1]
     assert not (r.root / ".phase").exists() and not (r.root / ".reqs").exists()
@@ -145,6 +151,14 @@ def test_reject_reruns_tests_with_reason(demo_repo: DemoRepo) -> None:
     assert ev[-1]["approved"] is False and ev[-1]["reason"] == "Check the error message text too"
     assert not git(r.root, "tag", "--list", "tests-approved/demo").strip()
 
+    assert r.af("approve", "demo") == 0
+    assert r.af("run", "demo") == 0
+    retro_input = (r.root / "out/demo/retro_input.md").read_text(encoding="utf-8")
+    assert "### R1 — tests gate rejected" in retro_input
+    assert "Reason: Check the error message text too" in retro_input
+    assert "human rejections 1" in retro_input
+    assert "- R1: one-off" in (r.root / "out/demo/retro_proposals.md").read_text(encoding="utf-8")
+
 
 def test_implement_failure_retry_then_escalation(demo_repo: DemoRepo) -> None:
     r = demo_repo
@@ -163,16 +177,33 @@ def test_implement_failure_retry_then_escalation(demo_repo: DemoRepo) -> None:
     assert "Attempt 2 failed these gates" in impl[2]["prompt"]
     gates = [e for e in r.events() if e["kind"] == "gate"]
     assert [g["passed"] for g in gates] == [False, False, False]
-    assert any(e["kind"] == "escalation" for e in r.events())
+    assert [g["attempt"] for g in gates] == [1, 2, 3]
+    for g in gates:
+        assert g["phase"] == "IMPLEMENT" and g["step"] == "step 1 - add"
+        assert g["failed"] == ["tests (current + earlier steps)"]
+        assert (
+            "[FAIL] tests (current + earlier steps)" in g["excerpt"] and len(g["excerpt"]) <= 2003
+        )
+    esc = [e for e in r.events() if e["kind"] == "escalation"]
+    assert len(esc) == 1 and esc[0]["step"] == "step 1 - add" and esc[0]["attempts"] == 3
+    assert esc[0]["phase"] == "IMPLEMENT" and esc[0]["failed"] == gates[-1]["failed"]
     assert "failed 3 times" in (r.root / "out/demo/escalation.md").read_text(encoding="utf-8")
     assert not (r.root / ".reqs").exists()
 
+    (r.root / "out/demo/answers.md").write_text("Subtraction is wrong; add.\n", encoding="utf-8")
     assert r.af("answer", "demo") == 0
     assert r.progress()["attempt"] == 0
     assert r.af("run", "demo") == 0  # 4th run writes the right code -> through to DONE
     assert r.progress()["phase"] == "DONE"
     impl = [c for c in r.calls() if c["phase"] == "IMPLEMENT"]
     assert len(impl) == 4 and "The human looked at the escalation" in impl[3]["prompt"]
+    retro_input = (r.root / "out/demo/retro_input.md").read_text(encoding="utf-8")
+    for item in ("### F1 — ", "### F2 — ", "### F3 — ", "### E1 — IMPLEMENT / step 1 - add"):
+        assert item in retro_input
+    assert "### F4" not in retro_input and "failed attempts 3" in retro_input
+    assert "retried after the human's answer: Subtraction is wrong; add." in retro_input
+    metrics = (r.root / "metrics/workflow_metrics.csv").read_text(encoding="utf-8").splitlines()
+    assert metrics[1].split(",")[2:6] == ["0", "1", "0", "3"]  # rejections, esc., q., gate fails
 
 
 def test_resume_after_interruption(demo_repo: DemoRepo) -> None:
@@ -201,3 +232,83 @@ def test_resume_after_interruption(demo_repo: DemoRepo) -> None:
     assert r.af("run", "demo") == 0
     assert r.progress()["phase"] == "DONE"
     assert [c["phase"] for c in r.calls()] == ["TESTS", "IMPLEMENT", "REVIEW", "PR", "RETRO"]
+
+
+def test_retro_input_question_and_failed_attempt(demo_repo: DemoRepo) -> None:
+    """1 question + 1 failed attempt -> retro_input.md with Q1/F1; the fake retro leaves F1 out
+    on its first run, so the coverage check re-runs it once with the missing ID."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.scenario(questions_in=["IMPLEMENT"], implement_fail=1, retro_omit=["F1"])
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE
+    assert r.af("approve", "demo") == 0
+    assert r.af("run", "demo") == EXIT_QUESTIONS
+    q = [e for e in r.events() if e["kind"] == "questions"]
+    assert len(q) == 1 and q[0]["phase"] == "IMPLEMENT" and q[0]["step"] == "step 1 - add"
+    assert "Should add() accept floats?" in q[0]["questions"]
+    assert r.progress()["attempt"] == 0  # a question is not an attempt
+    (r.root / "out/demo/answers.md").write_text("No floats: ints only.\n", encoding="utf-8")
+    assert r.af("answer", "demo") == 0
+    archive = (r.root / "out/demo/questions_archive.md").read_text(encoding="utf-8")
+    assert "IMPLEMENT / step 1 - add" in archive and "No floats: ints only." in archive
+    ans = [e for e in r.events() if e["kind"] == "answer"]
+    assert ans[0]["step"] == "step 1 - add" and "No floats" in ans[0]["answer"]
+
+    assert r.af("run", "demo") == 0
+    gates = [e for e in r.events() if e["kind"] == "gate"]
+    assert [(g["attempt"], g["passed"]) for g in gates] == [(1, False), (2, True)]
+    assert gates[0]["failed"] == ["tests (current + earlier steps)"] and gates[0]["excerpt"]
+    assert gates[1]["failed"] == [] and gates[1]["excerpt"] == ""
+
+    retro_input = (r.root / "out/demo/retro_input.md").read_text(encoding="utf-8")
+    assert "questions 1 (1 round); failed attempts 1; escalations 0" in retro_input
+    assert "### Q1 — IMPLEMENT / step 1 - add" in retro_input
+    assert "Question: [IMPLEMENT] Should add() accept floats?" in retro_input
+    assert "No floats: ints only." in retro_input
+    assert "### F1 — IMPLEMENT / step 1 - add, attempt 1" in retro_input
+    assert "Failing checks: tests (current + earlier steps)" in retro_input
+    assert "### Q2" not in retro_input and "### F2" not in retro_input
+
+    retro = [c for c in r.calls() if c["phase"] == "RETRO"]
+    assert len(retro) == 2  # re-run once for the missing F1
+    assert "retro_input.md" in retro[0]["prompt"] and "F1" not in retro[0]["prompt"]
+    assert "does not address these items" in retro[1]["prompt"] and ": F1." in retro[1]["prompt"]
+    assert "Every item ID must appear" in retro[0]["role"]
+    proposals = (r.root / "out/demo/retro_proposals.md").read_text(encoding="utf-8")
+    assert "Q1" in proposals and "F1" in proposals
+    cov = [e for e in r.events() if e["kind"] == "retro_coverage"]
+    assert cov == [cov[0]] and cov[0]["missing_first"] == ["F1"] and cov[0]["missing"] == []
+    assert cov[0]["items"] == 2 and cov[0]["rerun"] is True
+    metrics = (r.root / "metrics/workflow_metrics.csv").read_text(encoding="utf-8").splitlines()
+    assert metrics[1].split(",")[2:6] == ["0", "0", "1", "1"]
+
+
+def test_retro_coverage_warning_after_rerun(
+    demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
+) -> None:
+    r = demo_repo
+    r.add_toml(FAST)
+    r.scenario(implement_fail=1, retro_omit=["F1"], retro_omit_runs=2)
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE
+    assert r.af("approve", "demo") == 0
+    assert r.af("run", "demo") == 0  # a warning, not a stop
+    assert r.progress()["phase"] == "DONE"
+    assert len([c for c in r.calls() if c["phase"] == "RETRO"]) == 2  # only one re-run
+    cov = [e for e in r.events() if e["kind"] == "retro_coverage"][0]
+    assert cov["missing_first"] == ["F1"] and cov["missing"] == ["F1"]
+    assert "WARNING: retro_proposals.md still doesn't address F1" in capsys.readouterr().out
+
+
+def test_retro_no_items_no_rerun(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    r.add_toml(FAST)
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE
+    assert r.af("approve", "demo") == 0
+    assert r.af("run", "demo") == 0
+    retro_input = (r.root / "out/demo/retro_input.md").read_text(encoding="utf-8")
+    assert "questions 0 (0 rounds); failed attempts 0" in retro_input
+    assert retro_input.count("None.") == 6
+    assert len([c for c in r.calls() if c["phase"] == "RETRO"]) == 1

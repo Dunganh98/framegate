@@ -23,7 +23,9 @@ from agentflow.adapters import get_adapter
 from agentflow.adapters.base import LanguageAdapter
 from agentflow.checks import red_stubs, test_smells, traceability
 from agentflow.config import Config
-from agentflow.gates import run_gates
+from agentflow.gates import gate_report
+from agentflow.retro import build as build_retro_input
+from agentflow.retro import missing_ids
 from agentflow.specs import plan_steps
 from agentflow.state import (
     clear_phase,
@@ -70,8 +72,11 @@ TASKS = {
     "{out}/{f}/test_summary.md, {out}/{f}/steps.md, {out}/{f}/review.md, "
     "{out}/{f}/final_gates.md, {out}/{f}/mutation_survivors.md and {out}/{f}/answers.md "
     "if present.",
-    "RETRO": "Feature '{f}': run the retrospective. Inputs: {out}/events.jsonl (feature={f}), "
-    "{out}/{f}/, {out}/runs/*{f}*.json. Write proposals to {out}/{f}/retro_proposals.md.",
+    "RETRO": "Feature '{f}': run the retrospective. Start with {out}/{f}/retro_input.md: every "
+    "question, failed attempt, escalation, rejection, review finding and final-gate failure, "
+    "with item IDs. Address every ID in {out}/{f}/retro_proposals.md (a proposal, or the "
+    "'Not acted on' list with a one-line reason). More detail: {out}/events.jsonl (feature={f}), "
+    "{out}/{f}/, {out}/runs/*{f}*.json.",
 }
 
 
@@ -300,26 +305,40 @@ class Orchestrator:
         self.echo("\n" + self.describe_waiting(feature, waiting))
         raise Paused(WAIT_CODES[waiting["kind"]])
 
-    def check_questions(self, feature: str, prog: dict[str, Any]) -> None:
-        """Agents can't ask interactively in -p mode; they write questions.md and stop."""
+    def check_questions(self, feature: str, prog: dict[str, Any], step: str | None = None) -> None:
+        """Agents can't ask interactively in -p mode; they write questions.md and stop.
+        Questions never count as a failed attempt; they go to the retro as spec gaps."""
         qfile = self.fdir(feature) / "questions.md"
         if not qfile.is_file() or not qfile.read_text(encoding="utf-8").strip():
             return
-        log_event(self.cfg, feature, "questions", questions=qfile.read_text(encoding="utf-8"))
+        log_event(
+            self.cfg,
+            feature,
+            "questions",
+            phase=prog["phase"],
+            step=step,
+            questions=qfile.read_text(encoding="utf-8"),
+        )
         self.pause(
             feature,
             prog,
-            {"kind": "questions", "phase": prog["phase"], "files": [self.rel(qfile)]},
+            {"kind": "questions", "phase": prog["phase"], "step": step, "files": [self.rel(qfile)]},
         )
 
     def agent(
-        self, phase: str, feature: str, prog: dict[str, Any], task: str, role: str | None = None
+        self,
+        phase: str,
+        feature: str,
+        prog: dict[str, Any],
+        task: str,
+        role: str | None = None,
+        step: str | None = None,
     ) -> dict[str, Any]:
         """Run an agent with the pending feedback, consume it, then pause on questions."""
         res = self.run_agent(phase, feature, task, prog.get("feedback", ""), role=role)
         prog["feedback"] = ""
         save_progress(self.cfg, feature, prog)
-        self.check_questions(feature, prog)
+        self.check_questions(feature, prog, step)
         return res
 
     # ---------- implement loop (steps and review fixes) ----------
@@ -336,13 +355,24 @@ class Orchestrator:
             prog["attempt"] = attempt
             save_progress(self.cfg, feature, prog)
             try:
-                self.agent("IMPLEMENT", feature, prog, task, role="implement")
+                self.agent("IMPLEMENT", feature, prog, task, role="implement", step=label)
             except Paused:
                 prog["attempt"] = attempt - 1  # questions don't count as an attempt
                 save_progress(self.cfg, feature, prog)
                 raise
-            ok, out = run_gates(self.adapter, feature, "step")
-            log_event(self.cfg, feature, "gate", step=label, attempt=attempt, passed=ok)
+            rep = gate_report(self.adapter, feature, "step")
+            ok, out = rep.ok, rep.report
+            log_event(
+                self.cfg,
+                feature,
+                "gate",
+                phase=prog["phase"],
+                step=label,
+                attempt=attempt,
+                passed=ok,
+                failed=rep.failed,
+                excerpt=rep.excerpt() if not ok else "",
+            )
             if ok:
                 commit(self.cfg, f"{feature}: {label}")
                 prog["attempt"] = 0
@@ -361,9 +391,24 @@ class Orchestrator:
                     f"# {label}: failed {attempt} times\n\nLast gate output:\n\n~~~\n{out}\n~~~\n",
                     encoding="utf-8",
                 )
-                log_event(self.cfg, feature, "escalation", step=label, attempts=attempt)
+                log_event(
+                    self.cfg,
+                    feature,
+                    "escalation",
+                    phase=prog["phase"],
+                    step=label,
+                    attempts=attempt,
+                    failed=rep.failed,
+                )
                 self.pause(
-                    feature, prog, {"kind": "escalation", "step": label, "files": [self.rel(esc)]}
+                    feature,
+                    prog,
+                    {
+                        "kind": "escalation",
+                        "phase": prog["phase"],
+                        "step": label,
+                        "files": [self.rel(esc)],
+                    },
                 )
 
     # ---------- phases ----------
@@ -411,18 +456,25 @@ class Orchestrator:
         clear_reqs(self.cfg)
         self.advance(feature, prog, "REVIEW", sub="agent")
 
-    def review_tests_failing(self) -> bool:
+    def review_failures(self, feature: str) -> list[str]:
+        """Names of the failing review tests (the reviewer's findings); [] = none."""
         rdir = self.cfg.root / self.cfg.paths.review_tests
         if not rdir.exists():
-            return False
-        run = self.adapter.run_tests(paths=[self.cfg.paths.review_tests])
-        return run.status in ("failed", "error")
+            return []
+        junit = self.fdir(feature) / "review_tests.xml"
+        run = self.adapter.run_tests(paths=[self.cfg.paths.review_tests], junit=junit)
+        if run.status not in ("failed", "error"):
+            return []
+        names = [c.name for c in run.cases or [] if c.outcome in ("failed", "error")]
+        return names or [f"review tests ({run.status}, no per-test report)"]
 
     def phase_review(self, feature: str, prog: dict[str, Any]) -> None:
         sub = prog.get("sub") or "agent"
         if sub == "agent":
             self.agent("REVIEW", feature, prog, self.task_text("REVIEW", feature))
-            if self.review_tests_failing():
+            findings = self.review_failures(feature)
+            if findings:
+                log_event(self.cfg, feature, "review_findings", tests=findings)
                 prog["sub"] = "gate"
                 review = self.fdir(feature) / "review.md"
                 self.pause(
@@ -439,7 +491,7 @@ class Orchestrator:
                 )
             sub = "final"
         if sub == "review_check":
-            sub = "fix" if self.review_tests_failing() else "final"
+            sub = "fix" if self.review_failures(feature) else "final"
             prog["sub"] = sub
             save_progress(self.cfg, feature, prog)
         if sub == "fix":
@@ -453,9 +505,18 @@ class Orchestrator:
             sub = "final"
         prog["sub"] = "final"
         save_progress(self.cfg, feature, prog)
-        ok, out = run_gates(self.adapter, feature, "final")
+        rep = gate_report(self.adapter, feature, "final")
+        ok, out = rep.ok, rep.report
         (self.fdir(feature) / "final_gates.md").write_text(f"~~~\n{out}\n~~~\n", encoding="utf-8")
-        log_event(self.cfg, feature, "final_gates", passed=ok)
+        log_event(
+            self.cfg,
+            feature,
+            "final_gates",
+            passed=ok,
+            failed=rep.failed,
+            skipped=rep.skipped,
+            excerpt=rep.excerpt() if not ok else "",
+        )
         self.echo(
             f"Final gates: {'PASSED' if ok else 'FAILED'} "
             f"(see {self.cfg.paths.out}/{feature}/final_gates.md)"
@@ -470,8 +531,48 @@ class Orchestrator:
         )
         self.advance(feature, prog, "RETRO")
 
+    def write_retro_input(self, feature: str) -> list[str]:
+        """{out}/{f}/retro_input.md; returns the item IDs the proposals must address."""
+        d = self.fdir(feature)
+        review = d / "review.md"
+        notes = review.read_text(encoding="utf-8") if review.is_file() else ""
+        ri = build_retro_input(feature, read_events(self.cfg, feature), notes)
+        (d / "retro_input.md").write_text(ri.text, encoding="utf-8")
+        return ri.ids
+
+    def retro_missing(self, feature: str, ids: list[str]) -> list[str]:
+        f = self.fdir(feature) / "retro_proposals.md"
+        return missing_ids(f.read_text(encoding="utf-8") if f.is_file() else "", ids)
+
     def phase_retro(self, feature: str, prog: dict[str, Any]) -> None:
+        ids = self.write_retro_input(feature)
         self.agent("RETRO", feature, prog, self.task_text("RETRO", feature))
+        missing = self.retro_missing(feature, ids)
+        first = list(missing)
+        if missing:
+            self.echo(f"[RETRO] proposals miss {', '.join(missing)}; re-running the retro once.")
+            prog["feedback"] = (
+                f"{self.cfg.paths.out}/{feature}/retro_proposals.md does not address these items "
+                f"of {self.cfg.paths.out}/{feature}/retro_input.md: {', '.join(missing)}. Keep "
+                "the existing proposals and add each missing ID: in a proposal, or in the "
+                "'Not acted on' list with a one-line reason."
+            )
+            self.agent("RETRO", feature, prog, self.task_text("RETRO", feature))
+            missing = self.retro_missing(feature, ids)
+        log_event(
+            self.cfg,
+            feature,
+            "retro_coverage",
+            items=len(ids),
+            missing_first=first,
+            missing=missing,
+            rerun=bool(first),
+        )
+        if missing:
+            self.echo(
+                f"WARNING: retro_proposals.md still doesn't address {', '.join(missing)} "
+                f"(see {self.cfg.paths.out}/{feature}/retro_input.md)."
+            )
         ev = read_events(self.cfg, feature)
         row = [
             datetime.date.today().isoformat(),
@@ -637,8 +738,17 @@ class Orchestrator:
                     f"Write your answers to {self.cfg.paths.out}/{feature}/answers.md first."
                 )
             questions = qfile.read_text(encoding="utf-8") if qfile.is_file() else ""
+            answer_text = answers.read_text(encoding="utf-8") if answers.is_file() else ""
+            where = " / ".join(str(x) for x in (w.get("phase"), w.get("step")) if x)
             with open(d / "questions_archive.md", "a", encoding="utf-8") as fh:
-                fh.write(f"\n---\n{questions}\n")
+                fh.write(
+                    f"\n---\n<!-- {where} -->\n{questions.rstrip()}\n\n"
+                    + (
+                        "Aborted: the spec must change.\n"
+                        if abort
+                        else f"### Answer (answers.md)\n{answer_text.rstrip()}\n"
+                    )
+                )
             qfile.unlink(missing_ok=True)
             feedback = (
                 f"Your earlier questions (archived in "
@@ -655,7 +765,17 @@ class Orchestrator:
                 )
             )
             prog["attempt"] = 0
-        log_event(self.cfg, feature, "answer", waiting=w["kind"], aborted=abort)
+        answer_now = answers.read_text(encoding="utf-8") if answers.is_file() else ""
+        log_event(
+            self.cfg,
+            feature,
+            "answer",
+            waiting=w["kind"],
+            phase=w.get("phase"),
+            step=w.get("step"),
+            aborted=abort,
+            answer=answer_now[-2000:],
+        )
         if abort:
             prog["waiting"] = {"kind": "spec_change"}
             save_progress(self.cfg, feature, prog)
