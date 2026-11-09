@@ -180,3 +180,19 @@ warnings for code an earlier step already built.
   `out/coverage/`, `out/runs/`. FCSim's runner also writes to `out/`; set `[paths] out` to e.g.
   `"out/agentflow"` to keep them apart.
 - `dotnet` must be on the agents' PATH: the task prompts and allowed tools use plain `dotnet`.
+
+### Measured on FCSim (live smoke run 2026-11-09, 1,328 dev-loop tests)
+
+| Run | Time |
+|---|---|
+| Step gate (lint, format, typecheck `--no-incremental`, frame diff, step tests) | 12 s standalone, 24 s in the run |
+| of which: `dotnet build FCSim.slnx -c Release --no-incremental` (warm build server) / filtered `dotnet test` | 6.2 s / 3.6 s |
+| Final suite with coverlet, `final_filter = ""` (every test incl. Slow + Gate) | > 30 min, stopped (plain suite: ~4-5 min) |
+| Final suite with coverlet, dev-loop filter | > 20 min, stopped (plain: ~1 min) |
+| Final gates with coverage + Stryker restricted to the feature's `Req` tests | 142 s (Stryker 104 s, 6/6 mutants killed) |
+| Stryker with the dev-loop filter as `test-case-filter` | initial test run 9.3 min, coverage capture failed, stopped at 12 min |
+
+Stryker creates mutants for the whole project (40,273 in FCSim.Core); `--mutate` leaves 6 to test
+("Removed by mutate filter"), so the cost is the test runs, not the mutant count. Coverage and
+mutation over the full FCSim suite are not practical per feature; see the smoke-run report for
+the proposed design change (feature-scoped coverage/mutation runs).

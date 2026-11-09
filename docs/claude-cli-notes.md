@@ -29,10 +29,15 @@ What the orchestrator relies on, and how it was verified. No real `claude -p` ag
 with the current interpreter (used by the tests' fake claude). Each run's task prompt and raw
 output are saved to `out/runs/<stamp>-<feature>-<phase>.prompt.md` / `.json`.
 
-## Still to verify in a real run
+## Verified in the live FCSim smoke run (2026-11-09, claude 2.1.319, Windows 11)
 
-- The JSON result fields above and what `--max-turns` does when the limit is hit.
-- That `Bash(python -m pytest *)` also matches the bare command without arguments (agents always
-  pass `-q`, so this is unlikely to matter).
-- The Stop hook's single forced continuation (Claude Code caps Stop-hook continuations at 8 in a
-  row; `stop_hook_active` makes ours allow the stop after one).
+| Item | Result |
+|---|---|
+| JSON result fields | `is_error`, `result`, `total_cost_usd`, `num_turns`, `session_id`, `permission_denials` (tool name + input of every denied call) all present |
+| `--max-turns` hit | `is_error: true`, `subtype: "error_max_turns"`, `terminal_reason: "max_turns"`, no `result` field |
+| Multi-line task via stdin through the npm `.cmd` shim | Arrives intact (agent echoed three lines verbatim) |
+| Plugin hooks in `claude -p` (local-scope install) | PreToolUse blocks (`PreToolUse:Write hook error: ... [IMPLEMENT] Blocked write to tests/...`); Stop blocks on red tests (`Stop hook feedback: ... Tests are still failing`), then the agent continues |
+| Shell tool on Windows | Agents use the **PowerShell** tool as often as Bash. `Bash(...)` rules don't cover it; `PowerShell(<prefix> *)` rules do (agentflow now emits both). `cd ... &&`, `;` chains and PATH prefixes are denied |
+| Project CLAUDE.md | Loaded in every headless run; FCSim's "read HANDOVER.md first" was not followed (0 reads in 9 runs) |
+
+Still open: whether `Bash(python -m pytest *)` matches the bare command without arguments.

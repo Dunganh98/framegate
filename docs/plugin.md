@@ -89,8 +89,9 @@ Timeouts: PreToolUse 30 s, Stop 600 s (the Stop hook may run a full test suite).
 | Validation | `claude plugin validate --strict ./plugin` and `claude plugin validate --strict .` both pass (only "plugin directory" catalog advice: README/LICENSE/icon, irrelevant here) | run 2026-11-09 |
 | Install smoke test | Local scope in a temp repo: marketplace add + install OK; `claude plugin details agentflow` -> Skills (1) spec, Hooks (2) PreToolUse, Stop; then uninstalled and removed | run 2026-11-09 |
 
-Not tested (by design): a live session firing the hooks, the `!` injection in `/spec`, and `claude -p`
-runs. Check once in a real session after the CLI exists.
+Live check (FCSim smoke run, 2026-11-09, local-scope install): both hooks fire in `claude -p`
+runs (see docs/claude-cli-notes.md). Not yet tested: the `!` injection in `/spec` in an
+interactive session.
 
 ## Contract notes for the package
 
