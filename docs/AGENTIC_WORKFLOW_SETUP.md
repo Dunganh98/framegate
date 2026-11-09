@@ -24,7 +24,7 @@ Spec-driven, test-first workflow for Claude Code, with deterministic gates. You 
 2. **The verifier is independent of the implementer.** Tests are written from the spec and stubs only, approved by a human, then frozen. Implementers cannot change them.
 3. **Rules are checks, not prompts.** If a rule can be checked mechanically, it lives in `scripts/`, a hook, or CI, not in CLAUDE.md. CLAUDE.md is only for what can't be checked.
 4. **State lives in files, not conversations.** Each phase and step is a fresh `claude -p` process. Context never accumulates, so nothing depends on auto-compact.
-5. **Ambiguity means stop and ask, never guess.** Headless agents write questions to `out/<feature>/questions.md` and end. The orchestrator pauses for you.
+5. **Three human gates, forward only: SPEC -> TESTS -> FINAL.** Nothing stops in between. The test writer and the test reviewer write questions to `out/<feature>/questions.md` and continue; they are shown together at the tests gate. The implementer assumes from the spec and logs every assumption in `steps.md`; only when no reasonable assumption is possible it parks the step (`park.md`) and the run goes on. Parked items and assumptions are listed at the final gate. (Implemented in the agentflow package; the scripts below are the original single-repo version.)
 6. **Every human correction becomes data.** Gate rejections, escalations and gate failures are logged. A retro agent turns recurring problems into new checks.
 
 ---
@@ -35,11 +35,11 @@ Spec-driven, test-first workflow for Claude Code, with deterministic gates. You 
 
 | Phase | Who | Writes to | Ends with |
 |---|---|---|---|
-| SPEC | Interactive session (`/spec`) | `specs/<feature>/`, interface stubs in `src/` | **You approve** → tag `spec-approved/<feature>` |
-| TESTS | Headless test-writer | `tests/`, `out/` | Red-against-stubs + traceability + smell checks → **you approve the summary** → tag `tests-approved/<feature>` |
-| IMPLEMENT | Headless implementer, one fresh run per plan step | `src/`, `out/` | Step gates green → commit, next step |
-| REVIEW | Headless adversarial reviewer | `tests/review/`, `out/` | Failing tests for findings → you triage → implementer fixes |
-| PR | Headless | `out/` | `out/<feature>/pr.md`, final gate report |
+| SPEC | Interactive session (`/spec`) | `specs/<feature>/`, interface stubs in `src/` | **Gate 1: you approve** → tag `spec-approved/<feature>` |
+| TESTS | Headless test writer, then the headless **test reviewer** (TEST_REVIEW) | `tests/`, `out/` (reviewer: `out/` only) | Red-against-stubs + traceability + smell checks → reviewer objections go back to the writer (`test_review_rounds`, default 2) → **Gate 2: you read `tests_gate.md`** (ID → tests → what it checks, checks, verdict, all questions) → approve / reject / answer → tag `tests-approved/<feature>`. `[gates] tests = "auto"` skips the stop when all is clean |
+| IMPLEMENT | Headless implementer, one fresh run per plan step | `src/`, `out/` | Step gates green → commit, next step. No stop: assumptions logged in `steps.md`; a step without a reasonable assumption or failing `max_attempts` times is parked |
+| REVIEW | Headless adversarial reviewer, then the test reviewer triages (TRIAGE) | `tests/review/`, `out/` | Failing tests for findings → triage against the spec (valid kept, invalid deleted with a reason) → implementer fixes (unfixable: parked) → final gates |
+| PR | Headless summary agent | `out/` | `out/<feature>/final_summary.md` → **Gate 3: you decide**: approve (→ RETRO), `finish --no-retro`, or answer the parked questions (→ redo only those, gate 3 again) |
 | RETRO | Headless | `out/` | `out/<feature>/retro_proposals.md` + metrics row |
 
 ### Enforcement layers
@@ -1270,10 +1270,11 @@ python scripts/orchestrate.py approve-spec health-index-v2
 
 # 2. Everything else (autonomous between gates)
 python scripts/orchestrate.py run health-index-v2
-#   -> gate 1: review out/<feature>/test_summary.md + test_gate.md -> OK
-#   -> implementation runs per step; it pauses only for questions or escalations
-#   -> gate 2: review findings (delete invalid ones) -> OK
-#   -> PR summary in out/<feature>/pr.md, retro in out/<feature>/retro_proposals.md
+#   -> tests gate: read out/<feature>/tests_gate.md -> approve / reject / answer
+#   -> implementation, review, triage, fixes and final gates run without a stop
+#   -> final gate: read out/<feature>/final_summary.md -> approve (retro) / finish --no-retro /
+#      answer the parked questions (redo only those)
+#   (agentflow package: agentflow run / approve / reject / answer / finish <feature>)
 
 # 3. Open the PR, review in this order:
 #    assumptions -> mutation survivors -> review findings -> "where to look first" -> code
