@@ -32,7 +32,20 @@ def test_defaults_match_the_guide(tmp_path: pathlib.Path) -> None:
     assert cfg.write_paths("REVIEW") == ["tests/review/", "out/"]
     assert cfg.write_paths("SPEC") == ["specs/", "src/"]
     assert cfg.write_paths("PR") == ["out/"]
+    assert cfg.write_paths("TEST_REVIEW") == ["out/"]
+    assert cfg.write_paths("TRIAGE") == ["tests/review/", "out/"]
+    assert cfg.turn_cap("TEST_REVIEW") == 30 and cfg.turn_cap("TRIAGE") == 30
     assert cfg.frame_exceptions() == ["tests/review/"]
+    assert cfg.tests_gate == "human" and cfg.test_review_rounds == 2
+
+
+def test_tests_gate_and_review_rounds(tmp_path: pathlib.Path) -> None:
+    cfg = parse_config(tmp_path, {"gates": {"tests": "auto"}, "agents": {"test_review_rounds": 0}})
+    assert cfg.tests_gate == "auto" and cfg.test_review_rounds == 0
+    with pytest.raises(ConfigError, match="human, auto"):
+        parse_config(tmp_path, {"gates": {"tests": "skip"}})
+    with pytest.raises(ConfigError, match="test_review_rounds must be >= 0"):
+        parse_config(tmp_path, {"agents": {"test_review_rounds": -1}})
 
 
 def test_full_config(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:

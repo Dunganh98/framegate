@@ -101,6 +101,8 @@ def fresh_progress() -> dict[str, Any]:
         "attempt": 0,
         "feedback": "",
         "waiting": None,
+        "parked": [],
+        "redo": [],
     }
 
 

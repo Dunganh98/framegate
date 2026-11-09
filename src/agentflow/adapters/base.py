@@ -348,8 +348,10 @@ class LanguageAdapter(abc.ABC):
         tests, lint = self.test_tools(), self.lint_tools()
         table = {
             "TESTS": READ_TOOLS + WRITE_TOOLS + tests + lint,
+            "TEST_REVIEW": READ_TOOLS + ["Write"] + tests,
             "IMPLEMENT": READ_TOOLS + WRITE_TOOLS + tests + lint,
             "REVIEW": READ_TOOLS + WRITE_TOOLS + tests + GIT_READ_TOOLS,
+            "TRIAGE": READ_TOOLS + WRITE_TOOLS + tests + GIT_READ_TOOLS,
             "PR": READ_TOOLS + ["Write"] + GIT_READ_TOOLS,
             "RETRO": READ_TOOLS + ["Write"],
         }

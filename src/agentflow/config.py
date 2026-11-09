@@ -14,7 +14,7 @@ else:  # pragma: no cover - exercised only on 3.10
     import tomli as tomllib
 
 CONFIG_FILE = "agentflow.toml"
-PHASES = ("SPEC", "TESTS", "IMPLEMENT", "REVIEW", "PR", "RETRO")
+PHASES = ("SPEC", "TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "TRIAGE", "PR", "RETRO")
 DEFAULT_ID_PATTERN = r"\b[A-Z][A-Z0-9]{1,9}-[REI]-\d{3}\b"
 
 # section -> key -> accepted python type(s). "phases.<PHASE>" is handled separately.
@@ -36,8 +36,10 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "max_attempts": (int,),
         "max_turns": (int,),
         "permission_mode": (str,),
+        "test_review_rounds": (int,),
     },
     "gates": {
+        "tests": (str,),
         "diff_coverage": (int, float),
         "mutation_score": (int, float),
         "mutation_tool": (str,),
@@ -76,11 +78,24 @@ MUTATION_RUNNERS = ("auto", "native", "wsl")
 #: tests the final coverage / mutation runs use: the feature's tests (its spec IDs + the review
 #: tests; the whole suite then runs once more without instrumentation) or the whole suite
 GATE_SCOPES = ("feature", "suite")
+#: [gates] tests: "human" = always stop at the tests gate; "auto" = pass it without a stop when
+#: the mechanical checks pass, the test reviewer has no objections and no question is open
+TESTS_GATE_MODES = ("human", "auto")
 PHASE_KEYS = ("write", "tools", "max_turns")
 #: --max-turns per phase when neither [phases.<P>] max_turns nor [agents] max_turns is set.
 #: From the FCSim smoke run (most turns used: TESTS 27, IMPLEMENT 18, REVIEW 8, PR 18, RETRO 48
 #: of which most were denied shell probing): RETRO and PR only read and write one file.
-DEFAULT_MAX_TURNS = {"TESTS": 50, "IMPLEMENT": 80, "REVIEW": 40, "PR": 30, "RETRO": 30}
+#: TEST_REVIEW (test reviewer) and TRIAGE (the test reviewer triaging review findings) read and
+#: write one file, like PR.
+DEFAULT_MAX_TURNS = {
+    "TESTS": 50,
+    "TEST_REVIEW": 30,
+    "IMPLEMENT": 80,
+    "REVIEW": 40,
+    "TRIAGE": 30,
+    "PR": 30,
+    "RETRO": 30,
+}
 FALLBACK_MAX_TURNS = 80
 
 
@@ -113,6 +128,10 @@ class Config:
     #: [agents] max_turns: one cap for every phase without its own (None = DEFAULT_MAX_TURNS)
     max_turns: int | None = None
     permission_mode: str = "acceptEdits"
+    #: how often the test reviewer's objections go back to the test writer before the gate
+    test_review_rounds: int = 2
+    #: [gates] tests: "human" | "auto" (see TESTS_GATE_MODES)
+    tests_gate: str = "human"
     diff_coverage: float = 90
     mutation_score: float = 80
     mutation_tool: str | None = None  # None -> the adapter's default tool
@@ -178,8 +197,10 @@ class Config:
         defaults = {
             "SPEC": [p.specs, p.src],
             "TESTS": [p.tests, p.out],
+            "TEST_REVIEW": [p.out],
             "IMPLEMENT": [p.src, p.out],
             "REVIEW": [p.review_tests, p.out],
+            "TRIAGE": [p.review_tests, p.out],
             "PR": [p.out],
             "RETRO": [p.out],
         }
@@ -259,8 +280,16 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     cfg.permission_mode = agents.get("permission_mode", cfg.permission_mode)
     if cfg.max_attempts < 1 or (cfg.max_turns is not None and cfg.max_turns < 1):
         raise ConfigError("[agents] max_attempts and max_turns must be >= 1")
+    cfg.test_review_rounds = agents.get("test_review_rounds", cfg.test_review_rounds)
+    if cfg.test_review_rounds < 0:
+        raise ConfigError("[agents] test_review_rounds must be >= 0")
 
     gates = data.get("gates", {})
+    cfg.tests_gate = gates.get("tests", cfg.tests_gate)
+    if cfg.tests_gate not in TESTS_GATE_MODES:
+        raise ConfigError(
+            f"[gates] tests must be one of {', '.join(TESTS_GATE_MODES)}, got '{cfg.tests_gate}'"
+        )
     cfg.diff_coverage = gates.get("diff_coverage", cfg.diff_coverage)
     cfg.mutation_score = gates.get("mutation_score", cfg.mutation_score)
     cfg.mutation_tool = gates.get("mutation_tool", cfg.mutation_tool)

@@ -19,12 +19,18 @@ language = "{language}"            # "python" | "dotnet"
 
 [agents]
 # claude = "claude"                # override with env AGENTFLOW_CLAUDE
-# max_attempts = 3                 # implementation attempts per step before escalating
-# max_turns = 80                   # one turn cap for all phases; default per phase:
-#                                  # TESTS 50, IMPLEMENT 80, REVIEW 40, PR 30, RETRO 30
+# max_attempts = 3                 # implementation attempts per step before it is parked
+# max_turns = 80                   # one turn cap for all phases; default per phase: TESTS 50,
+#                                  # TEST_REVIEW 30, IMPLEMENT 80, REVIEW 40, TRIAGE 30, PR 30,
+#                                  # RETRO 30
+# test_review_rounds = 2           # test reviewer objections sent back to the test writer
+#                                  # (per gate cycle) before the tests gate
 # permission_mode = "acceptEdits"
 
 [gates]
+# tests = "human"                  # tests gate: "human" = always stop; "auto" = pass without a
+#                                  # stop when the checks pass, the test reviewer has no
+#                                  # objections and no question is open (else stop as "human")
 # diff_coverage = 90
 # mutation_score = 80
 # mutation_tool = "mutmut"         # default: mutmut (python), stryker (dotnet); "none" = off

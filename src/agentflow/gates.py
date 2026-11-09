@@ -6,6 +6,7 @@ scope final  everything, including coverage on the diff, traceability and mutati
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -90,6 +91,8 @@ class GateReport:
     skipped: list[str] = field(default_factory=list)
     #: failing check name -> its output (last 30 lines)
     outputs: dict[str, str] = field(default_factory=dict)
+    #: check name -> wall-clock seconds
+    durations: dict[str, float] = field(default_factory=dict)
 
     def excerpt(self, lines_per_check: int = 12, limit: int = 2000) -> str:
         """A trimmed excerpt of the failing checks' output (for events and the retro)."""
@@ -132,15 +135,18 @@ def gate_report(
     failed: list[str] = []
     skipped: list[str] = []
     outputs: dict[str, str] = {}
+    durations: dict[str, float] = {}
     if scope == "final":
         for line in scope_lines(adapter, feature, skip_mutation):
             emit(line)
         emit("")
     for check in checks(adapter, feature, scope, skip_mutation):
+        t0 = time.monotonic()
         try:
             res = check.run()
         except Exception as e:  # a crashing check must fail the gate, not the runner
             res = CheckResult("FAIL", f"check crashed: {type(e).__name__}: {e}")
+        durations[check.name] = round(time.monotonic() - t0, 1)
         emit(f"[{res.status}] {check.name}")
         out = res.output.strip()
         if res.status == "FAIL":
@@ -161,4 +167,4 @@ def gate_report(
     if skipped:
         summary += f" (SKIPPED: {', '.join(skipped)})"
     emit(f"\n{summary}")
-    return GateReport(not failed, "\n".join(lines), failed, skipped, outputs)
+    return GateReport(not failed, "\n".join(lines), failed, skipped, outputs, durations)
