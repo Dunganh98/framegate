@@ -7,6 +7,7 @@ Start with {out}/{feature}/retro_input.md. It lists, with item IDs and counts:
 - R: every human gate rejection with its reason
 - V: every review finding (failing reviewer test, human decision)
 - G: every final-gate failure
+- D: every tool call the permission check denied (phase/step, tool, command or path)
 More detail: {out}/events.jsonl (filter by feature), {out}/{feature}/ (test_gate.md, steps.md,
 review.md, final_gates.md, answers.md, questions_archive.md, mutation_survivors.md),
 {out}/runs/*{feature}*.json.
@@ -25,6 +26,11 @@ How to treat the items:
   change. A single failure with an obvious one-off cause may go to "Not acted on".
 - Rejections (R) and review findings (V): what should the test writer / implementer have caught?
   Prefer a spec-template category or a check over a prompt line.
+- A permission denial (D): an agent tried a command its allowed tools don't cover. Decide per
+  kind: the command was needed (propose the tool rule for that phase, `[phases.<P>] tools`, or
+  an adapter tool rule), it was a wrong form of an allowed command (propose a conventions-brief
+  or task line), or the denial was right (the phase must not do that; "Not acted on" with why).
+  Group repeated denials of the same kind in one proposal.
 Also look at mutation survivors and assumptions in steps.md that should have been in the spec.
 
 Write {out}/{feature}/retro_proposals.md. Start with the counts line from retro_input.md. For

@@ -314,5 +314,28 @@ def test_retro_no_items_no_rerun(demo_repo: DemoRepo) -> None:
     assert r.af("run", "demo") == 0
     retro_input = (r.root / "out/demo/retro_input.md").read_text(encoding="utf-8")
     assert "questions 0 (0 rounds); failed attempts 0" in retro_input
-    assert retro_input.count("None.") == 6
+    assert retro_input.count("None.") == 7  # one per item type
     assert len([c for c in r.calls() if c["phase"] == "RETRO"]) == 1
+
+
+def test_permission_denials_reach_events_and_retro(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    r.add_toml(FAST)
+    denied = {"tool_name": "PowerShell", "tool_input": {"command": "cd src; python -m pytest"}}
+    r.scenario(denials={"IMPLEMENT": [denied], "RETRO": [denied, denied]})
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE
+    assert r.af("approve", "demo") == 0
+    assert r.af("run", "demo") == 0
+    ev = [e for e in r.events() if e["kind"] == "permission_denials"]
+    assert [e["phase"] for e in ev] == ["IMPLEMENT", "RETRO"]
+    assert ev[0]["step"] == "step 1 - add"
+    assert ev[0]["denials"] == [{"tool": "PowerShell", "input": "cd src; python -m pytest"}]
+    runs = [e for e in r.events() if e["kind"] == "agent_run"]
+    assert [e["denials"] for e in runs if e["phase"] == "IMPLEMENT"] == [1]
+    retro_input = (r.root / "out/demo/retro_input.md").read_text(encoding="utf-8")
+    # the retro input is written before the RETRO run: only the IMPLEMENT denial is in it
+    assert "### D1 — IMPLEMENT / step 1 - add: PowerShell denied" in retro_input
+    assert "### D2" not in retro_input and "permission denials 1" in retro_input
+    cov = [e for e in r.events() if e["kind"] == "retro_coverage"][0]
+    assert cov["items"] == 1 and cov["missing"] == []

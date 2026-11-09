@@ -12,6 +12,11 @@ Scenario keys:
   retro_omit: item IDs (e.g. ["F1"]) the RETRO run leaves out of retro_proposals.md (every
     other ID from out/demo/retro_input.md is listed under "Not acted on")
   retro_omit_runs: how many RETRO runs omit them (default 1: the re-run fixes it)
+  denials: {phase: [{"tool_name": ..., "tool_input": {...}}]} reported as `permission_denials`
+    in the result of that phase's first run
+  max_turns: {phase: n} -> the first n runs of that phase end with subtype error_max_turns
+    (files are still written)
+  hang: phase whose first run starts a child process and sleeps (pid files in the scenario dir)
 """
 
 import json
@@ -217,7 +222,7 @@ def main() -> int:
         write("out/demo/pr.md", "# PR\nSummary.\n")
     elif phase == "RETRO":
         inp = pathlib.Path("out/demo/retro_input.md")
-        ids = re.findall(r"^### ([QFERVG]\d+) ", inp.read_text(encoding="utf-8"), re.M)
+        ids = re.findall(r"^### ([QFERVGD]\d+) ", inp.read_text(encoding="utf-8"), re.M)
         if runs[phase] <= scen.get("retro_omit_runs", 1):
             ids = [i for i in ids if i not in scen.get("retro_omit", [])]
         body = "".join(f"- {i}: one-off\n" for i in ids) or "none\n"
@@ -231,7 +236,14 @@ def main() -> int:
         "num_turns": 3,
         "total_cost_usd": 0.01,
         "session_id": "fake",
+        "permission_denials": [],
     }
+    if runs[phase] == 1:
+        result["permission_denials"] = scen.get("denials", {}).get(phase, [])
+    if runs[phase] <= scen.get("max_turns", {}).get(phase, 0):
+        cap = int(sys.argv[sys.argv.index("--max-turns") + 1])
+        result.update(subtype="error_max_turns", is_error=True, num_turns=cap + 1)
+        del result["result"]
     print(json.dumps(result))
     return 0
 

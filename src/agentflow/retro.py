@@ -1,5 +1,6 @@
-"""Retro input: every question, failed attempt, escalation, human rejection, review finding and
-final-gate failure of a feature, with item IDs (Q1, F1, E1, R1, V1, G1) the RETRO agent must
+"""Retro input: every question, failed attempt, escalation, human rejection, review finding,
+final-gate failure and permission denial of a feature, with item IDs (Q1, F1, E1, R1, V1, G1, D1)
+the RETRO agent must
 address in retro_proposals.md. Built from out/events.jsonl before the RETRO agent runs."""
 
 from __future__ import annotations
@@ -15,8 +16,9 @@ ID_PREFIXES = {
     "R": "Human rejections",
     "V": "Review findings",
     "G": "Final gate failures",
+    "D": "Permission denials",
 }
-ITEM_ID = re.compile(r"\b([QFERVG])(\d+)\b")
+ITEM_ID = re.compile(r"\b([QFERVGD])(\d+)\b")
 
 
 @dataclass
@@ -144,6 +146,14 @@ def build(feature: str, events: list[dict[str, Any]], review_notes: str = "") ->
                 [_block(str(e.get("excerpt") or "(see final_gates.md)"))],
             )
 
+        elif kind == "permission_denials":
+            for d in e.get("denials") or []:
+                item(
+                    "D",
+                    f"{_where(e) or 'unknown phase'}: {d.get('tool', '?')} denied",
+                    ["Denied call:", _block(str(d.get("input", "")), 400)],
+                )
+
     counts = {k: len(v) for k, v in sections.items()}
     names = {
         "Q": f"questions {counts['Q']} ({rounds} round{'s' if rounds != 1 else ''})",
@@ -152,6 +162,7 @@ def build(feature: str, events: list[dict[str, Any]], review_notes: str = "") ->
         "R": f"human rejections {counts['R']}",
         "V": f"review findings {counts['V']}",
         "G": f"final gate failures {counts['G']}",
+        "D": f"permission denials {counts['D']}",
     }
     out = [
         f"# Retro input: {feature}",

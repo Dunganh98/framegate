@@ -80,11 +80,33 @@ TASKS = {
     "{out}/{f}/final_gates.md, {out}/{f}/mutation_survivors.md and {out}/{f}/answers.md "
     "if present.",
     "RETRO": "Feature '{f}': run the retrospective. Start with {out}/{f}/retro_input.md: every "
-    "question, failed attempt, escalation, rejection, review finding and final-gate failure, "
+    "question, failed attempt, escalation, rejection, review finding, final-gate failure and "
+    "permission denial, "
     "with item IDs. Address every ID in {out}/{f}/retro_proposals.md (a proposal, or the "
     "'Not acted on' list with a one-line reason). More detail: {out}/events.jsonl (feature={f}), "
     "{out}/{f}/, {out}/runs/*{f}*.json.",
 }
+
+
+def summarize_denials(raw: Any, limit: int = 300) -> list[dict[str, str]]:
+    """`permission_denials` of a `claude -p` JSON result -> [{tool, input}] with the input
+    trimmed to its command / file path (or compact JSON)."""
+    out: list[dict[str, str]] = []
+    for d in raw if isinstance(raw, list) else []:
+        if not isinstance(d, dict):
+            continue
+        inp = d.get("tool_input")
+        if isinstance(inp, dict):
+            text = next(
+                (str(inp[k]) for k in ("command", "file_path", "notebook_path", "url") if k in inp),
+                json.dumps(inp, ensure_ascii=False),
+            )
+        else:
+            text = "" if inp is None else str(inp)
+        if len(text) > limit:
+            text = text[:limit] + "..."
+        out.append({"tool": str(d.get("tool_name", "?")), "input": text})
+    return out
 
 
 class WorkflowError(Exception):
@@ -191,7 +213,13 @@ class Orchestrator:
         return self.adapter.allowed_tools(phase)
 
     def run_agent(
-        self, phase: str, feature: str, task: str, feedback: str = "", role: str | None = None
+        self,
+        phase: str,
+        feature: str,
+        task: str,
+        feedback: str = "",
+        role: str | None = None,
+        step: str | None = None,
     ) -> dict[str, Any]:
         """One fresh headless Claude Code run. The task goes via stdin and the role via
         --append-system-prompt-file (no multi-line text on the command line)."""
@@ -242,6 +270,7 @@ class Orchestrator:
                 raise ValueError
         except ValueError:
             res = {"is_error": True, "result": (stderr or stdout)[-2000:]}
+        denials = summarize_denials(res.get("permission_denials"))
         log_event(
             self.cfg,
             feature,
@@ -251,7 +280,13 @@ class Orchestrator:
             cost=res.get("total_cost_usd"),
             turns=res.get("num_turns"),
             error=res.get("is_error"),
+            denials=len(denials),
         )
+        if denials:
+            log_event(
+                self.cfg, feature, "permission_denials", phase=phase, step=step, denials=denials
+            )
+            self.echo(f"[{phase}] {len(denials)} tool call(s) denied (logged for the retro).")
         if res.get("is_error"):
             self.echo(f"[{phase}] agent run reported an error: {str(res.get('result'))[:500]}")
         return res
@@ -343,7 +378,7 @@ class Orchestrator:
         step: str | None = None,
     ) -> dict[str, Any]:
         """Run an agent with the pending feedback, consume it, then pause on questions."""
-        res = self.run_agent(phase, feature, task, prog.get("feedback", ""), role=role)
+        res = self.run_agent(phase, feature, task, prog.get("feedback", ""), role=role, step=step)
         prog["feedback"] = ""
         save_progress(self.cfg, feature, prog)
         self.check_questions(feature, prog, step)
