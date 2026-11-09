@@ -72,6 +72,10 @@ def run_hook(event: str) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(errors="replace")  # never crash on a console that can't print a char
     args = build_parser().parse_args(argv)
     if args.command == "hook":  # fast path: no config/adapter imports outside a project
         return run_hook(args.event)

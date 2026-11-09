@@ -290,7 +290,12 @@ class Orchestrator:
         prog["waiting"] = waiting
         save_progress(self.cfg, feature, prog)
         log_event(
-            self.cfg, feature, "waiting", **{k: v for k, v in waiting.items() if k != "message"}
+            self.cfg,
+            feature,
+            "waiting",
+            wait=waiting["kind"],
+            gate=waiting.get("gate"),
+            step=waiting.get("step"),
         )
         self.echo("\n" + self.describe_waiting(feature, waiting))
         raise Paused(WAIT_CODES[waiting["kind"]])
