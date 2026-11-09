@@ -49,7 +49,12 @@ def test_no_phase_allows_everything(project: pathlib.Path) -> None:
         ("REVIEW", "tests/review/test_r.py", True),
         ("REVIEW", "tests/test_a.py", False),
         ("REVIEW", "src/pkg/a.py", False),
-        ("PR", "out/demo/pr.md", True),
+        ("TEST_REVIEW", "out/demo/test_review.md", True),
+        ("TEST_REVIEW", "tests/test_a.py", False),
+        ("TRIAGE", "tests/review/test_r.py", True),
+        ("TRIAGE", "tests/test_a.py", False),
+        ("TRIAGE", "src/pkg/a.py", False),
+        ("PR", "out/demo/final_summary.md", True),
         ("PR", "src/pkg/a.py", False),
         ("SPEC", "specs/demo/plan.md", True),
         ("SPEC", "src/pkg/a.py", True),
@@ -64,7 +69,8 @@ def test_phase_permissions(project: pathlib.Path, phase: str, rel: str, allowed:
         assert (code, msg) == (0, "")
     else:
         assert code == 2
-        assert f"[{phase}] Blocked write to {rel}" in msg and "questions.md" in msg
+        assert f"[{phase}] Blocked write to {rel}" in msg
+        assert ("park.md" if phase == "IMPLEMENT" else "questions.md") in msg
 
 
 def test_relative_path_resolves_against_cwd(project: pathlib.Path) -> None:
@@ -168,6 +174,17 @@ def test_stop_blocks_while_selected_tests_fail(green_red: pathlib.Path) -> None:
     assert require_green.evaluate(stop_json(green_red)) == (0, "")
     (green_red / ".reqs").write_text("X-R-001,X-R-002", encoding="utf-8")
     assert require_green.evaluate(stop_json(green_red))[0] == 2
+
+
+def test_stop_allowed_when_parked(green_red: pathlib.Path) -> None:
+    """An implementer that parks (park.md: no reasonable assumption) may stop with red tests."""
+    set_phase(green_red, "IMPLEMENT")
+    code, msg = require_green.evaluate(stop_json(green_red))
+    assert code == 2 and "park.md" in msg
+    park = green_red / "out" / "f" / "park.md"
+    park.parent.mkdir(parents=True)
+    park.write_text("- Which?\n", encoding="utf-8")
+    assert require_green.evaluate(stop_json(green_red)) == (0, "")
 
 
 def test_stop_hook_active_allows_stop(green_red: pathlib.Path) -> None:

@@ -45,6 +45,12 @@ def evaluate(stdin_text: str) -> tuple[int, str]:
         return 0, ""
     return 2, (
         f"[{phase}] Blocked write to {rel}. Allowed in this phase: {allowed}. "
-        f"If the spec or the tests look wrong, write the problem to "
-        f"{cfg.paths.out}/<feature>/questions.md and stop."
+        + (
+            "If the spec or a test looks wrong: assume what fits the spec and log it in "
+            f"{cfg.paths.out}/<feature>/steps.md, or (no reasonable assumption) write the "
+            f"question to {cfg.paths.out}/<feature>/park.md and stop."
+            if phase == "IMPLEMENT"
+            else "If the spec or the tests look wrong, write the problem to "
+            f"{cfg.paths.out}/<feature>/questions.md and continue."
+        )
     )

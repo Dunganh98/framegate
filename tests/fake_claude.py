@@ -5,9 +5,16 @@ Reads the task from stdin, the phase from .phase, and a scenario from FAKE_CLAUD
 scenario file, and prints the `--output-format json` result shape.
 
 Scenario keys:
-  questions_in: list of phases that ask one question (first run of that phase only)
+  questions_in: list of phases that ask one question in their first run (TESTS, TEST_REVIEW,
+    ...: questions.md, then the normal work; IMPLEMENT: questions.md only = a park request)
+  test_review_objections: number of TEST_REVIEW runs that object (Verdict: OBJECTIONS)
   implement_fail: number of IMPLEMENT runs that write a wrong implementation
-  review_finding: true -> the reviewer writes one failing test (bool accepted as int)
+  park_steps: plan step numbers whose first IMPLEMENT run writes park.md (and half-done code)
+  assume: true -> the first successful IMPLEMENT run logs one assumption in steps.md
+  review_finding: true -> the reviewer writes one failing test (bool accepted as int); TRIAGE
+    marks it VALID
+  review_invalid: true -> the reviewer also writes an invalid finding (negative ints rejected);
+    TRIAGE deletes it and marks it INVALID
   language: "python" (default) or "dotnet" (C# files for the .NET fixture, see test_dotnet_e2e)
   retro_omit: item IDs (e.g. ["F1"]) the RETRO run leaves out of retro_proposals.md (every
     other ID from out/demo/retro_input.md is listed under "Not acted on")
@@ -46,6 +53,26 @@ def test_add_rejects_non_int() -> None:
         add("1", 2)
 """
 
+TESTS_STEP2 = """
+
+@pytest.mark.req("DEMO-R-002")
+def test_neg_negates() -> None:
+    assert neg(4) == -4
+"""
+
+REVIEW_INVALID = """\
+import pytest
+
+from demo import add
+
+
+# Finding (invalid: the spec allows negative ints): negative inputs should be rejected.
+@pytest.mark.req("DEMO-R-001")
+def test_add_rejects_negative() -> None:
+    with pytest.raises(TypeError):
+        add(-1, 1)
+"""
+
 REVIEW_TEST = """\
 import pytest
 
@@ -58,6 +85,12 @@ def test_add_rejects_bool() -> None:
     with pytest.raises(TypeError, match="ints only"):
         add(True, 1)
 """
+
+
+NEG_HEAD = '\n\ndef neg(a: int) -> int:\n    """Negate an integer. Serves DEMO-R-002."""\n'
+NEG_STUB = NEG_HEAD + "    raise NotImplementedError\n"
+NEG_DONE = NEG_HEAD + "    return -a  # neg-done\n"
+NEG_PARTIAL = NEG_HEAD + "    return 0  # partial\n"
 
 
 def impl(body: str) -> str:
@@ -84,6 +117,9 @@ PYTHON = {
     "loose": LOOSE,
     "strict": STRICT,
     "review": ("tests/review/test_review_demo.py", REVIEW_TEST),
+    "review_invalid": ("tests/review/test_review_invalid.py", REVIEW_INVALID),
+    "valid_name": "test_add_rejects_bool",
+    "invalid_name": "test_add_rejects_negative",
 }
 
 CS_TESTS = """using System;
@@ -167,6 +203,7 @@ DOTNET = {
     "loose": cs_impl(CS_LOOSE),
     "strict": cs_impl("            return checked(a + b);"),
     "review": ("tests/Demo.Tests/Review/ReviewCalcTests.cs", CS_REVIEW),
+    "valid_name": "Add_NegativeOverflow_Throws",
 }
 
 
@@ -206,34 +243,79 @@ def main() -> int:
         time.sleep(120)
         return 1
     asked = state.setdefault("asked", [])
+    out = pathlib.Path("out/demo")
     if phase in scen.get("questions_in", []) and phase not in asked:
         asked.append(phase)
         write("out/demo/questions.md", f"- [{phase}] Should add() accept floats?\n")
-    elif phase == "TESTS":
-        write(*lang["tests"])
+        if phase == "IMPLEMENT":  # a park request: no code
+            phase = "-"
+    req = pathlib.Path("specs/demo/requirements.md")
+    two = req.is_file() and "DEMO-R-002" in req.read_text(encoding="utf-8")
+    if phase == "TESTS":
+        rel, text = lang["tests"]
+        if two:
+            text = text.replace("from demo import add", "from demo import add, neg") + TESTS_STEP2
+        write(rel, text)
         write("out/demo/test_summary.md", "| DEMO-R-001 | test_add_returns_sum | sum | example |\n")
-    elif phase == "IMPLEMENT":
-        fails = state.get("implement_failed", 0)
-        if fails < scen.get("implement_fail", 0):
-            state["implement_failed"] = fails + 1
-            write(lang["impl"], lang["wrong"])
-        elif "currently failing tests" in prompt:
-            write(lang["impl"], lang["strict"])
+    elif phase == "TEST_REVIEW":
+        if runs[phase] <= scen.get("test_review_objections", 0):
+            body = (
+                "Verdict: OBJECTIONS\n\n## Objections\n"
+                f"- DEMO-E-001 test_add_rejects_non_int: weak (review run {runs[phase]}) -> "
+                "also check the message\n"
+            )
         else:
-            write(lang["impl"], lang["loose"])
-        with open("out/demo/steps.md", "a", encoding="utf-8") as f:
-            f.write("## Step 1 — add\nBuilt add(). Assumption: bool counts as int.\n")
+            body = "Verdict: OK\n\n## Objections\nNone.\n"
+        write("out/demo/test_review.md", body)
+    elif phase == "IMPLEMENT":
+        path = pathlib.Path(lang["impl"])
+        cur = path.read_text(encoding="utf-8") if path.is_file() else ""
+        m = re.search(r"implement plan step (\d+)", prompt)
+        step = int(m.group(1)) if m else 0
+        parked = state.setdefault("parked", [])
+        neg = (NEG_DONE if "# neg-done" in cur or step == 2 else NEG_STUB) if two else ""
+        strict = "type(a) is not int" in cur
+        fails = state.get("implement_failed", 0)
+        if step in scen.get("park_steps", []) and step not in parked:
+            parked.append(step)
+            write(lang["impl"], (lang["strict"] if strict else lang["loose"]) + NEG_PARTIAL)
+            write("out/demo/park.md", f"- [DEMO-R-002] Step {step}: should neg(0) be 0 or -0?\n")
+        elif fails < scen.get("implement_fail", 0):
+            state["implement_failed"] = fails + 1
+            write(lang["impl"], lang["wrong"] + neg)
+        elif "currently failing tests" in prompt:
+            write(lang["impl"], lang["strict"] + neg)
+        else:
+            write(lang["impl"], (lang["strict"] if strict else lang["loose"]) + neg)
+        if not out.joinpath("park.md").exists():
+            note = "Assumptions: none\n"
+            if scen.get("assume") and not state.get("assumed"):
+                state["assumed"] = True
+                note = "- ASSUMPTION [DEMO-E-001]: bool counts as int (spec silent).\n"
+            with open("out/demo/steps.md", "a", encoding="utf-8") as f:
+                f.write(f"## Step {step or 'fix'} — add\nBuilt add().\n{note}")
     elif phase == "REVIEW":
+        lines = ""
         if scen.get("review_finding"):
             write(*lang["review"])
-            write("out/demo/review.md", "test_add_rejects_bool DEMO-E-001 med bool accepted\n")
-        else:
-            write("out/demo/review.md", "No findings.\n")
+            lines += f"{lang['valid_name']} DEMO-E-001 med bool accepted\n"
+        if scen.get("review_invalid"):
+            write(*lang["review_invalid"])
+            lines += f"{lang['invalid_name']} DEMO-R-001 low negatives accepted\n"
+        write("out/demo/review.md", lines or "No findings.\n")
+    elif phase == "TRIAGE":
+        lines = ""
+        if lang["valid_name"] in prompt:
+            lines += f"- {lang['valid_name']}: VALID — DEMO-E-001 says ints only\n"
+        if lang.get("invalid_name", "-") in prompt:
+            pathlib.Path(lang["review_invalid"][0]).unlink()
+            lines += f"- {lang['invalid_name']}: INVALID — the spec allows negative ints\n"
+        write("out/demo/triage.md", lines)
     elif phase == "PR":
-        write("out/demo/pr.md", "# PR\nSummary.\n")
+        write("out/demo/final_summary.md", "# Final summary\nSummary.\n")
     elif phase == "RETRO":
         inp = pathlib.Path("out/demo/retro_input.md")
-        ids = re.findall(r"^### ([QFERVGD]\d+) ", inp.read_text(encoding="utf-8"), re.M)
+        ids = re.findall(r"^### ([QFERVGDAP]\d+) ", inp.read_text(encoding="utf-8"), re.M)
         if runs[phase] <= scen.get("retro_omit_runs", 1):
             ids = [i for i in ids if i not in scen.get("retro_omit", [])]
         body = "".join(f"- {i}: one-off\n" for i in ids) or "none\n"

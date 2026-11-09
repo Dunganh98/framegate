@@ -2,7 +2,8 @@
 
 Runs the tests for the current and earlier steps (IDs in .reqs; full suite if .reqs is absent).
 stop_hook_active prevents an endless loop: after one forced continuation the agent may stop,
-and the orchestrator's gates catch whatever is still red.
+and the orchestrator's gates catch whatever is still red. An agent that parks its work (wrote
+<out>/<feature>/park.md: no reasonable assumption possible) may stop with red tests.
 """
 
 from __future__ import annotations
@@ -27,6 +28,8 @@ def evaluate(stdin_text: str) -> tuple[int, str]:
         return 0, ""
     if cfg.phase_path.read_text(encoding="utf-8").strip() != "IMPLEMENT":
         return 0, ""
+    if any(p.is_file() for p in cfg.out_dir.glob("*/park.md")):
+        return 0, ""  # parked: the orchestrator reverts the step's code and moves on
     from agentflow.adapters import get_adapter
     from agentflow.state import read_reqs
 
@@ -35,6 +38,7 @@ def evaluate(stdin_text: str) -> tuple[int, str]:
         return 0, ""
     tail = "\n".join(run.output.splitlines()[-40:])
     return 2, (
-        "Tests are still failing. Do not stop yet. Fix the implementation (tests are frozen):\n"
-        + tail
+        "Tests are still failing. Do not stop yet. Fix the implementation (tests are frozen). "
+        "Only if no reasonable assumption from the spec can make them pass, write the question "
+        f"to {cfg.paths.out}/<feature>/park.md and stop.\n" + tail
     )

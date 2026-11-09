@@ -8,7 +8,7 @@ import pathlib
 import pytest
 
 from agentflow import cli
-from agentflow.orchestrator import EXIT_ESCALATION, EXIT_GATE, EXIT_SPEC_CHANGE
+from agentflow.orchestrator import EXIT_GATE
 from conftest import DemoRepo, git
 
 
@@ -136,40 +136,34 @@ def test_reject_requires_reason_and_gate(demo_repo: DemoRepo) -> None:
     assert r.af("reject", "demo", "--reason", "again") == 1  # no longer waiting
 
 
-def test_review_gate_approve_and_reject(demo_repo: DemoRepo) -> None:
+def test_final_gate_commands(demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]) -> None:
     r = demo_repo
-    set_waiting(r, "REVIEW", {"kind": "gate", "gate": "review", "files": []}, sub="gate")
+    final = {"kind": "gate", "gate": "final", "files": []}
+    set_waiting(r, "FINAL", final)
+    capsys.readouterr()
+    assert r.af("status", "demo") == EXIT_GATE
+    assert "=== FINAL GATE (demo) ===" in capsys.readouterr().out
+    assert r.af("reject", "demo", "--reason", "no") == 1  # no reject at the final gate
     assert r.af("approve", "demo") == 0
-    assert r.progress()["sub"] == "review_check"
-    set_waiting(r, "REVIEW", {"kind": "gate", "gate": "review", "files": []}, sub="gate")
-    assert r.af("reject", "demo", "--reason", "findings are wrong") == 0
-    assert r.progress()["sub"] == "final" and r.progress()["phase"] == "REVIEW"
-
-
-def test_answer_escalation(demo_repo: DemoRepo) -> None:
-    r = demo_repo
-    set_waiting(
-        r,
-        "IMPLEMENT",
-        {"kind": "escalation", "step": "step 1 - add", "files": []},
-        attempt=3,
-        feedback="Attempt 3 failed these gates",
-    )
-    assert r.af("status", "demo") == EXIT_ESCALATION
-    assert r.af("approve", "demo") == 1  # escalations are answered, not approved
-    assert r.af("answer", "demo") == 0  # answers.md optional for an escalation
+    assert r.progress()["phase"] == "RETRO" and r.progress()["waiting"] is None
+    assert r.events()[-1]["gate"] == "final" and r.events()[-1]["approved"] is True
+    assert r.af("approve", "demo") == 1  # no longer waiting
+    set_waiting(r, "FINAL", final, parked=[])
+    (r.root / "out/demo/answers.md").write_text("a\n", encoding="utf-8")
+    assert r.af("answer", "demo") == 1  # nothing parked
+    item = {"kind": "finding", "label": "review fixes", "tests": ["t::x"], "reason": "r"}
+    set_waiting(r, "FINAL", final, parked=[item])
+    assert r.af("answer", "demo") == 0
     prog = r.progress()
-    assert prog["attempt"] == 0 and prog["waiting"] is None
-    assert prog["feedback"].startswith("Attempt 3 failed these gates")
-    assert "The human looked at the escalation" in prog["feedback"]
+    assert (prog["phase"], prog["sub"], prog["redo"]) == ("REVIEW", "fix", [item])
 
 
-def test_answer_abort_escalation(demo_repo: DemoRepo) -> None:
+def test_old_pause_kinds_are_dropped(demo_repo: DemoRepo) -> None:
+    """A progress.json of an older agentflow waiting for questions/escalation: no stop now."""
     r = demo_repo
     set_waiting(r, "IMPLEMENT", {"kind": "escalation", "step": "s", "files": []})
-    assert r.af("answer", "demo", "--abort") == EXIT_SPEC_CHANGE
-    assert r.progress()["waiting"] == {"kind": "spec_change"}
-    assert r.af("answer", "demo") == 1
+    assert r.af("status", "demo") == 0
+    assert r.af("approve", "demo") == 1 and r.af("finish", "demo", "--no-retro") == 1
 
 
 def test_main_module_help(capsys: pytest.CaptureFixture[str]) -> None:
@@ -186,6 +180,7 @@ def test_main_module_help(capsys: pytest.CaptureFixture[str]) -> None:
         "approve",
         "reject",
         "answer",
+        "finish",
         "gates",
         "spec-brief",
         "hook",

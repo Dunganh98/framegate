@@ -1,9 +1,16 @@
-"""Workflow driver: SPEC -> TESTS -> IMPLEMENT (per plan step) -> REVIEW -> PR -> RETRO -> DONE.
+"""Workflow driver with three human gates, forward only:
+
+SPEC (approve-spec) -> TESTS (test writer <-> test reviewer, mechanical checks) -> TESTS gate ->
+IMPLEMENT (per plan step) -> REVIEW (adversarial reviewer -> triage by the test reviewer -> fixes
+-> final gates) -> PR (final summary) -> FINAL gate -> RETRO -> DONE.
 
 Every agent run is a fresh headless `claude -p` process: no context accumulates between steps.
-`run` never blocks on input: it advances until a human gate, open agent questions or an
-escalation, records the wait in out/<f>/progress.json ("waiting") and exits with a distinct code.
-The human continues with `approve`, `reject`, `answer`, then `run` again. Resumable at any point.
+`run` never blocks on input and never stops between the gates: questions of the test writer and
+the test reviewer are collected and shown together at the tests gate; the implementer assumes from
+the spec (logged in steps.md) or parks a step it cannot do, and so does a step that fails
+max_attempts times; review findings are triaged against the spec by the test reviewer. At a gate
+`run` records the wait in out/<f>/progress.json ("waiting") and exits with EXIT_GATE; the human
+continues with approve / reject / answer / finish, then `run` again. Resumable at any point.
 """
 
 from __future__ import annotations
@@ -13,6 +20,7 @@ import importlib.resources
 import json
 import os
 import pathlib
+import re
 import shutil
 import sys
 import time
@@ -25,9 +33,19 @@ from agentflow.adapters.base import LanguageAdapter
 from agentflow.checks import red_stubs, test_smells, traceability
 from agentflow.config import Config
 from agentflow.gates import gate_report
+from agentflow.report import (
+    TestReview,
+    final_facts,
+    parse_assumptions,
+    parse_test_review,
+    parse_triage,
+    phase_table,
+    since_spec_approval,
+    triage_verdict,
+)
 from agentflow.retro import build as build_retro_input
-from agentflow.retro import missing_ids
-from agentflow.specs import plan_steps
+from agentflow.retro import missing_ids, split_questions
+from agentflow.specs import PlanStep, feature_ids, plan_steps
 from agentflow.state import (
     clear_phase,
     clear_reqs,
@@ -46,21 +64,14 @@ from agentflow.state import (
 
 EXIT_OK = 0
 EXIT_ERROR = 1
-EXIT_GATE = 10  # waiting for a human gate: approve / reject
-EXIT_QUESTIONS = 11  # agent questions: write answers.md, then answer
-EXIT_ESCALATION = 12  # step failed max_attempts times: fix/clarify, then answer
-EXIT_SPEC_CHANGE = 13  # aborted: edit the spec, then approve-spec
+EXIT_GATE = 10  # waiting at a human gate (tests or final): approve / reject / answer / finish
 EXIT_INTERRUPTED = 130  # Ctrl+C / SIGTERM: agents stopped, state cleared; run again
 
-WAIT_CODES = {
-    "gate": EXIT_GATE,
-    "questions": EXIT_QUESTIONS,
-    "escalation": EXIT_ESCALATION,
-    "spec_change": EXIT_SPEC_CHANGE,
-}
-
-PHASES = ["TESTS", "IMPLEMENT", "REVIEW", "PR", "RETRO", "DONE"]
-BRIEF_PHASES = {"TESTS", "IMPLEMENT", "FIX", "REVIEW"}
+PHASES = ["TESTS", "IMPLEMENT", "REVIEW", "PR", "FINAL", "RETRO", "DONE"]
+METRICS_HEADER = (
+    "date,feature,human_rejections,escalations,questions,gate_failures,cost_usd,parked,assumptions"
+)
+BRIEF_PHASES = {"TESTS", "TEST_REVIEW", "IMPLEMENT", "FIX", "REVIEW", "TRIAGE"}
 #: Only the plain command forms are pre-approved (--allowedTools); a `cd`/PATH prefix or an
 #: `;`/`&&` chain makes the permission check deny the call (seen in a live run on Windows).
 COMMAND_FORM = (
@@ -68,23 +79,43 @@ COMMAND_FORM = (
     "tool), one command per call: no `cd`, PATH/env prefixes, `;` or `&&` chains. Other forms "
     "are denied."
 )
+NO_STOP = (
+    "Nobody answers questions during the run. Where the spec is ambiguous, assume what fits the "
+    "spec best and log it in {out}/{f}/steps.md (`- ASSUMPTION [<spec ID>]: ...`). Only if no "
+    "reasonable assumption is possible, write the question to {out}/{f}/park.md and stop: the "
+    "work is parked and the run continues."
+)
+REDO_NOTE = (
+    "\n\nThis is a redo of parked work: the human answered the parked question(s) in "
+    "{out}/{f}/answers.md (earlier questions: {out}/{f}/questions_archive.md). Read both first."
+)
 
 TASKS = {
     "TESTS": "Feature '{f}': write the tests from {specs}/{f}/ and the interface stubs in {src}/. "
-    "Write the summary table to {out}/{f}/test_summary.md.",
+    "Write the summary table to {out}/{f}/test_summary.md. A question the spec does not settle "
+    "goes to {out}/{f}/questions.md; then continue with the rest (do not stop).",
+    "TEST_REVIEW": "Feature '{f}': review the tests against {specs}/{f}/ (round {round} of at "
+    "most {rounds}). Inputs: the tests tagged with the feature's spec IDs, "
+    "{out}/{f}/test_summary.md, the mechanical checks in {out}/{f}/test_checks.md, and "
+    "{out}/{f}/answers.md if present. Write your verdict to {out}/{f}/test_review.md. Do not "
+    "edit tests.{note}",
     "IMPLEMENT": "Feature '{f}': implement plan step {n} ('{title}'). Make the tests for these "
-    "IDs pass: {ids}. Tests of earlier steps must stay green. Check with: {check}",
+    "IDs pass: {ids}. Tests of earlier steps must stay green. Check with: {check}\n" + NO_STOP,
     "FIX": "Feature '{f}': make all currently failing tests pass without editing tests. "
-    "Check with: {check}",
+    "Check with: {check}\n" + NO_STOP,
     "REVIEW": "Feature '{f}': review the implementation against {specs}/{f}/. "
     "Implementation diff: git diff tests-approved/{f}",
-    "PR": "Feature '{f}': write the pull request summary to {out}/{f}/pr.md. Inputs: {specs}/{f}/, "
-    "{out}/{f}/test_summary.md, {out}/{f}/steps.md, {out}/{f}/review.md, "
-    "{out}/{f}/final_gates.md, {out}/{f}/mutation_survivors.md and {out}/{f}/answers.md "
-    "if present.",
+    "TRIAGE": "Feature '{f}': triage the adversarial reviewer's findings against {specs}/{f}/. "
+    "Failing review tests:\n{findings}\nReviewer notes: {out}/{f}/review.md. Delete the tests of "
+    "INVALID findings from {review_tests}/ and write one line per finding to {out}/{f}/triage.md.",
+    "PR": "Feature '{f}': write the final summary for the human's final gate to "
+    "{out}/{f}/final_summary.md. Start with {out}/{f}/final_facts.md (generated facts). Other "
+    "inputs: {specs}/{f}/, {out}/{f}/test_summary.md, {out}/{f}/steps.md, {out}/{f}/review.md, "
+    "{out}/{f}/triage.md, {out}/{f}/final_gates.md, {out}/{f}/mutation_survivors.md and "
+    "{out}/{f}/answers.md if present.",
     "RETRO": "Feature '{f}': run the retrospective. Start with {out}/{f}/retro_input.md: every "
-    "question, failed attempt, escalation, rejection, review finding, final-gate failure and "
-    "permission denial, "
+    "question, failed attempt, escalation, rejection, review finding, final-gate failure, "
+    "permission denial, assumption and parked item, "
     "with item IDs. Address every ID in {out}/{f}/retro_proposals.md (a proposal, or the "
     "'Not acted on' list with a one-line reason). More detail: {out}/events.jsonl (feature={f}), "
     "{out}/{f}/, {out}/runs/*{f}*.json.",
@@ -316,87 +347,79 @@ class Orchestrator:
             self.echo(f"[{phase}] agent run reported an error: {str(res.get('result'))[:500]}")
         return res
 
-    # ---------- waiting ----------
+    # ---------- waiting (only the tests gate and the final gate) ----------
     def describe_waiting(self, feature: str, waiting: dict[str, Any]) -> str:
-        kind = waiting.get("kind")
-        files = "\n".join(f"  review: {f}" for f in waiting.get("files", []))
-        f = feature
-        if kind == "gate":
+        gate = waiting.get("gate")
+        f, out = feature, self.cfg.paths.out
+        files = "\n".join(f"  read: {x}" for x in waiting.get("files", []))
+        msg = f"{waiting['message']}\n" if waiting.get("message") else ""
+        if waiting.get("kind") != "gate":
+            return f"waiting: {waiting}"
+        if gate == "tests":
             return (
-                f"=== GATE: {waiting.get('gate')} ({f}) ===\n{files}\n"
-                + (f"{waiting['message']}\n" if waiting.get("message") else "")
-                + f"Approve:  agentflow approve {f}\n"
-                f'Reject:   agentflow reject {f} --reason "<what is wrong>"\n'
+                f"=== TESTS GATE ({f}) ===\n{files}\n{msg}"
+                f"Approve:  agentflow approve {f}\n"
+                f'Reject:   agentflow reject {f} --reason "<what is wrong>"'
+                "   (test writer + test reviewer re-run)\n"
+                f"Answer:   write {out}/{f}/answers.md, then agentflow answer {f}"
+                "   (test writer + test reviewer re-run)\n"
                 f"Then:     agentflow run {f}"
             )
-        if kind == "questions":
-            qfile = self.cfg.feature_out(f) / "questions.md"
-            q = qfile.read_text(encoding="utf-8").strip() if qfile.is_file() else ""
+        if gate == "final":
             return (
-                f"=== AGENT QUESTIONS ({f}) ===\n{q}\n\n"
-                f"Write your answers to {self.cfg.paths.out}/{f}/answers.md "
-                "(read by all later agents), then:\n"
-                f"  agentflow answer {f}            (continue)\n"
-                f"  agentflow answer {f} --abort    (the spec itself must change)\n"
-                f"Then: agentflow run {f}"
+                f"=== FINAL GATE ({f}) ===\n{files}\n{msg}"
+                f"Approve:  agentflow approve {f}   (then agentflow run {f}: retro -> DONE)\n"
+                f"No retro: agentflow finish {f} --no-retro   (DONE)\n"
+                f"Parked:   write {out}/{f}/answers.md, then agentflow answer {f} and "
+                f"agentflow run {f}\n"
+                "          (redoes only the parked items, then this gate again)"
             )
-        if kind == "escalation":
-            what = (
-                "stopped at the turn cap twice"
-                if waiting.get("reason") == "turn_cap"
-                else f"failed {self.cfg.max_attempts} times"
-            )
-            return (
-                f"=== ESCALATION: {waiting.get('step')} {what} ({f}) ===\n"
-                f"{files}\n"
-                f"Fix the problem or clarify in {self.cfg.paths.out}/{f}/answers.md, then:\n"
-                f"  agentflow answer {f}            (retry with fresh attempts)\n"
-                f"  agentflow answer {f} --abort    (the spec itself must change)\n"
-                f"Then: agentflow run {f}"
-            )
-        if kind == "spec_change":
-            return (
-                f"=== SPEC CHANGE REQUIRED ({f}) ===\n"
-                f"Edit {self.cfg.paths.specs}/{f}/ in a normal session, then:\n"
-                f"  agentflow approve-spec {f}   (resets progress to TESTS)\n"
-                f"  agentflow run {f}"
-            )
-        return f"waiting: {waiting}"
+        return f"=== GATE: {gate} ({f}) ===\n{files}\n{msg}"
 
     def pause(self, feature: str, prog: dict[str, Any], waiting: dict[str, Any]) -> None:
         prog["waiting"] = waiting
         save_progress(self.cfg, feature, prog)
-        log_event(
-            self.cfg,
-            feature,
-            "waiting",
-            wait=waiting["kind"],
-            gate=waiting.get("gate"),
-            step=waiting.get("step"),
-        )
+        log_event(self.cfg, feature, "waiting", wait=waiting["kind"], gate=waiting.get("gate"))
         self.echo("\n" + self.describe_waiting(feature, waiting))
-        raise Paused(WAIT_CODES[waiting["kind"]])
+        raise Paused(EXIT_GATE)
 
-    def check_questions(self, feature: str, prog: dict[str, Any], step: str | None = None) -> None:
-        """Agents can't ask interactively in -p mode; they write questions.md and stop.
-        Questions never count as a failed attempt; they go to the retro as spec gaps."""
-        qfile = self.fdir(feature) / "questions.md"
-        if not qfile.is_file() or not qfile.read_text(encoding="utf-8").strip():
+    def set_sub(self, feature: str, prog: dict[str, Any], sub: str | None) -> str | None:
+        prog["sub"] = sub
+        save_progress(self.cfg, feature, prog)
+        return sub
+
+    # ---------- questions: collected, never a stop ----------
+    def collect_questions(self, feature: str, phase: str, who: str) -> int:
+        """Move questions.md (written by an agent) to open_questions.md, tagged with who asked.
+        They are shown at the next gate; the run goes on."""
+        d = self.fdir(feature)
+        qfile = d / "questions.md"
+        if not qfile.is_file():
+            return 0
+        text = qfile.read_text(encoding="utf-8").strip()
+        qfile.unlink()
+        items = split_questions(text)
+        if not items:
+            return 0
+        with open(d / "open_questions.md", "a", encoding="utf-8") as fh:
+            for q in items:
+                fh.write(f"- [{who}] " + q.replace("\n", "\n  ") + "\n")
+        log_event(self.cfg, feature, "questions", phase=phase, who=who, questions=text)
+        self.echo(f"[{phase}] {len(items)} question(s) collected for the next gate.")
+        return len(items)
+
+    def open_questions(self, feature: str) -> list[str]:
+        p = self.fdir(feature) / "open_questions.md"
+        return split_questions(p.read_text(encoding="utf-8")) if p.is_file() else []
+
+    def archive_questions(self, feature: str, where: str, questions: str, answer: str) -> None:
+        if not questions.strip():
             return
-        log_event(
-            self.cfg,
-            feature,
-            "questions",
-            phase=prog["phase"],
-            step=step,
-            questions=qfile.read_text(encoding="utf-8"),
-        )
-        self.pause(
-            feature,
-            prog,
-            {"kind": "questions", "phase": prog["phase"], "step": step, "files": [self.rel(qfile)]},
-        )
+        with open(self.fdir(feature) / "questions_archive.md", "a", encoding="utf-8") as fh:
+            fh.write(f"\n---\n<!-- {where} -->\n{questions.rstrip()}\n\n{answer.rstrip()}\n")
+        (self.fdir(feature) / "open_questions.md").unlink(missing_ok=True)
 
+    # ---------- agent runs ----------
     def agent(
         self,
         phase: str,
@@ -407,27 +430,30 @@ class Orchestrator:
         step: str | None = None,
         retry_turn_cap: bool = True,
     ) -> dict[str, Any]:
-        """Run an agent with the pending feedback, consume it, then pause on questions.
-        A run that stops at the turn cap is re-run once with a note, then escalated
-        (retry_turn_cap=False: the caller handles it, e.g. the step gate decides)."""
+        """Run an agent with the pending feedback and consume it. A run that stops at the turn
+        cap is re-run once with a note; if that one stops at the cap too, it is logged
+        (escalation event, retro E item) and the run continues (retry_turn_cap=False: the caller
+        handles it, e.g. the step gate decides)."""
         while True:
             res = self.run_agent(
                 phase, feature, task, prog.get("feedback", ""), role=role, step=step
             )
             prog["feedback"] = ""
             save_progress(self.cfg, feature, prog)
-            self.check_questions(feature, prog, step)
-            if not retry_turn_cap or not hit_turn_cap(res):
+            if (
+                not retry_turn_cap
+                or not hit_turn_cap(res)
+                or not self.turn_cap_retry(phase, feature, prog, step)
+            ):
                 prog["turn_cap_retries"] = 0
                 save_progress(self.cfg, feature, prog)
                 return res
-            self.turn_cap_retry_or_escalate(phase, feature, prog, step)
 
-    def turn_cap_retry_or_escalate(
+    def turn_cap_retry(
         self, phase: str, feature: str, prog: dict[str, Any], step: str | None
-    ) -> None:
-        """After a run stopped at the turn cap: set the retry note, or escalate (Paused) when
-        the retry stopped at the cap too."""
+    ) -> bool:
+        """After a run stopped at the turn cap: set the retry note (True), or log that the retry
+        stopped at the cap too and go on without a stop (False)."""
         cap = self.cfg.turn_cap(phase)
         label = step or phase
         retries = int(prog.get("turn_cap_retries", 0))
@@ -436,16 +462,7 @@ class Orchestrator:
             prog["feedback"] = turn_cap_note(cap)
             save_progress(self.cfg, feature, prog)
             self.echo(f"[{label}] re-running once after the turn cap.")
-            return
-        prog["turn_cap_retries"] = 0
-        esc = self.fdir(feature) / "escalation.md"
-        esc.write_text(
-            f"# {label}: the agent stopped at the turn cap ({cap} turns) "
-            f"{retries + 1} times in a row\n\nRaise `[phases.{phase}] max_turns` in "
-            "agentflow.toml, split the work, or clarify the task in answers.md. Run logs: "
-            f"{self.cfg.paths.out}/runs/*-{feature}-{phase}.json\n",
-            encoding="utf-8",
-        )
+            return True
         log_event(
             self.cfg,
             feature,
@@ -454,28 +471,43 @@ class Orchestrator:
             step=step,
             attempts=retries + 1,
             failed=[f"turn cap ({cap})"],
+            resolution=f"continued without a stop with the files of the last run (raise "
+            f"[phases.{phase}] max_turns if this recurs)",
         )
-        self.pause(
-            feature,
-            prog,
-            {
-                "kind": "escalation",
-                "reason": "turn_cap",
-                "phase": phase,
-                "step": label,
-                "files": [self.rel(esc)],
-            },
+        self.echo(
+            f"[{label}] stopped at the turn cap ({cap}) {retries + 1} times; continuing with what "
+            "it wrote (logged for the final summary and the retro)."
         )
+        return False
 
-    # ---------- implement loop (steps and review fixes) ----------
+    # ---------- implement loop (steps and review fixes): pass or park ----------
+    def take_park_request(self, feature: str) -> str:
+        """The implementer's park request (park.md; questions.md counts too), removed."""
+        d = self.fdir(feature)
+        text = ""
+        for name in ("park.md", "questions.md"):
+            p = d / name
+            if p.is_file():
+                text += p.read_text(encoding="utf-8").strip() + "\n"
+                p.unlink()
+        return text.strip()
+
     def implement_loop(
-        self, feature: str, prog: dict[str, Any], label: str, task: str, reqs: list[str] | None
-    ) -> None:
-        """Run the implementer until the step gates pass; escalate after max_attempts."""
+        self,
+        feature: str,
+        prog: dict[str, Any],
+        task: str,
+        reqs: list[str] | None,
+        item: dict[str, Any],
+    ) -> bool:
+        """Run the implementer until the step gates pass (True). A park request or max_attempts
+        failed attempts park the item (False); the run goes on either way."""
+        label = item["label"]
         if reqs:
             set_reqs(self.cfg, reqs)
         else:
             clear_reqs(self.cfg)
+        self.take_park_request(feature)  # a stale request of an interrupted run
         while True:
             attempt = int(prog.get("attempt", 0)) + 1
             prog["attempt"] = attempt
@@ -490,13 +522,23 @@ class Orchestrator:
                     step=label,
                     retry_turn_cap=False,
                 )
-                rep = gate_report(self.adapter, feature, "step")
-            except (Paused, KeyboardInterrupt):
-                # questions and interruptions don't count as an attempt
-                prog["attempt"] = attempt - 1
+                question = self.take_park_request(feature)
+                t0 = time.time()
+                rep = None if question else gate_report(self.adapter, feature, "step")
+            except KeyboardInterrupt:
+                prog["attempt"] = attempt - 1  # an interruption is not an attempt
                 save_progress(self.cfg, feature, prog)
                 raise
-            ok, out = rep.ok, rep.report
+            if rep is None:
+                self.park(
+                    feature,
+                    prog,
+                    item,
+                    "no reasonable assumption possible (question)",
+                    attempts=attempt - 1,
+                    question=question,
+                )
+                return False
             log_event(
                 self.cfg,
                 feature,
@@ -504,69 +546,324 @@ class Orchestrator:
                 phase=prog["phase"],
                 step=label,
                 attempt=attempt,
-                passed=ok,
+                passed=rep.ok,
                 failed=rep.failed,
-                excerpt=rep.excerpt() if not ok else "",
+                excerpt=rep.excerpt() if not rep.ok else "",
+                seconds=round(time.time() - t0),
             )
-            if ok:
+            if rep.ok:
                 commit(self.cfg, f"{feature}: {label}")
                 prog["attempt"] = 0
                 prog["feedback"] = ""
                 save_progress(self.cfg, feature, prog)
-                return
+                return True
             capped = turn_cap_note(self.cfg.turn_cap("IMPLEMENT")) if hit_turn_cap(res) else ""
             prog["feedback"] = (
                 (capped + "\n" if capped else "")
                 + f"Attempt {attempt} failed these gates. Tests and config are frozen; "
-                f"fix {self.cfg.paths.src}/.\n{out[-6000:]}"
+                f"fix {self.cfg.paths.src}/.\n{rep.report[-6000:]}"
             )
             save_progress(self.cfg, feature, prog)
             self.echo(f"[{label}] attempt {attempt} failed the step gates.")
             if attempt >= self.cfg.max_attempts:
-                esc = self.fdir(feature) / "escalation.md"
-                esc.write_text(
-                    f"# {label}: failed {attempt} times\n\nLast gate output:\n\n~~~\n{out}\n~~~\n",
-                    encoding="utf-8",
+                self.park(
+                    feature,
+                    prog,
+                    item,
+                    f"failed {attempt} attempts",
+                    attempts=attempt,
+                    failed=rep.failed,
+                    excerpt=rep.excerpt(),
                 )
+                return False
+
+    def revert_src(self, feature: str, label: str) -> str:
+        """Save the parked work's uncommitted source changes as a diff and restore the sources
+        to the last commit, so later steps start from code that passed its gates."""
+        src = self.cfg.paths.src
+        if not (self.cfg.root / src).exists():
+            return ""
+        git(self.cfg, "add", "-A", "--", src)
+        diff = git(self.cfg, "diff", "--cached", "HEAD", "--", src)
+        if not diff.strip():
+            return ""
+        pdir = self.fdir(feature) / "parked"
+        pdir.mkdir(exist_ok=True)
+        path = pdir / (re.sub(r"[^A-Za-z0-9]+", "-", label).strip("-").lower() + ".diff")
+        path.write_text(diff, encoding="utf-8")
+        git(self.cfg, "restore", "--source=HEAD", "--staged", "--worktree", "--", src)
+        return self.rel(path)
+
+    def park(
+        self,
+        feature: str,
+        prog: dict[str, Any],
+        item: dict[str, Any],
+        reason: str,
+        attempts: int,
+        question: str = "",
+        failed: list[str] | None = None,
+        excerpt: str = "",
+    ) -> None:
+        diff = self.revert_src(feature, item["label"])
+        rec = dict(item, reason=reason, attempts=attempts, question=question, failed=failed or [])
+        rec["diff"] = diff
+        prog["parked"] = [*(prog.get("parked") or []), rec]
+        prog.update(attempt=0, feedback="")
+        save_progress(self.cfg, feature, prog)
+        log_event(
+            self.cfg,
+            feature,
+            "parked",
+            item=item["kind"],
+            label=item["label"],
+            step=item.get("step"),
+            tests=item.get("tests"),
+            reason=reason,
+            attempts=attempts,
+            question=question,
+            failed=failed or [],
+            excerpt=excerpt,
+            diff=diff,
+        )
+        self.echo(
+            f"[{item['label']}] PARKED: {reason}. The run continues; it is listed at the final "
+            "gate" + (f" (its code changes: {diff})." if diff else ".")
+        )
+
+    # ---------- TESTS: writer <-> reviewer, then the tests gate ----------
+    def phase_tests(self, feature: str, prog: dict[str, Any]) -> None:
+        sub = prog.get("sub") or "write"
+        while True:
+            if sub == "write":
+                self.agent("TESTS", feature, prog, self.task_text("TESTS", feature))
+                self.collect_questions(feature, "TESTS", "test writer")
+                sub = self.set_sub(feature, prog, "checks")
+            if sub == "checks":
+                self.run_test_checks(feature, prog)
+                sub = self.set_sub(feature, prog, "review")
+            if sub == "review":
+                rnd = int(prog.get("round") or 0)
+                (self.fdir(feature) / "test_review.md").unlink(missing_ok=True)
+                note = prog.get("human_note") or ""
+                task = self.task_text(
+                    "TEST_REVIEW",
+                    feature,
+                    round=str(rnd + 1),
+                    rounds=str(self.cfg.test_review_rounds + 1),
+                    note=f"\n\nThe human's note at the tests gate (check the tests address it): "
+                    f"{note}"
+                    if note
+                    else "",
+                )
+                self.agent("TEST_REVIEW", feature, prog, task, role="test_review")
+                self.collect_questions(feature, "TEST_REVIEW", "test reviewer")
+                review = self.read_test_review(feature, keep_round=rnd + 1)
+                failed = [n for n, s in (prog.get("test_checks") or {}).items() if s != "PASS"]
+                back = (not review.clean or bool(failed)) and rnd < self.cfg.test_review_rounds
                 log_event(
                     self.cfg,
                     feature,
-                    "escalation",
-                    phase=prog["phase"],
-                    step=label,
-                    attempts=attempt,
-                    failed=rep.failed,
+                    "test_review",
+                    round=rnd + 1,
+                    verdict=review.verdict,
+                    objections=review.objections,
+                    failed_checks=failed,
+                    sent_back=back,
                 )
-                self.pause(
-                    feature,
-                    prog,
-                    {
-                        "kind": "escalation",
-                        "phase": prog["phase"],
-                        "step": label,
-                        "files": [self.rel(esc)],
-                    },
-                )
+                if back:
+                    prog["round"] = rnd + 1
+                    prog["feedback"] = self.objection_feedback(feature, review, failed)
+                    self.echo(
+                        f"[TESTS] test reviewer: {review.verdict} "
+                        f"({len(review.objections)} objection(s), {len(failed)} failed check(s)); "
+                        f"back to the test writer (round {rnd + 1} of "
+                        f"{self.cfg.test_review_rounds})."
+                    )
+                    sub = self.set_sub(feature, prog, "write")
+                    continue
+                sub = self.set_sub(feature, prog, "gate")
+            break
+        self.tests_gate(feature, prog)
 
-    # ---------- phases ----------
-    def phase_tests(self, feature: str, prog: dict[str, Any]) -> None:
-        self.agent("TESTS", feature, prog, self.task_text("TESTS", feature))
+    def run_test_checks(self, feature: str, prog: dict[str, Any]) -> None:
         sections = []
+        status: dict[str, str] = {}
         for name, mod in [
             ("Red against stubs", red_stubs),
             ("Traceability", traceability),
             ("Test smells", test_smells),
         ]:
             res = mod.check(self.adapter, feature)
+            status[name] = res.status
             sections.append(f"### {name}: {res.status}\n~~~\n{res.output}\n~~~")
-        gate_file = self.fdir(feature) / "test_gate.md"
-        gate_file.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
-        summary = self.fdir(feature) / "test_summary.md"
+        path = self.fdir(feature) / "test_checks.md"
+        path.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
+        prog["test_checks"] = status
+        save_progress(self.cfg, feature, prog)
+
+    def read_test_review(self, feature: str, keep_round: int | None = None) -> TestReview:
+        p = self.fdir(feature) / "test_review.md"
+        text = p.read_text(encoding="utf-8") if p.is_file() else None
+        if keep_round is not None and text is not None:
+            (self.fdir(feature) / f"test_review_round{keep_round}.md").write_text(
+                text, encoding="utf-8"
+            )
+        return parse_test_review(text)
+
+    def objection_feedback(self, feature: str, review: TestReview, failed: list[str]) -> str:
+        out = self.cfg.paths.out
+        parts = []
+        if review.objections:
+            parts.append(
+                "The test reviewer objected to your tests (" + f"{out}/{feature}/test_review.md). "
+                "Address every objection: fix the test or add the case; if an objection is wrong "
+                "per the spec, say why in test_summary.md.\n"
+                + "\n".join(f"- {o}" for o in review.objections)
+            )
+        if failed:
+            parts.append(
+                f"These mechanical checks failed ({out}/{feature}/test_checks.md): "
+                + ", ".join(failed)
+            )
+        return "\n\n".join(parts)
+
+    def tests_gate(self, feature: str, prog: dict[str, Any]) -> None:
+        review = self.read_test_review(feature)
+        questions = self.open_questions(feature)
+        failed = [n for n, s in (prog.get("test_checks") or {}).items() if s != "PASS"]
+        gate_file = self.write_tests_gate(feature, prog, review, questions, failed)
+        reasons = []
+        if failed:
+            reasons.append(f"failed checks: {', '.join(failed)}")
+        if not review.clean:
+            reasons.append(f"test reviewer: {len(review.objections)} objection(s)")
+        if questions:
+            reasons.append(f"{len(questions)} open question(s)")
+        if self.cfg.tests_gate == "auto":
+            log_event(self.cfg, feature, "tests_gate_auto", passed=not reasons, reasons=reasons)
+            if not reasons:
+                self.echo(
+                    'Tests gate passed without a stop ([gates] tests = "auto"): checks PASS, no '
+                    f"objections, no questions (see {self.rel(gate_file)})."
+                )
+                self.pass_tests_gate(feature, prog)
+                return
+            self.echo('[gates] tests = "auto", but the gate needs you: ' + "; ".join(reasons))
         self.pause(
             feature,
             prog,
-            {"kind": "gate", "gate": "tests", "files": [self.rel(summary), self.rel(gate_file)]},
+            {
+                "kind": "gate",
+                "gate": "tests",
+                "files": [self.rel(gate_file)],
+                "message": "State: " + ("; ".join(reasons) if reasons else "all clean") + ".",
+            },
         )
+
+    def write_tests_gate(
+        self,
+        feature: str,
+        prog: dict[str, Any],
+        review: TestReview,
+        questions: list[str],
+        failed: list[str],
+    ) -> pathlib.Path:
+        f, out, d = feature, self.cfg.paths.out, self.fdir(feature)
+        rnd, cap = int(prog.get("round") or 0), self.cfg.test_review_rounds
+        lines = [
+            f"# Tests gate: {f}",
+            "",
+            f'Decide: `agentflow approve {f}` | `agentflow reject {f} --reason "..."` | write '
+            f"answers to {out}/{f}/answers.md, then `agentflow answer {f}`. Reject and answer "
+            "re-run the test writer and the test reviewer, then this gate again.",
+            "",
+            f"## Open questions: {len(questions)}",
+            "",
+        ]
+        lines += [f"{i}. " + q.replace("\n", "\n   ") for i, q in enumerate(questions, 1)] or [
+            "None."
+        ]
+        state = (
+            f"{len(review.objections)} objection(s) left" if review.objections else "no objections"
+        )
+        lines += [
+            "",
+            f"## Test reviewer: {review.verdict}, {state}",
+            "",
+            f"Rounds back to the test writer: {rnd} of at most {cap}. Full text: "
+            f"{out}/{f}/test_review.md",
+            "",
+        ]
+        lines += [f"- {o}" for o in review.objections] or ["None."]
+        lines += ["", "## Mechanical checks" + (": all PASS" if not failed else ""), ""]
+        lines += [f"- {n}: {s}" for n, s in (prog.get("test_checks") or {}).items()]
+        lines += ["", f"Details: {out}/{f}/test_checks.md", "", "## Spec ID -> tests", ""]
+        lines += ["| ID | Tests |", "|---|---|"]
+        try:
+            tags = self.adapter.collect_req_tags()
+        except Exception as e:  # a broken test file must not hide the gate
+            tags = {}
+            lines.insert(-2, f"(test scan failed: {type(e).__name__}: {e})")
+        for i in sorted(feature_ids(self.cfg, feature)):
+            lines.append(f"| {i} | {'<br>'.join(tags.get(i, [])) or '**none**'} |")
+        summary = d / "test_summary.md"
+        lines += [
+            "",
+            "## What each test checks (test writer's test_summary.md)",
+            "",
+            summary.read_text(encoding="utf-8").strip() if summary.is_file() else "(missing)",
+        ]
+        path = d / "tests_gate.md"
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return path
+
+    def pass_tests_gate(self, feature: str, prog: dict[str, Any]) -> None:
+        questions = self.fdir(feature) / "open_questions.md"
+        if questions.is_file():
+            self.archive_questions(
+                feature,
+                "tests gate",
+                questions.read_text(encoding="utf-8"),
+                "Approved without an answer.",
+            )
+        commit(self.cfg, f"{feature}: tests approved")
+        git(self.cfg, "tag", "-f", f"tests-approved/{feature}")
+        prog["human_note"] = ""
+        prog["round"] = 0
+        self.advance(feature, prog, "IMPLEMENT")
+
+    # ---------- IMPLEMENT: per plan step, no stops ----------
+    def parked_steps(self, prog: dict[str, Any]) -> dict[int, dict[str, Any]]:
+        return {p["step"]: p for p in prog.get("parked") or [] if p.get("kind") == "step"}
+
+    def done_ids(self, prog: dict[str, Any], steps: list[PlanStep]) -> list[str]:
+        return [i for s in steps if s.num in prog["completed_steps"] for i in s.reqs]
+
+    def parked_context(
+        self, feature: str, prog: dict[str, Any], steps: list[PlanStep], step: PlanStep
+    ) -> str:
+        """Task lines about parked earlier steps; records declared dependencies on them."""
+        parked = self.parked_steps(prog)
+        if not parked:
+            return ""
+        names = ", ".join(p["label"] for n, p in sorted(parked.items()))
+        text = (
+            f"\n\nParked steps (not implemented; their tests are not part of your check): {names}."
+            " Do not implement them."
+        )
+        for dep in step.depends:
+            if dep in parked:
+                rec = parked[dep]
+                if step.num not in rec.setdefault("dependents", []):
+                    rec["dependents"].append(step.num)
+                    save_progress(self.cfg, feature, prog)
+                    log_event(self.cfg, feature, "parked_dependency", step=step.num, depends_on=dep)
+                text += (
+                    f" This step depends on parked step {dep} (plan.md): build what you can "
+                    "without it and log what is missing as an assumption."
+                )
+        return text
 
     def phase_implement(self, feature: str, prog: dict[str, Any]) -> None:
         steps = plan_steps(self.cfg, feature)
@@ -574,11 +871,17 @@ class Orchestrator:
             raise WorkflowError(
                 f"No '## Step N:' sections found in {self.cfg.paths.specs}/{feature}/plan.md"
             )
-        covered: list[str] = []
+        redo_mode = bool(prog.get("redo_mode"))
         for step in steps:
-            covered += step.reqs
             if step.num in prog["completed_steps"]:
                 continue
+            redo = [r for r in prog.get("redo") or [] if r.get("step") == step.num]
+            if redo_mode and not redo:
+                continue
+            if not redo_mode and step.num in self.parked_steps(prog):
+                continue
+            label = f"step {step.num} - {step.title}"
+            covered = self.done_ids(prog, steps) + step.reqs
             task = self.task_text(
                 "IMPLEMENT",
                 feature,
@@ -586,13 +889,26 @@ class Orchestrator:
                 title=step.title,
                 ids=", ".join(step.reqs),
                 check=self.adapter.test_command(covered),
+            ) + self.parked_context(feature, prog, steps, step)
+            if redo:
+                task += REDO_NOTE.format(**self.placeholders(feature))
+            ok = self.implement_loop(
+                feature, prog, task, covered, {"kind": "step", "step": step.num, "label": label}
             )
-            self.implement_loop(feature, prog, f"step {step.num} - {step.title}", task, covered)
-            prog["completed_steps"].append(step.num)
+            if ok:
+                prog["completed_steps"].append(step.num)
+            if redo:
+                log_event(self.cfg, feature, "redo_result", label=label, passed=ok)
+                prog["redo"] = [r for r in prog["redo"] if r.get("step") != step.num]
             save_progress(self.cfg, feature, prog)
         clear_reqs(self.cfg)
-        self.advance(feature, prog, "REVIEW", sub="agent")
+        if redo_mode:
+            findings = [r for r in prog.get("redo") or [] if r.get("kind") == "finding"]
+            self.advance(feature, prog, "REVIEW", sub="fix" if findings else "final")
+        else:
+            self.advance(feature, prog, "REVIEW", sub="agent")
 
+    # ---------- REVIEW: adversarial reviewer -> triage -> fixes -> final gates ----------
     def review_failures(self, feature: str) -> list[str]:
         """Names of the failing review tests (the reviewer's findings); [] = none."""
         rdir = self.cfg.root / self.cfg.paths.review_tests
@@ -609,71 +925,178 @@ class Orchestrator:
         sub = prog.get("sub") or "agent"
         if sub == "agent":
             self.agent("REVIEW", feature, prog, self.task_text("REVIEW", feature))
+            self.collect_questions(feature, "REVIEW", "adversarial reviewer")
             findings = self.review_failures(feature)
             if findings:
                 log_event(self.cfg, feature, "review_findings", tests=findings)
-                prog["sub"] = "gate"
-                review = self.fdir(feature) / "review.md"
-                self.pause(
-                    feature,
-                    prog,
-                    {
-                        "kind": "gate",
-                        "gate": "review",
-                        "files": [self.rel(review), self.cfg.paths.review_tests + "/"],
-                        "message": "The reviewer produced failing tests (findings). Delete invalid "
-                        f"findings from {self.cfg.paths.review_tests}/ before approving; "
-                        "approve = the implementer fixes the rest, reject = skip fixes.",
-                    },
-                )
-            sub = "final"
-        if sub == "review_check":
-            sub = "fix" if self.review_failures(feature) else "final"
-            prog["sub"] = sub
-            save_progress(self.cfg, feature, prog)
+                prog["findings"] = findings
+            sub = self.set_sub(feature, prog, "triage" if findings else "final")
+        if sub == "triage":
+            sub = self.set_sub(feature, prog, "fix" if self.triage(feature, prog) else "final")
         if sub == "fix":
-            self.implement_loop(
-                feature,
-                prog,
-                "review fixes",
-                self.task_text("FIX", feature, check=self.adapter.test_command()),
-                None,
-            )
-            sub = "final"
-        prog["sub"] = "final"
-        save_progress(self.cfg, feature, prog)
+            self.fix_findings(feature, prog)
+            sub = self.set_sub(feature, prog, "final")
+        t0 = time.time()
         rep = gate_report(self.adapter, feature, "final")
-        ok, out = rep.ok, rep.report
-        (self.fdir(feature) / "final_gates.md").write_text(f"~~~\n{out}\n~~~\n", encoding="utf-8")
+        timing = "\n".join(f"| {name} | {secs:.0f} |" for name, secs in rep.durations.items())
+        (self.fdir(feature) / "final_gates.md").write_text(
+            f"~~~\n{rep.report}\n~~~\n\nTime per check (s):\n\n| Check | Seconds |\n|---|---|\n"
+            f"{timing}\n",
+            encoding="utf-8",
+        )
         log_event(
             self.cfg,
             feature,
             "final_gates",
-            passed=ok,
+            passed=rep.ok,
             failed=rep.failed,
             skipped=rep.skipped,
-            excerpt=rep.excerpt() if not ok else "",
+            excerpt=rep.excerpt() if not rep.ok else "",
+            seconds=round(time.time() - t0),
+            durations=rep.durations,
         )
         self.echo(
-            f"Final gates: {'PASSED' if ok else 'FAILED'} "
+            f"Final gates: {'PASSED' if rep.ok else 'FAILED'} "
             f"(see {self.cfg.paths.out}/{feature}/final_gates.md)"
         )
         self.advance(feature, prog, "PR")
 
-    def phase_pr(self, feature: str, prog: dict[str, Any]) -> None:
-        self.agent("PR", feature, prog, self.task_text("PR", feature))
-        self.echo(
-            f"\nPR summary: {self.cfg.paths.out}/{feature}/pr.md — "
-            "open the PR yourself and review it."
-        )
-        self.advance(feature, prog, "RETRO")
+    def triage(self, feature: str, prog: dict[str, Any]) -> bool:
+        """The test reviewer decides per finding against the spec: VALID stays (fix loop),
+        INVALID is deleted with a reason. Returns True if valid findings remain."""
+        findings = list(prog.get("findings") or [])
+        tfile = self.fdir(feature) / "triage.md"
+        tfile.unlink(missing_ok=True)
+        task = self.task_text("TRIAGE", feature, findings="\n".join(f"- {t}" for t in findings))
+        self.agent("TRIAGE", feature, prog, task, role="test_review")
+        self.collect_questions(feature, "TRIAGE", "test reviewer")
+        verdicts = parse_triage(tfile.read_text(encoding="utf-8") if tfile.is_file() else "")
+        remaining = self.review_failures(feature)
+        records = []
+        for t in findings:
+            v = triage_verdict(t, verdicts)
+            if t in remaining:
+                reason = (
+                    v[1]
+                    if v and v[0] == "VALID"
+                    else "marked INVALID, but the test was not removed: kept"
+                    if v
+                    else "no verdict line in triage.md: kept"
+                )
+                records.append({"test": t, "verdict": "VALID", "reason": reason})
+            else:
+                reason = v[1] if v else "test removed without a verdict line"
+                verdict = "DISMISSED" if not v or v[0] == "INVALID" else "NO LONGER FAILING"
+                records.append({"test": t, "verdict": verdict, "reason": reason})
+        records += [
+            {"test": t, "verdict": "VALID", "reason": "new failing review test after triage"}
+            for t in remaining
+            if t not in findings
+        ]
+        log_event(self.cfg, feature, "triage", findings=records, remaining=remaining)
+        valid = sum(1 for r in records if r["verdict"] == "VALID")
+        self.echo(f"[TRIAGE] {valid} valid finding(s), {len(records) - valid} dismissed.")
+        commit(self.cfg, f"{feature}: review findings triaged ({valid} valid)")
+        prog["valid_findings"] = remaining
+        save_progress(self.cfg, feature, prog)
+        return bool(remaining)
 
+    def fix_findings(self, feature: str, prog: dict[str, Any]) -> None:
+        steps = plan_steps(self.cfg, feature)
+        redo = [r for r in prog.get("redo") or [] if r.get("kind") == "finding"]
+        tests = list(prog.get("valid_findings") or [])
+        for r in redo:
+            tests += [t for t in r.get("tests") or [] if t not in tests]
+        # with parked steps, their tests are red by design: check only the done steps' IDs
+        reqs = self.done_ids(prog, steps) if self.parked_steps(prog) else None
+        task = self.task_text("FIX", feature, check=self.adapter.test_command(reqs))
+        if redo:
+            task += REDO_NOTE.format(**self.placeholders(feature))
+        item = {"kind": "finding", "step": None, "label": "review fixes", "tests": tests}
+        ok = self.implement_loop(feature, prog, task, reqs, item)
+        clear_reqs(self.cfg)
+        if ok:
+            log_event(self.cfg, feature, "findings_fixed", tests=tests)
+        if redo:
+            log_event(self.cfg, feature, "redo_result", label="review fixes", passed=ok)
+            prog["redo"] = [r for r in prog.get("redo") or [] if r.get("kind") != "finding"]
+            save_progress(self.cfg, feature, prog)
+
+    # ---------- PR: final summary -> FINAL gate ----------
+    def phase_pr(self, feature: str, prog: dict[str, Any]) -> None:
+        d = self.fdir(feature)
+        self.write_final_facts(feature, prog)
+        (d / "final_summary.md").unlink(missing_ok=True)
+        self.agent("PR", feature, prog, self.task_text("PR", feature))
+        self.collect_questions(feature, "PR", "summary agent")
+        summary = d / "final_summary.md"
+        text = (
+            summary.read_text(encoding="utf-8").rstrip()
+            if summary.is_file()
+            else f"# Final summary: {feature}\n\n(The summary agent wrote no final_summary.md; "
+            f"see {self.cfg.paths.out}/{feature}/final_facts.md.)"
+        )
+        table = phase_table(since_spec_approval(read_events(self.cfg, feature)))
+        summary.write_text(
+            text + "\n\n## Cost, time, turns per phase (generated by agentflow)\n\n" + table + "\n",
+            encoding="utf-8",
+        )
+        prog["redo_mode"] = False
+        self.advance(feature, prog, "FINAL")
+        self.final_gate(feature, prog)
+
+    def write_final_facts(self, feature: str, prog: dict[str, Any]) -> None:
+        d = self.fdir(feature)
+        gates = d / "final_gates.md"
+        oq = d / "open_questions.md"
+        facts = final_facts(
+            feature,
+            plan_steps(self.cfg, feature),
+            prog,
+            read_events(self.cfg, feature),
+            self.assumptions(feature),
+            gates.read_text(encoding="utf-8") if gates.is_file() else "(no final gate run)",
+            oq.read_text(encoding="utf-8") if oq.is_file() else "",
+        )
+        (d / "final_facts.md").write_text(facts, encoding="utf-8")
+
+    def assumptions(self, feature: str) -> list[Any]:
+        p = self.fdir(feature) / "steps.md"
+        return parse_assumptions(p.read_text(encoding="utf-8")) if p.is_file() else []
+
+    def final_gate(self, feature: str, prog: dict[str, Any]) -> None:
+        last = [e for e in read_events(self.cfg, feature) if e["kind"] == "final_gates"]
+        passed = bool(last and last[-1].get("passed"))
+        parked = prog.get("parked") or []
+        state = f"Final gates {'PASSED' if passed else 'FAILED'}; " + (
+            f"{len(parked)} parked: " + ", ".join(p["label"] for p in parked)
+            if parked
+            else "nothing parked"
+        )
+        d = self.fdir(feature)
+        self.pause(
+            feature,
+            prog,
+            {
+                "kind": "gate",
+                "gate": "final",
+                "files": [self.rel(d / "final_summary.md"), self.rel(d / "final_gates.md")],
+                "message": state + ".",
+            },
+        )
+
+    def phase_final(self, feature: str, prog: dict[str, Any]) -> None:
+        self.final_gate(feature, prog)
+
+    # ---------- RETRO ----------
     def write_retro_input(self, feature: str) -> list[str]:
         """{out}/{f}/retro_input.md; returns the item IDs the proposals must address."""
         d = self.fdir(feature)
         review = d / "review.md"
         notes = review.read_text(encoding="utf-8") if review.is_file() else ""
-        ri = build_retro_input(feature, read_events(self.cfg, feature), notes)
+        ri = build_retro_input(
+            feature, read_events(self.cfg, feature), notes, self.assumptions(feature)
+        )
         (d / "retro_input.md").write_text(ri.text, encoding="utf-8")
         return ri.ids
 
@@ -710,6 +1133,14 @@ class Orchestrator:
                 f"WARNING: retro_proposals.md still doesn't address {', '.join(missing)} "
                 f"(see {self.cfg.paths.out}/{feature}/retro_input.md)."
             )
+        self.write_metrics(feature)
+        self.echo(
+            f"\nRetro proposals: {self.cfg.paths.out}/{feature}/retro_proposals.md — "
+            "apply the ones you accept in a normal session."
+        )
+        self.advance(feature, prog, "DONE")
+
+    def write_metrics(self, feature: str) -> None:
         ev = read_events(self.cfg, feature)
         row = [
             datetime.date.today().isoformat(),
@@ -719,22 +1150,20 @@ class Orchestrator:
             sum(1 for e in ev if e["kind"] == "questions"),
             sum(1 for e in ev if e["kind"] == "gate" and not e.get("passed")),
             round(sum((e.get("cost") or 0) for e in ev if e["kind"] == "agent_run"), 2),
+            sum(1 for e in ev if e["kind"] == "parked"),
+            len(self.assumptions(feature)),
         ]
         mfile = self.cfg.root / self.cfg.paths.metrics / "workflow_metrics.csv"
         mfile.parent.mkdir(parents=True, exist_ok=True)
         if not mfile.exists():
-            mfile.write_text(
-                "date,feature,human_rejections,escalations,questions,gate_failures,cost_usd\n",
-                encoding="utf-8",
-            )
+            mfile.write_text(METRICS_HEADER + "\n", encoding="utf-8")
+        else:  # an older file: extend the header, old rows keep fewer columns
+            lines = mfile.read_text(encoding="utf-8").splitlines()
+            if lines and lines[0] != METRICS_HEADER and METRICS_HEADER.startswith(lines[0]):
+                mfile.write_text("\n".join([METRICS_HEADER, *lines[1:]]) + "\n", encoding="utf-8")
         with open(mfile, "a", encoding="utf-8") as fh:
             fh.write(",".join(map(str, row)) + "\n")
         commit(self.cfg, f"{feature}: workflow metrics")
-        self.echo(
-            f"\nRetro proposals: {self.cfg.paths.out}/{feature}/retro_proposals.md — "
-            "apply the ones you accept in a normal session."
-        )
-        self.advance(feature, prog, "DONE")
 
     def advance(
         self, feature: str, prog: dict[str, Any], phase: str, sub: str | None = None
@@ -781,23 +1210,31 @@ class Orchestrator:
         warning = self.stale_warning()
         if warning:
             self.echo("\n" + warning)
-        if prog.get("waiting"):
-            self.echo("\n" + self.describe_waiting(feature, prog["waiting"]))
-            return WAIT_CODES.get(prog["waiting"].get("kind"), EXIT_OK)
+        w = prog.get("waiting")
+        if w and w.get("kind") == "gate":
+            self.echo("\n" + self.describe_waiting(feature, w))
+            return EXIT_GATE
+        self.echo(f"\nPhase {prog.get('phase')}: not at a gate. Next: agentflow run {feature}")
         return EXIT_OK
 
     def run(self, feature: str) -> int:
         if not tag_exists(self.cfg, f"spec-approved/{feature}"):
             raise WorkflowError(f"Spec not approved. Run: agentflow approve-spec {feature}")
         prog = load_progress(self.cfg, feature)
-        if prog.get("waiting"):
-            self.echo(self.describe_waiting(feature, prog["waiting"]))
-            return WAIT_CODES.get(prog["waiting"].get("kind"), EXIT_ERROR)
-        runners = {
+        w = prog.get("waiting")
+        if w and w.get("kind") == "gate":
+            self.echo(self.describe_waiting(feature, w))
+            return EXIT_GATE
+        if w:  # a pause kind of an older agentflow (questions / escalation): no longer a stop
+            self.echo(f"Dropping an old pause ({w.get('kind')}); the run continues.")
+            prog["waiting"] = None
+            save_progress(self.cfg, feature, prog)
+        runners: dict[str, Callable[[str, dict[str, Any]], None]] = {
             "TESTS": self.phase_tests,
             "IMPLEMENT": self.phase_implement,
             "REVIEW": self.phase_review,
             "PR": self.phase_pr,
+            "FINAL": self.phase_final,
             "RETRO": self.phase_retro,
         }
         self.take_run_lock(feature)
@@ -914,115 +1351,120 @@ class Orchestrator:
         self.recover_stale(lock, "unlock")
         return EXIT_OK
 
-    def _require_waiting(self, feature: str, kinds: tuple[str, ...]) -> dict[str, Any]:
+    # ---------- gate commands ----------
+    def _require_gate(
+        self, feature: str, gates: tuple[str, ...] = ("tests", "final")
+    ) -> dict[str, Any]:
         prog = load_progress(self.cfg, feature)
         w = prog.get("waiting")
-        if not w or w.get("kind") not in kinds:
-            now = f"waiting for {w.get('kind')}" if w else "not waiting"
-            raise WorkflowError(f"{feature} is {now}; this command needs: {' / '.join(kinds)}")
+        if not w or w.get("kind") != "gate" or w.get("gate") not in gates:
+            now = f"waiting at the {w.get('gate')} gate" if w else "not at a gate"
+            raise WorkflowError(
+                f"{feature} is {now}; this command needs the {' or '.join(gates)} gate"
+            )
         return prog
 
     def approve(self, feature: str) -> int:
-        prog = self._require_waiting(feature, ("gate",))
-        gate = prog["waiting"].get("gate")
+        prog = self._require_gate(feature)
+        gate = prog["waiting"]["gate"]
         log_event(self.cfg, feature, "human_gate", gate=gate, approved=True, reason=None)
         if gate == "tests":
-            commit(self.cfg, f"{feature}: tests approved")
-            git(self.cfg, "tag", "-f", f"tests-approved/{feature}")
-            self.advance(feature, prog, "IMPLEMENT")
+            self.pass_tests_gate(feature, prog)
             self.echo(f"Tests approved, tagged tests-approved/{feature}.")
-        elif gate == "review":
-            commit(self.cfg, f"{feature}: review findings accepted")
-            prog.update(sub="review_check", waiting=None)
-            save_progress(self.cfg, feature, prog)
-            self.echo("Review findings accepted; the implementer fixes them on the next run.")
         else:
-            raise WorkflowError(f"unknown gate {gate}")
+            self.advance(feature, prog, "RETRO")
+            self.echo("Final gate approved; the next run does the retro, then DONE.")
         self.echo(f"Next: agentflow run {feature}")
         return EXIT_OK
 
     def reject(self, feature: str, reason: str) -> int:
         if not reason.strip():
             raise WorkflowError("a rejection needs a reason (--reason)")
-        prog = self._require_waiting(feature, ("gate",))
-        gate = prog["waiting"].get("gate")
-        log_event(self.cfg, feature, "human_gate", gate=gate, approved=False, reason=reason)
-        if gate == "tests":
-            prog.update(
-                waiting=None,
-                sub=None,
-                feedback=(
-                    f"The human rejected the tests. Reason:\n{reason}\n"
-                    "Revise the tests accordingly."
-                ),
+        prog = self._require_gate(feature)
+        if prog["waiting"]["gate"] != "tests":
+            raise WorkflowError(
+                "The final gate has no reject. Answer the parked questions (answers.md, then "
+                f"agentflow answer {feature}), approve, or finish --no-retro. To change the spec: "
+                f"edit it, then agentflow approve-spec {feature}."
             )
-            self.echo("Tests rejected; the test writer reruns with your reason on the next run.")
-        else:
-            prog.update(waiting=None, sub="final")
-            self.echo(
-                "Review findings rejected; no fixes. Final gates run next (failing review "
-                "tests are reported there)."
-            )
+        log_event(self.cfg, feature, "human_gate", gate="tests", approved=False, reason=reason)
+        prog.update(
+            waiting=None,
+            sub="write",
+            round=0,
+            human_note=reason,
+            feedback=f"The human rejected the tests. Reason:\n{reason}\n"
+            "Revise the tests accordingly.",
+        )
         save_progress(self.cfg, feature, prog)
+        self.echo("Tests rejected; the test writer and the test reviewer re-run with your reason.")
         self.echo(f"Next: agentflow run {feature}")
         return EXIT_OK
 
-    def answer(self, feature: str, abort: bool = False) -> int:
-        prog = self._require_waiting(feature, ("questions", "escalation"))
-        w = prog["waiting"]
+    def answer(self, feature: str) -> int:
+        prog = self._require_gate(feature)
+        gate = prog["waiting"]["gate"]
         d = self.fdir(feature)
+        out = self.cfg.paths.out
         answers = d / "answers.md"
-        if w["kind"] == "questions":
-            qfile = d / "questions.md"
-            if not abort and not answers.is_file():
-                raise WorkflowError(
-                    f"Write your answers to {self.cfg.paths.out}/{feature}/answers.md first."
-                )
-            questions = qfile.read_text(encoding="utf-8") if qfile.is_file() else ""
-            answer_text = answers.read_text(encoding="utf-8") if answers.is_file() else ""
-            where = " / ".join(str(x) for x in (w.get("phase"), w.get("step")) if x)
-            with open(d / "questions_archive.md", "a", encoding="utf-8") as fh:
-                fh.write(
-                    f"\n---\n<!-- {where} -->\n{questions.rstrip()}\n\n"
-                    + (
-                        "Aborted: the spec must change.\n"
-                        if abort
-                        else f"### Answer (answers.md)\n{answer_text.rstrip()}\n"
-                    )
-                )
-            qfile.unlink(missing_ok=True)
-            feedback = (
-                f"Your earlier questions (archived in "
-                f"{self.cfg.paths.out}/{feature}/questions_archive.md) were answered in "
-                f"{self.cfg.paths.out}/{feature}/answers.md. Read it and complete the task."
+        text = answers.read_text(encoding="utf-8").strip() if answers.is_file() else ""
+        if not text:
+            raise WorkflowError(f"Write your answers to {out}/{feature}/answers.md first.")
+        oq = d / "open_questions.md"
+        open_q = oq.read_text(encoding="utf-8") if oq.is_file() else ""
+        reply = f"### Answer (answers.md)\n{text}"
+        if gate == "tests":
+            self.archive_questions(feature, "tests gate", open_q, reply)
+            log_event(self.cfg, feature, "answer", gate="tests", answer=text[-2000:])
+            prog.update(
+                waiting=None,
+                sub="write",
+                round=0,
+                human_note=f"the human answered questions in {out}/{feature}/answers.md",
+                feedback=f"The human answered the open questions in {out}/{feature}/answers.md "
+                f"(questions: {out}/{feature}/questions_archive.md). Read it and update the tests.",
             )
-        else:
-            feedback = (prog.get("feedback") or "") + (
-                "\n\nThe human looked at the escalation"
-                + (
-                    f"; read {self.cfg.paths.out}/{feature}/answers.md."
-                    if answers.is_file()
-                    else "."
-                )
-            )
-            prog["attempt"] = 0
-        answer_now = answers.read_text(encoding="utf-8") if answers.is_file() else ""
-        log_event(
-            self.cfg,
-            feature,
-            "answer",
-            waiting=w["kind"],
-            phase=w.get("phase"),
-            step=w.get("step"),
-            aborted=abort,
-            answer=answer_now[-2000:],
-        )
-        if abort:
-            prog["waiting"] = {"kind": "spec_change"}
             save_progress(self.cfg, feature, prog)
-            self.echo(self.describe_waiting(feature, prog["waiting"]))
-            return EXIT_SPEC_CHANGE
-        prog.update(waiting=None, feedback=feedback.strip())
-        save_progress(self.cfg, feature, prog)
-        self.echo(f"Answer recorded. Next: agentflow run {feature}")
+            self.echo("Answers recorded; the test writer and the test reviewer re-run with them.")
+        else:
+            parked = prog.get("parked") or []
+            if not parked:
+                raise WorkflowError(
+                    f"Nothing is parked. Approve (agentflow approve {feature}) or finish "
+                    f"(agentflow finish {feature} --no-retro)."
+                )
+            questions = "\n".join(
+                f"- [{p['label']}] {p.get('question') or p.get('reason')}" for p in parked
+            )
+            self.archive_questions(feature, "final gate: parked", questions + "\n" + open_q, reply)
+            log_event(
+                self.cfg,
+                feature,
+                "answer",
+                gate="final",
+                parked=[p["label"] for p in parked],
+                answer=text[-2000:],
+            )
+            steps = [p for p in parked if p.get("kind") == "step"]
+            prog.update(waiting=None, redo=parked, parked=[], redo_mode=True, attempt=0)
+            if steps:
+                prog.update(phase="IMPLEMENT", sub=None)
+            else:
+                prog.update(phase="REVIEW", sub="fix")
+            save_progress(self.cfg, feature, prog)
+            self.echo(
+                f"Answers recorded; the next run redoes only the parked items "
+                f"({', '.join(p['label'] for p in parked)}), then the final gate again."
+            )
+        self.echo(f"Next: agentflow run {feature}")
+        return EXIT_OK
+
+    def finish(self, feature: str) -> int:
+        """FINAL gate -> DONE without the retro (the metrics row is still written)."""
+        prog = self._require_gate(feature, ("final",))
+        log_event(self.cfg, feature, "human_gate", gate="final", approved=True, reason=None)
+        log_event(self.cfg, feature, "finished", retro=False)
+        self.write_metrics(feature)
+        self.advance(feature, prog, "DONE")
+        self.echo(f"Feature {feature}: DONE (no retro).")
         return EXIT_OK

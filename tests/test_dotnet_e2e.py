@@ -148,10 +148,13 @@ def test_dotnet_full_flow(dotnet_repo: DemoRepo) -> None:
 
     # TESTS -> red against stubs (NotImplementedException), traceability, smells
     assert r.af("run", "demo") == 10
-    gate = (r.root / "out/demo/test_gate.md").read_text(encoding="utf-8")
+    assert r.progress()["waiting"]["gate"] == "tests"
+    gate = (r.root / "out/demo/test_checks.md").read_text(encoding="utf-8")
     assert "Red against stubs: PASS" in gate, gate
     assert "Traceability: PASS" in gate and "Test smells: PASS" in gate, gate
     assert "2 tests for feature demo." in gate
+    tests_gate = (r.root / "out/demo/tests_gate.md").read_text(encoding="utf-8")
+    assert "| DEMO-E-001 | tests/Demo.Tests/CalcTests.cs::" in tests_gate, tests_gate
     tests_call = r.calls()[0]
     tools = tests_call["argv"][tests_call["argv"].index("--allowedTools") + 1].split(",")
     assert "Bash(dotnet test *)" in tools and "Bash(dotnet format *)" in tools
@@ -159,18 +162,21 @@ def test_dotnet_full_flow(dotnet_repo: DemoRepo) -> None:
     assert "NotImplementedException" in tests_call["prompt"]
     assert r.af("approve", "demo") == 0
 
-    # IMPLEMENT (step gate: format, style, build, tests) -> REVIEW finding -> review gate
+    # IMPLEMENT (step gate: format, style, build, tests) -> REVIEW finding -> TRIAGE (valid)
+    # -> fix -> final gates -> PR -> final gate
     assert r.af("run", "demo") == 10
     prog = r.progress()
-    assert prog["phase"] == "REVIEW" and prog["waiting"]["gate"] == "review", prog
-    impl_call = r.calls()[1]
+    assert prog["phase"] == "FINAL" and prog["waiting"]["gate"] == "final", prog
+    impl_call = r.calls()[2]
     assert (
         'dotnet test Demo.slnx -c Release --filter "(Req=DEMO-R-001|Req=DEMO-E-001)'
         '&(Category!=Slow)"' in impl_call["prompt"]
     )
+    triage = [e for e in r.events() if e["kind"] == "triage"][0]["findings"]
+    assert [f["verdict"] for f in triage] == ["VALID"], triage
     assert r.af("approve", "demo") == 0
 
-    # review fix -> final gates -> PR -> RETRO -> DONE
+    # RETRO -> DONE
     assert r.af("run", "demo") == 0
     assert r.progress()["phase"] == "DONE"
     final = (r.root / "out/demo/final_gates.md").read_text(encoding="utf-8")
@@ -198,8 +204,10 @@ def test_dotnet_full_flow(dotnet_repo: DemoRepo) -> None:
         assert "[SKIPPED] mutation score" in final
     assert [c["phase"] for c in r.calls()] == [
         "TESTS",
+        "TEST_REVIEW",
         "IMPLEMENT",
         "REVIEW",
+        "TRIAGE",
         "IMPLEMENT",
         "PR",
         "RETRO",

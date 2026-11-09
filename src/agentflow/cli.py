@@ -1,8 +1,7 @@
 """agentflow command line.
 
-Exit codes: 0 ok / done, 1 error, 2 usage (or hook block), 10 waiting for a human gate,
-11 waiting for answers to agent questions, 12 escalation, 13 spec change required,
-130 interrupted (Ctrl+C / SIGTERM; agents stopped, state cleared).
+Exit codes: 0 ok / done, 1 error, 2 usage (or hook block), 10 waiting at a human gate (tests or
+final; `status` says which), 130 interrupted (Ctrl+C / SIGTERM; agents stopped, state cleared).
 """
 
 from __future__ import annotations
@@ -16,18 +15,20 @@ commands:
   init                    scaffold agentflow.toml, spec templates, .gitignore lines
   spec <feature>          copy the spec templates, set the SPEC phase lock
   approve-spec <feature>  commit + tag spec-approved/<feature>, reset progress
-  run <feature>           advance TESTS -> IMPLEMENT -> REVIEW -> PR -> RETRO until a wait
-  status <feature>        show progress and what is waiting
-  approve <feature>       approve the waiting human gate (tests / review findings)
-  reject <feature> --reason TEXT   reject the waiting gate; the reason becomes agent feedback
-  answer <feature> [--abort]       continue after questions/escalation (answers.md)
+  run <feature>           advance to the next human gate (tests, final) or DONE; no other stops
+  status <feature>        show progress and which gate is waiting
+  approve <feature>       approve the waiting gate (tests -> implement; final -> retro)
+  reject <feature> --reason TEXT   reject the tests gate; writer + reviewer re-run with it
+  answer <feature>        after writing out/<f>/answers.md: tests gate -> writer + reviewer
+                          re-run; final gate -> the next run redoes the parked items
+  finish <feature> --no-retro      final gate -> DONE without the retro
   gates <feature> --scope step|final [--skip-mutation]
   spec-brief <feature>    print the conventions brief for the SPEC session
   unlock [--force]        clear a stale phase lock (.phase/.reqs) left by a killed run
   hook pre-tool-use|stop  Claude Code hooks (stdin = hook JSON; exit 2 = block)
 
-exit codes: 0 ok, 1 error, 10 human gate, 11 questions, 12 escalation, 13 spec change,
-  130 interrupted (Ctrl+C / SIGTERM; run again to resume)
+exit codes: 0 ok, 1 error, 10 human gate (tests or final), 130 interrupted (Ctrl+C /
+  SIGTERM; run again to resume)
 """
 
 
@@ -50,9 +51,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("reject")
     p.add_argument("feature")
     p.add_argument("--reason", required=True)
-    p = sub.add_parser("answer")
+    sub.add_parser("answer").add_argument("feature")
+    p = sub.add_parser("finish", help="final gate -> DONE without the retro")
     p.add_argument("feature")
-    p.add_argument("--abort", action="store_true", help="the spec itself must change")
+    p.add_argument("--no-retro", action="store_true", required=True, help="skip the retro")
     p = sub.add_parser("gates")
     p.add_argument("feature")
     p.add_argument("--scope", choices=["step", "final"], default="final")
@@ -133,7 +135,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "reject":
             return orch.reject(f, args.reason)
         if args.command == "answer":
-            return orch.answer(f, abort=args.abort)
+            return orch.answer(f)
+        if args.command == "finish":
+            return orch.finish(f)
     except (ConfigError, WorkflowError, GitError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

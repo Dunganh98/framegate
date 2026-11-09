@@ -52,6 +52,19 @@ def add(a: int, b: int) -> int:
     raise NotImplementedError
 '''
 
+#: two-step variant (DemoRepo.two_steps): step 2 adds neg(), declared to depend on step 1
+REQUIREMENTS2 = REQUIREMENTS.replace(
+    "| DEMO-R-001 | add() returns the sum of two ints | given 2, 3 when add then 5 |\n",
+    "| DEMO-R-001 | add() returns the sum of two ints | given 2, 3 when add then 5 |\n"
+    "| DEMO-R-002 | neg() negates an int | given 4 when neg then -4 |\n",
+)
+DESIGN2 = DESIGN + "neg(a: int) -> int (DEMO-R-002)\n"
+PLAN2 = PLAN + "\n## Step 2: neg\nCovers: DEMO-R-002\nDepends on: Step 1\nBuild neg().\n"
+STUB2 = STUB + (
+    '\n\ndef neg(a: int) -> int:\n    """Negate an integer. Serves DEMO-R-002."""\n'
+    "    raise NotImplementedError\n"
+)
+
 PYPROJECT = """\
 [project]
 name = "demo"
@@ -103,6 +116,14 @@ class DemoRepo:
     def events(self) -> list[dict[str, Any]]:
         p = self.root / "out" / "events.jsonl"
         return [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x]
+
+    def two_steps(self) -> None:
+        """Switch the demo spec to two plan steps (add, then neg) before approve-spec."""
+        spec = self.root / "specs" / "demo"
+        (spec / "requirements.md").write_text(REQUIREMENTS2, encoding="utf-8")
+        (spec / "design.md").write_text(DESIGN2, encoding="utf-8")
+        (spec / "plan.md").write_text(PLAN2, encoding="utf-8")
+        (self.root / "src" / "demo" / "__init__.py").write_text(STUB2, encoding="utf-8")
 
     def set_toml(self, section: str, key: str, value: str) -> None:
         """Set `key = value` (TOML literal) in an existing [section] of agentflow.toml."""

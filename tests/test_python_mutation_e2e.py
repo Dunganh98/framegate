@@ -36,8 +36,10 @@ def test_final_gates_mutation_through_wsl(
         assert r.af("run", "demo") == 10
         assert r.af("approve", "demo") == 0
         t0 = time.time()
-        assert r.af("run", "demo") == 0  # IMPLEMENT -> REVIEW -> final gates -> PR -> RETRO
+        assert r.af("run", "demo") == 10  # IMPLEMENT -> REVIEW -> final gates -> PR -> FINAL
         flow = time.time() - t0
+        assert r.af("approve", "demo") == 0
+        assert r.af("run", "demo") == 0  # RETRO -> DONE
         final = (r.root / "out/demo/final_gates.md").read_text(encoding="utf-8")
         assert "[PASS] mutation score" in final, final
         cold = next(x.strip() for x in final.splitlines() if "Mutation score" in x)
