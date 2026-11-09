@@ -1,0 +1,15 @@
+# .github/workflows/gates.yml — final gates on every PR from a feature/<name> branch.
+# Tags must be pushed (git push --tags); CI needs full history for the tag diffs.
+name: gates
+on: pull_request
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # needed for tag-based diffs
+{setup}      - name: Run final gates
+        run: |
+          FEATURE="${GITHUB_HEAD_REF#feature/}"
+          agentflow gates "$FEATURE" --scope final

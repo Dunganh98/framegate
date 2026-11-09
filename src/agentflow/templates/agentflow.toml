@@ -1,0 +1,51 @@
+# agentflow configuration. Every key is optional; the values shown are the defaults.
+
+[project]
+language = "{language}"            # "python" | "dotnet"
+
+[paths]
+# src = "src"
+# tests = "tests"
+# review_tests = "tests/review"
+# specs = "specs"
+# out = "out"
+# metrics = "metrics"
+# phase_file = ".phase"
+# reqs_file = ".reqs"
+
+# [env]
+# python = ".venv/Scripts/python.exe"   # python adapter: default = .venv interpreter, else current
+
+[agents]
+# claude = "claude"                # override with env AGENTFLOW_CLAUDE
+# max_attempts = 3                 # implementation attempts per step before escalating
+# max_turns = 80                   # hard stop per agent run
+# permission_mode = "acceptEdits"
+
+[gates]
+# diff_coverage = 90
+# mutation_score = 80
+# mutation_tool = "mutmut"         # adapter default; "none" disables
+
+# [gates.commands]                 # override the adapter's commands; [] disables one
+# lint = ["ruff", "check", "{src}", "{tests}"]
+# format = ["ruff", "format", "--check", "{src}", "{tests}"]
+# typecheck = ["python", "-m", "mypy", "{src}"]
+# imports = ["lint-imports"]
+
+[protected]
+# extra = ["config/", "data/reference/"]   # added to the core + adapter protected paths
+# exceptions = ["tests/review/"]           # default: [paths] review_tests
+
+# [frame]
+# forbidden_patterns = [...]       # replaces the adapter's suppression patterns
+
+# [spec]
+# id_pattern = '\b[A-Z][A-Z0-9]{1,9}-[REI]-\d{3}\b'
+
+# [phases.IMPLEMENT]
+# write = ["src/", "out/"]         # PreToolUse write permissions for the phase
+# tools = [...]                    # replaces the --allowedTools list for the phase
+
+# [roles]
+# extra_dir = ".agentflow/roles"   # <phase>.md files appended to the base role prompts

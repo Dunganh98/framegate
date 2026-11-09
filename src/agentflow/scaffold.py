@@ -1,0 +1,101 @@
+"""`agentflow init` and `agentflow spec-brief`."""
+
+from __future__ import annotations
+
+import os
+import pathlib
+from collections.abc import Callable
+
+from agentflow.adapters import detect_language, get_adapter
+from agentflow.config import CONFIG_FILE, Config, ConfigError, parse_config
+from agentflow.orchestrator import package_text
+
+SPEC_TEMPLATES = ("requirements.md", "design.md", "plan.md")
+
+
+def init(
+    language: str | None = None,
+    root: pathlib.Path | None = None,
+    echo: Callable[[str], None] = print,
+) -> int:
+    root = (root or pathlib.Path(os.getcwd())).resolve()
+    lang = language or detect_language(root)
+    if lang is None:
+        echo("error: could not detect the project language; pass --language python|dotnet")
+        return 1
+    cfg = parse_config(root, {"project": {"language": lang}})
+    created, skipped = [], []
+
+    def write(rel: str, text: str) -> None:
+        path = root / rel
+        if path.exists():
+            skipped.append(rel)
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        created.append(rel)
+
+    write(CONFIG_FILE, package_text("templates", "agentflow.toml").replace("{language}", lang))
+    for name in SPEC_TEMPLATES:
+        write(
+            f"{cfg.paths.specs}/_template/{name}",
+            package_text("templates", "specs", "_template", name),
+        )
+
+    gi = root / ".gitignore"
+    existing = gi.read_text(encoding="utf-8").splitlines() if gi.exists() else []
+    wanted = [cfg.paths.out + "/", cfg.paths.phase_file, cfg.paths.reqs_file]
+    missing = [w for w in wanted if w not in {x.strip() for x in existing}]
+    if missing:
+        prefix = "" if not existing or existing[-1] == "" else "\n"
+        with open(gi, "a", encoding="utf-8") as fh:
+            fh.write(prefix + "\n".join(missing) + "\n")
+
+    echo(f"agentflow init ({lang}) in {root}")
+    for rel in created:
+        echo(f"  created  {rel}")
+    for rel in skipped:
+        echo(f"  skipped  {rel} (exists, not overwritten)")
+    echo(f"  .gitignore: {'added ' + ', '.join(missing) if missing else 'already complete'}")
+
+    try:
+        setup = get_adapter(cfg).ci_setup()
+    except ConfigError:
+        setup = "      # install the project's toolchain and agentflow here\n"
+    snippet = package_text("templates", "claude_md_snippet.md")
+    for key, value in (("{specs}", cfg.paths.specs), ("{out}", cfg.paths.out)):
+        snippet = snippet.replace(key, value)
+    echo("\n--- Add to CLAUDE.md (not written; merge it yourself) ---\n" + snippet.rstrip())
+    echo(
+        "\n--- CI snippet (GitHub Actions; not written) ---\n"
+        + package_text("templates", "ci_github.yml").replace("{setup}", setup).rstrip()
+    )
+    if lang == "python":
+        echo(
+            "\nNote: add agentflow (pinned) to the project's dev dependencies; its pytest plugin "
+            "provides the `req` marker and `--req`. Remove any conftest.py that defines `--req`."
+        )
+    echo("\nNext: agentflow spec <feature>")
+    return 0
+
+
+def spec_brief(cfg: Config, feature: str) -> str:
+    adapter = get_adapter(cfg)
+    p = cfg.paths
+    folder = cfg.spec_dir(feature)
+    state = "exists" if folder.is_dir() else f"missing — run: agentflow spec {feature}"
+    return "\n".join(
+        [
+            f"agentflow spec brief: feature '{feature}', language {cfg.language}",
+            f"- Spec folder: {p.specs}/{feature}/ ({state}); templates in {p.specs}/_template/.",
+            "- IDs: <CODE>-R-001 (requirement), <CODE>-E-001 (edge case), <CODE>-I-001 "
+            f"(invariant); regex {cfg.id_pattern}",
+            '- plan.md is parsed: "## Step N: <title>" headings, each with one '
+            '"Covers: ID, ID" line. Every ID is covered by exactly one step.',
+            f"- Interface stubs go in {p.src}/. Do not write tests or implementation.",
+            "",
+            adapter.conventions_brief().rstrip(),
+            "",
+            f"When the spec is done: agentflow approve-spec {feature}",
+        ]
+    )
