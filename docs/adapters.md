@@ -19,7 +19,7 @@ imported lazily). An adapter instance gets the loaded `Config` (`self.cfg`, `sel
 |---|---|---|
 | `TestRun` | `status`, `returncode`, `output`, `cases` | `status`: `passed` / `failed` / `no_tests` / `error` (collection, build or usage problem). `cases`: per-test outcomes when a JUnit report was requested, else `None` |
 | `TestCase` | `name`, `outcome`, `message` | `outcome`: `passed` / `failed` / `error` / `skipped`; `message`: failure/error text ("" if none) |
-| `CheckResult` | `status`, `output` | `status`: `PASS` / `FAIL` / `SKIPPED`. SKIPPED never fails a gate but is printed and lands in `final_gates.md` (the PR role must report it) |
+| `CheckResult` | `status`, `output`, `summary` | `status`: `PASS` / `FAIL` / `SKIPPED`. SKIPPED never fails a gate but is printed and lands in `final_gates.md` (the PR role must report it). `summary` (optional): one line shown under a `[PASS]` line, e.g. the mutation score |
 | `Check` | `name`, `run()` | A named, lazily-run check for the gate runner |
 
 Helpers: `run_command(cmd, cwd, env=None, timeout=None)` (missing tool -> code 127, "Tool not
@@ -72,10 +72,46 @@ conventions brief" for tagging, property tests and forbidden patterns.
 | Traceability / smells | AST scan of `tests/**/test_*.py` and `*_test.py` (the guide's code) |
 | Gates | `ruff check`, `ruff format --check`, `mypy src` via `python -m`; `lint-imports` only if `.importlinter` exists |
 | Coverage | `pytest --cov=src --cov-branch --cov-report=xml:out/coverage.xml`, then `diff-cover out/coverage.xml --compare-branch=tests-approved/<f> --fail-under=90` |
-| Mutation | mutmut >= 3 (`mutmut run`, `mutmut results --all true`, filtered to changed modules). SKIPPED on native Windows (mutmut needs fork) and when not installed |
+| Mutation | mutmut >= 3 via the standalone runner `mutmut_runner.py` (copied to `out/.mutmut/`): `mutmut run <module>.x*` for the changed modules, `mutmut results --all true`, `mutmut show` for up to 50 survivors (diffs go into `mutation_survivors.md`); `mutants/` is deleted before and after the run (and gitignored by `init`). Score = (killed + timeout + caught by type check + segfault) / (those + survived + no tests + suspicious); skipped / not checked are left out. Where it runs: `[gates] mutation_runner` (see below). SKIPPED when mutmut can't run there |
 | Forbidden | `type: ignore`, `noqa`, `pragma: no cover`, `pytest.skip`, `xfail` |
 | Protected | `pyproject.toml`, `setup.cfg`, `setup.py`, `requirements*`, `uv.lock`, `poetry.lock`, `Pipfile`, `.importlinter`, `mypy.ini`, `ruff.toml`, `.ruff.toml`, `pytest.ini`, `tox.ini`, root `conftest.py` |
 | Tools | `Bash(python -m pytest *)`, `Bash(pytest *)`, `Bash(ruff check *)`, `Bash(ruff format *)`, `Bash(python -m ruff *)`, `Bash(python -m mypy *)` |
+
+### Python mutation through WSL
+
+mutmut needs `fork`, so it can't run on native Windows. `[gates] mutation_runner`:
+
+| Value | Meaning |
+|---|---|
+| `"auto"` (default) | `wsl` on Windows, `native` elsewhere |
+| `"native"` | The project interpreter (`[env] python` / `.venv`) runs mutmut, which must be installed there. On native Windows: SKIPPED with a pointer to `"wsl"` |
+| `"wsl"` | `wsl.exe [-d <[env] wsl_distro>] -e python3 <runner> <spec>` |
+
+WSL flow (`adapters/wsl.py`, `adapters/mutmut_runner.py`):
+
+1. Probe: `wsl.exe -e wslpath -a <repo>` (repo path, e.g. `/mnt/d/...`) and `python3 --version`.
+   Either failing -> SKIPPED with the reason (no wsl.exe, distro won't start, no python3).
+2. Venv: `~/.cache/agentflow/venvs/<sha256(WSL repo path)[:16]>` on the Linux filesystem (not
+   on `/mnt/<drive>`: slow and visible to Windows). Contents: the project's dependencies
+   (`[project] dependencies`, every optional extra, every `[dependency-groups]` group,
+   `[tool.uv] dev-dependencies`, `requirements*.txt`; the project itself is not installed because
+   mutmut puts its mutated copy on `sys.path`), `mutmut>=3`, `pytest`, and agentflow (its pytest
+   plugin) from this source tree when agentflow runs from one (a project's own `agentflow`
+   requirement is then dropped). Windows paths in requirements are translated.
+3. The venv is rebuilt when its stamp changes: sha256 of the requirement list, `pyproject.toml`,
+   `uv.lock`, `poetry.lock`, `Pipfile.lock`, `pdm.lock`, the requirements files, the agentflow
+   version and `MUTMUT_ENV_VERSION`. Built with `uv` (PATH, `~/.local/bin`, `~/.cargo/bin`;
+   `uv venv --python python3` + `uv pip install`), else `python3 -m venv` + pip. If neither
+   works: SKIPPED with the setup log and the one-time hint (`curl -LsSf
+   https://astral.sh/uv/install.sh | sh`, or `sudo apt install python3-venv`; Ubuntu's python3
+   has no `ensurepip` by default).
+4. mutmut runs in the repo through `/mnt/<drive>/...`; the runner writes
+   `out/.mutmut/result.json`, which the adapter parses.
+
+Measured on the e2e fixture (one module, 7 mutants, WSL Ubuntu, Python 3.12, uv 0.13, warm uv
+cache): first run incl. venv creation 4.0 s, later runs 2.7 s (venv reused); score 85.7 % (6/7,
+the survivor is `"ints only"` -> `"XXints onlyXX"`, which `pytest.raises(match=...)` accepts).
+The first venv on a machine also downloads the packages.
 
 ## .NET / xUnit adapter (`dotnet.py`, class `DotnetAdapter`)
 

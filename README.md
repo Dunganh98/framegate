@@ -45,7 +45,11 @@ Configuration: `agentflow.toml` (all keys optional; see the commented template w
 `init`). `[agents] claude` or env `AGENTFLOW_CLAUDE` selects the claude executable.
 
 Python projects: add agentflow (pinned) to the dev dependencies; its pytest plugin provides the
-`req` marker and `--req ID,ID` selection.
+`req` marker and `--req ID,ID` selection. mutmut needs fork, so on Windows the mutation gate runs
+through WSL (`[gates] mutation_runner = "auto"`, default; `[env] wsl_distro` picks the
+distribution) in a WSL-side venv with the project's dependencies. Install once inside WSL:
+`curl -LsSf https://astral.sh/uv/install.sh | sh` (or `sudo apt install python3-venv`). Without
+WSL the gate is SKIPPED with the reason. Details: docs/adapters.md.
 
 .NET projects (xUnit, `language = "dotnet"`, detected from a root `*.sln`/`*.slnx`/`*.csproj`):
 install agentflow with the `dotnet` extra (`pip install "agentflow[dotnet]"`, brings diff-cover)
@@ -60,7 +64,7 @@ docs/adapters.md.
 ```
 uv sync
 uv run pytest          # unit + end-to-end tests (fake claude, no API calls), ~45 s
-uv run pytest -m slow  # .NET end-to-end on a real solution (needs the dotnet SDK), ~1.5 min
+uv run pytest -m slow  # real toolchains: .NET e2e (dotnet SDK) ~1.5 min, mutmut via WSL ~15 s
 uv run pytest -m "slow or not slow"   # everything
 uv run ruff check src tests ; uv run ruff format --check src tests ; uv run mypy
 ```
