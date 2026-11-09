@@ -28,23 +28,53 @@ agentflow reject <f> --reason "..."         # reason goes to the agent as feedba
 agentflow answer <f> [--abort]              # after writing out/<f>/answers.md (questions/escalation)
 agentflow gates <f> --scope step|final      # the frame checks (also used in CI)
 agentflow spec-brief <f>                    # conventions for the SPEC session (used by /spec)
+agentflow unlock [--force]                  # clear a stale .phase/.reqs left by a killed run
 ```
 
 `run` never waits on the keyboard. It advances TESTS -> IMPLEMENT (per plan step) -> REVIEW ->
 PR -> RETRO -> DONE and stops at the next human gate, agent questions or escalation, writing
 `out/<f>/progress.json` (`waiting`) and printing what to review. Exit codes: 0 done/ok, 1 error,
-10 human gate, 11 questions, 12 escalation (step failed `max_attempts` times), 13 spec change
-required. Run `agentflow run <f>` again after `approve` / `reject` / `answer`; it also resumes
-after an interruption.
+10 human gate, 11 questions, 12 escalation (step failed `max_attempts` times, or an agent
+stopped at its turn cap twice), 13 spec change required, 130 interrupted. Run `agentflow run <f>`
+again after `approve` / `reject` / `answer`; it also resumes after an interruption.
+
+Stopping a run: Ctrl+C, Ctrl+Break or SIGTERM kill the running agent's whole process tree (each
+agent runs in its own process group; on Windows also in a kill-on-close job object, so even a
+`taskkill /F` of agentflow leaves no orphan `claude`), clear `.phase`/`.reqs`, record an
+`interrupted` event (+ `progress.json` `interrupted`; the attempt is not counted) and exit 130.
+`out/.run.lock` (pid, feature, start) marks a running orchestrator: a second `run` is refused,
+a lock whose pid is gone is taken over (and the interruption recorded). `agentflow status` warns
+about a phase lock without a running orchestrator (`SPEC` excepted: `agentflow spec` sets it for
+the interactive session); `agentflow unlock` clears it.
+
+Turn caps: `--max-turns` per phase = `[phases.<P>] max_turns`, else `[agents] max_turns`, else
+TESTS 50, IMPLEMENT 80, REVIEW 40, PR 30, RETRO 30 (from the FCSim smoke run: RETRO used 48 turns,
+mostly denied shell probing). A run that stops at the cap is logged (`max_turns` event). IMPLEMENT:
+the step gate decides (a failed gate is a normal failed attempt whose feedback names the cap);
+other phases are re-run once with a note, then escalated (`escalation.md`).
+
+Final gates (`--scope final`): coverage + diff coverage and mutation testing run only on the
+feature's tests (tagged with any spec ID of the feature, or under `[paths] review_tests`); the
+whole suite runs once more without coverage instrumentation (`regression` check). Coverage over a
+large suite is too slow per feature (FCSim: > 30 min vs 142 s feature-scoped). `final_gates.md`
+starts with the scope of each check. `[gates] coverage_scope` / `mutation_scope = "suite"` bring
+back the whole-suite runs. A run cut short (timeout `[gates] regression_timeout` 3600 s /
+`coverage_timeout` 1800 s / `mutation_timeout` 3600 s, crashed or aborted test host, killed,
+missing report or coverage file) is `FAIL` with `ERROR: ... incomplete (<reason>)`, never a
+coverage or mutation figure. Diff coverage and mutation score lines show the figures under
+PASS/FAIL.
 
 Questions and failed retries feed the retro. An agent question (`questions.md`) pauses the run
 but is not a failed attempt: it marks a spec gap. Every step-gate run is logged in
 `out/events.jsonl` (`gate`: phase, step, attempt, `failed` check names, trimmed `excerpt`), as are
 escalations (phase, step, attempts, failing checks), questions (phase, step, text), answers
 (text; also appended to `questions_archive.md` under the questions), review findings (failing
-reviewer tests) and final gates (`failed`, `skipped`). Before the RETRO agent runs, agentflow
+reviewer tests), final gates (`failed`, `skipped`), permission denials (`permission_denials`:
+phase, step, tool + command/path of every call the permission check denied, from the `claude -p`
+JSON), turn-cap hits (`max_turns`) and interruptions. Before the RETRO agent runs, agentflow
 writes `out/<f>/retro_input.md`: counts, then every question (Q1..), failed attempt (F1..),
-escalation (E1..), human rejection (R1..), review finding (V1..) and final-gate failure (G1..).
+escalation (E1..), human rejection (R1..), review finding (V1..), final-gate failure (G1..) and
+permission denial (D1..).
 The retro must mention every ID in `retro_proposals.md` (a proposal, or "Not acted on" with a
 one-line reason); if IDs are missing it is re-run once with them as feedback, then a warning is
 printed and logged (`retro_coverage` event).

@@ -22,12 +22,17 @@ What the orchestrator relies on, and how it was verified. No real `claude -p` ag
 ```
 <claude> -p --append-system-prompt-file out/<f>/prompts/<role>.system.md
          --allowedTools "<rule>,<rule>,..." --permission-mode acceptEdits
-         --max-turns 80 --output-format json          (task on stdin)
+         --max-turns <cap of the phase> --output-format json   (task on stdin)
 ```
 
 `<claude>` = `[agents] claude` (default `claude`) or env `AGENTFLOW_CLAUDE`; a `.py` path is run
 with the current interpreter (used by the tests' fake claude). Each run's task prompt and raw
-output are saved to `out/runs/<stamp>-<feature>-<phase>.prompt.md` / `.json`.
+output are saved to `out/runs/<stamp>-<feature>-<phase>.prompt.md` / `.json`. The process starts
+in its own process group and, on Windows, suspended in a kill-on-close job object, then resumed
+(`procs.popen(job=True)`): `claude.cmd` -> cmd.exe -> node would otherwise spawn before the
+assignment. From the result: `permission_denials` -> `permission_denials` event + retro D items;
+`subtype: "error_max_turns"` (or `terminal_reason: "max_turns"`) -> `max_turns` event and the
+turn-cap handling (README).
 
 ## Verified in the live FCSim smoke run (2026-11-09, claude 2.1.319, Windows 11)
 

@@ -17,13 +17,18 @@ imported lazily). An adapter instance gets the loaded `Config` (`self.cfg`, `sel
 
 | Type | Fields | Meaning |
 |---|---|---|
-| `TestRun` | `status`, `returncode`, `output`, `cases` | `status`: `passed` / `failed` / `no_tests` / `error` (collection, build or usage problem). `cases`: per-test outcomes when a JUnit report was requested, else `None` |
+| `TestRun` | `status`, `returncode`, `output`, `cases`, `incomplete` | `status`: `passed` / `failed` / `no_tests` / `error` (collection, build or usage problem). `cases`: per-test outcomes when a JUnit report was requested, else `None`. `incomplete`: why the run was cut short (timeout, crashed host, killed, missing report / coverage file), `""` if it ran to the end |
+| `TestScope` | `req_ids`, `paths` | The tests a final coverage / mutation run uses: tagged with any of `req_ids` OR under `paths` (review tests); both empty = whole suite. `describe()` gives the text for the report header |
 | `TestCase` | `name`, `outcome`, `message` | `outcome`: `passed` / `failed` / `error` / `skipped`; `message`: failure/error text ("" if none) |
 | `CheckResult` | `status`, `output`, `summary` | `status`: `PASS` / `FAIL` / `SKIPPED`. SKIPPED never fails a gate but is printed and lands in `final_gates.md` (the PR role must report it). `summary` (optional): one line shown under a `[PASS]` line, e.g. the mutation score |
 | `Check` | `name`, `run()` | A named, lazily-run check for the gate runner |
 
 Helpers: `run_command(cmd, cwd, env=None, timeout=None)` (missing tool -> code 127, "Tool not
-found"; timeout -> process tree killed, code 124, "TIMEOUT: ..."),
+found"; timeout -> process tree killed, code 124, "TIMEOUT: ..."; Ctrl+C / SIGTERM -> tree killed,
+re-raised; runs through `procs.run`), `incomplete_reason(code, output, timeout)` (`timed out after
+N s`, `killed (...)`, `test host crashed, run aborted`, or `""`), `incomplete_result(reason,
+output, what)` (FAIL with `ERROR: <what> incomplete (<reason>)` as output head and summary),
+`diff_coverage_summary(output, threshold)`,
 `command_check(name, cmd, cwd)`, `parse_junit(path)` (JUnit XML -> `TestCase` list; works for
 pytest `--junitxml` and the .NET `JunitXml.TestLogger`), `tool_path(name, near)`.
 
@@ -43,8 +48,9 @@ pytest `--junitxml` and the .NET `JunitXml.TestLogger`), `tool_path(name, near)`
 | `default_gate_commands()` | abstract | `{"lint"|"format"|"typecheck"|"imports": [argv]}`; omit a key to skip it. `[gates.commands]` overrides per key (`[]` disables) |
 | `resolve_command(cmd)` | default | Expands `{src}`, `{tests}`, `{out}` in configured commands (python also maps a leading `python` to the project interpreter) |
 | `lint_checks(base_ref=None)` | default | Builds the `Check`s from the merged commands. The gate runner passes `base_ref` (= `tests-approved/<f>`) so an adapter can limit checks to the files changed since then (the .NET adapter does) |
-| `coverage_checks(base_ref)` | abstract | Final scope: full suite with coverage, then diff coverage against `base_ref` (= `tests-approved/<f>`) `>= cfg.diff_coverage`. SKIPPED (with reason) when a coverage tool is missing, but the full suite must still run |
-| `mutation_check(feature, base_ref, changed_src)` | abstract | Mutation score on `changed_src` (src files changed since the tag) `>= cfg.mutation_score`; write survivors to `<out>/<feature>/mutation_survivors.md`. SKIPPED with reason if the tool is missing/unsupported or `mutation_tool = "none"` |
+| `regression_check()` | abstract | Final scope with feature-scoped coverage: the whole suite (the adapter's final selection) once, without coverage, `cfg.regression_timeout`. Check name `regression: whole suite, no coverage` |
+| `coverage_checks(base_ref, scope=None)` | abstract | Final scope: the tests of `scope` (`None` = whole suite) with coverage (`cfg.coverage_timeout`), then diff coverage against `base_ref` (= `tests-approved/<f>`) `>= cfg.diff_coverage`, with `diff_coverage_summary` as `summary`. Names: `coverage run (feature tests)` / `diff coverage >= N% (feature tests)`, or `full test suite + coverage` / `diff coverage >= N%` for the whole suite. SKIPPED (with reason) when a coverage tool is missing, but the tests must still run. A cut-short coverage run fails both checks with `ERROR: ... incomplete` (no 0 %) |
+| `mutation_check(feature, base_ref, changed_src, scope=None)` | abstract | Mutation score on `changed_src` (src files changed since the tag) `>= cfg.mutation_score`, killing mutants only with the tests of `scope` (`None` = whole suite), `cfg.mutation_timeout`; write survivors to `<out>/<feature>/mutation_survivors.md`. SKIPPED with reason if the tool is missing/unsupported or `mutation_tool = "none"`; a cut-short run is `ERROR: mutation run (...) incomplete` |
 | `default_forbidden_patterns()` | abstract | Regexes forbidden in source lines added since the tag (suppressions, skips). `[frame] forbidden_patterns` replaces them |
 | `default_protected_paths()` | abstract | Dependency/build/tool-config paths that must not change after the tag. Added to the core list (`tests/`, `specs/`, `.claude/`, `.agentflow/`, `CLAUDE.md`, `agentflow.toml`, CI files) and `[protected] extra`. Entries are prefixes; an entry containing `*`, `?` or `[` is a case-insensitive glob where `*` also matches `/` (`*.csproj` = a project file at any depth). The same holds for `[protected] paths/extra/exceptions` |
 | `test_tools()` / `lint_tools()` | abstract | `--allowedTools` rules that let an agent run tests / lint+format+typecheck (rule syntax: `Bash(<prefix> *)`) |
@@ -71,8 +77,8 @@ conventions brief" for tagging, property tests and forbidden patterns.
 | Tests | `python -m pytest -q --no-header -p no:cacheprovider [--req ...] [-x] [--junitxml=...]`; exit 0/1/5 -> passed/failed/no_tests, else error |
 | Traceability / smells | AST scan of `tests/**/test_*.py` and `*_test.py` (the guide's code) |
 | Gates | `ruff check`, `ruff format --check`, `mypy src` via `python -m`; `lint-imports` only if `.importlinter` exists |
-| Coverage | `pytest --cov=src --cov-branch --cov-report=xml:out/coverage.xml`, then `diff-cover out/coverage.xml --compare-branch=tests-approved/<f> --fail-under=90` |
-| Mutation | mutmut >= 3 via the standalone runner `mutmut_runner.py` (copied to `out/.mutmut/`): `mutmut run <module>.x*` for the changed modules, `mutmut results --all true`, `mutmut show` for up to 50 survivors (diffs go into `mutation_survivors.md`); `mutants/` is deleted before and after the run (and gitignored by `init`). Score = (killed + timeout + caught by type check + segfault) / (those + survived + no tests + suspicious); skipped / not checked are left out. Where it runs: `[gates] mutation_runner` (see below). SKIPPED when mutmut can't run there |
+| Coverage | Feature scope: `pytest --req <IDs> --req-paths <review_tests> --cov=src --cov-branch --cov-report=xml:out/coverage.xml` (`--req-paths` keeps the tests under these paths, tagged or not), then `diff-cover out/coverage.xml --compare-branch=tests-approved/<f> --fail-under=90`; regression = plain `pytest -q`. Incomplete: exit 124 / 2 (interrupted) / 3 (internal error), or no `coverage.xml` |
+| Mutation | mutmut >= 3 via the standalone runner `mutmut_runner.py` (copied to `out/.mutmut/`): `mutmut run <module>.x*` for the changed modules, `mutmut results --all true`, `mutmut show` for up to 50 survivors (diffs go into `mutation_survivors.md`); `mutants/` is deleted before and after the run (and gitignored by `init`). Feature scope: the runner sets `PYTEST_ADDOPTS="--req <IDs> --req-paths <review_tests>"` for mutmut's pytest runs (spec key `pytest_addopts`; needs the agentflow pytest plugin with `--req-paths` in the mutmut env, which is why `MUTMUT_ENV_VERSION` is 2). Score = (killed + timeout + caught by type check + segfault) / (those + survived + no tests + suspicious); skipped / not checked are left out. Where it runs: `[gates] mutation_runner` (see below). SKIPPED when mutmut can't run there |
 | Forbidden | `type: ignore`, `noqa`, `pragma: no cover`, `pytest.skip`, `xfail` |
 | Protected | `pyproject.toml`, `setup.cfg`, `setup.py`, `requirements*`, `uv.lock`, `poetry.lock`, `Pipfile`, `.importlinter`, `mypy.ini`, `ruff.toml`, `.ruff.toml`, `pytest.ini`, `tox.ini`, root `conftest.py` |
 | Tools | `Bash(python -m pytest *)`, `Bash(pytest *)`, `Bash(ruff check *)`, `Bash(ruff format *)`, `Bash(python -m ruff *)`, `Bash(python -m mypy *)` |
@@ -134,8 +140,9 @@ attribute lists, test methods, helper-method bodies; no build, no Roslyn).
 | lint | `dotnet format style <target> --verify-no-changes --include {changed}` |
 | format | `dotnet format whitespace <target> --verify-no-changes --include {changed}` |
 | typecheck | `dotnet build <target> -c <configuration> --no-incremental`; FAIL on build errors, and with `warnings = "changed"` (default) on warnings located in changed `.cs` files; `"any"` fails on every warning, `"ignore"` drops `--no-incremental` and ignores warnings |
-| Coverage | Full suite (`final_filter`) with `--collect "XPlat Code Coverage"` (coverlet.collector, part of the xUnit template; if no test project references it: suite still runs, coverage SKIPPED). Cobertura files are normalized to repo-relative posix paths (`out/coverage/normalized-N.xml`) and passed to `diff-cover --compare-branch=tests-approved/<f> --fail-under=<diff_coverage>`. diff-cover comes from agentflow's own environment (`pip install "agentflow[dotnet]"`), else `uvx --from diff-cover diff-cover`, else SKIPPED |
-| Mutation | Stryker.NET (`dotnet-stryker` on PATH or in `~/.dotnet/tools`, or a local tool in `.config/dotnet-tools.json`; else SKIPPED with `dotnet tool install -g dotnet-stryker`). One run per project owning changed `.cs` files under `src`: `dotnet-stryker -tp <test project> --project <X.csproj> --mutate **/<file> ... --configuration <cfg> -r Json -O out/<f>/stryker/<project> --break-at 0`, plus `-f` with `test-case-filter = base_filter` merged into the project's `stryker-config.json`. Score = (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage) over the changed files; survivors -> `mutation_survivors.md`. Runtime on the e2e fixture: ~15 s |
+| Regression | `dotnet test` with `final_filter`, no coverage, `[gates] regression_timeout` |
+| Coverage | Feature scope: filter `(Req=A\|Req=B\|FullyQualifiedName~<review class>.)&(<final_filter>)` (`scope_filter`); `suite` scope: `final_filter`. With `--collect "XPlat Code Coverage"` (coverlet.collector, part of the xUnit template; if no test project references it: tests still run, coverage SKIPPED). Incomplete (status `error`, `TestRun.incomplete`): exit 124, `Test Run Aborted` / `test host process crashed` in the output, no TRX with a non-zero exit (and no compile errors), or no `coverage.cobertura.xml` after a run with results. Cobertura files are normalized to repo-relative posix paths (`out/coverage/normalized-N.xml`) and passed to `diff-cover --compare-branch=tests-approved/<f> --fail-under=<diff_coverage>`. diff-cover comes from agentflow's own environment (`pip install "agentflow[dotnet]"`), else `uvx --from diff-cover diff-cover`, else SKIPPED |
+| Mutation | Stryker.NET (`dotnet-stryker` on PATH or in `~/.dotnet/tools`, or a local tool in `.config/dotnet-tools.json`; else SKIPPED with `dotnet tool install -g dotnet-stryker`). One run per project owning changed `.cs` files under `src`: `dotnet-stryker -tp <test project> --project <X.csproj> --mutate **/<file> ... --configuration <cfg> -r Json -O out/<f>/stryker/<project> --break-at 0`, plus `-f` with `test-case-filter` = the feature scope's filter ANDed with `base_filter` (`suite` scope: `base_filter`), ANDed with a filter already in the project's `stryker-config.json`. Timeout `[dotnet] mutation_timeout` if set, else `[gates] mutation_timeout`; exit 124, a killed Stryker or a missing report = `ERROR: mutation run (<project>) incomplete`. Score = (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage) over the changed files; survivors -> `mutation_survivors.md`. Runtime on the e2e fixture: ~15 s |
 | Forbidden | `#pragma warning disable`, `SuppressMessage`, `ExcludeFromCodeCoverage`, `Skip =`, `catch (Exception)` without a variable, `catch {`, single-line empty `catch (...) { }`. The null-forgiving `!` is allowed |
 | Protected | `*.csproj`, `*.sln`, `*.slnx`, `*Directory.Build.props`, `*Directory.Build.targets`, `*Directory.Packages.props`, `global.json`, `*NuGet.config`, `*.editorconfig`, `*.runsettings`, `.config/dotnet-tools.json`, `stryker-config.json` (globs: any depth) |
 | Tools | `Bash(dotnet test *)`, `Bash(dotnet build *)`, `Bash(dotnet format *)` (no `dotnet add` / `dotnet new`) |
@@ -163,7 +170,7 @@ warnings for code an earlier step already built.
 | `warnings` | `"changed"` | typecheck: `"changed"` / `"any"` / `"ignore"` |
 | `build_timeout` | `900` | Seconds per build / format / diff-cover command |
 | `test_timeout` | `3600` | Seconds per `dotnet test` |
-| `mutation_timeout` | `7200` | Seconds per Stryker run |
+| `mutation_timeout` | `[gates] mutation_timeout` (3600) | Seconds per Stryker run |
 
 ### Notes for a first project (checked against FCSim, read-only)
 
@@ -194,5 +201,7 @@ warnings for code an earlier step already built.
 
 Stryker creates mutants for the whole project (40,273 in FCSim.Core); `--mutate` leaves 6 to test
 ("Removed by mutate filter"), so the cost is the test runs, not the mutant count. Coverage and
-mutation over the full FCSim suite are not practical per feature; see the smoke-run report for
-the proposed design change (feature-scoped coverage/mutation runs).
+mutation over the full FCSim suite are not practical per feature, hence the default feature
+scope (`[gates] coverage_scope` / `mutation_scope = "feature"`): coverage and Stryker use only the
+feature's `Req` tests + review classes, the regression run is the plain suite (~1 min dev-loop
+filter, ~4-5 min every test). Not yet re-measured live with the new default.
