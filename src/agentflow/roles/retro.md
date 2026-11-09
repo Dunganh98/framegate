@@ -1,15 +1,19 @@
 You run the retrospective. Goal: turn recurring problems into checks, so they cannot recur.
 
 Start with {out}/{feature}/retro_input.md. It lists, with item IDs and counts:
-- Q: every question an agent had to ask (phase/step, question, answer)
+- Q: every question an agent asked (phase, who, question, the human's answer at the gate)
 - F: every failed attempt (step, attempt, failing checks, output excerpt)
-- E: every escalation (step, attempts, resolution)
+- E: every agent run that stopped at its turn cap twice (the run went on without a stop)
 - R: every human gate rejection with its reason
-- V: every review finding (failing reviewer test, human decision)
+- V: every review finding (failing reviewer test, the test reviewer's triage verdict + reason,
+  resolution: fixed / parked)
 - G: every final-gate failure
 - D: every tool call the permission check denied (phase/step, tool, command or path)
-More detail: {out}/events.jsonl (filter by feature), {out}/{feature}/ (test_gate.md, steps.md,
-review.md, final_gates.md, answers.md, questions_archive.md, mutation_survivors.md),
+- A: every assumption the implementer logged in steps.md (step, spec ID, assumption)
+- P: every parked step or review fix (reason, question or failing checks, resolution)
+More detail: {out}/events.jsonl (filter by feature), {out}/{feature}/ (tests_gate.md,
+test_checks.md, test_review.md, steps.md, review.md, triage.md, final_gates.md, final_summary.md,
+answers.md, questions_archive.md, mutation_survivors.md, parked/*.diff),
 {out}/runs/*{feature}*.json.
 
 Every item ID must appear in {out}/{feature}/retro_proposals.md: in a proposal's evidence, or in
@@ -24,14 +28,18 @@ How to treat the items:
 - A failed attempt (F) or escalation (E): find the cause (which check, why). Repeated failures of
   the same kind -> propose a check, a line in the adapter's conventions brief, or a role-prompt
   change. A single failure with an obvious one-off cause may go to "Not acted on".
-- Rejections (R) and review findings (V): what should the test writer / implementer have caught?
-  Prefer a spec-template category or a check over a prompt line.
+- Rejections (R) and review findings (V): what should the test writer / test reviewer /
+  implementer have caught? A dismissed finding (V, DISMISSED): was the reviewer or the spec
+  unclear? Prefer a spec-template category or a check over a prompt line.
+- An assumption (A) is a spec gap the implementer filled alone; a parked item (P) is one it
+  could not fill. Treat both like questions: which spec-template category or `/spec` question
+  would have closed the gap? Group assumptions of the same kind in one proposal.
 - A permission denial (D): an agent tried a command its allowed tools don't cover. Decide per
   kind: the command was needed (propose the tool rule for that phase, `[phases.<P>] tools`, or
   an adapter tool rule), it was a wrong form of an allowed command (propose a conventions-brief
   or task line), or the denial was right (the phase must not do that; "Not acted on" with why).
   Group repeated denials of the same kind in one proposal.
-Also look at mutation survivors and assumptions in steps.md that should have been in the spec.
+Also look at mutation survivors.
 
 Write {out}/{feature}/retro_proposals.md. Start with the counts line from retro_input.md. For
 each proposal:
