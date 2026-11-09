@@ -1,7 +1,8 @@
 """agentflow command line.
 
 Exit codes: 0 ok / done, 1 error, 2 usage (or hook block), 10 waiting for a human gate,
-11 waiting for answers to agent questions, 12 escalation, 13 spec change required.
+11 waiting for answers to agent questions, 12 escalation, 13 spec change required,
+130 interrupted (Ctrl+C / SIGTERM; agents stopped, state cleared).
 """
 
 from __future__ import annotations
@@ -22,9 +23,11 @@ commands:
   answer <feature> [--abort]       continue after questions/escalation (answers.md)
   gates <feature> --scope step|final [--skip-mutation]
   spec-brief <feature>    print the conventions brief for the SPEC session
+  unlock [--force]        clear a stale phase lock (.phase/.reqs) left by a killed run
   hook pre-tool-use|stop  Claude Code hooks (stdin = hook JSON; exit 2 = block)
 
-exit codes: 0 ok, 1 error, 10 human gate, 11 questions, 12 escalation, 13 spec change
+exit codes: 0 ok, 1 error, 10 human gate, 11 questions, 12 escalation, 13 spec change,
+  130 interrupted (Ctrl+C / SIGTERM; run again to resume)
 """
 
 
@@ -54,6 +57,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("feature")
     p.add_argument("--scope", choices=["step", "final"], default="final")
     p.add_argument("--skip-mutation", action="store_true")
+    p = sub.add_parser("unlock", help="clear a stale phase lock left by a killed run")
+    p.add_argument("--force", action="store_true", help="even if a run looks active")
     p = sub.add_parser("hook")
     p.add_argument("event", choices=["pre-tool-use", "stop"])
     return ap
@@ -112,6 +117,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0 if ok else 1
         orch = Orchestrator(cfg)
+        if args.command == "unlock":
+            return orch.unlock(force=args.force)
         f = args.feature
         if args.command == "spec":
             return orch.spec(f)

@@ -23,7 +23,9 @@ import json
 import os
 import pathlib
 import re
+import subprocess
 import sys
+import time
 
 STUB_DOC = '"""Add two integers. Serves DEMO-R-001, DEMO-E-001."""'
 
@@ -194,6 +196,15 @@ def main() -> int:
     lang = DOTNET if scen.get("language") == "dotnet" else PYTHON
     runs = state.setdefault("runs", {})
     runs[phase] = runs.get(phase, 0) + 1
+    if scen.get("hang") == phase and runs[phase] == 1:
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+        pids = {"claude": os.getpid(), "child": child.pid}
+        tmp = scen_path.with_name("hang_pids.tmp")
+        tmp.write_text(json.dumps(pids), encoding="utf-8")
+        tmp.replace(scen_path.with_name("hang_pids.json"))
+        time.sleep(120)
+        return 1
     asked = state.setdefault("asked", [])
     if phase in scen.get("questions_in", []) and phase not in asked:
         asked.append(phase)

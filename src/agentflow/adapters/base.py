@@ -12,14 +12,13 @@ import os
 import pathlib
 import re
 import shutil
-import signal
 import subprocess
-import sys
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import ClassVar
 
+from agentflow import procs
 from agentflow.config import GATE_COMMAND_KEYS, Config
 
 READ_TOOLS = ["Read", "Glob", "Grep"]
@@ -96,19 +95,6 @@ class Check:
 TIMEOUT_CODE = 124
 
 
-def _kill_tree(proc: subprocess.Popen[str]) -> None:
-    """Kill a process and its children (test hosts, build nodes)."""
-    if sys.platform == "win32":
-        subprocess.run(
-            ["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False
-        )
-    else:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except OSError:
-            proc.kill()
-
-
 def run_command(
     cmd: Sequence[str],
     cwd: pathlib.Path,
@@ -116,35 +102,23 @@ def run_command(
     timeout: float | None = None,
 ) -> tuple[int, str]:
     """Run a command, return (exit code, stdout+stderr). Missing executables -> code 127,
-    timeout (seconds) -> code 124 after killing the process tree."""
+    timeout (seconds) -> code 124 after killing the process tree. The process tree is also
+    killed when agentflow is interrupted (procs.run), and on Windows when agentflow dies."""
     try:
-        proc = subprocess.Popen(
-            list(cmd),
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=env,
-            start_new_session=timeout is not None and sys.platform != "win32",
-        )
+        code, out, err = procs.run(cmd, cwd=cwd, env=env, timeout=timeout)
     except FileNotFoundError as e:
         return 127, f"Tool not found: {e}"
+    except subprocess.TimeoutExpired as e:
+        partial = "".join(
+            x.decode("utf-8", "replace") if isinstance(x, bytes) else x
+            for x in (e.output, e.stderr)
+            if x
+        )
+        msg = f"TIMEOUT: {cmd[0]} did not finish within {timeout:g} s (process tree killed)"
+        return TIMEOUT_CODE, partial.strip() + "\n" + msg
     except OSError as e:
         return 127, f"Could not start {cmd[0]}: {e}"
-    try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        _kill_tree(proc)
-        try:
-            out, err = proc.communicate(timeout=30)
-        except subprocess.TimeoutExpired:
-            out, err = "", ""
-        msg = f"TIMEOUT: {cmd[0]} did not finish within {timeout:g} s (process tree killed)"
-        return TIMEOUT_CODE, ((out or "") + (err or "")).strip() + "\n" + msg
-    return proc.returncode, (out + err).strip()
+    return code, (out + err).strip()
 
 
 def command_check(name: str, cmd: Sequence[str], cwd: pathlib.Path) -> Check:

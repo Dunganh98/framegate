@@ -11,14 +11,15 @@ from __future__ import annotations
 import datetime
 import importlib.resources
 import json
+import os
 import pathlib
 import shutil
-import subprocess
 import sys
 import time
 from collections.abc import Callable
 from typing import Any
 
+from agentflow import procs
 from agentflow.adapters import get_adapter
 from agentflow.adapters.base import LanguageAdapter
 from agentflow.checks import red_stubs, test_smells, traceability
@@ -36,6 +37,7 @@ from agentflow.state import (
     load_progress,
     log_event,
     read_events,
+    read_phase,
     save_progress,
     set_phase,
     set_reqs,
@@ -48,6 +50,7 @@ EXIT_GATE = 10  # waiting for a human gate: approve / reject
 EXIT_QUESTIONS = 11  # agent questions: write answers.md, then answer
 EXIT_ESCALATION = 12  # step failed max_attempts times: fix/clarify, then answer
 EXIT_SPEC_CHANGE = 13  # aborted: edit the spec, then approve-spec
+EXIT_INTERRUPTED = 130  # Ctrl+C / SIGTERM: agents stopped, state cleared; run again
 
 WAIT_CODES = {
     "gate": EXIT_GATE,
@@ -268,16 +271,9 @@ class Orchestrator:
         (runs / f"{stamp}-{feature}-{phase}.prompt.md").write_text(prompt, encoding="utf-8")
         t0 = time.time()
         try:
-            r = subprocess.run(
-                args,
-                cwd=self.cfg.root,
-                input=prompt,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
-            stdout, stderr = r.stdout or "", r.stderr or ""
+            # own process group + kill-on-close job: Ctrl+C / SIGTERM / a killed agentflow
+            # take the whole agent tree (claude, node, shells, dotnet) down with it
+            _, stdout, stderr = procs.run(args, input=prompt, cwd=self.cfg.root, job=True)
         except OSError as e:
             stdout, stderr = "", f"could not start claude: {e}"
         (runs / f"{stamp}-{feature}-{phase}.json").write_text(stdout or stderr, encoding="utf-8")
@@ -494,11 +490,12 @@ class Orchestrator:
                     step=label,
                     retry_turn_cap=False,
                 )
-            except Paused:
-                prog["attempt"] = attempt - 1  # questions don't count as an attempt
+                rep = gate_report(self.adapter, feature, "step")
+            except (Paused, KeyboardInterrupt):
+                # questions and interruptions don't count as an attempt
+                prog["attempt"] = attempt - 1
                 save_progress(self.cfg, feature, prog)
                 raise
-            rep = gate_report(self.adapter, feature, "step")
             ok, out = rep.ok, rep.report
             log_event(
                 self.cfg,
@@ -781,6 +778,9 @@ class Orchestrator:
     def status(self, feature: str) -> int:
         prog = load_progress(self.cfg, feature)
         self.echo(json.dumps(prog, indent=2))
+        warning = self.stale_warning()
+        if warning:
+            self.echo("\n" + warning)
         if prog.get("waiting"):
             self.echo("\n" + self.describe_waiting(feature, prog["waiting"]))
             return WAIT_CODES.get(prog["waiting"].get("kind"), EXIT_OK)
@@ -800,17 +800,118 @@ class Orchestrator:
             "PR": self.phase_pr,
             "RETRO": self.phase_retro,
         }
+        self.take_run_lock(feature)
         try:
-            while prog["phase"] != "DONE":
-                if prog["phase"] not in runners:
-                    raise WorkflowError(f"unknown phase in progress.json: {prog['phase']}")
-                self.echo(f"--- {feature}: {prog['phase']} ---")
-                runners[prog["phase"]](feature, prog)
+            with procs.stop_signals():
+                while prog["phase"] != "DONE":
+                    if prog["phase"] not in runners:
+                        raise WorkflowError(f"unknown phase in progress.json: {prog['phase']}")
+                    self.echo(f"--- {feature}: {prog['phase']} ---")
+                    runners[prog["phase"]](feature, prog)
         except Paused as p:
             return p.code
+        except KeyboardInterrupt as e:  # Ctrl+C, Ctrl+Break, SIGTERM (procs.Interrupted)
+            self.record_interruption(feature, prog, procs.interrupt_name(e))
+            return EXIT_INTERRUPTED
         finally:
             clear_phase(self.cfg)
+            procs.remove_lock(self.cfg.out_dir)
         self.echo(f"\nFeature {feature}: DONE.")
+        return EXIT_OK
+
+    # ---------- run lock, interruption, stale state ----------
+    def take_run_lock(self, feature: str) -> None:
+        """One orchestrator per repo. A lock left by a killed run is taken over (and the
+        interruption recorded); a live one is an error."""
+        lock = procs.read_lock(self.cfg.out_dir)
+        if lock is not None and int(lock.get("pid") or 0) != os.getpid():
+            if procs.lock_alive(lock):
+                raise WorkflowError(
+                    f"agentflow run is already active (pid {lock.get('pid')}, feature "
+                    f"{lock.get('feature')}, since {lock.get('started')})."
+                )
+            self.recover_stale(lock, "run")
+        procs.write_lock(self.cfg.out_dir, feature)
+
+    def record_interruption(self, feature: str, prog: dict[str, Any], how: str) -> None:
+        prog["interrupted"] = {
+            "ts": datetime.datetime.now().isoformat(timespec="seconds"),
+            "phase": prog.get("phase"),
+            "how": how,
+        }
+        save_progress(self.cfg, feature, prog)
+        log_event(
+            self.cfg,
+            feature,
+            "interrupted",
+            phase=prog.get("phase"),
+            sub=prog.get("sub"),
+            completed_steps=prog.get("completed_steps"),
+            how=how,
+        )
+        self.echo(
+            f"\nInterrupted ({how}) in {prog.get('phase')}: agent processes stopped, phase lock "
+            f"cleared. Resume with: agentflow run {feature}"
+        )
+
+    def recover_stale(self, lock: dict[str, Any] | None, by: str) -> None:
+        """Clear .phase/.reqs/lock left by an orchestrator that died without cleanup, and
+        record the interruption for its feature."""
+        phase = read_phase(self.cfg)
+        feature = str((lock or {}).get("feature") or "")
+        clear_phase(self.cfg)
+        procs.remove_lock(self.cfg.out_dir, force=True)
+        if feature:
+            prog = load_progress(self.cfg, feature)
+            prog["interrupted"] = {
+                "ts": datetime.datetime.now().isoformat(timespec="seconds"),
+                "phase": prog.get("phase"),
+                "how": f"orchestrator gone (pid {(lock or {}).get('pid')}), found by {by}",
+            }
+            save_progress(self.cfg, feature, prog)
+            log_event(
+                self.cfg,
+                feature,
+                "interrupted",
+                phase=prog.get("phase"),
+                how=prog["interrupted"]["how"],
+                stale_phase=phase,
+            )
+        self.echo(
+            f"Cleared stale state of a run that ended without cleanup (pid "
+            f"{(lock or {}).get('pid', '?')}, phase lock {phase or 'none'})."
+        )
+
+    def stale_warning(self) -> str:
+        """A warning when .phase is set but no orchestrator is running ("" otherwise). SPEC is
+        set by `agentflow spec` for an interactive session and never stale."""
+        phase = read_phase(self.cfg)
+        lock = procs.read_lock(self.cfg.out_dir)
+        if procs.lock_alive(lock):
+            return (
+                f"agentflow run is active: pid {(lock or {}).get('pid')}, feature "
+                f"{(lock or {}).get('feature')}, phase lock {phase or 'none'}."
+            )
+        if (phase and phase != "SPEC") or lock is not None:
+            return (
+                f"WARNING: stale phase lock '{phase or 'none'}'"
+                + (f" (left by pid {lock.get('pid')})" if lock else "")
+                + ": no agentflow run is active, so the hooks still apply that phase's rules. "
+                "Clear it with: agentflow unlock"
+            )
+        return ""
+
+    def unlock(self, force: bool = False) -> int:
+        lock = procs.read_lock(self.cfg.out_dir)
+        if procs.lock_alive(lock) and not force:
+            raise WorkflowError(
+                f"agentflow run is active (pid {(lock or {}).get('pid')}); stop it first "
+                "(Ctrl+C) or use --force."
+            )
+        if read_phase(self.cfg) is None and lock is None and not self.cfg.reqs_path.exists():
+            self.echo("Nothing to unlock.")
+            return EXIT_OK
+        self.recover_stale(lock, "unlock")
         return EXIT_OK
 
     def _require_waiting(self, feature: str, kinds: tuple[str, ...]) -> dict[str, Any]:

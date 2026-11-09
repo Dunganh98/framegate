@@ -3,12 +3,22 @@
 
 from __future__ import annotations
 
+import json
+import os
+import signal
+import subprocess
+import sys
+import threading
+import time
+
 import pytest
 
+from agentflow import procs
 from agentflow.config import load_config
 from agentflow.orchestrator import (
     EXIT_ESCALATION,
     EXIT_GATE,
+    EXIT_INTERRUPTED,
     EXIT_QUESTIONS,
     EXIT_SPEC_CHANGE,
     Orchestrator,
@@ -227,12 +237,15 @@ def test_resume_after_interruption(demo_repo: DemoRepo) -> None:
         return real(phase, *a, **k)  # type: ignore[arg-type]
 
     orch.run_agent = interrupted  # type: ignore[method-assign]
-    with pytest.raises(KeyboardInterrupt):
-        orch.run("demo")
+    assert orch.run("demo") == EXIT_INTERRUPTED
     assert not (r.root / ".phase").exists() and not (r.root / ".reqs").exists()
+    assert not (r.root / "out/.run.lock").exists()
     prog = r.progress()
     assert prog["phase"] == "IMPLEMENT" and prog["completed_steps"] == []
-    assert prog["waiting"] is None
+    assert prog["waiting"] is None and prog["attempt"] == 0  # not a failed attempt
+    assert prog["interrupted"]["phase"] == "IMPLEMENT" and prog["interrupted"]["how"] == "SIGINT"
+    ev = [e for e in r.events() if e["kind"] == "interrupted"]
+    assert len(ev) == 1 and ev[0]["phase"] == "IMPLEMENT"
 
     assert r.af("run", "demo") == 0
     assert r.progress()["phase"] == "DONE"
@@ -397,3 +410,126 @@ def test_turn_cap_twice_escalates(demo_repo: DemoRepo) -> None:
     assert r.af("answer", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE  # third TESTS run finishes normally
     assert len(r.calls()) == 3
+
+
+# ---------- stopping a run: no orphan agents, no stale phase lock ----------
+def _hang_pids(r: DemoRepo) -> dict[str, int]:
+    f = r.root.parent / "hang_pids.json"
+    deadline = time.monotonic() + 60
+    while not f.is_file():
+        assert time.monotonic() < deadline, "the fake agent never started"
+        time.sleep(0.1)
+    pids: dict[str, int] = json.loads(f.read_text(encoding="utf-8"))
+    return pids
+
+
+def _all_dead(pids: dict[str, int], seconds: float = 20) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if not any(procs.pid_alive(p) for p in pids.values()):
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def _to_implement(r: DemoRepo) -> None:
+    r.add_toml(FAST)
+    r.scenario(hang="IMPLEMENT")
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE
+    assert r.af("approve", "demo") == 0
+
+
+def test_sigterm_mid_implement_stops_agents_then_resume(demo_repo: DemoRepo) -> None:
+    """SIGTERM while the IMPLEMENT agent runs: the agent and its child are killed, .phase/.reqs
+    and the run lock are cleared, the interruption is recorded; `run` resumes to DONE."""
+    r = demo_repo
+    _to_implement(r)
+    seen: dict[str, int] = {}
+
+    def stop() -> None:
+        seen.update(_hang_pids(r))
+        signal.raise_signal(signal.SIGTERM)
+
+    threading.Thread(target=stop, daemon=True).start()
+    t0 = time.monotonic()
+    assert r.af("run", "demo") == EXIT_INTERRUPTED
+    assert time.monotonic() - t0 < 60
+    assert _all_dead(seen), f"orphans left: {seen}"
+    for name in (".phase", ".reqs", "out/.run.lock"):
+        assert not (r.root / name).exists(), name
+    ev = [e for e in r.events() if e["kind"] == "interrupted"]
+    assert len(ev) == 1 and ev[0]["how"] == "SIGTERM" and ev[0]["phase"] == "IMPLEMENT"
+    assert r.progress()["attempt"] == 0
+    assert r.af("run", "demo") == 0
+    assert r.progress()["phase"] == "DONE"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the kill-on-close job is Windows-only")
+def test_hard_kill_mid_implement_no_orphans_stale_lock_recovered(
+    demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`taskkill /F` of the orchestrator (no handler runs): the job kills the agent tree; the
+    stale .phase is reported by `status`, cleared by `unlock`, and `run` resumes to DONE."""
+    r = demo_repo
+    _to_implement(r)
+    env = dict(os.environ)
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "agentflow", "run", "demo"],
+        cwd=r.root,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        pids = _hang_pids(r)
+        lock = json.loads((r.root / "out/.run.lock").read_text(encoding="utf-8"))
+        subprocess.run(
+            ["taskkill", "/F", "/PID", str(lock["pid"])], check=False, capture_output=True
+        )
+        assert _all_dead(pids), f"orphans left: {pids}"
+        proc.wait(timeout=30)
+    finally:
+        procs.kill_tree(proc)
+    assert (r.root / ".phase").read_text(encoding="utf-8") == "IMPLEMENT"
+    capsys.readouterr()
+    r.af("status", "demo")
+    assert "WARNING: stale phase lock 'IMPLEMENT'" in capsys.readouterr().out
+    assert r.af("unlock") == 0
+    assert not (r.root / ".phase").exists() and not (r.root / "out/.run.lock").exists()
+    ev = [e for e in r.events() if e["kind"] == "interrupted"]
+    assert len(ev) == 1 and "found by unlock" in ev[0]["how"]
+    assert r.af("unlock") == 0  # nothing left
+    assert r.af("run", "demo") == 0
+    assert r.progress()["phase"] == "DONE"
+
+
+def test_stale_lock_taken_over_by_run_live_lock_refused(
+    demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
+) -> None:
+    r = demo_repo
+    r.add_toml(FAST)
+    assert r.af("approve-spec", "demo") == 0
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    lock = r.root / "out/.run.lock"
+    lock.parent.mkdir(exist_ok=True)
+    lock.write_text(json.dumps({"pid": dead.pid, "feature": "demo"}), encoding="utf-8")
+    (r.root / ".phase").write_text("TESTS", encoding="utf-8")
+    assert r.af("run", "demo") == EXIT_GATE  # stale lock recovered, run continues
+    assert "Cleared stale state" in capsys.readouterr().out
+    assert [e["kind"] for e in r.events()].count("interrupted") == 1
+    # a live lock (another process) blocks a second run and plain unlock
+    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    lock.write_text(json.dumps({"pid": other.pid, "feature": "x"}), encoding="utf-8")
+    (r.root / ".phase").write_text("TESTS", encoding="utf-8")
+    orch = Orchestrator(load_config(r.root), echo=lambda s: None)
+    with pytest.raises(Exception, match="already active"):
+        orch.take_run_lock("demo")
+    assert "agentflow run is active" in orch.stale_warning()
+    assert r.af("unlock") == 1
+    assert r.af("unlock", "--force") == 0 and not lock.exists()
+    other.kill()
+    # SPEC is set on purpose by `agentflow spec`: never reported as stale
+    (r.root / ".phase").write_text("SPEC", encoding="utf-8")
+    assert orch.stale_warning() == ""
