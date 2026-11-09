@@ -77,13 +77,18 @@ a lock whose pid is gone is taken over (and the interruption recorded). `agentfl
 about a phase lock without a running orchestrator (`SPEC` excepted: `agentflow spec` sets it for
 the interactive session); `agentflow unlock` clears it.
 
-Turn caps: `--max-turns` per phase = `[phases.<P>] max_turns`, else `[agents] max_turns`, else
-TESTS 50, TEST_REVIEW 30, IMPLEMENT 80, REVIEW 40, TRIAGE 30, PR 30, RETRO 30 (from the FCSim
-smoke run: RETRO used 48 turns, mostly denied shell probing). A run that stops at the cap is
-logged (`max_turns` event). IMPLEMENT: the step gate decides (a failed gate is a normal failed
-attempt whose feedback names the cap); other phases are re-run once with a note; if that run
-stops at the cap too, it is logged (`escalation` event, retro E item) and the run continues with
-what the agent wrote.
+Turn and cost caps per agent run: `--max-turns` = `[phases.<P>] max_turns`, else
+`[agents] max_turns`, else TESTS 50, TEST_REVIEW 30, IMPLEMENT 80, REVIEW 40, TRIAGE 30, PR 30,
+RETRO 30. A turn is one model round trip (one assistant message, however many parallel tool calls
+it makes); the CLI's `num_turns` counts messages (prompt + every tool result) and runs about 2x
+higher, so agentflow logs both (`turns` = round trips from the message stream, `messages` =
+`num_turns`; docs/claude-cli-notes.md). `--max-budget-usd` = `[phases.<P>] max_budget_usd`, else
+`[agents] max_budget_usd`, else TESTS 2.0, TEST_REVIEW 1.5, IMPLEMENT 1.5, REVIEW 1.5, TRIAGE 1.5,
+PR 1.5, RETRO 3.0 USD (~3x the live FCSim cost per run; `0` = no cap). A run that stops at
+either cap is logged (`max_turns` / `max_budget` event). IMPLEMENT: the step gate decides (a
+failed gate is a normal failed attempt whose feedback names the cap); other phases are re-run
+once with a note; if that run stops at a cap too, it is logged (`escalation` event with
+`cap_kind`, retro E item) and the run continues with what the agent wrote.
 
 Final gates (`--scope final`): coverage + diff coverage and mutation testing run only on the
 feature's tests (tagged with any spec ID of the feature, or under `[paths] review_tests`); the

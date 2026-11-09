@@ -508,10 +508,13 @@ def test_turn_cap_retry_then_done(demo_repo: DemoRepo) -> None:
     assert "stopped at the turn cap (7 turns)" in retro[1]["prompt"]
     assert len([c for c in r.calls() if c["phase"] == "IMPLEMENT"]) == 1
     capped = [e for e in r.events() if e["kind"] == "max_turns"]
-    assert [(e["phase"], e["cap"], e["turns"]) for e in capped] == [
-        ("IMPLEMENT", 80, 81),
-        ("RETRO", 7, 8),
+    # turns = API round trips from the stream (what --max-turns caps); messages = num_turns
+    assert [(e["phase"], e["cap"], e["turns"], e["messages"]) for e in capped] == [
+        ("IMPLEMENT", 80, 80, 81),
+        ("RETRO", 7, 7, 8),
     ]
+    runs = [e for e in r.events() if e["kind"] == "agent_run" and not e["error"]]
+    assert runs and all(e["turns"] == 2 and e["messages"] == 3 for e in runs)
     assert r.progress().get("turn_cap_retries") == 0
 
 
@@ -541,6 +544,40 @@ def test_turn_cap_twice_continues_without_a_stop(demo_repo: DemoRepo) -> None:
     assert "## Agent runs stopped at the turn cap twice: 1" in read(r, "out/demo/final_facts.md")
     finish_with_retro(r)
     assert "### E1 — TESTS stopped at the turn cap 2 times" in read(r, "out/demo/retro_input.md")
+
+
+def test_budget_cap_retry_then_escalation(demo_repo: DemoRepo) -> None:
+    """--max-budget-usd goes to every run (phase default or config). A run that stops at the
+    budget cap is handled like the turn cap: re-run once with a note, then logged (E item)."""
+    r = demo_repo
+    r.set_toml("agents", "max_budget_usd", "2.5")
+    r.add_toml(FAST + "\n[phases.TESTS]\nmax_budget_usd = 0.8\n")
+    r.scenario(max_budget={"TESTS": 2})
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "tests"
+    calls = r.calls()
+    budget = {c["phase"]: c["argv"][c["argv"].index("--max-budget-usd") + 1] for c in calls}
+    assert budget == {"TESTS": "0.8", "TEST_REVIEW": "2.5"}
+    assert "stopped at the budget cap (0.8 USD)" in calls[1]["prompt"]
+    ev = [e for e in r.events() if e["kind"] == "max_budget"]
+    assert [(e["phase"], e["cap"]) for e in ev] == [("TESTS", 0.8), ("TESTS", 0.8)]
+    esc = [e for e in r.events() if e["kind"] == "escalation"]
+    assert esc[0]["failed"] == ["budget cap (0.8)"] and esc[0]["cap_kind"] == "budget"
+    assert "max_budget_usd" in esc[0]["resolution"]
+    assert r.af("approve", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE
+    finish_with_retro(r)
+    assert "### E1 — TESTS stopped at the budget cap 2 times" in read(r, "out/demo/retro_input.md")
+
+
+def test_no_budget_flag_when_disabled(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    r.add_toml(FAST)
+    r.set_toml("agents", "max_budget_usd", "0")
+    r.scenario()
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE
+    assert all("--max-budget-usd" not in c["argv"] for c in r.calls())
 
 
 # ---------- stopping a run: no orphan agents, no stale phase lock ----------

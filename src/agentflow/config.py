@@ -35,6 +35,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "claude": (str,),
         "max_attempts": (int,),
         "max_turns": (int,),
+        "max_budget_usd": (int, float),
         "permission_mode": (str,),
         "test_review_rounds": (int,),
     },
@@ -81,12 +82,13 @@ GATE_SCOPES = ("feature", "suite")
 #: [gates] tests: "human" = always stop at the tests gate; "auto" = pass it without a stop when
 #: the mechanical checks pass, the test reviewer has no objections and no question is open
 TESTS_GATE_MODES = ("human", "auto")
-PHASE_KEYS = ("write", "tools", "max_turns")
+PHASE_KEYS = ("write", "tools", "max_turns", "max_budget_usd")
 #: --max-turns per phase when neither [phases.<P>] max_turns nor [agents] max_turns is set.
-#: From the FCSim smoke run (most turns used: TESTS 27, IMPLEMENT 18, REVIEW 8, PR 18, RETRO 48
-#: of which most were denied shell probing): RETRO and PR only read and write one file.
-#: TEST_REVIEW (test reviewer) and TRIAGE (the test reviewer triaging review findings) read and
-#: write one file, like PR.
+#: --max-turns caps the model's API round trips (one assistant message, with any number of
+#: parallel tool calls). The result's `num_turns` counts messages (prompt + one per tool result),
+#: so it runs higher: the live RETRO with `num_turns` 46 made 23 API round trips under a cap of 30
+#: (docs/claude-cli-notes.md). RETRO and PR only read and write one file; TEST_REVIEW (test
+#: reviewer) and TRIAGE (the test reviewer triaging review findings) too.
 DEFAULT_MAX_TURNS = {
     "TESTS": 50,
     "TEST_REVIEW": 30,
@@ -97,6 +99,19 @@ DEFAULT_MAX_TURNS = {
     "RETRO": 30,
 }
 FALLBACK_MAX_TURNS = 80
+#: --max-budget-usd per agent run when neither [phases.<P>] max_budget_usd nor
+#: [agents] max_budget_usd is set: about 3x the live FCSim costs per run (TESTS 0.69, TEST_REVIEW
+#: 0.42, IMPLEMENT 0.40, REVIEW 0.46, PR 0.39, RETRO 1.15 USD; 2026-11-09). 0 = no cap.
+DEFAULT_MAX_BUDGET_USD = {
+    "TESTS": 2.0,
+    "TEST_REVIEW": 1.5,
+    "IMPLEMENT": 1.5,
+    "REVIEW": 1.5,
+    "TRIAGE": 1.5,
+    "PR": 1.5,
+    "RETRO": 3.0,
+}
+FALLBACK_MAX_BUDGET_USD = 2.0
 
 
 class ConfigError(Exception):
@@ -127,6 +142,9 @@ class Config:
     max_attempts: int = 3
     #: [agents] max_turns: one cap for every phase without its own (None = DEFAULT_MAX_TURNS)
     max_turns: int | None = None
+    #: [agents] max_budget_usd: one cost cap per run for every phase without its own
+    #: (None = DEFAULT_MAX_BUDGET_USD; 0 = no cap)
+    max_budget_usd: float | None = None
     permission_mode: str = "acceptEdits"
     #: how often the test reviewer's objections go back to the test writer before the gate
     test_review_rounds: int = 2
@@ -152,6 +170,7 @@ class Config:
     phase_write: dict[str, list[str]] = field(default_factory=dict)
     phase_tools: dict[str, list[str]] = field(default_factory=dict)
     phase_max_turns: dict[str, int] = field(default_factory=dict)
+    phase_max_budget: dict[str, float] = field(default_factory=dict)
     roles_extra_dir: str | None = None
     #: raw, type-checked adapter sections, e.g. {"dotnet": {"configuration": "Release"}}
     language_options: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -187,6 +206,17 @@ class Config:
         if self.max_turns is not None:
             return self.max_turns
         return DEFAULT_MAX_TURNS.get(phase, FALLBACK_MAX_TURNS)
+
+    def budget_cap(self, phase: str) -> float | None:
+        """--max-budget-usd of an agent run in this phase: [phases.<P>] max_budget_usd, else
+        [agents] max_budget_usd, else the phase default. None = no cap (configured 0)."""
+        if phase in self.phase_max_budget:
+            value = self.phase_max_budget[phase]
+        elif self.max_budget_usd is not None:
+            value = self.max_budget_usd
+        else:
+            value = DEFAULT_MAX_BUDGET_USD.get(phase, FALLBACK_MAX_BUDGET_USD)
+        return value if value > 0 else None
 
     # ---- phase permissions ----
     def write_paths(self, phase: str) -> list[str]:
@@ -277,6 +307,10 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     cfg.claude = agents.get("claude", cfg.claude)
     cfg.max_attempts = agents.get("max_attempts", cfg.max_attempts)
     cfg.max_turns = agents.get("max_turns", cfg.max_turns)
+    if "max_budget_usd" in agents:
+        cfg.max_budget_usd = float(agents["max_budget_usd"])
+        if cfg.max_budget_usd < 0:
+            raise ConfigError("[agents] max_budget_usd must be >= 0 (0 = no cap)")
     cfg.permission_mode = agents.get("permission_mode", cfg.permission_mode)
     if cfg.max_attempts < 1 or (cfg.max_turns is not None and cfg.max_turns < 1):
         raise ConfigError("[agents] max_attempts and max_turns must be >= 1")
@@ -353,6 +387,13 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
                 if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                     raise ConfigError(f"[phases.{phase}] max_turns must be an int >= 1")
                 cfg.phase_max_turns[phase] = value
+                continue
+            if key == "max_budget_usd":
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+                    raise ConfigError(
+                        f"[phases.{phase}] max_budget_usd must be a number >= 0 (0 = no cap)"
+                    )
+                cfg.phase_max_budget[phase] = float(value)
                 continue
             target = cfg.phase_write if key == "write" else cfg.phase_tools
             target[phase] = _str_list(f"[phases.{phase}] {key}", value)

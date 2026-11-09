@@ -11,7 +11,9 @@ What the orchestrator relies on, and how it was verified. No real `claude -p` ag
 | `--allowedTools` rule syntax | `--allowedTools, --allowed-tools <tools...>`: "Comma or space-separated list of tool names to allow (e.g. "Bash(git *) Edit")". agentflow passes **one** comma-joined argument and uses the space form `Bash(<prefix> *)` (the guide's `Bash(cmd:*)` is the older prefix syntax) | `--help` |
 | `--permission-mode` | Choices: `acceptEdits`, `auto`, `bypassPermissions`, `manual`, `dontAsk`, `plan`. Default used: `acceptEdits` (`[agents] permission_mode`) | `--help` |
 | `--permission-prompts` | New: `host` (default) or `none` (anything that would prompt is denied). Not passed | `--help` |
-| `--max-turns <turns>` | **Hidden** (not in `--help`) but accepted: `--max-turns notanumber` -> `error: option '--max-turns <turns>' argument 'notanumber' is invalid. must be a number`; `--max-turns 3` reaches the stdin check. `--max-budget-usd` is a listed alternative | `claude -p --max-turns ... < /dev/null` |
+| `--max-turns <turns>` | **Hidden** (not in `--help`) but accepted: `--max-turns notanumber` -> `error: option '--max-turns <turns>' argument 'notanumber' is invalid. must be a number`; `--max-turns 3` reaches the stdin check. What it counts: see "Turns" below | `claude -p --max-turns ... < /dev/null` |
+| `--max-budget-usd <amount>` | Listed ("only works with --print"). Checked after each API turn, so the final cost can pass the cap by one turn. Hit: `is_error: true`, `subtype: "error_max_budget_usd"`, `terminal_reason: "budget_exhausted"`, `errors: ["Reached maximum budget ($0.004)"]`, no `result` | Probe 2026-11-10 (claude 2.1.321, `--model haiku`, cap $0.004: stopped at $0.0045 after 5 API turns) |
+| `--output-format stream-json` | Needs `--verbose` with `-p`. One JSON message per line: `system` (init, hooks), `assistant` (one line **per content block**; the blocks of one API turn share `message.id`), `user` (tool results), `rate_limit_event`, and the `result` object last (same fields as `json`) | Probe 2026-11-10 |
 | `--output-format json` | Choices `text`, `json`, `stream-json`. The fields read (`is_error`, `result`, `total_cost_usd`, `num_turns`) are the documented result-message fields; **not verified by a live run**. Unparseable output is recorded as an error result | `--help`; docs |
 | `--bare` | Skips hooks and plugins (and CLAUDE.md discovery, OAuth). **Never passed**: it would disable the phase lock and the Stop hook | `--help`; plugin agent's docs check (docs/plugin.md) |
 | Hooks in `-p` mode | Fire (per the hooks/headless docs, checked by the plugin agent) | docs/plugin.md |
@@ -22,17 +24,32 @@ What the orchestrator relies on, and how it was verified. No real `claude -p` ag
 ```
 <claude> -p --append-system-prompt-file out/<f>/prompts/<role>.system.md
          --allowedTools "<rule>,<rule>,..." --permission-mode acceptEdits
-         --max-turns <cap of the phase> --output-format json   (task on stdin)
+         --max-turns <cap of the phase> --output-format stream-json --verbose
+         [--max-budget-usd <cap of the phase>]   (task on stdin)
 ```
 
 `<claude>` = `[agents] claude` (default `claude`) or env `AGENTFLOW_CLAUDE`; a `.py` path is run
 with the current interpreter (used by the tests' fake claude). Each run's task prompt and raw
-output are saved to `out/runs/<stamp>-<feature>-<phase>.prompt.md` / `.json`. The process starts
+output are saved to `out/runs/<stamp>-<feature>-<phase>.prompt.md` / `.json` (the result object
++ `api_turns`) / `.stream.jsonl` (the whole message stream, for debugging). The process starts
 in its own process group and, on Windows, suspended in a kill-on-close job object, then resumed
 (`procs.popen(job=True)`): `claude.cmd` -> cmd.exe -> node would otherwise spawn before the
 assignment. From the result: `permission_denials` -> `permission_denials` event + retro D items;
-`subtype: "error_max_turns"` (or `terminal_reason: "max_turns"`) -> `max_turns` event and the
-turn-cap handling (README).
+`subtype: "error_max_turns"` (or `terminal_reason: "max_turns"`) -> `max_turns` event,
+`subtype: "error_max_budget_usd"` (or `terminal_reason: "budget_exhausted"`) -> `max_budget`
+event; both take the cap handling (README).
+
+## Turns: `--max-turns` vs `num_turns`
+
+`--max-turns N` caps the **API round trips** (assistant messages). The result's `num_turns`
+counts **messages on the user side**: the prompt + one per tool result, so parallel tool calls
+inflate it. Evidence: the live FCSim RETRO (`--max-turns 30`) reported `num_turns` 46 and ended
+`success`; its transcript has 23 distinct assistant message ids (23 round trips <= 30) and 45 tool
+results (+ 1 prompt = 46). Probe (claude 2.1.321, haiku, 8 sequential `echo` calls,
+`--max-turns 3`): stopped with `error_max_turns` after 3 round trips, `num_turns` 4. So the cap
+worked; only the reading of `num_turns` as turns was wrong. agentflow now reads the message stream
+(`--output-format stream-json --verbose`) and logs `turns` = distinct assistant message ids (what
+the cap counts) next to `messages` = `num_turns`; the phase table shows `turns`.
 
 ## Verified in the live FCSim smoke run (2026-11-09, claude 2.1.319, Windows 11)
 

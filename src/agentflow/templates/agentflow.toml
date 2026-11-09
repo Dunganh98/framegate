@@ -23,6 +23,10 @@ language = "{language}"            # "python" | "dotnet"
 # max_turns = 80                   # one turn cap for all phases; default per phase: TESTS 50,
 #                                  # TEST_REVIEW 30, IMPLEMENT 80, REVIEW 40, TRIAGE 30, PR 30,
 #                                  # RETRO 30
+#                                  # (API round trips; the result's num_turns runs higher)
+# max_budget_usd = 2.0             # one cost cap (USD) per agent run for all phases; default per
+#                                  # phase: TESTS 2.0, TEST_REVIEW 1.5, IMPLEMENT 1.5, REVIEW 1.5,
+#                                  # TRIAGE 1.5, PR 1.5, RETRO 3.0; 0 = no cap
 # test_review_rounds = 2           # test reviewer objections sent back to the test writer
 #                                  # (per gate cycle) before the tests gate
 # permission_mode = "acceptEdits"
@@ -65,6 +69,7 @@ language = "{language}"            # "python" | "dotnet"
 # write = ["src/", "out/"]         # PreToolUse write permissions for the phase
 # tools = [...]                    # replaces the --allowedTools list for the phase
 # max_turns = 80                   # turn cap of the phase's agent runs (wins over [agents])
+# max_budget_usd = 1.5             # cost cap (USD) per agent run of the phase (wins over [agents])
 
 # [roles]
 # extra_dir = ".agentflow/roles"   # <phase>.md files appended to the base role prompts

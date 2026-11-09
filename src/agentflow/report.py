@@ -193,7 +193,11 @@ def final_facts(
     esc = [e for e in ev if e.get("kind") == "escalation"]
     if esc:
         out += ["", f"## Agent runs stopped at the turn cap twice: {len(esc)}", ""]
-        out += [f"- {e.get('phase')} {e.get('step') or ''}: continued without a stop" for e in esc]
+        out += [
+            f"- {e.get('phase')} {e.get('step') or ''}: {', '.join(e.get('failed') or [])}, "
+            "continued without a stop"
+            for e in esc
+        ]
 
     out += ["", "## Review findings", ""]
     triaged = [e for e in ev if e.get("kind") == "triage"]

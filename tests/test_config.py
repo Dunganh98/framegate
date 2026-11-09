@@ -107,6 +107,10 @@ def test_env_overrides_claude(tmp_path: pathlib.Path, monkeypatch: pytest.Monkey
         ({"agents": {"max_turns": 0}}, ">= 1"),
         ({"phases": {"RETRO": {"max_turns": 0}}}, "max_turns must be an int >= 1"),
         ({"phases": {"RETRO": {"max_turns": "9"}}}, "max_turns must be an int >= 1"),
+        ({"agents": {"max_budget_usd": -1}}, "max_budget_usd must be >= 0"),
+        ({"agents": {"max_budget_usd": "2"}}, "must be int/float"),
+        ({"phases": {"PR": {"max_budget_usd": -0.5}}}, "max_budget_usd must be a number >= 0"),
+        ({"phases": {"PR": {"max_budget_usd": True}}}, "max_budget_usd must be a number >= 0"),
         ({"gates": {"commands": {"build": ["x"]}}}, "unknown key 'build'"),
         ({"gates": {"commands": {"lint": "ruff"}}}, "list of strings"),
         ({"phases": {"DEPLOY": {"write": []}}}, "unknown phase"),
@@ -145,3 +149,19 @@ def test_turn_caps(tmp_path: pathlib.Path) -> None:
     assert cfg.turn_cap("RETRO") == 12  # phase wins
     assert cfg.turn_cap("TESTS") == 60 and cfg.turn_cap("IMPLEMENT") == 60  # [agents] for all
     assert parse_config(tmp_path, {"phases": {"PR": {"max_turns": 5}}}).turn_cap("PR") == 5
+
+
+def test_budget_caps(tmp_path: pathlib.Path) -> None:
+    """Defaults ~3x the live FCSim cost per run; [phases.<P>] wins over [agents]; 0 = no cap."""
+    cfg = parse_config(tmp_path, {})
+    caps = {p: cfg.budget_cap(p) for p in ("TESTS", "TEST_REVIEW", "IMPLEMENT", "RETRO")}
+    assert caps == {"TESTS": 2.0, "TEST_REVIEW": 1.5, "IMPLEMENT": 1.5, "RETRO": 3.0}
+    cfg = parse_config(
+        tmp_path,
+        {"agents": {"max_budget_usd": 4}, "phases": {"PR": {"max_budget_usd": 0.75}}},
+    )
+    assert cfg.budget_cap("PR") == 0.75 and cfg.budget_cap("TESTS") == 4.0
+    cfg = parse_config(
+        tmp_path, {"agents": {"max_budget_usd": 0}, "phases": {"RETRO": {"max_budget_usd": 1}}}
+    )
+    assert cfg.budget_cap("TESTS") is None and cfg.budget_cap("RETRO") == 1.0

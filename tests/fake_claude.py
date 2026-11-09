@@ -2,7 +2,9 @@
 
 Reads the task from stdin, the phase from .phase, and a scenario from FAKE_CLAUDE_SCENARIO
 (JSON). Writes canned files for feature `demo`, logs every call to calls.jsonl next to the
-scenario file, and prints the `--output-format json` result shape.
+scenario file, and prints the result: `--output-format stream-json` -> one JSON message per line
+(system init, one assistant message per API turn, the result last), else the single result object
+of `--output-format json`.
 
 Scenario keys:
   questions_in: list of phases that ask one question in their first run (TESTS, TEST_REVIEW,
@@ -22,7 +24,8 @@ Scenario keys:
   denials: {phase: [{"tool_name": ..., "tool_input": {...}}]} reported as `permission_denials`
     in the result of that phase's first run
   max_turns: {phase: n} -> the first n runs of that phase end with subtype error_max_turns
-    (files are still written)
+    (files are still written); the stream then has `cap` assistant messages, num_turns = cap + 1
+  max_budget: {phase: n} -> the first n runs of that phase end with subtype error_max_budget_usd
   hang: phase whose first run starts a child process and sleeps (pid files in the scenario dir)
 """
 
@@ -333,10 +336,29 @@ def main() -> int:
     }
     if runs[phase] == 1:
         result["permission_denials"] = scen.get("denials", {}).get(phase, [])
+    api_turns = 2
     if runs[phase] <= scen.get("max_turns", {}).get(phase, 0):
         cap = int(sys.argv[sys.argv.index("--max-turns") + 1])
         result.update(subtype="error_max_turns", is_error=True, num_turns=cap + 1)
+        result.update(terminal_reason="max_turns")
         del result["result"]
+        api_turns = cap
+    elif runs[phase] <= scen.get("max_budget", {}).get(phase, 0):
+        cap_usd = float(sys.argv[sys.argv.index("--max-budget-usd") + 1])
+        result.update(subtype="error_max_budget_usd", is_error=True, total_cost_usd=cap_usd + 0.01)
+        result.update(terminal_reason="budget_exhausted", errors=["Reached maximum budget"])
+        del result["result"]
+    fmt = sys.argv[sys.argv.index("--output-format") + 1]
+    if fmt != "stream-json":
+        print(json.dumps(result))
+        return 0
+    print(json.dumps({"type": "system", "subtype": "init", "session_id": "fake"}))
+    for i in range(api_turns):
+        # one API turn can arrive as several lines (one per content block), same message id
+        for block in ("thinking", "tool_use"):
+            msg = {"id": f"msg_{i}", "role": "assistant", "content": [{"type": block}]}
+            print(json.dumps({"type": "assistant", "message": msg}))
+        print(json.dumps({"type": "user", "message": {"role": "user", "content": []}}))
     print(json.dumps(result))
     return 0
 

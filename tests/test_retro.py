@@ -119,3 +119,39 @@ def test_gate_report_details(tmp_path: pathlib.Path) -> None:
     assert excerpt.startswith("[FAIL] frame diff") and "[FAIL] tests (current" in excerpt
     long = GateReport(False, "", ["x"], [], {"x": "\n".join("y" * 300 for _ in range(12))})
     assert long.excerpt().startswith("...") and len(long.excerpt()) == 2003
+
+
+def test_parse_result_stream_counts_api_turns() -> None:
+    """stream-json (claude 2.1.321): one line per content block, blocks of one API turn share
+    the message id. --max-turns caps these turns; num_turns counts prompt + tool results."""
+    from agentflow.orchestrator import hit_cap, parse_result
+
+    lines = [
+        {"type": "system", "subtype": "init"},
+        {"type": "assistant", "message": {"id": "m1", "content": [{"type": "tool_use"}]}},
+        {"type": "assistant", "message": {"id": "m1", "content": [{"type": "tool_use"}]}},
+        {"type": "assistant", "message": {"id": "m1", "content": [{"type": "tool_use"}]}},
+        {"type": "user", "message": {"content": []}},
+        {"type": "rate_limit_event"},
+        {"type": "assistant", "message": {"id": "m2", "content": [{"type": "tool_use"}]}},
+        {
+            "type": "result",
+            "subtype": "error_max_budget_usd",
+            "terminal_reason": "budget_exhausted",
+            "is_error": True,
+            "num_turns": 5,
+            "total_cost_usd": 0.0045,
+        },
+    ]
+    import json
+
+    res = parse_result("\n".join(json.dumps(x) for x in lines) + "\nnot json\n")
+    assert res["api_turns"] == 2 and res["num_turns"] == 5
+    assert hit_cap(res) == "budget"
+    assert hit_cap({"subtype": "error_max_turns"}) == "turns"
+    assert hit_cap({"subtype": "success", "terminal_reason": "completed"}) is None
+    # a single JSON object (--output-format json) still works; no stream -> api_turns None
+    one = parse_result(json.dumps({"type": "result", "num_turns": 46, "subtype": "success"}))
+    assert one["api_turns"] is None and one["num_turns"] == 46
+    bad = parse_result("", "Error: boom")
+    assert bad["is_error"] and bad["result"] == "Error: boom"

@@ -143,18 +143,66 @@ def summarize_denials(raw: Any, limit: int = 300) -> list[dict[str, str]]:
     return out
 
 
-#: re-runs of a non-IMPLEMENT agent that stopped at the turn cap before escalating
+def parse_result(stdout: str, stderr: str = "") -> dict[str, Any]:
+    """The result of a `claude -p` run: `--output-format stream-json --verbose` (one JSON
+    message per line, the last `type: result` line is the result) or a single JSON object
+    (`--output-format json`). Adds `api_turns`: the distinct assistant messages = model round
+    trips, which is what --max-turns caps (None without the stream). Unparseable output is an
+    error result."""
+    text = stdout.strip()
+    try:
+        whole = json.loads(text)
+        if isinstance(whole, dict):
+            whole.setdefault("api_turns", None)
+            return whole
+    except ValueError:
+        pass
+    result: dict[str, Any] | None = None
+    ids: set[str] = set()
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("type") == "result":
+            result = msg
+        elif msg.get("type") == "assistant" and isinstance(msg.get("message"), dict):
+            ids.add(str(msg["message"].get("id") or f"#{len(ids)}"))
+    if result is None:
+        return {"is_error": True, "result": (stderr or stdout)[-2000:], "api_turns": len(ids)}
+    result["api_turns"] = len(ids)
+    return result
+
+
+#: re-runs of a non-IMPLEMENT agent that stopped at a cap (turns or budget) before escalating
 TURN_CAP_RETRIES = 1
 
 
-def hit_turn_cap(res: dict[str, Any]) -> bool:
-    """True if a `claude -p` JSON result says the run stopped at --max-turns."""
-    return res.get("subtype") == "error_max_turns" or res.get("terminal_reason") == "max_turns"
+def hit_cap(res: dict[str, Any]) -> str | None:
+    """'turns' if a `claude -p` result says the run stopped at --max-turns, 'budget' if it
+    stopped at --max-budget-usd, else None."""
+    if res.get("subtype") == "error_max_turns" or res.get("terminal_reason") == "max_turns":
+        return "turns"
+    if (
+        res.get("subtype") == "error_max_budget_usd"
+        or res.get("terminal_reason") == "budget_exhausted"
+    ):
+        return "budget"
+    return None
 
 
-def turn_cap_note(cap: int) -> str:
+def cap_label(kind: str, cap: float) -> str:
+    return f"turn cap ({cap:g} turns)" if kind == "turns" else f"budget cap ({cap:g} USD)"
+
+
+def turn_cap_note(cap: float, kind: str = "turns") -> str:
     return (
-        f"Your previous run stopped at the turn cap ({cap} turns) before it finished. Its "
+        f"Your previous run stopped at the {cap_label(kind, cap)} before it finished. Its "
         "file changes are kept: check what is already done, then finish the rest with fewer, "
         "larger steps (batch reads and edits, no exploratory commands)."
     )
@@ -294,8 +342,12 @@ class Orchestrator:
             "--max-turns",
             str(self.cfg.turn_cap(phase)),
             "--output-format",
-            "json",
+            "stream-json",
+            "--verbose",
         ]
+        budget = self.cfg.budget_cap(phase)
+        if budget is not None:
+            args += ["--max-budget-usd", f"{budget:g}"]
         runs = self.cfg.out_dir / "runs"
         runs.mkdir(parents=True, exist_ok=True)
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -307,13 +359,13 @@ class Orchestrator:
             _, stdout, stderr = procs.run(args, input=prompt, cwd=self.cfg.root, job=True)
         except OSError as e:
             stdout, stderr = "", f"could not start claude: {e}"
-        (runs / f"{stamp}-{feature}-{phase}.json").write_text(stdout or stderr, encoding="utf-8")
-        try:
-            res = json.loads(stdout)
-            if not isinstance(res, dict):
-                raise ValueError
-        except ValueError:
-            res = {"is_error": True, "result": (stderr or stdout)[-2000:]}
+        res = parse_result(stdout, stderr)
+        # the result object (read by the retro), and the whole message stream for debugging
+        (runs / f"{stamp}-{feature}-{phase}.json").write_text(
+            json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8"
+        )
+        if stdout.count("\n") > 1:
+            (runs / f"{stamp}-{feature}-{phase}.stream.jsonl").write_text(stdout, encoding="utf-8")
         denials = summarize_denials(res.get("permission_denials"))
         log_event(
             self.cfg,
@@ -322,7 +374,9 @@ class Orchestrator:
             phase=phase,
             seconds=round(time.time() - t0),
             cost=res.get("total_cost_usd"),
-            turns=res.get("num_turns"),
+            # API round trips (what --max-turns caps); num_turns counts messages
+            turns=res["api_turns"] if res.get("api_turns") is not None else res.get("num_turns"),
+            messages=res.get("num_turns"),
             error=res.get("is_error"),
             denials=len(denials),
         )
@@ -331,7 +385,8 @@ class Orchestrator:
                 self.cfg, feature, "permission_denials", phase=phase, step=step, denials=denials
             )
             self.echo(f"[{phase}] {len(denials)} tool call(s) denied (logged for the retro).")
-        if hit_turn_cap(res):
+        kind = hit_cap(res)
+        if kind == "turns":
             cap = self.cfg.turn_cap(phase)
             log_event(
                 self.cfg,
@@ -340,9 +395,22 @@ class Orchestrator:
                 phase=phase,
                 step=step,
                 cap=cap,
-                turns=res.get("num_turns"),
+                turns=res.get("api_turns"),
+                messages=res.get("num_turns"),
             )
             self.echo(f"[{phase}] agent run stopped at the turn cap ({cap} turns).")
+        elif kind == "budget":
+            budget_cap = self.cfg.budget_cap(phase) or 0.0
+            log_event(
+                self.cfg,
+                feature,
+                "max_budget",
+                phase=phase,
+                step=step,
+                cap=budget_cap,
+                cost=res.get("total_cost_usd"),
+            )
+            self.echo(f"[{phase}] agent run stopped at the budget cap ({budget_cap:g} USD).")
         elif res.get("is_error"):
             self.echo(f"[{phase}] agent run reported an error: {str(res.get('result'))[:500]}")
         return res
@@ -431,38 +499,51 @@ class Orchestrator:
         retry_turn_cap: bool = True,
     ) -> dict[str, Any]:
         """Run an agent with the pending feedback and consume it. A run that stops at the turn
-        cap is re-run once with a note; if that one stops at the cap too, it is logged
-        (escalation event, retro E item) and the run continues (retry_turn_cap=False: the caller
-        handles it, e.g. the step gate decides)."""
+        cap or the budget cap is re-run once with a note; if that one stops at a cap too, it is
+        logged (escalation event, retro E item) and the run continues (retry_turn_cap=False: the
+        caller handles it, e.g. the step gate decides)."""
         while True:
             res = self.run_agent(
                 phase, feature, task, prog.get("feedback", ""), role=role, step=step
             )
             prog["feedback"] = ""
             save_progress(self.cfg, feature, prog)
+            kind = hit_cap(res)
             if (
                 not retry_turn_cap
-                or not hit_turn_cap(res)
-                or not self.turn_cap_retry(phase, feature, prog, step)
+                or kind is None
+                or not self.turn_cap_retry(phase, feature, prog, step, kind)
             ):
                 prog["turn_cap_retries"] = 0
                 save_progress(self.cfg, feature, prog)
                 return res
 
+    def cap_value(self, phase: str, kind: str) -> float:
+        if kind == "turns":
+            return self.cfg.turn_cap(phase)
+        return self.cfg.budget_cap(phase) or 0.0
+
     def turn_cap_retry(
-        self, phase: str, feature: str, prog: dict[str, Any], step: str | None
+        self,
+        phase: str,
+        feature: str,
+        prog: dict[str, Any],
+        step: str | None,
+        kind: str = "turns",
     ) -> bool:
-        """After a run stopped at the turn cap: set the retry note (True), or log that the retry
-        stopped at the cap too and go on without a stop (False)."""
-        cap = self.cfg.turn_cap(phase)
+        """After a run stopped at a cap (turns or budget): set the retry note (True), or log
+        that the retry stopped at a cap too and go on without a stop (False)."""
+        cap = self.cap_value(phase, kind)
         label = step or phase
+        name = "turn cap" if kind == "turns" else "budget cap"
         retries = int(prog.get("turn_cap_retries", 0))
         if retries < TURN_CAP_RETRIES:
             prog["turn_cap_retries"] = retries + 1
-            prog["feedback"] = turn_cap_note(cap)
+            prog["feedback"] = turn_cap_note(cap, kind)
             save_progress(self.cfg, feature, prog)
-            self.echo(f"[{label}] re-running once after the turn cap.")
+            self.echo(f"[{label}] re-running once after the {name}.")
             return True
+        key = "max_turns" if kind == "turns" else "max_budget_usd"
         log_event(
             self.cfg,
             feature,
@@ -470,12 +551,13 @@ class Orchestrator:
             phase=phase,
             step=step,
             attempts=retries + 1,
-            failed=[f"turn cap ({cap})"],
+            cap_kind=kind,
+            failed=[f"{name} ({cap:g})"],
             resolution=f"continued without a stop with the files of the last run (raise "
-            f"[phases.{phase}] max_turns if this recurs)",
+            f"[phases.{phase}] {key} if this recurs)",
         )
         self.echo(
-            f"[{label}] stopped at the turn cap ({cap}) {retries + 1} times; continuing with what "
+            f"[{label}] stopped at the {name} ({cap:g}) {retries + 1} times; continuing with what "
             "it wrote (logged for the final summary and the retro)."
         )
         return False
@@ -557,7 +639,8 @@ class Orchestrator:
                 prog["feedback"] = ""
                 save_progress(self.cfg, feature, prog)
                 return True
-            capped = turn_cap_note(self.cfg.turn_cap("IMPLEMENT")) if hit_turn_cap(res) else ""
+            kind = hit_cap(res)
+            capped = turn_cap_note(self.cap_value("IMPLEMENT", kind), kind) if kind else ""
             prog["feedback"] = (
                 (capped + "\n" if capped else "")
                 + f"Attempt {attempt} failed these gates. Tests and config are frozen; "

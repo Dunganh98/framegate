@@ -3,7 +3,7 @@ You run the retrospective. Goal: turn recurring problems into checks, so they ca
 Start with {out}/{feature}/retro_input.md. It lists, with item IDs and counts:
 - Q: every question an agent asked (phase, who, question, the human's answer at the gate)
 - F: every failed attempt (step, attempt, failing checks, output excerpt)
-- E: every agent run that stopped at its turn cap twice (the run went on without a stop)
+- E: every agent run that stopped at its turn or budget cap twice (the run went on without a stop)
 - R: every human gate rejection with its reason
 - V: every review finding (failing reviewer test, the test reviewer's triage verdict + reason,
   resolution: fixed / parked)

@@ -1,8 +1,8 @@
-"""Retro input: every question, failed attempt, escalation (turn cap hit twice), human rejection,
-review finding, final-gate failure, permission denial, implementer assumption and parked item of a
-feature, with item IDs (Q1, F1, E1, R1, V1, G1, D1, A1, P1) the RETRO agent must address in
-retro_proposals.md. Built from out/events.jsonl (+ the assumptions in steps.md) before the RETRO
-agent runs."""
+"""Retro input: every question, failed attempt, escalation (turn or budget cap hit twice), human
+rejection, review finding, final-gate failure, permission denial, implementer assumption and
+parked item of a feature, with item IDs (Q1, F1, E1, R1, V1, G1, D1, A1, P1) the RETRO agent must
+address in retro_proposals.md. Built from out/events.jsonl (+ the assumptions in steps.md)
+before the RETRO agent runs."""
 
 from __future__ import annotations
 
@@ -112,7 +112,9 @@ def build(
             failed = ", ".join(e.get("failed") or []) or "(not recorded)"
             item(
                 "E",
-                f"{_where(e)} stopped at the turn cap {e.get('attempts')} times",
+                f"{_where(e)} stopped at the "
+                f"{'budget' if e.get('cap_kind') == 'budget' else 'turn'} cap "
+                f"{e.get('attempts')} times",
                 [f"Failing checks: {failed}", f"Resolution: {e['resolution']}"],
             )
         elif kind == "escalation":
