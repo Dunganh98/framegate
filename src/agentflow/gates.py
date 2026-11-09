@@ -7,6 +7,7 @@ scope final  everything, including coverage on the diff, traceability and mutati
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass, field
 
 from agentflow.adapters.base import Check, CheckResult, LanguageAdapter
 from agentflow.checks import frame_diff, mutation, test_smells, traceability
@@ -34,6 +35,27 @@ def checks(adapter: LanguageAdapter, feature: str, scope: str, skip_mutation: bo
     return c
 
 
+@dataclass
+class GateReport:
+    """Result of a gate run: overall verdict, the report text, and per-check details."""
+
+    ok: bool
+    report: str
+    failed: list[str] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)
+    #: failing check name -> its output (last 30 lines)
+    outputs: dict[str, str] = field(default_factory=dict)
+
+    def excerpt(self, lines_per_check: int = 12, limit: int = 2000) -> str:
+        """A trimmed excerpt of the failing checks' output (for events and the retro)."""
+        parts = []
+        for name in self.failed:
+            tail = self.outputs.get(name, "").splitlines()[-lines_per_check:]
+            parts.append(f"[FAIL] {name}" + ("\n" + "\n".join(tail) if tail else ""))
+        text = "\n".join(parts)
+        return text if len(text) <= limit else "..." + text[-limit:]
+
+
 def run_gates(
     adapter: LanguageAdapter,
     feature: str,
@@ -42,6 +64,18 @@ def run_gates(
     echo: Callable[[str], None] | None = None,
 ) -> tuple[bool, str]:
     """Run all checks of the scope. Returns (all passed, report text)."""
+    rep = gate_report(adapter, feature, scope, skip_mutation, echo)
+    return rep.ok, rep.report
+
+
+def gate_report(
+    adapter: LanguageAdapter,
+    feature: str,
+    scope: str = "final",
+    skip_mutation: bool = False,
+    echo: Callable[[str], None] | None = None,
+) -> GateReport:
+    """Run all checks of the scope and return the detailed result."""
     adapter.cfg.out_dir.mkdir(parents=True, exist_ok=True)
     lines: list[str] = []
 
@@ -50,7 +84,9 @@ def run_gates(
         if echo:
             echo(text)
 
-    failed, skipped = [], []
+    failed: list[str] = []
+    skipped: list[str] = []
+    outputs: dict[str, str] = {}
     for check in checks(adapter, feature, scope, skip_mutation):
         try:
             res = check.run()
@@ -60,8 +96,9 @@ def run_gates(
         out = res.output.strip()
         if res.status == "FAIL":
             failed.append(check.name)
+            outputs[check.name] = "\n".join(out.splitlines()[-30:])
             if out:
-                emit("\n".join(out.splitlines()[-30:]))
+                emit(outputs[check.name])
         elif res.status == "SKIPPED":
             skipped.append(check.name)
             emit(f"  {out.splitlines()[-1] if out else 'SKIPPED'}")
@@ -73,4 +110,4 @@ def run_gates(
     if skipped:
         summary += f" (SKIPPED: {', '.join(skipped)})"
     emit(f"\n{summary}")
-    return not failed, "\n".join(lines)
+    return GateReport(not failed, "\n".join(lines), failed, skipped, outputs)
