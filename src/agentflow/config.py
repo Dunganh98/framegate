@@ -30,7 +30,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "phase_file": (str,),
         "reqs_file": (str,),
     },
-    "env": {"python": (str,)},
+    "env": {"python": (str,), "wsl_distro": (str,)},
     "agents": {
         "claude": (str,),
         "max_attempts": (int,),
@@ -41,6 +41,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "diff_coverage": (int, float),
         "mutation_score": (int, float),
         "mutation_tool": (str,),
+        "mutation_runner": (str,),
         "commands": (dict,),
     },
     "protected": {"paths": (list,), "extra": (list,), "exceptions": (list,)},
@@ -66,6 +67,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
 #: sections owned by a language adapter (stored raw in Config.language_options)
 LANGUAGE_SECTIONS = ("dotnet",)
 GATE_COMMAND_KEYS = ("lint", "format", "typecheck", "imports")
+MUTATION_RUNNERS = ("auto", "native", "wsl")
 PHASE_KEYS = ("write", "tools")
 
 
@@ -91,6 +93,8 @@ class Config:
     language: str = "python"
     paths: Paths = field(default_factory=Paths)
     python: str | None = None
+    #: WSL distribution for mutation_runner = "wsl" (None = the default distribution)
+    wsl_distro: str | None = None
     claude: str = "claude"
     max_attempts: int = 3
     max_turns: int = 80
@@ -98,6 +102,8 @@ class Config:
     diff_coverage: float = 90
     mutation_score: float = 80
     mutation_tool: str | None = None  # None -> the adapter's default tool
+    #: where the mutation tool runs: auto | native | wsl (adapters that support it: python)
+    mutation_runner: str = "auto"
     gate_commands: dict[str, list[str]] = field(default_factory=dict)
     protected_paths: list[str] | None = None  # None -> core + adapter defaults
     protected_extra: list[str] = field(default_factory=list)
@@ -214,6 +220,7 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
         setattr(cfg.paths, key, _norm(value).rstrip("/"))
 
     cfg.python = data.get("env", {}).get("python")
+    cfg.wsl_distro = data.get("env", {}).get("wsl_distro")
 
     agents = data.get("agents", {})
     cfg.claude = agents.get("claude", cfg.claude)
@@ -227,6 +234,12 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     cfg.diff_coverage = gates.get("diff_coverage", cfg.diff_coverage)
     cfg.mutation_score = gates.get("mutation_score", cfg.mutation_score)
     cfg.mutation_tool = gates.get("mutation_tool", cfg.mutation_tool)
+    cfg.mutation_runner = gates.get("mutation_runner", cfg.mutation_runner)
+    if cfg.mutation_runner not in MUTATION_RUNNERS:
+        raise ConfigError(
+            f"[gates] mutation_runner must be one of {', '.join(MUTATION_RUNNERS)}, "
+            f"got '{cfg.mutation_runner}'"
+        )
     for key, cmd in gates.get("commands", {}).items():
         if key not in GATE_COMMAND_KEYS:
             raise ConfigError(

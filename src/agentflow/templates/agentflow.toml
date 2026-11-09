@@ -15,6 +15,7 @@ language = "{language}"            # "python" | "dotnet"
 
 # [env]
 # python = ".venv/Scripts/python.exe"   # python adapter: default = .venv interpreter, else current
+# wsl_distro = "Ubuntu"            # WSL distribution for mutation_runner = "wsl" (default: WSL's default)
 
 [agents]
 # claude = "claude"                # override with env AGENTFLOW_CLAUDE
@@ -26,6 +27,8 @@ language = "{language}"            # "python" | "dotnet"
 # diff_coverage = 90
 # mutation_score = 80
 # mutation_tool = "mutmut"         # default: mutmut (python), stryker (dotnet); "none" = off
+# mutation_runner = "auto"         # python: "auto" (WSL on Windows if available, else native),
+#                                  # "native" or "wsl" (mutmut needs fork: no native Windows)
 
 # [gates.commands]                 # override the adapter's commands; [] disables one
 #                                  # (python examples; dotnet: see docs/adapters.md)

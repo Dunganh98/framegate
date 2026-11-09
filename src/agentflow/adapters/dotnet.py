@@ -861,11 +861,14 @@ class DotnetAdapter(LanguageAdapter):
         if total == 0:
             return CheckResult("PASS", "No mutants generated for the changed files.")
         score = 100.0 * detected / total
-        msg = (
+        summary = (
             f"Mutation score {score:.1f}% ({detected}/{total} killed), "
-            f"threshold {self.cfg.mutation_score:g}%. " + "; ".join(logs)
+            f"threshold {self.cfg.mutation_score:g}%."
         )
-        return CheckResult("PASS" if score >= self.cfg.mutation_score else "FAIL", msg)
+        msg = summary + " " + "; ".join(logs)
+        return CheckResult(
+            "PASS" if score >= self.cfg.mutation_score else "FAIL", msg, summary=summary
+        )
 
     def _stryker_config(self, work: pathlib.Path) -> pathlib.Path | None:
         """A config file carrying [dotnet] base_filter as the test-case filter, merged into the

@@ -65,6 +65,8 @@ def run_gates(
         elif res.status == "SKIPPED":
             skipped.append(check.name)
             emit(f"  {out.splitlines()[-1] if out else 'SKIPPED'}")
+        elif res.summary:
+            emit(f"  {res.summary}")
         elif "SKIPPED" in out:
             emit("  " + next(line for line in out.splitlines() if "SKIPPED" in line).strip())
     summary = "ALL GATES PASSED" if not failed else "FAILED: " + ", ".join(failed)

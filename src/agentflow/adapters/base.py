@@ -67,6 +67,8 @@ class CheckResult:
 
     status: str
     output: str = ""
+    #: optional one-line result (e.g. a score) shown under a [PASS] line in the gate report
+    summary: str = ""
 
 
 @dataclass
