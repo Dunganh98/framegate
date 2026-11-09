@@ -53,6 +53,7 @@ def test_full_flow(demo_repo: DemoRepo) -> None:
     assert "ALL GATES PASSED" in final, final
     assert "[PASS] frame diff" in final
     assert "[PASS] diff coverage" in final
+    assert "  Diff coverage 100% (" in final and "threshold 90%." in final
     assert (r.root / "out/demo/pr.md").is_file()
     assert (r.root / "out/demo/retro_proposals.md").is_file()
     retro_input = (r.root / "out/demo/retro_input.md").read_text(encoding="utf-8")

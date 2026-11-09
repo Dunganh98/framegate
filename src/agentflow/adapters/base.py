@@ -10,6 +10,7 @@ from __future__ import annotations
 import abc
 import os
 import pathlib
+import re
 import shutil
 import signal
 import subprocess
@@ -152,6 +153,24 @@ def command_check(name: str, cmd: Sequence[str], cwd: pathlib.Path) -> Check:
         return CheckResult("PASS" if code == 0 else "FAIL", out)
 
     return Check(name, run)
+
+
+def diff_coverage_summary(output: str, threshold: float) -> str:
+    """One line from diff-cover's console report: percent, covered/total changed lines and the
+    threshold ("" when the output has no coverage figures, e.g. diff-cover crashed)."""
+    pct = re.search(r"^Coverage:\s*([\d.]+)%", output, re.M)
+    if pct:
+        total = re.search(r"^Total:\s*(\d+) lines?", output, re.M)
+        missing = re.search(r"^Missing:\s*(\d+) lines?", output, re.M)
+        lines = ""
+        if total:
+            n = int(total.group(1))
+            covered = n - (int(missing.group(1)) if missing else 0)
+            lines = f" ({covered}/{n} changed lines covered)"
+        return f"Diff coverage {pct.group(1)}%{lines}, threshold {threshold:g}%."
+    if "No lines with coverage information" in output:
+        return f"Diff coverage: no coverable changed lines, threshold {threshold:g}%."
+    return ""
 
 
 def parse_junit(path: pathlib.Path) -> list[TestCase]:

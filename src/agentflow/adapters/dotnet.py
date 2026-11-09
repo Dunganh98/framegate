@@ -24,6 +24,7 @@ from agentflow.adapters.base import (
     LanguageAdapter,
     TestCase,
     TestRun,
+    diff_coverage_summary,
     parse_junit,
     run_command,
 )
@@ -738,7 +739,8 @@ class DotnetAdapter(LanguageAdapter):
                 self.root,
                 timeout=self.settings.build_timeout,
             )
-            return CheckResult("PASS" if code == 0 else "FAIL", out)
+            summary = diff_coverage_summary(out, self.cfg.diff_coverage)
+            return CheckResult("PASS" if code == 0 else "FAIL", out, summary=summary)
 
         return [
             Check("full test suite + coverage", full_suite),

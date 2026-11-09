@@ -96,6 +96,8 @@ def gate_report(
         out = res.output.strip()
         if res.status == "FAIL":
             failed.append(check.name)
+            if res.summary:
+                emit(f"  {res.summary}")
             outputs[check.name] = "\n".join(out.splitlines()[-30:])
             if out:
                 emit(outputs[check.name])

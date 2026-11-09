@@ -322,3 +322,53 @@ def test_gate_runner_missing_tool_and_crash(framed: pathlib.Path) -> None:
     )
     ok, report = run_gates(a, "f", "step")
     assert not ok and "[FAIL] lint" in report and "Tool not found" in report
+
+
+# ---------- diff coverage summary ----------
+DIFF_COVER_OUT = """\
+-------------
+Diff Coverage
+Diff: tests-approved/demo...HEAD, staged and unstaged changes
+-------------
+src/demo/calc.py (60.0%): Missing lines 12,14
+-------------
+Total:   5 lines
+Missing: 2 lines
+Coverage: 60%
+-------------
+"""
+
+
+def test_diff_coverage_summary() -> None:
+    from agentflow.adapters.base import diff_coverage_summary
+
+    assert diff_coverage_summary(DIFF_COVER_OUT, 90) == (
+        "Diff coverage 60% (3/5 changed lines covered), threshold 90%."
+    )
+    assert diff_coverage_summary("No lines with coverage information in this diff.", 85.5) == (
+        "Diff coverage: no coverable changed lines, threshold 85.5%."
+    )
+    assert diff_coverage_summary("Traceback: boom", 90) == ""
+
+
+def test_gate_report_shows_summary_under_fail_and_pass(
+    framed: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agentflow import gates
+    from agentflow.adapters.base import Check
+
+    a = adapter_for(framed)
+    fake = [
+        Check("diff coverage", lambda: CheckResult("FAIL", "detail", summary="Diff coverage 60%")),
+        Check("mutation", lambda: CheckResult("PASS", "x", summary="Mutation score 100%")),
+    ]
+    monkeypatch.setattr(gates, "checks", lambda *args: fake)
+    rep = gates.gate_report(a, "f", "final")
+    lines = rep.report.splitlines()
+    assert lines[:5] == [
+        "[FAIL] diff coverage",
+        "  Diff coverage 60%",
+        "detail",
+        "[PASS] mutation",
+        "  Mutation score 100%",
+    ]
