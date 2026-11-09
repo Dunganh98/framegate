@@ -42,7 +42,9 @@ def test_init_scaffolds_and_never_overwrites(
     assert (tmp_path / "specs/_template/requirements.md").is_file()
     assert (tmp_path / "specs/_template/plan.md").read_text(encoding="utf-8") == "MINE"
     assert "skipped  specs/_template/plan.md (exists, not overwritten)" in out
-    assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == "build/\nout/\n.phase\n.reqs\n"
+    assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == (
+        "build/\nout/\n.phase\n.reqs\nmutants/\n"
+    )
     assert "--- Add to CLAUDE.md" in out and "# Workflow" in out
     assert 'agentflow gates "$FEATURE" --scope final' in out and "setup-python" in out
     assert not (tmp_path / "CLAUDE.md").exists() and not (tmp_path / ".github").exists()

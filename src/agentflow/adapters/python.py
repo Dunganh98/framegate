@@ -4,12 +4,24 @@ diff-cover, mutmut."""
 from __future__ import annotations
 
 import ast
+import hashlib
+import importlib.resources
+import json
 import os
 import pathlib
 import re
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Any
 
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # pragma: no cover - exercised only on 3.10
+    import tomli as tomllib
+
+from agentflow import __version__
+from agentflow.adapters import wsl
 from agentflow.adapters.base import (
     Check,
     CheckResult,
@@ -20,6 +32,15 @@ from agentflow.adapters.base import (
 )
 
 SKIP_MARKS = {"skip", "skipif", "xfail"}
+MUTATION_TIMEOUT = 7200  # seconds for `mutmut run`
+#: bump to force the WSL mutmut venvs to be rebuilt
+MUTMUT_ENV_VERSION = 1
+#: files whose content keys the WSL venv (besides the requirement list itself)
+LOCK_FILES = ("pyproject.toml", "uv.lock", "poetry.lock", "Pipfile.lock", "pdm.lock")
+#: mutmut 3 statuses (mutmut/stats.py); "skipped" / "not checked" don't count
+DETECTED = {"killed", "timeout", "caught by type check", "segfault"}
+SURVIVED = {"survived", "no tests", "suspicious"}
+MUTANT_LINE = re.compile(r"^\s*(\S+__mutmut_\d+):\s*(.+?)\s*$")
 PYTEST_STATUS = {0: "passed", 1: "failed", 5: "no_tests"}
 
 BRIEF = """\
@@ -231,6 +252,13 @@ class PythonAdapter(LanguageAdapter):
             Check(f"diff coverage >= {self.cfg.diff_coverage:g}%", diff_coverage),
         ]
 
+    def mutation_runner(self) -> str:
+        """Where mutmut runs: "native" or "wsl" ("auto" = wsl on Windows, else native)."""
+        runner = self.cfg.mutation_runner
+        if runner == "auto":
+            return "wsl" if os.name == "nt" else "native"
+        return runner
+
     def mutation_check(
         self, feature: str, base_ref: str, changed_src: Sequence[str]
     ) -> CheckResult:
@@ -244,56 +272,134 @@ class PythonAdapter(LanguageAdapter):
         changed = [f for f in changed_src if f.endswith(".py")]
         if not changed:
             return CheckResult("PASS", "No changed Python source files to mutate.")
+        modules = self._mutmut_modules(changed)
+        if self.mutation_runner() == "wsl":
+            return self._mutmut_wsl(feature, modules)
         if os.name == "nt":
             return CheckResult(
                 "SKIPPED",
-                "SKIPPED: mutmut does not support native Windows; run the final gates in CI or WSL",
+                "SKIPPED: mutmut does not support native Windows; set [gates] mutation_runner = "
+                '"wsl" (or "auto") or run the final gates in CI',
             )
-        mutmut = self.tool_path("mutmut", self.python)
-        if not mutmut:
+        if not self._has_module("mutmut"):
             return CheckResult("SKIPPED", "SKIPPED: mutmut is not installed")
-        return self._run_mutmut(mutmut, feature, changed)
+        work = self._mutmut_dir()
+        spec = self._mutmut_spec(modules, str(self.root), str(work / "result.json"))
+        (work / "spec.json").write_text(json.dumps(spec, indent=1), encoding="utf-8")
+        cmd = [self.python, str(work / "runner.py"), str(work / "spec.json")]
+        return self._mutmut_finish(feature, modules, cmd, "native")
 
-    def _run_mutmut(self, mutmut: str, feature: str, changed: Sequence[str]) -> CheckResult:
-        """mutmut >= 3: `mutmut run` (configured via [tool.mutmut]), then `mutmut results`.
-        Mutant names look like `pkg.mod.x_func__mutmut_3`; filtered to the changed modules."""
-        code, out = run_command([mutmut, "run"], self.root)
-        if code not in (0, 1):
-            return CheckResult("FAIL", f"mutmut run failed:\n{out}")
-        code, res = run_command([mutmut, "results", "--all", "true"], self.root)
+    # ---------- mutmut internals ----------
+    def _mutmut_modules(self, changed: Sequence[str]) -> list[str]:
+        """Changed files -> module names as mutmut names them (relative to `src/`)."""
         src = self.cfg.paths.src.rstrip("/") + "/"
-        modules = [
-            f[len(src) :][:-3].replace("/", ".") if f.startswith(src) else f[:-3].replace("/", ".")
-            for f in changed
-        ]
-        modules = [m[: -len(".__init__")] if m.endswith(".__init__") else m for m in modules]
-        total = killed = 0
-        survivors = []
-        for line in res.splitlines():
-            m = re.match(r"\s*([\w.]+__mutmut_\d+):\s*(\w[\w ]*)", line)
-            if not m or not any(m.group(1).startswith(mod + ".") for mod in modules):
-                continue
-            total += 1
-            status = m.group(2).strip()
-            if status == "killed":
-                killed += 1
-            elif status in ("survived", "no tests"):
-                survivors.append(
-                    f"- `{m.group(1)}`: {status} (show with `mutmut show {m.group(1)}`)"
-                )
-        surv_file = self.root / self.cfg.paths.out / feature / "mutation_survivors.md"
-        surv_file.parent.mkdir(parents=True, exist_ok=True)
-        surv_file.write_text(
-            "# Mutation survivors\n\n" + ("\n".join(survivors) or "None.") + "\n", encoding="utf-8"
+        mods = [(f[len(src) :] if f.startswith(src) else f)[:-3].replace("/", ".") for f in changed]
+        return sorted({m[: -len(".__init__")] if m.endswith(".__init__") else m for m in mods})
+
+    def _mutmut_dir(self) -> pathlib.Path:
+        """out/.mutmut/ with a fresh copy of the runner script."""
+        work = self.root / self.cfg.paths.out / ".mutmut"
+        work.mkdir(parents=True, exist_ok=True)
+        runner = importlib.resources.files("agentflow.adapters").joinpath("mutmut_runner.py")
+        (work / "runner.py").write_text(runner.read_text(encoding="utf-8"), encoding="utf-8")
+        return work
+
+    def _mutmut_spec(self, modules: Sequence[str], project: str, result: str) -> dict[str, Any]:
+        return {
+            "project": project,
+            "result": result,
+            # top-level functions (x_name) and methods (x<sep>Class<sep>name) of the modules
+            "patterns": [f"{m}.x*" for m in modules],
+            "show_modules": list(modules),
+            "show_limit": 50,
+            "timeout": MUTATION_TIMEOUT,
+        }
+
+    def _mutmut_wsl(self, feature: str, modules: Sequence[str]) -> CheckResult:
+        distro = self.cfg.wsl_distro
+        wsl_root, problem = wsl.probe(self.root, distro)
+        if wsl_root is None:
+            return CheckResult(
+                "SKIPPED",
+                f"SKIPPED: mutation testing via WSL is unavailable: {problem}. mutmut does not "
+                "support native Windows; run the final gates in CI or fix WSL.",
+            )
+        work = self._mutmut_dir()
+        root_wsl: str = wsl_root
+
+        def w(path: pathlib.Path) -> str:
+            return wsl.to_wsl(path, self.root, root_wsl, distro)
+
+        reqs, files, stamp = self._wsl_requirements(w)
+        spec = self._mutmut_spec(modules, wsl_root, w(work / "result.json"))
+        repo_key = hashlib.sha256(wsl_root.encode("utf-8")).hexdigest()[:16]
+        spec.update(
+            venv=f"~/.cache/agentflow/venvs/{repo_key}",
+            stamp=stamp,
+            requirements=reqs,
+            requirement_files=files,
         )
-        if total == 0:
+        (work / "spec.json").write_text(json.dumps(spec, indent=1), encoding="utf-8")
+        cmd = wsl.wsl_command(["python3", w(work / "runner.py"), w(work / "spec.json")], distro)
+        return self._mutmut_finish(feature, modules, cmd, f"WSL {distro}" if distro else "WSL")
+
+    def _wsl_requirements(
+        self, w: Callable[[pathlib.Path], str]
+    ) -> tuple[list[str], list[str], str]:
+        """What the WSL venv needs: the project's dependencies (all extras and dependency
+        groups, requirements*.txt), mutmut and pytest, and agentflow itself (its pytest plugin)
+        from this source tree when agentflow runs from one. The project itself is not installed:
+        mutmut puts its mutated copy on sys.path. Returns (requirements, -r files, stamp)."""
+        reqs, files = collect_requirements(self.root)
+        own = agentflow_source()
+        reqs = [r for r in reqs if not (own and req_name(r) == "agentflow")]
+        reqs += ["mutmut>=3", "pytest"] + ([w(own)] if own else [])
+        reqs = [translate_drive_paths(r, w) for r in reqs]
+        digest = hashlib.sha256()
+        digest.update(json.dumps([MUTMUT_ENV_VERSION, __version__, reqs]).encode("utf-8"))
+        for path in [self.root / n for n in LOCK_FILES] + files:
+            if path.is_file():
+                digest.update(path.name.encode("utf-8") + b"\0" + path.read_bytes())
+        return reqs, [w(f) for f in files], digest.hexdigest()
+
+    def _mutmut_finish(
+        self, feature: str, modules: Sequence[str], cmd: list[str], where: str
+    ) -> CheckResult:
+        result_file = self.root / self.cfg.paths.out / ".mutmut" / "result.json"
+        result_file.unlink(missing_ok=True)
+        code, out = run_command(cmd, self.root, timeout=MUTATION_TIMEOUT + 1800)
+        if not result_file.is_file():
+            return CheckResult("FAIL", f"mutmut runner ({where}) failed (exit {code}):\n{out}")
+        res = json.loads(result_file.read_text(encoding="utf-8"))
+        if not res.get("ok"):
+            return CheckResult(
+                "SKIPPED",
+                f"{res.get('setup_log', '')}\nSKIPPED: {res.get('error')} ({where}); "
+                f"{res.get('hint', '')}",
+            )
+        output = str(res.get("run_output", ""))
+        if res.get("run_code") != 0:
+            if "nothing matches" in output:  # no mutants in the changed modules
+                return CheckResult("PASS", "No mutants generated for the changed files.")
+            return CheckResult("FAIL", f"mutmut run failed ({where}):\n{output}")
+        tally = tally_mutmut(str(res.get("results", "")), modules)
+        write_survivors(
+            self.root / self.cfg.paths.out / feature / "mutation_survivors.md",
+            tally,
+            res.get("shows") or {},
+        )
+        if tally.total == 0:
             return CheckResult("PASS", "No mutants generated for the changed files.")
-        score = 100.0 * killed / total
-        msg = (
-            f"Mutation score {score:.1f}% ({killed}/{total} killed), "
-            f"threshold {self.cfg.mutation_score:g}%."
+        timing = f"{where}, {res.get('seconds')} s" + (
+            ", venv reused" if res.get("venv_reused") else ""
         )
-        return CheckResult("PASS" if score >= self.cfg.mutation_score else "FAIL", msg)
+        msg = (
+            f"Mutation score {tally.score:.1f}% ({tally.detected}/{tally.total} killed), "
+            f"threshold {self.cfg.mutation_score:g}% ({timing})."
+        )
+        return CheckResult(
+            "PASS" if tally.score >= self.cfg.mutation_score else "FAIL", msg, summary=msg
+        )
 
     # ---------- frame ----------
     def default_forbidden_patterns(self) -> list[str]:
@@ -333,6 +439,9 @@ class PythonAdapter(LanguageAdapter):
         p = self.cfg.paths
         return BRIEF.format(src=p.src, tests=p.tests, review_tests=p.review_tests)
 
+    def gitignore_entries(self) -> list[str]:
+        return ["mutants/"]  # mutmut's working copy (removed after each run)
+
     def init_note(self) -> str:
         return (
             "add agentflow (pinned) to the project's dev dependencies; its pytest plugin "
@@ -348,3 +457,100 @@ class PythonAdapter(LanguageAdapter):
             "      # pytest, ruff, mypy, pytest-cov, diff-cover, hypothesis, mutmut)\n"
             '      - run: pip install -e ".[dev]"\n'
         )
+
+
+# ---------- mutmut helpers (module level: unit-tested on any OS) ----------
+@dataclass
+class MutmutTally:
+    detected: int = 0
+    total: int = 0
+    #: (mutant name, status) of survived / no tests / suspicious mutants
+    survivors: list[tuple[str, str]] = field(default_factory=list)
+    #: skipped / not checked mutants (excluded from the score)
+    unchecked: int = 0
+
+    @property
+    def score(self) -> float:
+        return 100.0 * self.detected / self.total if self.total else 100.0
+
+
+def tally_mutmut(results: str, modules: Sequence[str]) -> MutmutTally:
+    """Count `mutmut results --all true` lines (`    pkg.mod.x_func__mutmut_3: killed`) of the
+    given modules. The module is everything before the last dot (mangled names have none)."""
+    wanted = set(modules)
+    t = MutmutTally()
+    for line in results.splitlines():
+        m = MUTANT_LINE.match(line)
+        if not m or m.group(1).rsplit(".", 1)[0] not in wanted:
+            continue
+        status = m.group(2)
+        if status in DETECTED:
+            t.detected += 1
+            t.total += 1
+        elif status in SURVIVED:
+            t.total += 1
+            t.survivors.append((m.group(1), status))
+        else:
+            t.unchecked += 1
+    return t
+
+
+def write_survivors(path: pathlib.Path, tally: MutmutTally, shows: Mapping[str, str]) -> None:
+    lines = ["# Mutation survivors", ""]
+    for name, status in tally.survivors:
+        lines.append(f"## `{name}`: {status}")
+        diff = shows.get(name, "")
+        diff = "\n".join(x for x in diff.splitlines() if not x.startswith("# "))
+        lines += ["", "```diff", diff.strip() or "(no diff captured)", "```", ""]
+    if not tally.survivors:
+        lines.append("None.")
+    if tally.unchecked:
+        lines.append(f"\n{tally.unchecked} mutant(s) skipped or not checked (not in the score).")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+
+def req_name(req: str) -> str:
+    m = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", req)
+    return re.sub(r"[-_.]+", "-", m.group(1)).lower() if m else ""
+
+
+def collect_requirements(root: pathlib.Path) -> tuple[list[str], list[pathlib.Path]]:
+    """The project's requirement strings (pyproject: dependencies, every optional extra, every
+    dependency group, [tool.uv] dev-dependencies; the project itself is left out) and its
+    requirements*.txt files."""
+    reqs: list[str] = []
+    files = sorted(root.glob("requirements*.txt"))
+    pyproject = root / "pyproject.toml"
+    if pyproject.is_file():
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        project = data.get("project", {})
+        reqs += list(project.get("dependencies", []))
+        for extra in project.get("optional-dependencies", {}).values():
+            reqs += list(extra)
+        for group in data.get("dependency-groups", {}).values():
+            reqs += [r for r in group if isinstance(r, str)]  # {include-group} entries: all
+        reqs += list(data.get("tool", {}).get("uv", {}).get("dev-dependencies", []))
+        own = req_name(str(project.get("name", "")))
+        reqs = [r for r in reqs if not own or req_name(r) != own]
+    return list(dict.fromkeys(reqs)), files
+
+
+def agentflow_source() -> pathlib.Path | None:
+    """agentflow's source tree when it runs from one (editable install / checkout), else None."""
+    root = pathlib.Path(__file__).resolve().parents[3]
+    pyproject = root / "pyproject.toml"
+    if pyproject.is_file() and re.search(
+        r'^name\s*=\s*"agentflow"', pyproject.read_text(encoding="utf-8"), re.M
+    ):
+        return root
+    return None
+
+
+def translate_drive_paths(req: str, w: Callable[[pathlib.Path], str]) -> str:
+    """Windows paths in a requirement (`x @ file:///D:/x`, `D:\\x`) -> WSL paths."""
+
+    def sub(m: re.Match[str]) -> str:
+        return ("file://" if m.group(1) else "") + w(pathlib.Path(m.group(2)))
+
+    return re.sub(r"(file:///?)?([A-Za-z]:[\\/][^\s;,]*)", sub, req)

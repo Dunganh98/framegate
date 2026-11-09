@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -103,6 +104,21 @@ class DemoRepo:
         p = self.root / "out" / "events.jsonl"
         return [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x]
 
+    def set_toml(self, section: str, key: str, value: str) -> None:
+        """Set `key = value` (TOML literal) in an existing [section] of agentflow.toml."""
+        p = self.root / "agentflow.toml"
+        text = p.read_text(encoding="utf-8")
+        line = f"{key} = {value}"
+        if re.search(rf"^{key} = .*$", text, re.M):
+            text = re.sub(rf"^{key} = .*$", line, text, count=1, flags=re.M)
+        else:
+            header = f"[{section}]\n"
+            assert header in text, section
+            text = text.replace(header, header + line + "\n", 1)
+        p.write_text(text, encoding="utf-8")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "config")
+
     def add_toml(self, text: str) -> None:
         p = self.root / "agentflow.toml"
         p.write_text(p.read_text(encoding="utf-8") + "\n" + text, encoding="utf-8")
@@ -124,6 +140,14 @@ def demo_repo(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> DemoRe
     repo = DemoRepo(root)
     repo.scenario()
     assert repo.af("init") == 0
+    # fast suite: never start WSL for mutmut (test_python_mutation_e2e.py covers that, slow)
+    toml = root / "agentflow.toml"
+    toml.write_text(
+        toml.read_text(encoding="utf-8").replace(
+            "[gates]\n", '[gates]\nmutation_runner = "native"\n', 1
+        ),
+        encoding="utf-8",
+    )
     (root / "src" / "demo").mkdir(parents=True)
     (root / "tests").mkdir()
     git(root, "add", "-A")
