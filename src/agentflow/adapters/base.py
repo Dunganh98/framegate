@@ -11,7 +11,9 @@ import abc
 import os
 import pathlib
 import shutil
+import signal
 import subprocess
+import sys
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -39,6 +41,8 @@ class TestCase:
 
     name: str
     outcome: str
+    #: failure/error message (and stack trace when the report has one); "" if none
+    message: str = ""
 
 
 @dataclass
@@ -71,25 +75,58 @@ class Check:
     run: Callable[[], CheckResult]
 
 
+TIMEOUT_CODE = 124
+
+
+def _kill_tree(proc: subprocess.Popen[str]) -> None:
+    """Kill a process and its children (test hosts, build nodes)."""
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False
+        )
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            proc.kill()
+
+
 def run_command(
-    cmd: Sequence[str], cwd: pathlib.Path, env: dict[str, str] | None = None
+    cmd: Sequence[str],
+    cwd: pathlib.Path,
+    env: dict[str, str] | None = None,
+    timeout: float | None = None,
 ) -> tuple[int, str]:
-    """Run a command, return (exit code, stdout+stderr). Missing executables -> code 127."""
+    """Run a command, return (exit code, stdout+stderr). Missing executables -> code 127,
+    timeout (seconds) -> code 124 after killing the process tree."""
     try:
-        r = subprocess.run(
+        proc = subprocess.Popen(
             list(cmd),
             cwd=cwd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
             env=env,
+            start_new_session=timeout is not None and sys.platform != "win32",
         )
     except FileNotFoundError as e:
         return 127, f"Tool not found: {e}"
     except OSError as e:
         return 127, f"Could not start {cmd[0]}: {e}"
-    return r.returncode, (r.stdout + r.stderr).strip()
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        try:
+            out, err = proc.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            out, err = "", ""
+        msg = f"TIMEOUT: {cmd[0]} did not finish within {timeout:g} s (process tree killed)"
+        return TIMEOUT_CODE, ((out or "") + (err or "")).strip() + "\n" + msg
+    return proc.returncode, (out + err).strip()
 
 
 def command_check(name: str, cmd: Sequence[str], cwd: pathlib.Path) -> Check:
@@ -106,16 +143,15 @@ def parse_junit(path: pathlib.Path) -> list[TestCase]:
     for tc in ET.parse(path).getroot().iter("testcase"):
         cls = tc.get("classname") or ""
         name = f"{cls}::{tc.get('name')}" if cls else str(tc.get("name"))
-        tags = {child.tag for child in tc}
-        if "error" in tags:
-            outcome = "error"
-        elif "skipped" in tags:
-            outcome = "skipped"
-        elif "failure" in tags:
-            outcome = "failed"
-        else:
-            outcome = "passed"
-        cases.append(TestCase(name, outcome))
+        by_tag = {child.tag: child for child in tc}
+        outcome, message = "passed", ""
+        for tag, result in (("error", "error"), ("skipped", "skipped"), ("failure", "failed")):
+            if tag in by_tag:
+                node = by_tag[tag]
+                outcome = result
+                message = "\n".join(x for x in (node.get("message"), node.text) if x).strip()
+                break
+        cases.append(TestCase(name, outcome, message))
     return cases
 
 
@@ -166,6 +202,11 @@ class LanguageAdapter(abc.ABC):
         """Run the feature's tests against the stubs with a JUnit report. Every case must fail."""
         return self.run_tests(req_ids=req_ids, junit=report)
 
+    def stub_failure_problem(self, case: TestCase) -> str | None:
+        """For a case that failed against the stubs: a reason why the failure does not count
+        (e.g. it did not fail because of the stub), else None. Default: every failure counts."""
+        return None
+
     # ---------- gates ----------
     @abc.abstractmethod
     def default_gate_commands(self) -> dict[str, list[str]]:
@@ -177,7 +218,9 @@ class LanguageAdapter(abc.ABC):
         p = self.cfg.paths
         return [a.format(src=p.src, tests=p.tests, out=p.out) for a in cmd]
 
-    def lint_checks(self) -> list[Check]:
+    def lint_checks(self, base_ref: str | None = None) -> list[Check]:
+        """The lint/format/typecheck/imports checks. base_ref (the tests-approved tag, when the
+        gate runner knows it) lets an adapter limit checks to files changed since then."""
         defaults = self.default_gate_commands()
         checks = []
         for key in GATE_COMMAND_KEYS:
@@ -238,6 +281,20 @@ class LanguageAdapter(abc.ABC):
     def ci_setup(self) -> str:
         """GitHub Actions steps (YAML, indented 6 spaces) that install the toolchain."""
         return "      # install the project's toolchain and agentflow here\n"
+
+    # ---------- init ----------
+    def config_template(self) -> str:
+        """Commented agentflow.toml section(s) for this language, appended by `agentflow init`."""
+        return ""
+
+    def gitignore_entries(self) -> list[str]:
+        """Extra .gitignore lines `agentflow init` adds (build outputs the workflow must never
+        commit: the orchestrator commits with `git add -A`)."""
+        return []
+
+    def init_note(self) -> str:
+        """Setup advice printed at the end of `agentflow init`."""
+        return ""
 
     # ---------- helpers ----------
     def tool_path(self, name: str, near: str | None = None) -> str | None:

@@ -333,6 +333,12 @@ class PythonAdapter(LanguageAdapter):
         p = self.cfg.paths
         return BRIEF.format(src=p.src, tests=p.tests, review_tests=p.review_tests)
 
+    def init_note(self) -> str:
+        return (
+            "add agentflow (pinned) to the project's dev dependencies; its pytest plugin "
+            "provides the `req` marker and `--req`. Remove any conftest.py that defines `--req`."
+        )
+
     def ci_setup(self) -> str:
         return (
             "      - uses: actions/setup-python@v5\n"

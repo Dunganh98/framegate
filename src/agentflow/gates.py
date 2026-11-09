@@ -15,7 +15,7 @@ from agentflow.state import read_reqs
 
 def checks(adapter: LanguageAdapter, feature: str, scope: str, skip_mutation: bool) -> list[Check]:
     tag = frame_diff.approved_tag(feature)
-    c = list(adapter.lint_checks())
+    c = list(adapter.lint_checks(tag))
     c.append(Check("frame diff", lambda: frame_diff.check(adapter, feature)))
     if scope == "step":
         reqs = read_reqs(adapter.cfg)

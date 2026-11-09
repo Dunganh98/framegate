@@ -7,6 +7,7 @@ added source lines contain suppression patterns. Tool-independent: it compares a
 
 from __future__ import annotations
 
+import fnmatch
 import re
 
 from agentflow.adapters.base import CheckResult, LanguageAdapter
@@ -38,6 +39,22 @@ def protected_paths(adapter: LanguageAdapter) -> list[str]:
             base.append(cfg.roles_extra_dir.rstrip("/") + "/")
         base += adapter.default_protected_paths()
     return base + list(cfg.protected_extra)
+
+
+GLOB_CHARS = ("*", "?", "[")
+
+
+def path_matches(path: str, entries: list[str]) -> bool:
+    """True if `path` (posix, relative to the root) starts with one of the prefix entries or
+    matches one of the glob entries (entries containing * ? [; `*` also matches `/`, so
+    `*.csproj` matches a project file at any depth; case-insensitive)."""
+    for entry in entries:
+        if any(ch in entry for ch in GLOB_CHARS):
+            if fnmatch.fnmatchcase(path.lower(), entry.lower()):
+                return True
+        elif path.startswith(entry):
+            return True
+    return False
 
 
 def forbidden_regex(adapter: LanguageAdapter) -> re.Pattern[str] | None:
@@ -74,12 +91,12 @@ def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
         diff = git(cfg, "diff", "-U0", tag, "--", cfg.paths.src)
     except GitError as e:
         return CheckResult("FAIL", str(e))
-    protected = tuple(protected_paths(adapter))
-    exceptions = tuple(cfg.frame_exceptions())
+    protected = protected_paths(adapter)
+    exceptions = cfg.frame_exceptions()
     problems = [
         f"PROTECTED PATH CHANGED: {f}"
         for f in sorted(changed)
-        if f.startswith(protected) and not (exceptions and f.startswith(exceptions))
+        if path_matches(f, protected) and not path_matches(f, exceptions)
     ]
     added = [
         line[1:]

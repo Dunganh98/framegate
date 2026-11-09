@@ -7,6 +7,7 @@ import pathlib
 from collections.abc import Callable
 
 from agentflow.adapters import detect_language, get_adapter
+from agentflow.adapters.base import LanguageAdapter
 from agentflow.config import CONFIG_FILE, Config, ConfigError, parse_config
 from agentflow.orchestrator import package_text
 
@@ -24,6 +25,10 @@ def init(
         echo("error: could not detect the project language; pass --language python|dotnet")
         return 1
     cfg = parse_config(root, {"project": {"language": lang}})
+    try:
+        adapter: LanguageAdapter | None = get_adapter(cfg)
+    except ConfigError:
+        adapter = None
     created, skipped = [], []
 
     def write(rel: str, text: str) -> None:
@@ -35,7 +40,11 @@ def init(
         path.write_text(text, encoding="utf-8")
         created.append(rel)
 
-    write(CONFIG_FILE, package_text("templates", "agentflow.toml").replace("{language}", lang))
+    toml = package_text("templates", "agentflow.toml").replace("{language}", lang)
+    extra = adapter.config_template().rstrip() if adapter is not None else ""
+    if extra:
+        toml = toml.rstrip() + "\n\n" + extra + "\n"
+    write(CONFIG_FILE, toml)
     for name in SPEC_TEMPLATES:
         write(
             f"{cfg.paths.specs}/_template/{name}",
@@ -45,6 +54,7 @@ def init(
     gi = root / ".gitignore"
     existing = gi.read_text(encoding="utf-8").splitlines() if gi.exists() else []
     wanted = [cfg.paths.out + "/", cfg.paths.phase_file, cfg.paths.reqs_file]
+    wanted += adapter.gitignore_entries() if adapter is not None else []
     missing = [w for w in wanted if w not in {x.strip() for x in existing}]
     if missing:
         prefix = "" if not existing or existing[-1] == "" else "\n"
@@ -58,10 +68,11 @@ def init(
         echo(f"  skipped  {rel} (exists, not overwritten)")
     echo(f"  .gitignore: {'added ' + ', '.join(missing) if missing else 'already complete'}")
 
-    try:
-        setup = get_adapter(cfg).ci_setup()
-    except ConfigError:
-        setup = "      # install the project's toolchain and agentflow here\n"
+    setup = (
+        adapter.ci_setup()
+        if adapter is not None
+        else "      # install the project's toolchain and agentflow here\n"
+    )
     snippet = package_text("templates", "claude_md_snippet.md")
     for key, value in (("{specs}", cfg.paths.specs), ("{out}", cfg.paths.out)):
         snippet = snippet.replace(key, value)
@@ -70,11 +81,9 @@ def init(
         "\n--- CI snippet (GitHub Actions; not written) ---\n"
         + package_text("templates", "ci_github.yml").replace("{setup}", setup).rstrip()
     )
-    if lang == "python":
-        echo(
-            "\nNote: add agentflow (pinned) to the project's dev dependencies; its pytest plugin "
-            "provides the `req` marker and `--req`. Remove any conftest.py that defines `--req`."
-        )
+    note = adapter.init_note().rstrip() if adapter is not None else ""
+    if note:
+        echo("\nNote: " + note)
     echo("\nNext: agentflow spec <feature>")
     return 0
 

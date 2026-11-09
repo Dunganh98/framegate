@@ -48,7 +48,23 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
     "spec": {"id_pattern": (str,)},
     "roles": {"extra_dir": (str,)},
     "phases": {},
+    # language adapter sections: validated here, read by the adapter (cfg.language_options)
+    "dotnet": {
+        "executable": (str,),
+        "solution": (str,),
+        "test_projects": (list,),
+        "configuration": (str,),
+        "base_filter": (str,),
+        "final_filter": (str,),
+        "build_before_test": (bool,),
+        "warnings": (str,),
+        "build_timeout": (int,),
+        "test_timeout": (int,),
+        "mutation_timeout": (int,),
+    },
 }
+#: sections owned by a language adapter (stored raw in Config.language_options)
+LANGUAGE_SECTIONS = ("dotnet",)
 GATE_COMMAND_KEYS = ("lint", "format", "typecheck", "imports")
 PHASE_KEYS = ("write", "tools")
 
@@ -91,6 +107,8 @@ class Config:
     phase_write: dict[str, list[str]] = field(default_factory=dict)
     phase_tools: dict[str, list[str]] = field(default_factory=dict)
     roles_extra_dir: str | None = None
+    #: raw, type-checked adapter sections, e.g. {"dotnet": {"configuration": "Release"}}
+    language_options: dict[str, dict[str, Any]] = field(default_factory=dict)
     loaded_from_file: bool = False
 
     # ---- paths ----
@@ -168,7 +186,7 @@ def _check_types(section: str, data: dict[str, Any]) -> None:
         if key not in allowed:
             raise ConfigError(f"[{section}] unknown key '{key}' (allowed: {', '.join(allowed)})")
         types = allowed[key]
-        if isinstance(value, bool) or not isinstance(value, types):
+        if (isinstance(value, bool) and bool not in types) or not isinstance(value, types):
             names = "/".join(t.__name__ for t in types)
             raise ConfigError(f"[{section}] {key} must be {names}, got {type(value).__name__}")
 
@@ -231,6 +249,13 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
 
     cfg.id_pattern = data.get("spec", {}).get("id_pattern", cfg.id_pattern)
     cfg.roles_extra_dir = data.get("roles", {}).get("extra_dir")
+    for section in LANGUAGE_SECTIONS:
+        if section in data:
+            body = dict(data[section])
+            for key, value in body.items():
+                if isinstance(value, list):
+                    _str_list(f"[{section}] {key}", value)
+            cfg.language_options[section] = body
 
     for phase, body in data.get("phases", {}).items():
         if phase not in PHASES:

@@ -23,10 +23,16 @@ def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
     passed = [c.name for c in run.cases if c.outcome == "passed"]
     errored = [c.name for c in run.cases if c.outcome == "error"]
     skipped = [c.name for c in run.cases if c.outcome == "skipped"]
+    other = [
+        f"{c.name} — {problem}"
+        for c in run.cases
+        if c.outcome == "failed" and (problem := adapter.stub_failure_problem(c))
+    ]
     total = len(run.cases)
     lines = [f"{total} tests for feature {feature}."]
     lines += [f"PASSES AGAINST STUB (weak or wrong test): {n}" for n in passed]
     lines += [f"ERROR (import/fixture/collection problem): {n}" for n in errored]
     lines += [f"SKIPPED: {n}" for n in skipped]
-    failed = bool(passed or errored or skipped or total == 0)
+    lines += [f"FAILS FOR ANOTHER REASON THAN THE STUB: {n}" for n in other]
+    failed = bool(passed or errored or skipped or other or total == 0)
     return CheckResult("FAIL" if failed else "PASS", "\n".join(lines))
