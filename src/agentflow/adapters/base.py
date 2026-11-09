@@ -74,6 +74,9 @@ class TestRun:
     returncode: int
     output: str
     cases: list[TestCase] | None = None
+    #: why the run was cut short (timeout, crashed host, killed, missing report or coverage
+    #: file); "" = it ran to the end. An incomplete run has status "error".
+    incomplete: str = ""
 
 
 @dataclass
@@ -127,6 +130,38 @@ def command_check(name: str, cmd: Sequence[str], cwd: pathlib.Path) -> Check:
         return CheckResult("PASS" if code == 0 else "FAIL", out)
 
     return Check(name, run)
+
+
+#: console lines of a test run that was aborted part-way (VSTest; English CLI output)
+ABORT_MARKERS = (
+    "test run aborted",
+    "the active test run was aborted",
+    "test host process crashed",
+)
+#: exit codes of a killed process: Ctrl+C / Ctrl+Break on Windows, SIGKILL / SIGTERM via a shell
+KILLED_CODES = {3221225786: "Ctrl+C", -1073741510: "Ctrl+C", 137: "SIGKILL", 143: "SIGTERM"}
+
+
+def incomplete_reason(code: int, output: str, timeout: float | None = None) -> str:
+    """Why a test/coverage/mutation run did not run to the end ("" = it did, as far as the
+    exit code and output tell)."""
+    if code == TIMEOUT_CODE:
+        return f"timed out after {timeout:g} s" if timeout else "timed out"
+    if code in KILLED_CODES:
+        return f"killed ({KILLED_CODES[code]}, exit {code})"
+    if code < 0:
+        return f"killed by signal {-code}"
+    low = output.lower()
+    if any(m in low for m in ABORT_MARKERS):
+        return "test host crashed, run aborted"
+    return ""
+
+
+def incomplete_result(reason: str, output: str = "", what: str = "test run") -> CheckResult:
+    """A FAIL that says the run was cut short; never a coverage or mutation figure."""
+    head = f"ERROR: {what} incomplete ({reason})"
+    tail = "\n".join(output.strip().splitlines()[-25:])
+    return CheckResult("FAIL", head + ("\n" + tail if tail else ""), summary=head)
 
 
 def diff_coverage_summary(output: str, threshold: float) -> str:

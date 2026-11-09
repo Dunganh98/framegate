@@ -42,6 +42,8 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "mutation_score": (int, float),
         "mutation_tool": (str,),
         "mutation_runner": (str,),
+        "coverage_timeout": (int,),
+        "mutation_timeout": (int,),
         "commands": (dict,),
     },
     "protected": {"paths": (list,), "extra": (list,), "exceptions": (list,)},
@@ -110,6 +112,9 @@ class Config:
     mutation_tool: str | None = None  # None -> the adapter's default tool
     #: where the mutation tool runs: auto | native | wsl (adapters that support it: python)
     mutation_runner: str = "auto"
+    #: seconds per final-gate run before it is killed and reported as incomplete
+    coverage_timeout: int = 1800
+    mutation_timeout: int = 3600
     gate_commands: dict[str, list[str]] = field(default_factory=dict)
     protected_paths: list[str] | None = None  # None -> core + adapter defaults
     protected_extra: list[str] = field(default_factory=list)
@@ -256,6 +261,11 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
             f"[gates] mutation_runner must be one of {', '.join(MUTATION_RUNNERS)}, "
             f"got '{cfg.mutation_runner}'"
         )
+    for key in ("coverage_timeout", "mutation_timeout"):
+        value = gates.get(key, getattr(cfg, key))
+        if value < 1:
+            raise ConfigError(f"[gates] {key} must be >= 1")
+        setattr(cfg, key, value)
     for key, cmd in gates.get("commands", {}).items():
         if key not in GATE_COMMAND_KEYS:
             raise ConfigError(

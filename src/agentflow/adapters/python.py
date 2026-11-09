@@ -28,12 +28,13 @@ from agentflow.adapters.base import (
     LanguageAdapter,
     TestRun,
     diff_coverage_summary,
+    incomplete_reason,
+    incomplete_result,
     parse_junit,
     run_command,
 )
 
 SKIP_MARKS = {"skip", "skipif", "xfail"}
-MUTATION_TIMEOUT = 7200  # seconds for `mutmut run`
 #: bump to force the WSL mutmut venvs to be rebuilt
 MUTMUT_ENV_VERSION = 1
 #: files whose content keys the WSL venv (besides the requirement list itself)
@@ -43,6 +44,8 @@ DETECTED = {"killed", "timeout", "caught by type check", "segfault"}
 SURVIVED = {"survived", "no tests", "suspicious"}
 MUTANT_LINE = re.compile(r"^\s*(\S+__mutmut_\d+):\s*(.+?)\s*$")
 PYTEST_STATUS = {0: "passed", 1: "failed", 5: "no_tests"}
+#: pytest exit codes of a run that did not reach the end
+PYTEST_INCOMPLETE = {2: "pytest interrupted (exit 2)", 3: "pytest internal error (exit 3)"}
 
 BRIEF = """\
 Language: Python. Test framework: pytest (agentflow plugin provides the `req` marker).
@@ -219,19 +222,35 @@ class PythonAdapter(LanguageAdapter):
         out_dir = self.root / self.cfg.paths.out
         xml = out_dir / "coverage.xml"
 
+        #: why the coverage run was cut short ("" = complete; None = not run / no coverage)
+        state: dict[str, str | None] = {"incomplete": None}
+
         def full_suite() -> CheckResult:
             out_dir.mkdir(parents=True, exist_ok=True)
             xml.unlink(missing_ok=True)
             cmd = [self.python, "-m", "pytest", "-q", "-p", "no:cacheprovider"]
             note = ""
-            if self._has_module("pytest_cov"):
+            collect = self._has_module("pytest_cov")
+            if collect:
                 cmd += [f"--cov={self.cfg.paths.src}", "--cov-branch", f"--cov-report=xml:{xml}"]
             else:
                 note = "\nSKIPPED coverage: pytest-cov is not installed in the project environment"
-            code, out = run_command(cmd, self.root)
+            timeout = self.cfg.coverage_timeout
+            code, out = run_command(cmd, self.root, timeout=timeout)
+            reason = incomplete_reason(code, out, timeout) or PYTEST_INCOMPLETE.get(code, "")
+            if not reason and collect and code in (0, 1) and not xml.is_file():
+                reason = "coverage file missing"
+            if collect:
+                state["incomplete"] = reason
+            if reason:
+                return incomplete_result(reason, out)
             return CheckResult("PASS" if code == 0 else "FAIL", out + note)
 
         def diff_coverage() -> CheckResult:
+            if state["incomplete"]:
+                return incomplete_result(
+                    f"{state['incomplete']}; no diff coverage computed", what="coverage run"
+                )
             if not xml.exists():
                 return CheckResult("SKIPPED", "SKIPPED: no coverage report (see previous check)")
             tool = self.tool_path("diff-cover", self.python)
@@ -314,7 +333,7 @@ class PythonAdapter(LanguageAdapter):
             "patterns": [f"{m}.x*" for m in modules],
             "show_modules": list(modules),
             "show_limit": 50,
-            "timeout": MUTATION_TIMEOUT,
+            "timeout": self.cfg.mutation_timeout,
         }
 
     def _mutmut_wsl(self, feature: str, modules: Sequence[str]) -> CheckResult:
@@ -369,8 +388,13 @@ class PythonAdapter(LanguageAdapter):
     ) -> CheckResult:
         result_file = self.root / self.cfg.paths.out / ".mutmut" / "result.json"
         result_file.unlink(missing_ok=True)
-        code, out = run_command(cmd, self.root, timeout=MUTATION_TIMEOUT + 1800)
+        # + 30 min for building the WSL venv
+        timeout = self.cfg.mutation_timeout + 1800
+        code, out = run_command(cmd, self.root, timeout=timeout)
         if not result_file.is_file():
+            reason = incomplete_reason(code, out, timeout)
+            if reason:
+                return incomplete_result(reason, out, f"mutation run ({where})")
             return CheckResult("FAIL", f"mutmut runner ({where}) failed (exit {code}):\n{out}")
         res = json.loads(result_file.read_text(encoding="utf-8"))
         if not res.get("ok"):
@@ -380,6 +404,9 @@ class PythonAdapter(LanguageAdapter):
                 f"{res.get('hint', '')}",
             )
         output = str(res.get("run_output", ""))
+        reason = incomplete_reason(int(res.get("run_code") or 0), output, self.cfg.mutation_timeout)
+        if reason:
+            return incomplete_result(reason, output, f"mutation run ({where})")
         if res.get("run_code") != 0:
             if "nothing matches" in output:  # no mutants in the changed modules
                 return CheckResult("PASS", "No mutants generated for the changed files.")

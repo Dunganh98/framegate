@@ -30,6 +30,8 @@ language = "{language}"            # "python" | "dotnet"
 # mutation_tool = "mutmut"         # default: mutmut (python), stryker (dotnet); "none" = off
 # mutation_runner = "auto"         # python: "auto" (WSL on Windows if available, else native),
 #                                  # "native" or "wsl" (mutmut needs fork: no native Windows)
+# coverage_timeout = 1800          # seconds per coverage run; killed -> "ERROR: test run incomplete"
+# mutation_timeout = 3600          # seconds per mutation run (same)
 
 # [gates.commands]                 # override the adapter's commands; [] disables one
 #                                  # (python examples; dotnet: see docs/adapters.md)

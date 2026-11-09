@@ -25,6 +25,8 @@ from agentflow.adapters.base import (
     TestCase,
     TestRun,
     diff_coverage_summary,
+    incomplete_reason,
+    incomplete_result,
     parse_junit,
     run_command,
 )
@@ -95,7 +97,7 @@ CONFIG_TEMPLATE = """\
 # warnings = "changed"             # typecheck: warnings in changed files fail | "any" | "ignore"
 # build_timeout = 900              # seconds
 # test_timeout = 3600
-# mutation_timeout = 7200
+# mutation_timeout = 3600          # default: [gates] mutation_timeout
 """
 
 
@@ -111,7 +113,8 @@ class DotnetSettings:
     warnings: str = "changed"
     build_timeout: int = 900
     test_timeout: int = 3600
-    mutation_timeout: int = 7200
+    #: None = [gates] mutation_timeout
+    mutation_timeout: int | None = None
 
     @classmethod
     def from_options(cls, options: dict[str, Any]) -> DotnetSettings:
@@ -119,7 +122,7 @@ class DotnetSettings:
         if s.warnings not in WARNING_MODES:
             raise ConfigError(f"[dotnet] warnings must be one of {', '.join(WARNING_MODES)}")
         for key in ("build_timeout", "test_timeout", "mutation_timeout"):
-            if getattr(s, key) < 1:
+            if getattr(s, key) is not None and getattr(s, key) < 1:
                 raise ConfigError(f"[dotnet] {key} must be >= 1")
         s.test_projects = [p.replace("\\", "/") for p in s.test_projects]
         return s
@@ -421,6 +424,7 @@ class DotnetAdapter(LanguageAdapter):
         kind: str,
         junit: pathlib.Path | None = None,
         coverage: pathlib.Path | None = None,
+        timeout: int | None = None,
     ) -> TestRun:
         targets = self.test_targets()
         outputs = []
@@ -441,6 +445,7 @@ class DotnetAdapter(LanguageAdapter):
             else "trx"
         )
         codes = []
+        limit = timeout or self.settings.test_timeout
         for t in targets:
             args = ["test", t, "-c", self.settings.configuration]
             if self.settings.build_before_test:
@@ -450,7 +455,7 @@ class DotnetAdapter(LanguageAdapter):
                 args += ["--filter", filt]
             if coverage is not None:
                 args += ["--collect", "XPlat Code Coverage"]
-            code, out = self._exec(args, self.settings.test_timeout)
+            code, out = self._exec(args, limit)
             codes.append(code)
             outputs.append(out)
         report_files = sorted(results.rglob("*.junit.xml" if junit_logger else "*.trx"))
@@ -462,8 +467,15 @@ class DotnetAdapter(LanguageAdapter):
         if junit is not None and cases:
             write_junit(cases, junit)
         output += f"\n{kind} run: {run_summary(cases)}" + (f" (filter: {filt})" if filt else "")
-        if TIMEOUT_CODE in codes:
-            return TestRun("error", TIMEOUT_CODE, output, cases or None)
+        reason = next((r for r in (incomplete_reason(c, output, limit) for c in codes) if r), "")
+        if not reason and not reports and any(codes) and not diagnostics(output, "error"):
+            reason = f"no test report (exit {max(codes)})"
+        if not reason and coverage is not None and cases:
+            if not any(coverage.rglob("coverage.cobertura.xml")):
+                reason = "coverage file missing"
+        if reason:
+            code = TIMEOUT_CODE if TIMEOUT_CODE in codes else max(codes) or 1
+            return TestRun("error", code, output, cases or None, incomplete=reason)
         if any(c.outcome in ("failed", "error") for c in cases):
             return TestRun("failed", max(codes), output, cases)
         if any(codes):
@@ -700,12 +712,22 @@ class DotnetAdapter(LanguageAdapter):
     def coverage_checks(self, base_ref: str) -> list[Check]:
         cov_dir = self.root / self.cfg.paths.out / "coverage"
 
+        #: why the coverage run was cut short ("" = complete; None = not run / no coverage)
+        state: dict[str, str | None] = {"incomplete": None}
+
         def full_suite() -> CheckResult:
             shutil.rmtree(cov_dir, ignore_errors=True)
             collect = self.references("coverlet.collector")
             run = self._dotnet_test(
-                self.settings.final_filter, "final", coverage=cov_dir if collect else None
+                self.settings.final_filter,
+                "final",
+                coverage=cov_dir if collect else None,
+                timeout=self.cfg.coverage_timeout,
             )
+            if collect:
+                state["incomplete"] = run.incomplete
+            if run.incomplete:
+                return incomplete_result(run.incomplete, run.output)
             note = (
                 ""
                 if collect
@@ -714,6 +736,10 @@ class DotnetAdapter(LanguageAdapter):
             return CheckResult("PASS" if run.status == "passed" else "FAIL", run.output + note)
 
         def diff_coverage() -> CheckResult:
+            if state["incomplete"]:
+                return incomplete_result(
+                    f"{state['incomplete']}; no diff coverage computed", what="coverage run"
+                )
             reports = sorted(cov_dir.rglob("coverage.cobertura.xml")) if cov_dir.is_dir() else []
             if not reports:
                 return CheckResult("SKIPPED", "SKIPPED: no Cobertura report (see previous check)")
@@ -841,11 +867,15 @@ class DotnetAdapter(LanguageAdapter):
                 "--break-at",
                 "0",
             ]
-            code, out = run_command(
-                cmd, self.root, env=self.env(), timeout=self.settings.mutation_timeout
-            )
+            timeout = self.settings.mutation_timeout or self.cfg.mutation_timeout
+            code, out = run_command(cmd, self.root, env=self.env(), timeout=timeout)
             (work / f"{proj.stem}.log").write_text(out, encoding="utf-8")
             report = out_dir / "reports" / "mutation-report.json"
+            reason = incomplete_reason(code, out, timeout)
+            if not reason and code == 0 and not report.is_file():
+                reason = "no mutation report"
+            if reason:
+                return incomplete_result(reason, out, f"mutation run ({proj.name})")
             if code != 0 or not report.is_file():
                 tail = "\n".join(out.splitlines()[-25:])
                 return CheckResult("FAIL", f"Stryker failed for {proj.name} (exit {code}):\n{tail}")
