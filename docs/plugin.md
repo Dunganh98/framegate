@@ -1,7 +1,7 @@
 # agentflow Claude Code plugin
 
-The plugin is the Claude Code side of agentflow: three skills that drive the workflow from the chat
-(`/agentflow:feature`, `/agentflow:resume`, `/agentflow:status`) and two hooks, all calling the
+The plugin is the Claude Code side of agentflow: four skills that drive the workflow from the chat
+(`/agentflow:setup`, `/agentflow:feature`, `/agentflow:resume`, `/agentflow:status`) and two hooks, all calling the
 `agentflow` CLI (the Python package in `src/`). All logic lives in the package (including the
 chat run protocol, `agentflow protocol`); the plugin only registers things. Installed
 **user-wide**, it stays inert in repos without `agentflow.toml`.
@@ -11,9 +11,12 @@ chat run protocol, `agentflow protocol`); the plugin only registers things. Inst
 ```
 .claude-plugin/marketplace.json     # marketplace "agentflow", one entry: source "./plugin"
 plugin/
-  .claude-plugin/plugin.json        # name agentflow, version 0.2.2
+  .claude-plugin/plugin.json        # name agentflow, version 0.3.0
   hooks/hooks.json                  # PreToolUse (Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell) + Stop
   scripts/agentflow-hook.js         # wrapper: node agentflow-hook.js <event> -> agentflow hook <event>
+  skills/setup/SKILL.md             # /agentflow:setup: read the repo, draft agentflow.toml and
+                                    # .agentflow/project.md, one batch of questions, agentflow
+                                    # doctor, optional smoke run
   skills/feature/SKILL.md           # /agentflow:feature <f>: branch + spec dialogue, then the run
                                     # protocol (injected: agentflow protocol)
   skills/resume/SKILL.md            # /agentflow:resume [f]: reattach after a session restart

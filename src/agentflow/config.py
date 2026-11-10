@@ -22,6 +22,7 @@ PHASES = (
     "IMPLEMENT",
     "REVIEW",
     "TRIAGE",
+    "DIAGNOSIS",
     "PR",
     "RETRO",
 )
@@ -29,7 +30,7 @@ DEFAULT_ID_PATTERN = r"\b[A-Z][A-Z0-9]{1,9}-[REI]-\d{3}\b"
 
 # section -> key -> accepted python type(s). "phases.<PHASE>" is handled separately.
 SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
-    "project": {"language": (str,)},
+    "project": {"language": (str,), "knowledge": (str,)},
     "paths": {
         "src": (str,),
         "tests": (str,),
@@ -51,6 +52,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "model": (str,),
         "effort": (str,),
         "step_batch_ids": (int,),
+        "diagnose_after": (int,),
     },
     "gates": {
         "tests": (str,),
@@ -76,6 +78,28 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
     "notify": {"toast": (bool,)},
     "phases": {},
     # language adapter sections: validated here, read by the adapter (cfg.language_options)
+    # generic adapter: any language, commands with placeholders (adapters/generic.py)
+    "generic": {
+        "source_suffixes": (list,),
+        "test_files": (list,),
+        "tag_pattern": (str,),
+        "skip_pattern": (str,),
+        "test_all": (list,),
+        "test_ids": (list,),
+        "test_paths": (list,),
+        "ids_separator": (str,),
+        "stub_marker": (str,),
+        "coverage": (list,),
+        "coverage_ids": (list,),
+        "coverage_report": (str,),
+        "mutation": (list,),
+        "mutation_score_pattern": (str,),
+        "format_fix": (list,),
+        "forbidden_patterns": (list,),
+        "protected": (list,),
+        "conventions": (str,),
+        "test_timeout": (int,),
+    },
     "dotnet": {
         "executable": (str,),
         "solution": (str,),
@@ -92,7 +116,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
     },
 }
 #: sections owned by a language adapter (stored raw in Config.language_options)
-LANGUAGE_SECTIONS = ("dotnet",)
+LANGUAGE_SECTIONS = ("dotnet", "generic")
 GATE_COMMAND_KEYS = ("lint", "format", "typecheck", "imports")
 MUTATION_RUNNERS = ("auto", "native", "wsl")
 #: tests the final coverage / mutation runs use: the feature's tests (its spec IDs + the review
@@ -119,6 +143,7 @@ DEFAULT_MODELS = {
     "TEST_REVIEW": "opus",
     "REVIEW": "opus",
     "TRIAGE": "opus",
+    "DIAGNOSIS": "opus",
     "RETRO": "opus",
 }
 #: --max-turns per phase when neither [phases.<P>] max_turns nor [agents] max_turns is set.
@@ -133,6 +158,7 @@ DEFAULT_MAX_TURNS = {
     "IMPLEMENT": 80,
     "REVIEW": 40,
     "TRIAGE": 30,
+    "DIAGNOSIS": 40,
     "PR": 30,
     "RETRO": 30,
     "SPEC_UPDATE": 30,
@@ -147,6 +173,7 @@ DEFAULT_MAX_BUDGET_USD = {
     "IMPLEMENT": 1.5,
     "REVIEW": 1.5,
     "TRIAGE": 1.5,
+    "DIAGNOSIS": 2.0,
     "PR": 1.5,
     "RETRO": 3.0,
     "SPEC_UPDATE": 1.0,
@@ -197,6 +224,12 @@ class Config:
     #: [agents] step_batch_ids: consecutive plan steps share one implementer run while their
     #: spec IDs add up to at most this many (a small plan = one run); 0 = one run per step
     step_batch_ids: int = 15
+    #: [agents] diagnose_after: when the same checks fail this many attempts in a row, a
+    #: diagnosis agent finds the root cause and proposes one fix (0 = off)
+    diagnose_after: int = 2
+    #: [project] knowledge: the project's knowledge file (architecture rules, things that
+    #: must never change, test-harness facts, tools); read by the agents, grown by the retro
+    knowledge: str = ".agentflow/project.md"
     #: [gates] format_fix: the gates apply the formatter to the changed source files before
     #: checking (a formatting slip costs no implementer attempt)
     format_fix: bool = True
@@ -309,6 +342,7 @@ class Config:
             "IMPLEMENT": [p.src, p.out],
             "REVIEW": [p.review_tests, p.out],
             "TRIAGE": [p.review_tests, p.out],
+            "DIAGNOSIS": [p.out],
             "PR": [p.out],
             "RETRO": [p.out],
         }
@@ -380,6 +414,7 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
 
     proj = data.get("project", {})
     cfg.language = proj.get("language", cfg.language)
+    cfg.knowledge = _norm(proj.get("knowledge", cfg.knowledge))
 
     for key, value in data.get("paths", {}).items():
         setattr(cfg.paths, key, _norm(value).rstrip("/"))
@@ -408,6 +443,9 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     cfg.step_batch_ids = agents.get("step_batch_ids", cfg.step_batch_ids)
     if cfg.step_batch_ids < 0:
         raise ConfigError("[agents] step_batch_ids must be >= 0 (0 = one run per step)")
+    cfg.diagnose_after = agents.get("diagnose_after", cfg.diagnose_after)
+    if cfg.diagnose_after < 0:
+        raise ConfigError("[agents] diagnose_after must be >= 0 (0 = no diagnosis)")
 
     gates = data.get("gates", {})
     cfg.tests_gate = gates.get("tests", cfg.tests_gate)

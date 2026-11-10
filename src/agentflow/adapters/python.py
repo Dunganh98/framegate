@@ -82,6 +82,50 @@ def _has_check(fn: ast.AST) -> bool:
     return False
 
 
+def _picked(node: ast.AST, names: set[str]) -> bool:
+    """A collection of cases picked from data: a comprehension with an `if`, `filter(...)`, or
+    a name bound to one of those."""
+    if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
+        return any(g.ifs for g in node.generators)
+    if isinstance(node, ast.Call):
+        name = _call_name(node)
+        if name in {"list", "tuple", "set", "sorted"} and node.args:
+            return _picked(node.args[0], names)
+        return name == "filter"
+    return isinstance(node, ast.Name) and node.id in names
+
+
+def _vacuous_loop(fn: ast.AST) -> bool:
+    """A loop / all() over picked cases without anything that checks there is at least one
+    (len(), any(), `assert picked`): passes when the data has no such case."""
+    names = {
+        t.id
+        for n in ast.walk(fn)
+        if isinstance(n, ast.Assign) and _picked(n.value, set())
+        for t in n.targets
+        if isinstance(t, ast.Name)
+    }
+    loops = [
+        n
+        for n in ast.walk(fn)
+        if (isinstance(n, (ast.For, ast.AsyncFor)) and _picked(n.iter, names))
+        or (
+            isinstance(n, ast.Call)
+            and _call_name(n) == "all"
+            and bool(n.args)
+            and _picked(n.args[0], names)
+        )
+    ]
+    if not loops:
+        return False
+    guarded = any(
+        (isinstance(n, ast.Call) and _call_name(n) in {"len", "any", "next"})
+        or (isinstance(n, ast.Assert) and isinstance(n.test, ast.Name))
+        for n in ast.walk(fn)
+    )
+    return not guarded
+
+
 def _is_skip_call(node: ast.Call) -> bool:
     """pytest.skip(...) / skip(...), but not the @pytest.mark.skip(...) decorator (reported as
     SKIP/XFAIL already)."""
@@ -123,6 +167,29 @@ class PythonAdapter(LanguageAdapter):
         out = super().resolve_command(cmd)
         if out and out[0] in ("python", "python3", "{python}"):
             out[0] = self.python
+        return out
+
+    def tool_report(self) -> list[tuple[str, bool, str]]:
+        out = []
+        for module, what in (
+            ("pytest", "tests"),
+            ("pytest_cov", "coverage"),
+            ("ruff", "lint / format"),
+            ("mypy", "type check"),
+        ):
+            ok = self._has_module(module)
+            out.append((f"{module} ({what})", ok, self.python if ok else f"install {module}"))
+        diff = self.tool_path("diff-cover", self.python)
+        out.append(("diff-cover (diff coverage)", bool(diff), diff or "install diff-cover"))
+        if self.cfg.mutation_tool == "none":
+            out.append(("mutmut (mutation)", True, "mutation off ([gates] mutation_tool = none)"))
+        elif self.mutation_runner() == "wsl":
+            out.append(
+                ("mutmut (mutation)", True, "runs in WSL (checked by the first mutation run)")
+            )
+        else:
+            ok = self._has_module("mutmut")
+            out.append(("mutmut (mutation)", ok, self.python if ok else "install mutmut"))
         return out
 
     def _has_module(self, module: str) -> bool:
@@ -199,6 +266,12 @@ class PythonAdapter(LanguageAdapter):
                     where = f"{where_file}::{node.name}"
                     if not _has_check(node):
                         problems.append(f"NO ASSERTION: {where}")
+                    elif _vacuous_loop(node):
+                        problems.append(
+                            "NOTE: LOOP OVER PICKED CASES WITHOUT A VISIBLE NON-EMPTY CHECK "
+                            "(zero cases would "
+                            f"pass; the test reviewer decides): {where}"
+                        )
                     for dec in node.decorator_list:
                         target = dec.func if isinstance(dec, ast.Call) else dec
                         if getattr(target, "attr", None) in SKIP_MARKS:

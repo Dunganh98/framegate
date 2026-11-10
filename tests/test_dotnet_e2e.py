@@ -124,8 +124,11 @@ def dotnet_repo(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Demo
     repo.scenario(language="dotnet")
     assert repo.af("init") == 0  # detects dotnet from Demo.slnx
     toml = root / "agentflow.toml"
-    text = toml.read_text(encoding="utf-8").replace(
-        '# review_tests = "tests/review"', 'review_tests = "tests/Demo.Tests/Review"'
+    # this flow stops at the tests gate ("human"; the default "defer" goes on to the final gate)
+    text = (
+        toml.read_text(encoding="utf-8")
+        .replace('# review_tests = "tests/review"', 'review_tests = "tests/Demo.Tests/Review"')
+        .replace("[gates]\n", '[gates]\ntests = "human"\n', 1)
     )
     toml.write_text(text + 'base_filter = "Category!=Slow"\n', encoding="utf-8")
     git(root, "add", "-A")

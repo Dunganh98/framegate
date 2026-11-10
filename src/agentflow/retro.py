@@ -320,6 +320,44 @@ def build(
     return RetroInput("\n".join(out).rstrip() + "\n", ids, counts)
 
 
+KNOWLEDGE_ITEM = re.compile(r"^\s*[-*]\s*K(\d+)\s*\[([^\]]+)\]\s*:?\s*(.+?)\s*$")
+
+
+def knowledge_items(proposals: str) -> list[tuple[int, str, str]]:
+    """The `## Project knowledge` section of retro_proposals.md -> [(n, section, fact)]."""
+    items: list[tuple[int, str, str]] = []
+    inside = False
+    for line in proposals.splitlines():
+        if line.startswith("#"):
+            inside = line.lstrip("#").strip().lower().startswith("project knowledge")
+            continue
+        m = KNOWLEDGE_ITEM.match(line) if inside else None
+        if m:
+            items.append((int(m.group(1)), m.group(2).strip(), m.group(3).strip()))
+    return items
+
+
+def add_knowledge(text: str, section: str, line: str) -> str:
+    """`text` (a knowledge file) with `line` added at the end of `## <section>` (case-insensitive;
+    a missing section is appended)."""
+    lines = text.rstrip("\n").splitlines()
+    start = next(
+        (
+            i
+            for i, x in enumerate(lines)
+            if x.startswith("## ") and x[3:].strip().lower() == section.strip().lower()
+        ),
+        None,
+    )
+    if start is None:
+        return "\n".join([*lines, "", f"## {section.strip()}", line]) + "\n"
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+    at = end
+    while at > start + 1 and not lines[at - 1].strip():
+        at -= 1
+    return "\n".join([*lines[:at], line, *lines[at:]]) + "\n"
+
+
 def missing_ids(proposals: str, ids: list[str]) -> list[str]:
     """IDs from retro_input.md that retro_proposals.md never mentions."""
     present = {m.group(0) for m in ITEM_ID.finditer(proposals)}

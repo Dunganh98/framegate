@@ -502,6 +502,7 @@ class LanguageAdapter(abc.ABC):
             "IMPLEMENT": READ_TOOLS + WRITE_TOOLS + tests + lint,
             "REVIEW": READ_TOOLS + WRITE_TOOLS + tests + GIT_READ_TOOLS,
             "TRIAGE": READ_TOOLS + WRITE_TOOLS + tests + GIT_READ_TOOLS,
+            "DIAGNOSIS": READ_TOOLS + ["Write"] + tests + GIT_READ_TOOLS,
             "PR": READ_TOOLS + ["Write"] + GIT_READ_TOOLS,
             "RETRO": READ_TOOLS + ["Write"],
             "SPEC_UPDATE": READ_TOOLS + WRITE_TOOLS,
@@ -516,6 +517,12 @@ class LanguageAdapter(abc.ABC):
     def ci_setup(self) -> str:
         """GitHub Actions steps (YAML, indented 6 spaces) that install the toolchain."""
         return "      # install the project's toolchain and agentflow here\n"
+
+    # ---------- doctor ----------
+    def tool_report(self) -> list[tuple[str, bool, str]]:
+        """`agentflow doctor`: (tool, found, detail or install hint) for the tools the gates use
+        beyond the configured commands (coverage, diff coverage, mutation)."""
+        return []
 
     # ---------- init ----------
     def config_template(self) -> str:

@@ -26,8 +26,14 @@ WATCH_START_WAIT = 30.0
 WATCH_POLL = 1.0
 DIFF_LINES = 40
 #: phase names in run log file names ({stamp}-{feature}-{PHASE}.json / .prompt.md / ...)
-RUN_LOG_PHASES = "SPEC_UPDATE|TESTS|TEST_REVIEW|IMPLEMENT|REVIEW|TRIAGE|PR|RETRO"
-TAG_PREFIXES = ("spec-approved", "tests-approved", "spec-update", "tests-update")
+RUN_LOG_PHASES = "SPEC_UPDATE|TESTS|TEST_REVIEW|IMPLEMENT|DIAGNOSIS|REVIEW|TRIAGE|PR|RETRO"
+TAG_PREFIXES = (
+    "spec-approved",
+    "tests-approved",
+    "spec-update",
+    "tests-update",
+    "knowledge-update",
+)
 
 
 def _clip(text: str, n: int = 200) -> str:
@@ -273,7 +279,7 @@ def gate_summary(orch: Orchestrator, feature: str) -> int:
             _clip(
                 f"{p['label']}: {p.get('reason')}"
                 + (f"; question: {p['question']}" if p.get("question") else ""),
-                400,
+                900,  # a diagnosis (root cause + proposed fix) must stay readable
             )
             for p in prog.get("parked") or []
         ]

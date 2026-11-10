@@ -64,6 +64,9 @@ fail for no reason. Reading files and git log/diff/status are fine.
      short clarifying question and wait. A wish to change the spec at the final gate: explain
      it means editing the spec and `agentflow approve-spec <f>` (restarts from the tests), ask.
    - Answers plus an approval at the tests gate: answers win (they re-run the tests anyway).
+   - A parked item with a diagnosis (root cause + proposed fix): "ok" / "approve <n>" for it is
+     the answer `Approved: apply the proposed fix as written.`; the next run sends it to the
+     phase that owns the file (spec, tests, code). Approving the gate itself is a separate reply.
 4. `answers.md` format (overwrite the file; keep the user's wording, do not improve it):
 
    ```
@@ -82,7 +85,9 @@ fail for no reason. Reading files and git log/diff/status are fine.
 ## D. DONE: wrap-up and cleanup
 
 1. If `<out>/<f>/retro_proposals.md` exists: show its proposals as a short numbered list (one
-   line each). Applying them is separate work, only if the user asks.
+   line each). Applying them is separate work, only if the user asks. Show its "Project
+   knowledge" items (K1, ...) too and ask which to keep; on the reply run
+   `agentflow learn <f> K1 K3` (or `all`). Nothing is added without the user's pick.
 2. Ask in one message:
    1. "Create the PR with the final summary as its description? (pushes feat/<f>)", default no;
    2. "Clean up the run files now (`<out>/<f>/` and its run logs; specs and metrics stay)?",

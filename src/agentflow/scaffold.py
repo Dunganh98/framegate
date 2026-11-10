@@ -22,7 +22,10 @@ def init(
     root = (root or pathlib.Path(os.getcwd())).resolve()
     lang = language or detect_language(root)
     if lang is None:
-        echo("error: could not detect the project language; pass --language python|dotnet")
+        echo(
+            "error: could not detect the project language; pass --language python|dotnet, or "
+            "--language generic for any other language (configured in agentflow.toml)"
+        )
         return 1
     cfg = parse_config(root, {"project": {"language": lang}})
     try:
@@ -41,7 +44,14 @@ def init(
         created.append(rel)
 
     toml = package_text("templates", "agentflow.toml").replace("{language}", lang)
-    extra = adapter.config_template().rstrip() if adapter is not None else ""
+    if adapter is not None:
+        extra = adapter.config_template().rstrip()
+    elif lang == "generic":  # unconfigured yet: the adapter cannot start without its section
+        from agentflow.adapters.generic import TEMPLATE
+
+        extra = TEMPLATE.rstrip()
+    else:
+        extra = ""
     if extra:
         toml = toml.rstrip() + "\n\n" + extra + "\n"
     write(CONFIG_FILE, toml)
@@ -50,6 +60,7 @@ def init(
             f"{cfg.paths.specs}/_template/{name}",
             package_text("templates", "specs", "_template", name),
         )
+    write(cfg.knowledge, package_text("templates", "project.md"))
 
     gi = root / ".gitignore"
     gi_text = gi.read_text(encoding="utf-8") if gi.exists() else ""
@@ -82,11 +93,19 @@ def init(
         "\n--- CI snippet (GitHub Actions; not written) ---\n"
         + package_text("templates", "ci_github.yml").replace("{setup}", setup).rstrip()
     )
-    note = adapter.init_note().rstrip() if adapter is not None else ""
+    if adapter is not None:
+        note = adapter.init_note().rstrip()
+    elif lang == "generic":
+        from agentflow.adapters.generic import INIT_NOTE
+
+        note = INIT_NOTE
+    else:
+        note = ""
     if note:
         echo("\nNote: " + note)
     echo(
-        "\nNext: commit these files, then in Claude Code (agentflow plugin installed): "
+        "\nNext: `agentflow doctor` (checks the configured tools and commands, no agents), "
+        "commit these files, then in Claude Code (agentflow plugin installed): "
         "/agentflow:feature <feature>"
         '\nAllow the CLI for the chat skills: add "Bash(agentflow *)" and '
         '"PowerShell(agentflow *)" to permissions.allow in .claude/settings.local.json'
@@ -99,6 +118,17 @@ def spec_brief(cfg: Config, feature: str) -> str:
     p = cfg.paths
     folder = cfg.spec_dir(feature)
     state = "exists" if folder.is_dir() else f"missing — run: agentflow spec {feature}"
+    kpath = cfg.root / cfg.knowledge
+    knowledge = (
+        [
+            f"Project knowledge ({cfg.knowledge}; use it for the questions and the spec, e.g. "
+            "what must never change, how fixtures are made):",
+            kpath.read_text(encoding="utf-8").strip(),
+            "",
+        ]
+        if kpath.is_file()
+        else [f"(No project knowledge file {cfg.knowledge}; `agentflow init` creates one.)", ""]
+    )
     return "\n".join(
         [
             f"agentflow spec brief: feature '{feature}', language {cfg.language}",
@@ -112,6 +142,7 @@ def spec_brief(cfg: Config, feature: str) -> str:
             "",
             adapter.conventions_brief().rstrip(),
             "",
+            *knowledge,
             f"When the spec is done: agentflow approve-spec {feature}",
         ]
     )

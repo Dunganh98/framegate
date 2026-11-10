@@ -12,7 +12,8 @@ from collections.abc import Sequence
 
 COMMANDS_HELP = """\
 commands:
-  init                    scaffold agentflow.toml, spec templates, .gitignore lines
+  init                    scaffold agentflow.toml, spec templates, .agentflow/project.md,
+                          .gitignore lines
   spec <feature>          create/switch to the branch feat/<feature> from [git] base, copy
                           the spec templates, set the SPEC phase lock
   approve-spec <feature>  commit + tag spec-approved/<feature>, reset progress
@@ -26,11 +27,15 @@ commands:
   answer <feature>        after writing out/<f>/answers.md: tests gate -> writer + reviewer
                           re-run; final gate -> the next run redoes the parked items
   finish <feature> --no-retro      final gate -> DONE without the retro
+  learn <feature> K1 [K3 ...|all]  add the retro's project-knowledge proposals you accept to
+                          the knowledge file ([project] knowledge), committed
   gates <feature> --scope step|final [--skip-mutation]
   spec-brief <feature>    print the conventions brief for the SPEC session
+  doctor [--full]         check the setup without agents: config, git, claude CLI, tools,
+                          gate commands, test selection by spec ID; --full: the whole suite
   cleanup <feature> [--tags] [--force]   delete out/<feature>/ and its run logs (DONE only);
                           --tags: also the feature's tags (spec-approved, tests-approved,
-                          spec-update, tests-update)
+                          spec-update, tests-update, knowledge-update)
   unlock [--force]        clear a stale phase lock (.phase/.reqs) left by a killed run
   protocol                the chat run protocol the plugin skills follow (printed)
   hook pre-tool-use|stop  Claude Code hooks (stdin = hook JSON; exit 2 = block)
@@ -53,7 +58,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="command", required=True, metavar="command")
 
     p = sub.add_parser("init", help="scaffold the workflow files into the current repository")
-    p.add_argument("--language", choices=["python", "dotnet"], help="default: detected")
+    p.add_argument(
+        "--language",
+        choices=["python", "dotnet", "generic"],
+        help="default: detected (generic: any other language, configured in agentflow.toml)",
+    )
     for name in ("spec", "approve-spec", "run", "approve", "spec-brief", "watch", "gate-summary"):
         sub.add_parser(name).add_argument("feature")
     p = sub.add_parser("status")
@@ -70,10 +79,15 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("finish", help="final gate -> DONE without the retro")
     p.add_argument("feature")
     p.add_argument("--no-retro", action="store_true", required=True, help="skip the retro")
+    p = sub.add_parser("learn", help="add accepted retro knowledge proposals (K1 ...)")
+    p.add_argument("feature")
+    p.add_argument("items", nargs="+", help="K numbers (K1 K3 or 1,3) or all")
     p = sub.add_parser("gates")
     p.add_argument("feature")
     p.add_argument("--scope", choices=["step", "final"], default="final")
     p.add_argument("--skip-mutation", action="store_true")
+    p = sub.add_parser("doctor", help="check the project setup (no agents)")
+    p.add_argument("--full", action="store_true", help="also run the whole test suite")
     p = sub.add_parser("unlock", help="clear a stale phase lock left by a killed run")
     p.add_argument("--force", action="store_true", help="even if a run looks active")
     sub.add_parser("protocol", help="print the chat run protocol (used by the plugin skills)")
@@ -126,6 +140,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 1
         cfg = load_config(root)
+        if args.command == "doctor":
+            from agentflow import doctor
+
+            return doctor.run(cfg, full=args.full)
         if args.command == "spec-brief":
             from agentflow.scaffold import spec_brief
 
@@ -169,6 +187,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return orch.answer(f)
         if args.command == "finish":
             return orch.finish(f)
+        if args.command == "learn":
+            return orch.learn(f, args.items)
     except (ConfigError, WorkflowError, GitError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

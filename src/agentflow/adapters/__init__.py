@@ -12,6 +12,8 @@ from agentflow.config import Config, ConfigError
 ADAPTERS: dict[str, str] = {
     "python": "agentflow.adapters.python:PythonAdapter",
     "dotnet": "agentflow.adapters.dotnet:DotnetAdapter",
+    # any other language, configured in agentflow.toml [generic]; never auto-detected
+    "generic": "agentflow.adapters.generic:GenericAdapter",
 }
 
 
