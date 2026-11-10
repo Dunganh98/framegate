@@ -1,7 +1,7 @@
 # agentflow configuration. Every key is optional; the values shown are the defaults.
 
 [project]
-language = "{language}"            # "python" | "dotnet"
+language = "{language}"            # "python" | "dotnet" | "generic" (any language, [generic])
 # knowledge = ".agentflow/project.md"  # project knowledge: read by the spec dialogue and
 #                                  # the agents; `agentflow learn` adds accepted retro facts
 

@@ -31,6 +31,8 @@ commands:
                           the knowledge file ([project] knowledge), committed
   gates <feature> --scope step|final [--skip-mutation]
   spec-brief <feature>    print the conventions brief for the SPEC session
+  doctor [--full]         check the setup without agents: config, git, claude CLI, tools,
+                          gate commands, test selection by spec ID; --full: the whole suite
   cleanup <feature> [--tags] [--force]   delete out/<feature>/ and its run logs (DONE only);
                           --tags: also the feature's tags (spec-approved, tests-approved,
                           spec-update, tests-update, knowledge-update)
@@ -56,7 +58,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="command", required=True, metavar="command")
 
     p = sub.add_parser("init", help="scaffold the workflow files into the current repository")
-    p.add_argument("--language", choices=["python", "dotnet"], help="default: detected")
+    p.add_argument(
+        "--language",
+        choices=["python", "dotnet", "generic"],
+        help="default: detected (generic: any other language, configured in agentflow.toml)",
+    )
     for name in ("spec", "approve-spec", "run", "approve", "spec-brief", "watch", "gate-summary"):
         sub.add_parser(name).add_argument("feature")
     p = sub.add_parser("status")
@@ -80,6 +86,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("feature")
     p.add_argument("--scope", choices=["step", "final"], default="final")
     p.add_argument("--skip-mutation", action="store_true")
+    p = sub.add_parser("doctor", help="check the project setup (no agents)")
+    p.add_argument("--full", action="store_true", help="also run the whole test suite")
     p = sub.add_parser("unlock", help="clear a stale phase lock left by a killed run")
     p.add_argument("--force", action="store_true", help="even if a run looks active")
     sub.add_parser("protocol", help="print the chat run protocol (used by the plugin skills)")
@@ -132,6 +140,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 1
         cfg = load_config(root)
+        if args.command == "doctor":
+            from agentflow import doctor
+
+            return doctor.run(cfg, full=args.full)
         if args.command == "spec-brief":
             from agentflow.scaffold import spec_brief
 

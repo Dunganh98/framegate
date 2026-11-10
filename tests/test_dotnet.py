@@ -196,10 +196,10 @@ def test_smells(tmp_path: pathlib.Path) -> None:
         f"EARLY RETURN (test body starts with return;): {where}.Early",
         f"TRIVIAL ASSERTION (Assert.True(true)): {where}.Trivial",
         f"INLINE SKIP: {where}.Inline",
-        "LOOP OVER PICKED CASES WITHOUT A NON-EMPTY CHECK (passes with zero cases; assert there "
-        f"is at least one): {where}.Vacuous",
-        "LOOP OVER PICKED CASES WITHOUT A NON-EMPTY CHECK (passes with zero cases; assert there "
-        f"is at least one): {where}.VacuousAll",
+        "NOTE: LOOP OVER PICKED CASES WITHOUT A VISIBLE NON-EMPTY CHECK (zero cases would pass; "
+        f"the test reviewer decides): {where}.Vacuous",
+        "NOTE: LOOP OVER PICKED CASES WITHOUT A VISIBLE NON-EMPTY CHECK (zero cases would pass; "
+        f"the test reviewer decides): {where}.VacuousAll",
     ]
 
 

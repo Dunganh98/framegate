@@ -225,6 +225,73 @@ def test_smells(tmp_path: pathlib.Path) -> None:
         assert f"::{fine}" not in res.output
 
 
+PICKED = """\
+RECORDS = [{"lap": True, "missed": True}]
+
+
+def test_loop_over_picked() -> None:
+    for r in [x for x in RECORDS if x["lap"]]:
+        assert r["missed"]
+
+
+def test_all_over_picked() -> None:
+    assert all(x["missed"] for x in RECORDS if x["lap"])
+
+
+def test_named_picked() -> None:
+    laps = list(filter(lambda x: x["lap"], RECORDS))
+    for r in laps:
+        assert r["missed"]
+
+
+def test_guarded() -> None:
+    laps = [x for x in RECORDS if x["lap"]]
+    assert laps
+    for r in laps:
+        assert r["missed"]
+
+
+def test_guarded_len() -> None:
+    laps = [x for x in RECORDS if x["lap"]]
+    assert len(laps) >= 1 and all(x["missed"] for x in laps)
+
+
+def test_plain_loop() -> None:
+    for r in RECORDS:
+        assert r["missed"]
+"""
+
+
+def test_smell_loop_over_picked_cases(tmp_path: pathlib.Path) -> None:
+    write(tmp_path, "tests/test_p.py", PICKED)
+    out = smells_check.check(adapter_for(tmp_path)).output
+    flagged = [n for n in ("loop_over_picked", "all_over_picked", "named_picked") if n in out]
+    assert flagged == ["loop_over_picked", "all_over_picked", "named_picked"]
+    for fine in ("test_guarded", "test_guarded_len", "test_plain_loop"):
+        assert f"::{fine}" not in out
+
+
+def test_smells_count_only_in_the_features_test_files(tmp_path: pathlib.Path) -> None:
+    """Old tests are not the feature's business: smells in test files unchanged since
+    spec-approved/<f> are ignored; NOTE lines (heuristics) never fail the check."""
+    init_git(tmp_path)
+    write(tmp_path, "tests/test_old.py", "def test_old() -> None:\n    x = 1\n")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-q", "-m", "old")
+    git(tmp_path, "tag", "spec-approved/f")
+    a = adapter_for(tmp_path)
+    assert smells_check.check(a, "f").status == "PASS"
+    write(tmp_path, "tests/test_new.py", PICKED)
+    res = smells_check.check(a, "f")
+    assert res.status == "PASS" and "NOTE: LOOP OVER PICKED CASES" in res.output
+    assert "(1 in test files this feature did not change: ignored)" in res.output
+    write(tmp_path, "tests/test_new.py", PICKED + "\n\ndef test_bare() -> None:\n    x = 1\n")
+    res = smells_check.check(a, "f")
+    assert res.status == "FAIL" and "NO ASSERTION: tests/test_new.py::test_bare" in res.output
+    assert "test_old" not in res.output.replace("(1 in test files", "")
+    assert smells_check.check(a).status == "FAIL"  # no feature: every test file
+
+
 def test_no_smells(tmp_path: pathlib.Path) -> None:
     write(tmp_path, "tests/test_ok.py", "def test_ok() -> None:\n    assert 1 == 1\n")
     assert smells_check.check(adapter_for(tmp_path)) == CheckResult("PASS", "No test smells found.")

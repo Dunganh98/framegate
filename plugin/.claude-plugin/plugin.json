@@ -1,6 +1,6 @@
 {
   "name": "agentflow",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Spec-driven, test-first workflow driven from the chat: /agentflow:feature (spec dialogue, background run with a live view, gates in plain words, cleanup), /agentflow:resume, /agentflow:status, plus phase-lock (PreToolUse) and require-green (Stop) hooks that call the agentflow CLI. Inactive in repos without agentflow.toml.",
   "author": {
     "name": "Anh Pham"

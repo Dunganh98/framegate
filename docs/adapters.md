@@ -68,6 +68,30 @@ values land in `Config.language_options["<section>"]` and the adapter applies it
 The base role prompts (`src/agentflow/roles/*.md`) never name a language; they refer to "the
 conventions brief" for tagging, property tests and forbidden patterns.
 
+## Generic adapter (`generic.py`, `language = "generic"`)
+
+Any language or test framework without a built-in adapter, configured entirely in
+agentflow.toml (`agentflow init --language generic` writes a commented TypeScript / vitest
+example; `/agentflow:setup` drafts it from the repository). Never auto-detected.
+
+| `[generic]` key | Meaning |
+|---|---|
+| `test_all`, `test_ids`, `test_paths` (required: the first two) | commands; placeholders `{junit}` (JUnit XML agentflow reads), `{ids}` (joined by `ids_separator`, default `,`), `{ids_regex}` (`A|B`), `{paths}` (one argument per path), `{src}` `{tests}` `{out}` |
+| `tag_pattern` (required) | regex over the test files; group 1 holds a test's spec IDs (found with the ID pattern) |
+| `test_files`, `source_suffixes` | globs under `[paths] tests`; suffixes of source files (frame diff, format fix) |
+| `stub_marker` | text in the failure of a test that hit a not-implemented stub (red check) |
+| `skip_pattern` | regex for skipped tests (the only smell the generic scan knows) |
+| `coverage`, `coverage_ids`, `coverage_report` | coverage command (whole suite / by IDs) and the Cobertura or LCOV report it writes; diff coverage via `diff-cover` |
+| `mutation`, `mutation_score_pattern` | mutation command (`{files}` = changed source files) and a regex whose group 1 is the score in percent |
+| `format_fix` | formatter command with `{files}` (the gates' format fix) |
+| `forbidden_patterns`, `protected` | suppression regexes for the frame diff; dependency / config files frozen after the tests gate |
+| `conventions` | text for the agents: how stubs look, how tests are tagged |
+| `test_timeout` | seconds per test run |
+
+lint / format / typecheck checks come from `[gates.commands]`. Compared with a built-in adapter:
+no static smell scan beyond `skip_pattern`, mutation not limited to changed hunks, tagged test
+locations are `file:line`. A project can start here and get a dedicated adapter later.
+
 ## Python adapter (`python.py`)
 
 | Concern | Implementation |

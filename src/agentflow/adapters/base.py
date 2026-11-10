@@ -518,6 +518,12 @@ class LanguageAdapter(abc.ABC):
         """GitHub Actions steps (YAML, indented 6 spaces) that install the toolchain."""
         return "      # install the project's toolchain and agentflow here\n"
 
+    # ---------- doctor ----------
+    def tool_report(self) -> list[tuple[str, bool, str]]:
+        """`agentflow doctor`: (tool, found, detail or install hint) for the tools the gates use
+        beyond the configured commands (coverage, diff coverage, mutation)."""
+        return []
+
     # ---------- init ----------
     def config_template(self) -> str:
         """Commented agentflow.toml section(s) for this language, appended by `agentflow init`."""

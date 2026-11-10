@@ -707,8 +707,9 @@ class DotnetAdapter(LanguageAdapter):
                     problems.append(f"INLINE SKIP: {where}")
                 if VACUOUS_LOOP.search(m.body) and not NON_EMPTY.search(m.body):
                     problems.append(
-                        "LOOP OVER PICKED CASES WITHOUT A NON-EMPTY CHECK (passes with zero "
-                        f"cases; assert there is at least one): {where}"
+                        "NOTE: LOOP OVER PICKED CASES WITHOUT A VISIBLE NON-EMPTY CHECK "
+                        "(zero cases would "
+                        f"pass; the test reviewer decides): {where}"
                     )
         return problems
 
@@ -942,6 +943,33 @@ class DotnetAdapter(LanguageAdapter):
             return [exe]
         uvx = shutil.which("uvx")
         return [uvx, "--from", "diff-cover", "diff-cover"] if uvx else None
+
+    def tool_report(self) -> list[tuple[str, bool, str]]:
+        dotnet = shutil.which(self.dotnet) or (
+            self.dotnet if pathlib.Path(self.dotnet).is_file() else None
+        )
+        mutation_off = self.cfg.mutation_tool == "none"
+        stryker = self.stryker_command()
+        return [
+            (
+                "dotnet SDK",
+                bool(dotnet),
+                dotnet or "install the .NET SDK or set [dotnet] executable",
+            ),
+            (
+                "diff-cover (diff coverage)",
+                self.diff_cover_command() is not None,
+                " ".join(self.diff_cover_command() or [])
+                or "pip install diff-cover (or uv, for uvx)",
+            ),
+            (
+                "Stryker.NET (mutation)",
+                mutation_off or stryker is not None,
+                "mutation off ([gates] mutation_tool = none)"
+                if mutation_off
+                else " ".join(stryker or []) or "dotnet tool install -g dotnet-stryker",
+            ),
+        ]
 
     # ---------- mutation ----------
     def stryker_command(self) -> list[str] | None:

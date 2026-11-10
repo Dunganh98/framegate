@@ -24,12 +24,19 @@ mutation score) and never stops to ask.
 | Part | Where | Docs |
 |---|---|---|
 | Python package + CLI `agentflow` | `src/agentflow/` | this file, docs/adapters.md, docs/claude-cli-notes.md |
-| Claude Code plugin (`/agentflow:feature`, `:resume`, `:status`, hooks) | `plugin/` | docs/plugin.md |
+| Claude Code plugin (`/agentflow:setup`, `:feature`, `:resume`, `:status`, hooks) | `plugin/` | docs/plugin.md |
 
 ## Daily use: from the Claude Code chat
 
-Once per repository: `agentflow init [--language python|dotnet]` (agentflow.toml, spec templates,
-.gitignore lines; commit them), the plugin installed (docs/plugin.md), and an allow rule so the
+Once per repository: `/agentflow:setup` in the chat (it reads the repo, drafts agentflow.toml and
+`.agentflow/project.md`, asks one batch of questions, runs `agentflow init` and `agentflow
+doctor`, and offers a small smoke feature), or by hand `agentflow init [--language
+python|dotnet|generic]` (agentflow.toml, spec templates, `.agentflow/project.md`, .gitignore
+lines; commit them) and `agentflow doctor` (checks config, git, the claude CLI, the tools, the
+gate commands and the test selection by spec ID, without agents; `--full` also times the
+whole suite). Any language without a built-in adapter uses the generic adapter: test, coverage,
+mutation and format commands with placeholders in `[generic]` (docs/adapters.md), no agentflow
+code. Also the plugin installed (docs/plugin.md), and an allow rule so the
 skills can run the CLI without a prompt after the first turn (an `allowed-tools` grant of a skill
 only lasts for the turn it was invoked in): `"Bash(agentflow *)"` and `"PowerShell(agentflow *)"`
 under `permissions.allow` in `.claude/settings.local.json` (or answer the first prompt with
@@ -76,7 +83,9 @@ change). The engine stays generic; each project's knowledge grows with its runs.
 The skills only call these commands; everything works the same from a terminal.
 
 ```
-agentflow init [--language python|dotnet]   # agentflow.toml, specs/_template/, .gitignore lines
+agentflow init [--language python|dotnet|generic]  # agentflow.toml, specs/_template/,
+                                            # .agentflow/project.md, .gitignore lines
+agentflow doctor [--full]                   # check the setup without agents
 agentflow spec <f>                          # branch feat/<f> from [git] base + SPEC phase
 agentflow approve-spec <f>                  # tag spec-approved/<f>
 agentflow run <f>                           # runs to the next gate (tests, final) or DONE;
@@ -139,8 +148,11 @@ Between the gates nothing stops:
   `Fixture_*`) that shows, with code that exists before the feature, that the data has the
   situation the tests need. The red check expects these to PASS against the stubs (all other
   tests must fail), so data picked wrong shows up before any implementation. Checks over cases
-  picked from data must assert at least one case (the .NET smell check flags a `foreach` over a
-  `.Where(...)` / `.Where(...).All(...)` without a non-empty check).
+  picked from data must assert at least one case: the smell scan notes loops / `all()` over
+  filtered cases without a visible non-empty check (C# `.Where(...)`, Python comprehensions with
+  `if` / `filter()`). These are NOTEs for the test reviewer, not failures (a heuristic: most
+  hits in an existing suite are fine), and every smell counts only in the test files the
+  feature changed.
 - The implementer assumes from the spec and logs each assumption in its step note (written with
   the Write tool to `out/<f>/notes/<step>.md`; agentflow appends it to `steps.md`:
   `- ASSUMPTION [<spec ID>]: ...`). Only when no reasonable assumption is possible it writes

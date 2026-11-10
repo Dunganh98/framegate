@@ -78,6 +78,28 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
     "notify": {"toast": (bool,)},
     "phases": {},
     # language adapter sections: validated here, read by the adapter (cfg.language_options)
+    # generic adapter: any language, commands with placeholders (adapters/generic.py)
+    "generic": {
+        "source_suffixes": (list,),
+        "test_files": (list,),
+        "tag_pattern": (str,),
+        "skip_pattern": (str,),
+        "test_all": (list,),
+        "test_ids": (list,),
+        "test_paths": (list,),
+        "ids_separator": (str,),
+        "stub_marker": (str,),
+        "coverage": (list,),
+        "coverage_ids": (list,),
+        "coverage_report": (str,),
+        "mutation": (list,),
+        "mutation_score_pattern": (str,),
+        "format_fix": (list,),
+        "forbidden_patterns": (list,),
+        "protected": (list,),
+        "conventions": (str,),
+        "test_timeout": (int,),
+    },
     "dotnet": {
         "executable": (str,),
         "solution": (str,),
@@ -94,7 +116,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
     },
 }
 #: sections owned by a language adapter (stored raw in Config.language_options)
-LANGUAGE_SECTIONS = ("dotnet",)
+LANGUAGE_SECTIONS = ("dotnet", "generic")
 GATE_COMMAND_KEYS = ("lint", "format", "typecheck", "imports")
 MUTATION_RUNNERS = ("auto", "native", "wsl")
 #: tests the final coverage / mutation runs use: the feature's tests (its spec IDs + the review
