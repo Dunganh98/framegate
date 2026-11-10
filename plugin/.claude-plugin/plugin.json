@@ -1,9 +1,14 @@
 {
   "name": "agentflow",
-  "version": "0.1.0",
-  "description": "Spec-driven, test-first workflow: /spec plus phase-lock (PreToolUse) and require-green (Stop) hooks that call the agentflow CLI. Inactive in repos without agentflow.toml.",
+  "version": "0.2.0",
+  "description": "Spec-driven, test-first workflow driven from the chat: /agentflow:feature (spec dialogue, background run with a live view, gates in plain words, cleanup), /agentflow:resume, /agentflow:status, plus phase-lock (PreToolUse) and require-green (Stop) hooks that call the agentflow CLI. Inactive in repos without agentflow.toml.",
   "author": {
     "name": "Anh Pham"
   },
-  "keywords": ["workflow", "tdd", "spec", "hooks"]
+  "keywords": [
+    "workflow",
+    "tdd",
+    "spec",
+    "hooks"
+  ]
 }

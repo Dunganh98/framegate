@@ -8,7 +8,7 @@
     {
       "name": "agentflow",
       "source": "./plugin",
-      "description": "/spec command plus phase-lock and require-green hooks that call the agentflow CLI. Inactive in repos without agentflow.toml."
+      "description": "/agentflow:feature, :resume, :status (chat-driven workflow) plus phase-lock and require-green hooks that call the agentflow CLI. Inactive in repos without agentflow.toml."
     }
   ]
 }
