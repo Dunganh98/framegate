@@ -21,7 +21,9 @@ claude plugin install agentflow@agentflow
    commit the files it lists.
 2. **Start a feature:** `/agentflow:feature <name>`, describe what you want, answer the
    questions, check `specs/<name>/`, then say **"spec OK"**.
-3. **Wait:** the agents run in the background; the chat shows progress and cost.
+3. **Wait:** the agents run in the background; the chat shows progress and cost. If a step
+   fails the same way twice, a diagnosis agent finds the cause: a code fix is retried at
+   once, a test or spec fix waits for you at the final gate.
 4. **Final gate:** read the summary, then reply **"ok"**, **"no retro"**, or answer the
    numbered questions (only the affected work is redone).
 5. **Done:** keep the retro facts you like, create the PR if you want.
