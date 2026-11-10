@@ -34,7 +34,11 @@ fail for no reason. Reading files and git log/diff/status are fine.
   and act on its first line once (the second signal is then ignored):
   - `waiting at the tests gate` / `waiting at the final gate`: section C.
   - `DONE`: section D.
-  - `interrupted ...`: say where, ask "Continue the run?" (default yes), then A.2.
+  - `interrupted ... (usage limit, resets <when> ...)`: say that the Claude usage limit stopped
+    the run and when it resets; continue (A.2) only when the user says so after that time (a
+    run started earlier stops again at once).
+  - `interrupted ...` (any other reason): say where, ask "Continue the run?" (default yes),
+    then A.2.
   - `phase X, not running` after an error: show the last 20 lines of the background task's
     output file (Read) and ask how to go on. Do not retry blindly.
 

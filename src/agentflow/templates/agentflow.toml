@@ -39,7 +39,10 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 # effort = ""                      # one `claude --effort` (low|medium|high|xhigh|max); "" = default
 # diagnose_after = 2               # same checks failing this many attempts in a row -> a
 #                                  # diagnosis run (root cause + one proposed fix); 0 = off
-# step_batch_ids = 15              # consecutive plan steps share one implementer run while their
+# limit_wait_max_hours = 6         # usage limit hit: wait for the reset and run again (no
+#                                  # failed attempt) if it is at most this far away; later
+#                                  # (weekly limit): stop, resume with `agentflow run`; 0 = stop
+# step_batch_ids = 15             # consecutive plan steps share one implementer run while their
 #                                  # spec IDs add up to at most this; 0 = one run per step
 
 [gates]

@@ -53,6 +53,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "effort": (str,),
         "step_batch_ids": (int,),
         "diagnose_after": (int,),
+        "limit_wait_max_hours": (int, float),
     },
     "gates": {
         "tests": (str,),
@@ -227,6 +228,11 @@ class Config:
     #: [agents] diagnose_after: when the same checks fail this many attempts in a row, a
     #: diagnosis agent finds the root cause and proposes one fix (0 = off)
     diagnose_after: int = 2
+    #: [agents] limit_wait_max_hours: a run refused by the usage limit waits for the reset and
+    #: runs again (not a failed attempt) when the reset is at most this far away; a later
+    #: reset (e.g. a weekly limit) stops the run like Ctrl+C (resume: agentflow run). 0 = never
+    #: wait
+    limit_wait_max_hours: float = 6.0
     #: [project] knowledge: the project's knowledge file (architecture rules, things that
     #: must never change, test-harness facts, tools); read by the agents, grown by the retro
     knowledge: str = ".agentflow/project.md"
@@ -446,6 +452,9 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     cfg.diagnose_after = agents.get("diagnose_after", cfg.diagnose_after)
     if cfg.diagnose_after < 0:
         raise ConfigError("[agents] diagnose_after must be >= 0 (0 = no diagnosis)")
+    cfg.limit_wait_max_hours = float(agents.get("limit_wait_max_hours", cfg.limit_wait_max_hours))
+    if cfg.limit_wait_max_hours < 0:
+        raise ConfigError("[agents] limit_wait_max_hours must be >= 0 (0 = never wait)")
 
     gates = data.get("gates", {})
     cfg.tests_gate = gates.get("tests", cfg.tests_gate)

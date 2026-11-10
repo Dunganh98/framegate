@@ -264,6 +264,20 @@ failed gate is a normal failed attempt whose feedback names the cap); other phas
 once with a note; if that run stops at a cap too, it is logged (`escalation` event with
 `cap_kind`, retro E item) and the run continues with what the agent wrote.
 
+Usage limit: a run that the Claude subscription's usage limit refuses (a rejected
+`rate_limit_event` in the stream, or an error result such as "You've hit your limit · resets
+4pm") is not a failed attempt. agentflow logs a `usage_limit` event, waits until the reset plus
+one minute (15 minutes when claude names no time; progress line and toast), then runs the same
+task again. A reset further away than `[agents] limit_wait_max_hours` (default 6; `0` = never
+wait), e.g. a weekly limit, or a limit still there after 4 waits, stops the run like Ctrl+C
+(exit 130, `interrupted` with the reset time); `agentflow run <f>` after the reset goes on.
+
+Check output in the gate report and the fix prompt: a failing check's output of more than 40
+lines is filtered to the lines that look like failures (failure words, pytest `E` lines, file
+locations such as `src/x.py:12:` or `Foo.cs(12,5)`) with two lines of context, plus the last 8
+lines; the whole output is saved to `out/<f>/check_logs/<check>.log` and named in the report.
+Decisions on the output (e.g. "lint fails only in frozen files") read the whole output.
+
 Models and speed:
 - `--model` per phase: `[phases.<P>] model`, else `[agents] model`, else Sonnet for the writers
   that follow the approved spec and the frozen tests (TESTS, IMPLEMENT incl. review fixes,
