@@ -713,6 +713,127 @@ def test_answers_that_need_a_test_change_reach_the_tests(demo_repo: DemoRepo) ->
     ]
 
 
+def test_repeated_failure_gets_a_diagnosis_for_the_implementer(demo_repo: DemoRepo) -> None:
+    """The same checks fail twice: a diagnosis run (Opus, changes nothing) finds the root cause;
+    a fix in the code goes to the implementer's next attempt."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.defer_tests_gate()
+    r.set_toml("agents", "diagnose_after", "2")
+    r.scenario(implement_fail=2)
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+    assert phases(r) == [
+        "TESTS",
+        "TEST_REVIEW",
+        "IMPLEMENT",
+        "IMPLEMENT",
+        "DIAGNOSIS",
+        "IMPLEMENT",
+        "REVIEW",
+        "PR",
+    ]
+    diag = r.calls()[4]
+    assert "DIAGNOSIS agent" in diag["role"] and flag(diag, "--model") == "opus"
+    assert (
+        "failed the same checks (tests (current + earlier steps)) in 2 implementer"
+        in (diag["prompt"])
+    )
+    assert "Attempt 2 failed" not in diag["prompt"]  # the gate feedback is not its input
+    third = r.calls()[5]["prompt"]
+    assert "Attempt 2 failed these gates" in third
+    assert "A diagnosis of the repeated failure (follow it):\nRoot cause: add() returns" in third
+    (ev,) = [e for e in r.events() if e["kind"] == "diagnosis"]
+    assert (ev["owner"], ev["proposed_fix"]) == ("src", "return a + b.")
+    assert (r.root / "out/demo/diagnoses/step-1-add.md").is_file()
+    assert r.progress()["completed_steps"] == [1] and not r.progress()["parked"]
+
+
+def test_a_diagnosed_test_problem_is_approved_at_the_final_gate(
+    demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A diagnosis whose fix needs a test change parks the step at once with the proposal as its
+    question; the human approves it in one reply and the redo applies it."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.defer_tests_gate()
+    r.set_toml("agents", "diagnose_after", "2")
+    r.scenario(implement_fail=2, diagnosis="tests")
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+    assert phases(r) == [
+        "TESTS",
+        "TEST_REVIEW",
+        "IMPLEMENT",
+        "IMPLEMENT",
+        "DIAGNOSIS",
+        "REVIEW",
+        "PR",
+    ]
+    (p,) = r.progress()["parked"]
+    assert p["reason"] == "diagnosis: the fix needs a tests change" and p["attempts"] == 2
+    assert "Proposed fix (tests): return a + b." in p["question"]
+    capsys.readouterr()
+    assert r.af("gate-summary", "demo") == 0
+    out = capsys.readouterr().out
+    assert "Root cause: add() returns a - b" in out and "Proposed fix (tests)" in out
+    (r.root / "out/demo/answers.md").write_text(
+        "1. Q: step 1 - add\n   A: Approved: apply the proposed fix as written.\n", "utf-8"
+    )
+    assert r.af("answer", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+    assert phases(r)[7:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "PR"]
+    assert "Diagnosis (out/demo/diagnoses/step-1-add.md)" in read(
+        r, "out/demo/questions_archive.md"
+    )
+    assert "approves a diagnosis' proposed fix" in r.calls()[9]["prompt"]
+    assert r.progress()["completed_steps"] == [1]
+
+
+def test_project_knowledge_reaches_the_agents_and_grows_from_the_retro(
+    demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`agentflow init` creates .agentflow/project.md; the spec brief and the agents (not the
+    summary agent) get it; the retro proposes facts, `agentflow learn` adds the picked ones
+    (committed, tagged, allowed by the frame diff)."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.defer_tests_gate()
+    kfile = r.root / ".agentflow/project.md"
+    assert "## Test harness" in kfile.read_text(encoding="utf-8")  # from `agentflow init`
+    kfile.write_text(
+        kfile.read_text(encoding="utf-8").replace(
+            "## Never changes\n", "## Never changes\n- add() keeps its signature.\n"
+        ),
+        encoding="utf-8",
+    )
+    capsys.readouterr()
+    assert r.af("spec-brief", "demo") == 0
+    assert "- add() keeps its signature." in capsys.readouterr().out
+    r.scenario(knowledge=[["Test harness", "demo data comes from DATA"], ["Tools", "no scan"]])
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+    for c in r.calls():
+        has = "# Project knowledge (.agentflow/project.md" in c["role"]
+        assert has == (c["phase"] != "PR"), c["phase"]
+        assert not has or "- add() keeps its signature." in c["role"]
+    finish_with_retro(r)
+    assert "- K1 [Test harness]: demo data comes from DATA" in read(
+        r, "out/demo/retro_proposals.md"
+    )
+    assert r.af("learn", "demo", "K9") == 1
+    assert r.af("learn", "demo", "K1") == 0
+    text = kfile.read_text(encoding="utf-8")
+    harness = text.split("## Test harness")[1].split("## Tools")[0]
+    assert "- demo data comes from DATA (demo)" in harness and "no scan" not in text
+    assert "project knowledge from the retro (K1)" in git(r.root, "log", "-1", "--format=%s")
+    adapter = get_adapter(load_config(r.root))
+    assert frame_diff.check(adapter, "demo").status == "PASS"
+    assert [e["items"] for e in r.events() if e["kind"] == "knowledge_added"] == [
+        [[1, "Test harness", "demo data comes from DATA"]]
+    ]
+
+
 def test_format_fix_and_project_checks(demo_repo: DemoRepo) -> None:
     """The gates format the changed source files before checking (no attempt lost on a
     formatting slip); [gates.extra] project checks run at the final gates and are shown at the

@@ -31,7 +31,7 @@ from agentflow import notify, procs
 from agentflow.adapters import get_adapter
 from agentflow.adapters.base import GATE_NAMES, LanguageAdapter
 from agentflow.checks import red_stubs, test_smells, traceability
-from agentflow.checks.frame_diff import path_matches, tests_update_tag
+from agentflow.checks.frame_diff import knowledge_tag, path_matches, tests_update_tag
 from agentflow.config import Config
 from agentflow.gates import gate_report
 from agentflow.hooks import AGENT_ENV
@@ -46,8 +46,14 @@ from agentflow.report import (
     since_spec_approval,
     triage_verdict,
 )
+from agentflow.retro import (
+    add_knowledge,
+    knowledge_items,
+    missing_ids,
+    parse_answer_items,
+    split_questions,
+)
 from agentflow.retro import build as build_retro_input
-from agentflow.retro import missing_ids, parse_answer_items, split_questions
 from agentflow.specs import PlanStep, feature_ids, plan_steps
 from agentflow.state import (
     GitError,
@@ -86,6 +92,7 @@ BRIEF_PHASES = {
     "IMPLEMENT",
     "IMPLEMENT_STEPS",
     "FIX",
+    "DIAGNOSIS",
     "REVIEW",
     "TRIAGE",
 }
@@ -101,6 +108,19 @@ COMMAND_FORM = (
     "verbosity, quiet flags) or read the result file it writes with the Read tool; to search "
     "files use Grep / Glob / Read."
 )
+#: roles that get the project knowledge file in their instructions (the PR summary does not
+#: need it); the spec dialogue gets it through `agentflow spec-brief`
+KNOWLEDGE_ROLES = {
+    "tests",
+    "test_review",
+    "implement",
+    "review",
+    "spec_update",
+    "diagnosis",
+    "retro",
+}
+KNOWLEDGE_MAX_LINES = 300
+FIX_OWNER_RE = re.compile(r"^\W*Fix owner\W*:\W*(src|tests|spec)\b", re.I | re.M)
 #: first lines of every task: most denied calls in live runs were chained `ls; cat; git log`
 #: calls just to look around
 LOOK_AROUND = (
@@ -121,7 +141,8 @@ NO_STOP = (
 )
 REDO_NOTE = (
     "\n\nThis is a redo of parked work: the human answered the parked question(s) in "
-    "{out}/{f}/answers.md (earlier questions: {out}/{f}/questions_archive.md). Read both first."
+    "{out}/{f}/answers.md (earlier questions: {out}/{f}/questions_archive.md). Read both first. "
+    "An answer that approves a diagnosis' proposed fix means: apply that proposal as written."
 )
 
 TASKS = {
@@ -133,7 +154,8 @@ TASKS = {
     "{out}/{f}/questions_archive.md); the spec was updated from them where needed. The "
     "implementation exists and the tests are frozen for everyone but you. Change the tests only "
     "where an answer requires it: fixtures or seeds, expected values, tests for spec IDs that "
-    "have none yet, a review test in {review_tests}/ that an answer names. Change nothing else; "
+    "have none yet, a review test in {review_tests}/ that an answer names, a diagnosis' proposed "
+    "test fix that an answer approves (the question shows the proposal). Change nothing else; "
     "if no answer needs a test change, change nothing. Then append to {out}/{f}/test_summary.md "
     "a section '## Changes from {ref}' (what changed, or 'No test change: <why>'). A question the "
     "answers do not settle goes to {out}/{f}/questions.md.",
@@ -147,6 +169,10 @@ TASKS = {
     "IMPLEMENT_STEPS": "Feature '{f}': implement plan steps {n} in one go, in plan order: "
     "{titles}. Make the tests for these IDs pass: {ids}. Tests of earlier steps must stay green. "
     "Check with: {check}\n" + NO_STOP,
+    "DIAGNOSIS": "Feature '{f}': '{label}' failed the same checks ({failed}) in {n} implementer "
+    "attempts in a row. Find the root cause; do not fix anything. Write {out}/{f}/diagnosis.md "
+    "(Root cause / Fix owner: src | tests | spec / Proposed fix / Evidence). The implementer's "
+    "check command: {check}\nThe last gate output:\n{report}",
     "FIX": "Feature '{f}': make all currently failing tests pass without editing tests. "
     "Check with: {check}\n" + NO_STOP,
     "REVIEW": "Feature '{f}': review the implementation against {specs}/{f}/. "
@@ -320,6 +346,7 @@ class Orchestrator:
             "tests": p.tests,
             "review_tests": p.review_tests,
             "out": p.out,
+            "knowledge": self.cfg.knowledge,
         }
 
     def render(self, text: str, feature: str) -> str:
@@ -337,7 +364,27 @@ class Orchestrator:
                     + "\n\n# Project additions\n\n"
                     + extra.read_text(encoding="utf-8")
                 )
+        knowledge = self.knowledge() if role in KNOWLEDGE_ROLES else ""
+        if knowledge:
+            text = (
+                text.rstrip()
+                + f"\n\n# Project knowledge ({self.cfg.knowledge}, kept by the human: facts about"
+                " this project that the spec does not repeat; follow them)\n\n" + knowledge
+            )
         return self.render(text, feature)
+
+    def knowledge(self) -> str:
+        """The project knowledge file ("" if there is none), at most KNOWLEDGE_MAX_LINES."""
+        path = self.cfg.root / self.cfg.knowledge
+        if not path.is_file():
+            return ""
+        lines = path.read_text(encoding="utf-8").strip().splitlines()
+        if len(lines) > KNOWLEDGE_MAX_LINES:
+            lines = [
+                *lines[:KNOWLEDGE_MAX_LINES],
+                f"... (cut at {KNOWLEDGE_MAX_LINES} lines; the rest: {self.cfg.knowledge})",
+            ]
+        return "\n".join(lines)
 
     def task_text(self, kind: str, feature: str, **extra: str) -> str:
         task = TASKS[kind].format(**self.placeholders(feature), **extra)
@@ -741,6 +788,8 @@ class Orchestrator:
         else:
             clear_reqs(self.cfg)
         self.take_park_request(feature)  # a stale request of an interrupted run
+        if not prog.get("attempt"):  # a fresh item (not a resumed one)
+            prog.update(fail_streak=0, last_failed=[], diagnosed=False)
         while True:
             attempt = int(prog.get("attempt", 0)) + 1
             prog["attempt"] = attempt
@@ -806,20 +855,48 @@ class Orchestrator:
                     excerpt=rep.excerpt(),
                 )
                 return False
+            self.progress(
+                feature,
+                f"[{label}] attempt {attempt} of {self.cfg.max_attempts} failed: "
+                + (", ".join(rep.failed) or "step gates"),
+            )
+            same = sorted(rep.failed) == sorted(prog.get("last_failed") or [])
+            prog["fail_streak"] = int(prog.get("fail_streak") or 0) + 1 if same else 1
+            prog["last_failed"] = rep.failed
+            diagnosis: dict[str, str] = {}
+            if (
+                self.cfg.diagnose_after
+                and prog["fail_streak"] >= self.cfg.diagnose_after
+                and not prog.get("diagnosed")
+            ):
+                diagnosis = self.diagnose(feature, prog, label, reqs, rep)
+                if diagnosis.get("owner") in ("tests", "spec"):
+                    self.park(
+                        feature,
+                        prog,
+                        item,
+                        f"diagnosis: the fix needs a {diagnosis['owner']} change",
+                        attempts=attempt,
+                        question=diagnosis["question"],
+                        failed=rep.failed,
+                        excerpt=rep.excerpt(),
+                    )
+                    return False
             kind = hit_cap(res)
             capped = turn_cap_note(self.cap_value("IMPLEMENT", kind), kind) if kind else ""
             prog["feedback"] = (
                 (capped + "\n" if capped else "")
                 + f"Attempt {attempt} failed these gates. Tests and config are frozen; "
                 f"fix {self.cfg.paths.src}/.\n{rep.report[-6000:]}"
+                + (
+                    "\n\nA diagnosis of the repeated failure (follow it):\n" + diagnosis["text"]
+                    if diagnosis.get("owner") == "src"
+                    else ""
+                )
             )
             save_progress(self.cfg, feature, prog)
-            self.progress(
-                feature,
-                f"[{label}] attempt {attempt} of {self.cfg.max_attempts} failed: "
-                + (", ".join(rep.failed) or "step gates"),
-            )
-            if attempt >= self.cfg.max_attempts:
+            # a src diagnosis always gets its attempt, even after the last regular one
+            if attempt >= self.cfg.max_attempts and diagnosis.get("owner") != "src":
                 self.park(
                     feature,
                     prog,
@@ -830,6 +907,75 @@ class Orchestrator:
                     excerpt=rep.excerpt(),
                 )
                 return False
+
+    def diagnose(
+        self,
+        feature: str,
+        prog: dict[str, Any],
+        label: str,
+        reqs: list[str] | None,
+        rep: Any,
+    ) -> dict[str, str]:
+        """The same checks failed diagnose_after attempts in a row: one diagnosis run (Opus,
+        reads everything, runs tests, changes nothing) finds the root cause and proposes one fix
+        with its owner. src -> the implementer's next attempt; tests / spec -> parked with the
+        proposal as the question, approved at the final gate in one reply. {} = no usable
+        diagnosis (the loop goes on as before)."""
+        prog["diagnosed"] = True
+        save_progress(self.cfg, feature, prog)
+        d = self.fdir(feature)
+        report = d / "diagnosis.md"
+        report.unlink(missing_ok=True)
+        task = self.task_text(
+            "DIAGNOSIS",
+            feature,
+            label=label,
+            failed=", ".join(rep.failed) or "step gates",
+            n=str(prog.get("fail_streak")),
+            check=self.adapter.test_command(reqs),
+            report=rep.report[-6000:],
+        )
+        saved = prog.get("feedback", "")
+        prog["feedback"] = ""  # the gate feedback is for the implementer, not the diagnosis
+        self.agent("DIAGNOSIS", feature, prog, task, role="diagnosis", step=label)
+        prog["feedback"] = saved
+        set_phase(self.cfg, "IMPLEMENT")
+        text = report.read_text(encoding="utf-8").strip() if report.is_file() else ""
+        m = FIX_OWNER_RE.search(text)
+        if not m:
+            log_event(self.cfg, feature, "diagnosis", step=label, owner=None, failed=rep.failed)
+            self.progress(feature, f"[{label}] diagnosis: no usable diagnosis.md; going on")
+            return {}
+        owner = m.group(1).lower()
+        keep = d / "diagnoses"
+        keep.mkdir(exist_ok=True)
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", label).strip("-").lower()
+        kept = keep / f"{slug}.md"
+        kept.write_text(text + "\n", encoding="utf-8")
+        report.unlink()
+
+        def line(name: str) -> str:
+            found = re.search(rf"^\W*{name}\W*:\s*(.+)$", text, re.I | re.M)
+            return found.group(1).strip() if found else ""
+
+        root, fix = line("Root cause"), line("Proposed fix")
+        log_event(
+            self.cfg,
+            feature,
+            "diagnosis",
+            step=label,
+            owner=owner,
+            root_cause=root,
+            proposed_fix=fix,
+            failed=rep.failed,
+            file=self.rel(kept),
+        )
+        self.progress(feature, f"[{label}] diagnosis ({owner}): {root}")
+        question = (
+            f"Diagnosis ({self.rel(kept)}): approve the proposed fix, or answer otherwise.\n"
+            f"Root cause: {root}\nProposed fix ({owner}): {fix}"
+        )
+        return {"owner": owner, "text": text, "question": question}
 
     def unfixable(self, rep: Any) -> str:
         """If every failing check of a step gate is a lint / format check whose findings are all
@@ -894,7 +1040,7 @@ class Orchestrator:
         rec = dict(item, reason=reason, attempts=attempts, question=question, failed=failed or [])
         rec["diff"] = diff
         prog["parked"] = [*(prog.get("parked") or []), rec]
-        prog.update(attempt=0, feedback="")
+        prog.update(attempt=0, feedback="", fail_streak=0, last_failed=[], diagnosed=False)
         save_progress(self.cfg, feature, prog)
         log_event(
             self.cfg,
@@ -1770,7 +1916,7 @@ class Orchestrator:
 
     def drop_spec_update_tag(self, feature: str) -> None:
         """A new spec approval restarts from the tests: the answer tags of the old one go."""
-        for tag in (f"spec-update/{feature}", tests_update_tag(feature)):
+        for tag in (f"spec-update/{feature}", tests_update_tag(feature), knowledge_tag(feature)):
             if tag_exists(self.cfg, tag):
                 git(self.cfg, "tag", "-d", tag)
 
@@ -2434,6 +2580,50 @@ class Orchestrator:
                 f"are redone ({', '.join(p['label'] for p in parked)}), then the final gate again."
             )
         self.echo(f"Next: agentflow run {feature}")
+        return EXIT_OK
+
+    def learn(self, feature: str, picks: list[str]) -> int:
+        """Append the retro's project-knowledge proposals the human accepted (`K1 K3`, or
+        `all`) to the knowledge file, commit it and tag the commit knowledge-update/<f> (the
+        frame diff allows exactly that change; agents cannot edit the file)."""
+        prop = self.fdir(feature) / "retro_proposals.md"
+        items = knowledge_items(prop.read_text(encoding="utf-8") if prop.is_file() else "")
+        if not items:
+            raise WorkflowError(
+                f"No project-knowledge proposals (K1, ...) in {self.rel(prop)}: run the retro."
+            )
+        wanted = {p.strip().upper().lstrip("K") for x in picks for p in x.split(",") if p.strip()}
+        chosen = items if "ALL" in wanted else [i for i in items if str(i[0]) in wanted]
+        unknown = sorted(wanted - {str(i[0]) for i in items} - {"ALL"})
+        if unknown or not chosen:
+            have = ", ".join(f"K{n}" for n, _, _ in items)
+            raise WorkflowError(f"Pick from {have} (or all); unknown: {', '.join(unknown) or '-'}")
+        path = self.cfg.root / self.cfg.knowledge
+        text = (
+            path.read_text(encoding="utf-8")
+            if path.is_file()
+            else package_text("templates", "project.md")
+        )
+        for _, section, fact in chosen:
+            text = add_knowledge(text, section, f"- {fact} ({feature})")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        names = ", ".join(f"K{n}" for n, _, _ in chosen)
+        git(self.cfg, "add", "--", self.cfg.knowledge)
+        git(
+            self.cfg,
+            "commit",
+            "-q",
+            "-m",
+            f"{feature}: project knowledge from the retro ({names})",
+            "--",
+            self.cfg.knowledge,
+        )
+        git(self.cfg, "tag", "-f", knowledge_tag(feature))
+        log_event(self.cfg, feature, "knowledge_added", items=[list(i) for i in chosen])
+        self.echo(
+            f"Added {names} to {self.cfg.knowledge} (committed, tagged {knowledge_tag(feature)})."
+        )
         return EXIT_OK
 
     def finish(self, feature: str) -> int:

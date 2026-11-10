@@ -360,6 +360,15 @@ def main() -> int:
             pathlib.Path(lang["review_invalid"][0]).unlink()
             lines += f"- {lang['invalid_name']}: INVALID — the spec allows negative ints\n"
         write("out/demo/triage.md", lines)
+    elif phase == "DIAGNOSIS":
+        owner = scen.get("diagnosis", "src")
+        if owner != "none":
+            write(
+                "out/demo/diagnosis.md",
+                "Root cause: add() returns a - b (src/demo/__init__.py:5).\n"
+                f"Fix owner: {owner}\n"
+                "Proposed fix: return a + b.\nEvidence:\n- ran the step tests\n",
+            )
     elif phase == "PR":
         write("out/demo/final_summary.md", "# Final summary\nSummary.\n")
     elif phase == "RETRO":
@@ -368,7 +377,13 @@ def main() -> int:
         if runs[phase] <= scen.get("retro_omit_runs", 1):
             ids = [i for i in ids if i not in scen.get("retro_omit", [])]
         body = "".join(f"- {i}: one-off\n" for i in ids) or "none\n"
-        write("out/demo/retro_proposals.md", "# Retro\n\nNot acted on:\n" + body)
+        know = "".join(
+            f"- K{i} [{s}]: {t}\n" for i, (s, t) in enumerate(scen.get("knowledge", []), 1)
+        )
+        write(
+            "out/demo/retro_proposals.md",
+            "# Retro\n\nNot acted on:\n" + body + "\n## Project knowledge\n" + (know or "None.\n"),
+        )
     state_path.write_text(json.dumps(state), encoding="utf-8")
     result = {
         "type": "result",

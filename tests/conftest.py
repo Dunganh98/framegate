@@ -174,12 +174,13 @@ def demo_repo(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> DemoRe
     # fast suite: never start WSL for mutmut (test_python_mutation_e2e.py covers that, slow).
     # The tests gate stops here ("human") and every plan step gets its own implementer run;
     # the defaults ("defer", step batches) have their own tests (DemoRepo.defer_tests_gate,
-    # set_toml("agents", "step_batch_ids", ...)).
+    # set_toml("agents", "step_batch_ids", ...)); no diagnosis runs unless a test sets
+    # [agents] diagnose_after.
     toml = root / "agentflow.toml"
     toml.write_text(
         toml.read_text(encoding="utf-8")
         .replace("[gates]\n", '[gates]\nmutation_runner = "native"\ntests = "human"\n', 1)
-        .replace("[agents]\n", "[agents]\nstep_batch_ids = 0\n", 1),
+        .replace("[agents]\n", "[agents]\nstep_batch_ids = 0\ndiagnose_after = 0\n", 1),
         encoding="utf-8",
     )
     (root / "src" / "demo").mkdir(parents=True)

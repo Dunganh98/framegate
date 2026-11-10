@@ -52,5 +52,16 @@ each proposal:
 - Scope: `project` (only this repo: domain, spec content, local checks) or `framework`
   (generic: orchestrator, gates, checks, hooks, base roles, templates, adapters).
 End with the "Not acted on" list ("Not acted on: none" if empty).
+
+Then a section `## Project knowledge`: facts this run showed that every later feature of this
+project needs and that no single spec holds (e.g. "the fingerprint test hashes the whole
+report; a new field needs [JsonIgnore] or an entry in its exclusion list", "the test bot always
+answers the deadline", "find seeds with `<scan command>`"). One line each, at most 5, only facts
+not already in the project knowledge ({knowledge}, shown in your instructions):
+
+    - K1 [<section>]: <fact>
+
+Sections: Architecture rules, Never changes, Test harness, Tools, Off-limits. "None." if there is
+nothing. The human accepts them with `agentflow learn` (they are not applied otherwise).
 Also list CLAUDE.md lines that are now enforced by a check and can be deleted.
 Do not apply anything — proposals only.

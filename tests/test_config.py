@@ -60,6 +60,14 @@ def test_models_effort_batches_format_fix_and_extra_checks(tmp_path: pathlib.Pat
     assert {cfg.agent_model(p) for p in ("TEST_REVIEW", "REVIEW", "TRIAGE", "RETRO")} == {"opus"}
     assert cfg.agent_effort("IMPLEMENT") == ""
     assert (cfg.step_batch_ids, cfg.format_fix, cfg.extra_checks) == (15, True, {})
+    assert (cfg.diagnose_after, cfg.knowledge) == (2, ".agentflow/project.md")
+    assert cfg.agent_model("DIAGNOSIS") == "opus" and cfg.write_paths("DIAGNOSIS") == ["out/"]
+    other = parse_config(
+        tmp_path, {"agents": {"diagnose_after": 0}, "project": {"knowledge": "docs\\k.md"}}
+    )
+    assert (other.diagnose_after, other.knowledge) == (0, "docs/k.md")
+    with pytest.raises(ConfigError, match="diagnose_after must be >= 0"):
+        parse_config(tmp_path, {"agents": {"diagnose_after": -1}})
     cfg = parse_config(
         tmp_path,
         {

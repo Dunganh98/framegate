@@ -6,7 +6,15 @@ from __future__ import annotations
 import pathlib
 
 from agentflow.gates import GateReport, gate_report
-from agentflow.retro import build, match_answer, missing_ids, parse_answer_items, split_questions
+from agentflow.retro import (
+    add_knowledge,
+    build,
+    knowledge_items,
+    match_answer,
+    missing_ids,
+    parse_answer_items,
+    split_questions,
+)
 from conftest import git, init_git
 from test_checks import adapter_for, write
 
@@ -42,6 +50,24 @@ def test_answers_matched_per_question() -> None:
     assert "Answer:\n~~~\nA Missed entry, yes.\n~~~" in text
     assert "Question: Y?\nAnswer:\n~~~\n(not answered: no numbered answer" in text
     assert "Re-scan" not in text
+
+
+def test_knowledge_items_and_adding_them() -> None:
+    proposals = (
+        "# Retro\n\n## 1. Something\n- K9 [Tools]: not in the section\n\n"
+        "## Project knowledge\n- K1 [Never changes]: the fingerprint hashes the whole report\n"
+        "- K2 [Seeds]: find seeds with `scan`\n\nNot acted on: none\n"
+    )
+    assert knowledge_items(proposals) == [
+        (1, "Never changes", "the fingerprint hashes the whole report"),
+        (2, "Seeds", "find seeds with `scan`"),
+    ]
+    base = "# Project knowledge\n\n## Never changes\n<!-- c -->\n- old fact\n\n## Tools\n"
+    text = add_knowledge(base, "never changes", "- new fact")
+    assert text == (
+        "# Project knowledge\n\n## Never changes\n<!-- c -->\n- old fact\n- new fact\n\n## Tools\n"
+    )
+    assert add_knowledge(base, "Seeds", "- x").endswith("## Tools\n\n## Seeds\n- x\n")
 
 
 def test_split_questions() -> None:

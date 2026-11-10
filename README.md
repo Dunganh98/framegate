@@ -58,6 +58,19 @@ Then you only type requirements, answers and gate decisions:
 After a session restart: `/agentflow:resume [name]` reattaches (live view, the waiting gate or the
 wrap-up). `/agentflow:status` lists the features and where they stand.
 
+## Project knowledge
+
+`.agentflow/project.md` (`[project] knowledge`; `agentflow init` creates it) holds what no
+single spec repeats: architecture rules, what must never change (hashes, save formats,
+public APIs), test-harness facts (slow tests, how fixtures and seeds are made, scan
+commands), tools, off-limits. The spec dialogue gets it through `agentflow spec-brief`;
+the test writer, test reviewer, implementer, reviewer, spec updater, diagnosis and retro
+get it in their instructions (up to 300 lines; keep it short). Agents cannot edit it. The
+retro ends with a "Project knowledge" section (`- K1 [<section>]: <fact>`); at DONE the
+chat shows them and `agentflow learn <f> K1 K3` (or `all`) appends the ones you pick under
+their section, commits and tags `knowledge-update/<f>` (the frame diff allows that
+change). The engine stays generic; each project's knowledge grows with its runs.
+
 ## CLI (the engine; manual fallback)
 
 The skills only call these commands; everything works the same from a terminal.
@@ -79,6 +92,8 @@ agentflow answer <f>                        # after writing out/<f>/answers.md: 
                                             # gate -> the test writer applies answers that need
                                             # a test change, then only the parked items redo
 agentflow finish <f> --no-retro             # final gate -> DONE without the retro
+agentflow learn <f> K1 [K3 ...|all]         # add accepted retro knowledge to the
+                                            # project knowledge file (committed)
 agentflow cleanup <f> [--tags] [--force]    # DONE: delete out/<f>/ + its run logs; --tags: also
                                             # spec-approved/tests-approved/spec-update/
                                             # tests-update tags
@@ -137,6 +152,14 @@ Between the gates nothing stops:
   run, redone after it. A step gate whose only failures are lint / format findings in files the
   implementer may not edit (frozen tests) parks at once ("unfixable in IMPLEMENT") instead of
   using up its attempts.
+- When the same checks fail `[agents] diagnose_after` attempts in a row (default 2), a
+  diagnosis run (Opus, `roles/diagnosis.md`) reads everything, runs the tests and changes
+  nothing: it writes the root cause, the fix owner (`src` / `tests` / `spec`) and one
+  proposed fix (`out/<f>/diagnoses/<item>.md`, `diagnosis` event). `src`: the proposal goes
+  to the implementer's next attempt (it always gets that attempt). `tests` / `spec`: the item
+  parks at once with the proposal as its question; at the final gate one reply approves it,
+  and the redo sends it to the phase that owns the file (spec updater, test writer,
+  implementer).
 - Review findings (failing reviewer tests) are triaged against the spec by the test reviewer:
   VALID stays and goes to the fix loop, INVALID is deleted with a one-line reason
   (`triage.md`, `triage` event). Fixes that fail `max_attempts` times are parked. The reviewer

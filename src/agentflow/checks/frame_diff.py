@@ -43,14 +43,20 @@ def tests_update_tag(feature: str) -> str:
     return f"tests-update/{feature}"
 
 
+def knowledge_tag(feature: str) -> str:
+    return f"knowledge-update/{feature}"
+
+
 def allowed_spec_changes(cfg: Config, feature: str, untracked: set[str]) -> set[str]:
     """Spec files of the feature changed by the tagged SPEC_UPDATE commit and test files
-    changed by the tagged test update (since the tests were approved), still identical to the
-    tagged commit."""
-    return _tagged(
-        cfg, feature, spec_update_tag(feature), f"{cfg.paths.specs}/{feature}/", untracked
-    ) | _tagged(
-        cfg, feature, tests_update_tag(feature), cfg.paths.tests.rstrip("/") + "/", untracked
+    changed by the tagged test update, and the knowledge file changed by `agentflow learn`
+    (since the tests were approved), still identical to the tagged commit."""
+    return (
+        _tagged(cfg, feature, spec_update_tag(feature), f"{cfg.paths.specs}/{feature}/", untracked)
+        | _tagged(
+            cfg, feature, tests_update_tag(feature), cfg.paths.tests.rstrip("/") + "/", untracked
+        )
+        | _tagged(cfg, feature, knowledge_tag(feature), cfg.knowledge, untracked)
     )
 
 

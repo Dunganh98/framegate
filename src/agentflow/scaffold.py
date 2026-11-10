@@ -50,6 +50,7 @@ def init(
             f"{cfg.paths.specs}/_template/{name}",
             package_text("templates", "specs", "_template", name),
         )
+    write(cfg.knowledge, package_text("templates", "project.md"))
 
     gi = root / ".gitignore"
     gi_text = gi.read_text(encoding="utf-8") if gi.exists() else ""
@@ -99,6 +100,17 @@ def spec_brief(cfg: Config, feature: str) -> str:
     p = cfg.paths
     folder = cfg.spec_dir(feature)
     state = "exists" if folder.is_dir() else f"missing — run: agentflow spec {feature}"
+    kpath = cfg.root / cfg.knowledge
+    knowledge = (
+        [
+            f"Project knowledge ({cfg.knowledge}; use it for the questions and the spec, e.g. "
+            "what must never change, how fixtures are made):",
+            kpath.read_text(encoding="utf-8").strip(),
+            "",
+        ]
+        if kpath.is_file()
+        else [f"(No project knowledge file {cfg.knowledge}; `agentflow init` creates one.)", ""]
+    )
     return "\n".join(
         [
             f"agentflow spec brief: feature '{feature}', language {cfg.language}",
@@ -112,6 +124,7 @@ def spec_brief(cfg: Config, feature: str) -> str:
             "",
             adapter.conventions_brief().rstrip(),
             "",
+            *knowledge,
             f"When the spec is done: agentflow approve-spec {feature}",
         ]
     )

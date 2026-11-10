@@ -12,7 +12,8 @@ from collections.abc import Sequence
 
 COMMANDS_HELP = """\
 commands:
-  init                    scaffold agentflow.toml, spec templates, .gitignore lines
+  init                    scaffold agentflow.toml, spec templates, .agentflow/project.md,
+                          .gitignore lines
   spec <feature>          create/switch to the branch feat/<feature> from [git] base, copy
                           the spec templates, set the SPEC phase lock
   approve-spec <feature>  commit + tag spec-approved/<feature>, reset progress
@@ -26,11 +27,13 @@ commands:
   answer <feature>        after writing out/<f>/answers.md: tests gate -> writer + reviewer
                           re-run; final gate -> the next run redoes the parked items
   finish <feature> --no-retro      final gate -> DONE without the retro
+  learn <feature> K1 [K3 ...|all]  add the retro's project-knowledge proposals you accept to
+                          the knowledge file ([project] knowledge), committed
   gates <feature> --scope step|final [--skip-mutation]
   spec-brief <feature>    print the conventions brief for the SPEC session
   cleanup <feature> [--tags] [--force]   delete out/<feature>/ and its run logs (DONE only);
                           --tags: also the feature's tags (spec-approved, tests-approved,
-                          spec-update, tests-update)
+                          spec-update, tests-update, knowledge-update)
   unlock [--force]        clear a stale phase lock (.phase/.reqs) left by a killed run
   protocol                the chat run protocol the plugin skills follow (printed)
   hook pre-tool-use|stop  Claude Code hooks (stdin = hook JSON; exit 2 = block)
@@ -70,6 +73,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("finish", help="final gate -> DONE without the retro")
     p.add_argument("feature")
     p.add_argument("--no-retro", action="store_true", required=True, help="skip the retro")
+    p = sub.add_parser("learn", help="add accepted retro knowledge proposals (K1 ...)")
+    p.add_argument("feature")
+    p.add_argument("items", nargs="+", help="K numbers (K1 K3 or 1,3) or all")
     p = sub.add_parser("gates")
     p.add_argument("feature")
     p.add_argument("--scope", choices=["step", "final"], default="final")
@@ -169,6 +175,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return orch.answer(f)
         if args.command == "finish":
             return orch.finish(f)
+        if args.command == "learn":
+            return orch.learn(f, args.items)
     except (ConfigError, WorkflowError, GitError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

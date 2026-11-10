@@ -33,6 +33,14 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
   new spec template sections (overlaps / sources of truth, fixture table, input domain and copy
   semantics, serialized-data tests) and spec-dialogue questions. FCSim's own `specs/_template/`
   is a copy and does not have these sections until it is updated.
+- **Project knowledge + diagnosis (branch feat/knowledge-diagnosis, on top of PR #2):**
+  `.agentflow/project.md` read by the spec dialogue and the agents, grown by
+  `agentflow learn` from the retro's K items (user picks; never automatic); a diagnosis
+  run after the same checks fail twice (src fix -> next attempt; tests/spec fix ->
+  parked, approved at the final gate in one reply). Planned next: `/agentflow:setup`
+  (repo scan, one batch of questions, toml + project.md) with `agentflow doctor` (tool
+  check without agents), then a config-only generic adapter for new languages; per-path
+  thresholds and a Python zero-case check after the next FCSim feature is measured.
 - **Adapters:** python (pytest, mutmut via WSL on Windows), dotnet (xUnit, Stryker opt-in level).
 - **Chat flow (plugin 0.2.2):** `/agentflow:feature <f>` (branch `feat/<f>` from `[git] base`,
   spec dialogue, approve, background `agentflow run` + Monitor on `agentflow watch`, gate digests

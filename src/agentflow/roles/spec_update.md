@@ -22,6 +22,8 @@ Rules:
 - Mark every change with the answer reference in the changed line or row, e.g.
   `... raises TypeError matching "ints only" (answer ANS-2)`, or an HTML comment
   `<!-- answer ANS-2 -->` after a changed paragraph.
+- An answer that approves a diagnosis' proposed fix (the question shows it) settles what that
+  proposal says about the spec; a proposal about tests or code is not yours.
 - Change only what the answers settle. Do not restyle or reorder the spec. If an answer settles
   nothing in the spec (e.g. it only concerns test style), change nothing.
 - Then write {out}/{feature}/spec_update.md: one line per change, `- <ID or section>: <what
