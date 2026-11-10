@@ -166,6 +166,20 @@ namespace S
         [Fact] public void Inline() { Assert.Skip("no"); Assert.Equal(1, 1); }
         [Fact] public void ViaHelper() => Helper(3);
         [Fact] public void Fine() { Assert.Equal(3, Calc.Add(1, 2)); }
+        [Fact] public void Vacuous()
+        {
+            foreach (var r in Run(3).Records.Where(x => x.Lap)) { Assert.True(r.Missed); }
+        }
+        [Fact] public void VacuousAll()
+        {
+            Assert.True(Run(3).Records.Where(x => x.Lap).All(x => x.Missed));
+        }
+        [Fact] public void Guarded()
+        {
+            var picked = Run(3).Records.Where(x => x.Lap).ToList();
+            Assert.NotEmpty(picked);
+            foreach (var r in picked.Where(x => x.Lap)) { Assert.True(r.Missed); }
+        }
         private static void Helper(int n) { Assert.InRange(n, 0, 9); }
     }
 }
@@ -182,7 +196,42 @@ def test_smells(tmp_path: pathlib.Path) -> None:
         f"EARLY RETURN (test body starts with return;): {where}.Early",
         f"TRIVIAL ASSERTION (Assert.True(true)): {where}.Trivial",
         f"INLINE SKIP: {where}.Inline",
+        "LOOP OVER PICKED CASES WITHOUT A NON-EMPTY CHECK (passes with zero cases; assert there "
+        f"is at least one): {where}.Vacuous",
+        "LOOP OVER PICKED CASES WITHOUT A NON-EMPTY CHECK (passes with zero cases; assert there "
+        f"is at least one): {where}.VacuousAll",
     ]
+
+
+def test_format_and_lint_findings_only_on_changed_lines(tmp_path: pathlib.Path) -> None:
+    """dotnet format diagnostics on lines the feature did not change are ignored (no churn in
+    old code, no loop on them); the format fix keeps only its changes on changed lines."""
+    from agentflow.adapters.base import merge_scoped
+
+    init_git(tmp_path)
+    write(tmp_path, "src/A/Old.cs", "class Old\n{\n  int a;\n  int b;\n}\n")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-q", "-m", "base")
+    git(tmp_path, "tag", "base")
+    write(tmp_path, "src/A/Old.cs", "class Old\n{\n  int a;\n  int b;\n  int  c;\n}\n")
+    write(tmp_path, "src/A/New.cs", "class New{}\n")
+    a = adapter(tmp_path)
+    out = (
+        f"{tmp_path / 'src/A/Old.cs'}(3,3): error WHITESPACE: Fix whitespace. [x.csproj]\n"
+        "src/A/Old.cs(5,6): error WHITESPACE: Fix whitespace. [x.csproj]\n"
+        "src/A/New.cs(1,10): warning IDE0055: Fix formatting. [x.csproj]\n"
+        "Build summary\n"
+    )
+    scoped, kept, ignored = a.scope_diagnostics(out, "base")
+    assert (kept, ignored) == (2, 1)
+    assert "Old.cs(3,3)" not in scoped and "src/A/Old.cs(5,6)" in scoped
+    assert "src/A/New.cs(1,10)" in scoped and "Build summary" in scoped
+    assert a.scope_diagnostics(out, None) == (out, 0, 0)
+    # the formatter re-indented every member; only the changed line keeps the change
+    before = "class Old\n{\n  int a;\n  int b;\n  int  c;\n}\n"
+    after = "class Old\n{\n    int a;\n    int b;\n    int c;\n}\n"
+    assert merge_scoped(before, after, {5}) == "class Old\n{\n  int a;\n  int b;\n    int c;\n}\n"
+    assert merge_scoped(before, after, set()) == before
 
 
 def test_test_classes_for_review_paths(tmp_path: pathlib.Path) -> None:

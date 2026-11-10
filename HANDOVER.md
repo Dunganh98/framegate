@@ -21,8 +21,20 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
   changed files first (`format_fix`). **Not yet measured on a real feature** — compare the
   `agent_run` events (model, cost) and failed attempts of the next FCSim feature with the table
   above.
+- **Second FCSim feature (M5-action-reviews, 2026-11-10):** 67 min agent time, $9.76; its retro
+  (FCSim `docs/history/agentflow-retro-M5-action-reviews.md`) led to: answers at the final gate
+  reach the tests (TESTS_AMEND run, tag `tests-update/<f>`); a step-gate failure only in files
+  the implementer may not edit parks at once; the test writer's and the reviewer's files are
+  formatted; .NET format/lint checks only changed lines; fixture precondition tests
+  (`test_fixture_*` / `Fixture_*`) must pass on the stubs; a .NET smell for loops over picked
+  cases without a non-empty check; `Depends on` steps wait for a parked step; findings only on
+  parked IDs are deferred; every task has a look-around rule and an orientation block; step
+  notes are written with the Write tool; retro_input pairs each question with its own answer;
+  new spec template sections (overlaps / sources of truth, fixture table, input domain and copy
+  semantics, serialized-data tests) and spec-dialogue questions. FCSim's own `specs/_template/`
+  is a copy and does not have these sections until it is updated.
 - **Adapters:** python (pytest, mutmut via WSL on Windows), dotnet (xUnit, Stryker opt-in level).
-- **Chat flow (plugin 0.2.1):** `/agentflow:feature <f>` (branch `feat/<f>` from `[git] base`,
+- **Chat flow (plugin 0.2.2):** `/agentflow:feature <f>` (branch `feat/<f>` from `[git] base`,
   spec dialogue, approve, background `agentflow run` + Monitor on `agentflow watch`, gate digests
   via `agentflow gate-summary`, plain-word replies mapped to approve/reject/answer/finish,
   wrap-up: retro proposals, PR offer, `agentflow cleanup`), `/agentflow:resume [f]`,

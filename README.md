@@ -76,10 +76,12 @@ agentflow reject <f> --reason "..."         # tests gate: writer + test reviewer
 agentflow answer <f>                        # after writing out/<f>/answers.md: the next run
                                             # writes them into the spec (SPEC_UPDATE), then
                                             # tests gate -> writer + reviewer re-run; final
-                                            # gate -> redoes only the parked items
+                                            # gate -> the test writer applies answers that need
+                                            # a test change, then only the parked items redo
 agentflow finish <f> --no-retro             # final gate -> DONE without the retro
 agentflow cleanup <f> [--tags] [--force]    # DONE: delete out/<f>/ + its run logs; --tags: also
-                                            # spec-approved/tests-approved/spec-update tags
+                                            # spec-approved/tests-approved/spec-update/
+                                            # tests-update tags
 agentflow gates <f> --scope step|final      # the frame checks (also used in CI)
 agentflow spec-brief <f>                    # conventions for the spec dialogue (skill injects it)
 agentflow protocol                          # the chat run protocol (skills inject it)
@@ -115,18 +117,35 @@ resumes after an interruption. The spec itself must change: edit it, `agentflow 
 Between the gates nothing stops:
 - Questions of the test writer and the test reviewer (`questions.md`) are collected in
   `open_questions.md` and shown together at the next gate (by default the final gate, with the
-  test reviewer's objections still open and failed test checks). Answers there go into the spec;
-  if it changes, the reviewer checks the code against it again, then the final gate comes again.
-- The implementer assumes from the spec and logs each assumption in `steps.md`
-  (`- ASSUMPTION [<spec ID>]: ...`). Only when no reasonable assumption is possible it writes
+  test reviewer's objections still open and failed test checks). Answers there go into the spec
+  and, where they need it, into the tests (below); if the spec changes, the reviewer checks the
+  code against it again, then the final gate comes again.
+- Pinned test data (a seed, a recording) gets a fixture precondition test (`test_fixture_*` /
+  `Fixture_*`) that shows, with code that exists before the feature, that the data has the
+  situation the tests need. The red check expects these to PASS against the stubs (all other
+  tests must fail), so data picked wrong shows up before any implementation. Checks over cases
+  picked from data must assert at least one case (the .NET smell check flags a `foreach` over a
+  `.Where(...)` / `.Where(...).All(...)` without a non-empty check).
+- The implementer assumes from the spec and logs each assumption in its step note (written with
+  the Write tool to `out/<f>/notes/<step>.md`; agentflow appends it to `steps.md`:
+  `- ASSUMPTION [<spec ID>]: ...`). Only when no reasonable assumption is possible it writes
   `park.md` and stops (the Stop hook lets it); a step that fails `max_attempts` times is parked
   too (reason, failing checks, attempts). The parked step's uncommitted source changes are saved
   as `out/<f>/parked/<step>.diff` and the sources restored to the last green commit; later steps
-  continue (their check leaves the parked step's IDs out; a declared `Depends on: Step N` in
-  plan.md is noted in the final summary).
+  continue (their check leaves the parked step's IDs out, and their task says not to build
+  them). A step with `Depends on: Step N` (plan.md) on a parked step waits: parked without a
+  run, redone after it. A step gate whose only failures are lint / format findings in files the
+  implementer may not edit (frozen tests) parks at once ("unfixable in IMPLEMENT") instead of
+  using up its attempts.
 - Review findings (failing reviewer tests) are triaged against the spec by the test reviewer:
   VALID stays and goes to the fix loop, INVALID is deleted with a one-line reason
-  (`triage.md`, `triage` event). Fixes that fail `max_attempts` times are parked.
+  (`triage.md`, `triage` event). Fixes that fail `max_attempts` times are parked. The reviewer
+  is told the parked steps' IDs; a valid finding whose test carries only such IDs is DEFERRED:
+  no review-fix run builds the parked step, its redo makes the test pass.
+- Every agent task starts with a short rule (look around with Read / Glob / Grep, write with
+  Write / Edit, the shell only for the named commands) and an orientation block: the files in
+  `specs/<f>/` and `out/<f>/` and `git log -3 --stat`, which agents otherwise fetched with
+  chained shell calls that the run denies.
 - The final summary (`final_summary.md`) is written from `final_facts.md` (generated from the
   run records); agentflow appends the cost / time / turns table per phase.
 
@@ -144,9 +163,14 @@ moves the tag `spec-approved/<f>` to it (`spec_reapproved` event). `[gates] test
 passes a gate with such a diff. At the final gate the update comes after the tests were approved:
 agentflow tags it `spec-update/<f>`, and the frame diff allows exactly the spec files that commit
 changed, as long as their content equals the tagged one (any further spec edit fails the frame
-again); new IDs there have no tests, so traceability fails at the final gate and says so.
-`approve-spec` drops the `spec-update/<f>` tag. The PreToolUse hook lets SPEC_UPDATE write only
-`specs/` and `out/`.
+again). Then the test writer runs once more (`TESTS_AMEND` task): it applies the answers that
+need a test change (fixtures, seeds, expected values, tests for new IDs, a review test an answer
+names) and changes nothing else; the implementer may not touch tests, so without this such an
+answer could never be applied. Changed tests get one test-reviewer pass (objections go to the
+final gate), are committed (`<f>: tests updated from answers ANS-<n>`, `tests_amended` event)
+and tagged `tests-update/<f>`, which the frame diff allows like `spec-update/<f>`. If they fail,
+the review fixes make them pass. `approve-spec` drops both tags. The PreToolUse hook lets
+SPEC_UPDATE write only `specs/` and `out/`.
 
 Stopping a run: Ctrl+C, Ctrl+Break or SIGTERM kill the running agent's whole process tree (each
 agent runs in its own process group; on Windows also in a kill-on-close job object, so even a
@@ -181,8 +205,11 @@ Models and speed:
   committed, parked and redone as one unit (`steps 1, 2, 3`).
 - The implementer checks only with the step command (its steps' tests and the earlier ones); the
   step gate runs everything else. Before checking, the gates format the changed source files
-  (`[gates] format_fix`, default on, only with the adapter's own format check), so a formatting
-  slip costs no attempt.
+  and the changed review tests, and the test writer's files are formatted after each of its
+  runs (`[gates] format_fix`, default on, only with the adapter's own format check), so a
+  formatting slip costs no attempt and never sits in a file the implementer may not edit. For
+  .NET the format / lint checks report only findings on changed lines, and the format fix keeps
+  only its changes there: no churn in code the feature did not touch.
 - `[gates.extra]` (name = command): project checks after the final gates, e.g. a balance
   measurement. Shown at the final gate with exit code and output (full output in
   `out/<f>/extra_<name>.log`); never part of the verdict.

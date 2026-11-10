@@ -27,7 +27,7 @@ WATCH_POLL = 1.0
 DIFF_LINES = 40
 #: phase names in run log file names ({stamp}-{feature}-{PHASE}.json / .prompt.md / ...)
 RUN_LOG_PHASES = "SPEC_UPDATE|TESTS|TEST_REVIEW|IMPLEMENT|REVIEW|TRIAGE|PR|RETRO"
-TAG_PREFIXES = ("spec-approved", "tests-approved", "spec-update")
+TAG_PREFIXES = ("spec-approved", "tests-approved", "spec-update", "tests-update")
 
 
 def _clip(text: str, n: int = 200) -> str:

@@ -6,9 +6,42 @@ from __future__ import annotations
 import pathlib
 
 from agentflow.gates import GateReport, gate_report
-from agentflow.retro import build, missing_ids, split_questions
+from agentflow.retro import build, match_answer, missing_ids, parse_answer_items, split_questions
 from conftest import git, init_git
 from test_checks import adapter_for, write
+
+
+def test_answers_matched_per_question() -> None:
+    """Each question gets its own numbered answer (seen live: every question showed the same
+    cut slice of answers.md). Items match on the question text, either way round clipped."""
+    answers = (
+        "# Answers (final gate)\n\n"
+        "1. Q: step 2 - record: no reasonable assumption possible\n"
+        "   A: Re-scan for seeds where a duel lap runs out.\n"
+        "      Pin them; one extra match each.\n"
+        "2. Q: [test writer] MAR-R-003 vs MAR-E-009: a duel where he picks Jockey and the lap "
+        "runs out ...\n"
+        "   A: A Missed entry, yes.\n"
+        "3. No floats.\n"
+    )
+    items = parse_answer_items(answers)
+    assert [(i["n"], i["a"]) for i in items] == [
+        (1, "Re-scan for seeds where a duel lap runs out.\nPin them; one extra match each."),
+        (2, "A Missed entry, yes."),
+        (3, "No floats."),
+    ]
+    q = "MAR-R-003 vs MAR-E-009: a duel where he picks Jockey and the lap runs out, then what?"
+    assert match_answer(q, items) == "A Missed entry, yes."
+    assert match_answer("Something else entirely?", items) is None
+    events = [
+        {"kind": "spec_approved"},
+        {"kind": "questions", "phase": "TESTS", "who": "test writer", "questions": f"- {q}\n- Y?"},
+        {"kind": "answer", "gate": "final", "answer": answers, "items": items},
+    ]
+    text = build("f", events).text
+    assert "Answer:\n~~~\nA Missed entry, yes.\n~~~" in text
+    assert "Question: Y?\nAnswer:\n~~~\n(not answered: no numbered answer" in text
+    assert "Re-scan" not in text
 
 
 def test_split_questions() -> None:

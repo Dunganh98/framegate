@@ -4,10 +4,11 @@ Fails if protected paths changed (tests, specs, config, dependency and workflow 
 added source lines contain suppression patterns. Tool-independent: it compares against the
 `tests-approved/<feature>` tag, so it also catches writes made through shells.
 
-One exception: answers to parked items at the final gate are written into the spec by the
-SPEC_UPDATE step (after the tests were approved). agentflow tags that commit
-`spec-update/<feature>`; a spec file of the feature that this commit changed is allowed only while
-its content is exactly the tagged one (any further edit is a frame violation again).
+Two exceptions, both from answers at the final gate (after the tests were approved): the
+SPEC_UPDATE step writes them into the spec (agentflow tags that commit `spec-update/<feature>`),
+and the test writer applies the ones that need a test change (tagged `tests-update/<feature>`).
+A spec file of the feature / a test file that the tagged commit changed is allowed only while its
+content is exactly the tagged one (any further edit is a frame violation again).
 """
 
 from __future__ import annotations
@@ -38,13 +39,24 @@ def spec_update_tag(feature: str) -> str:
     return f"spec-update/{feature}"
 
 
+def tests_update_tag(feature: str) -> str:
+    return f"tests-update/{feature}"
+
+
 def allowed_spec_changes(cfg: Config, feature: str, untracked: set[str]) -> set[str]:
-    """Spec files of the feature changed by the tagged SPEC_UPDATE commit (since the tests were
-    approved) and still identical to that commit."""
-    tag = spec_update_tag(feature)
+    """Spec files of the feature changed by the tagged SPEC_UPDATE commit and test files
+    changed by the tagged test update (since the tests were approved), still identical to the
+    tagged commit."""
+    return _tagged(
+        cfg, feature, spec_update_tag(feature), f"{cfg.paths.specs}/{feature}/", untracked
+    ) | _tagged(
+        cfg, feature, tests_update_tag(feature), cfg.paths.tests.rstrip("/") + "/", untracked
+    )
+
+
+def _tagged(cfg: Config, feature: str, tag: str, folder: str, untracked: set[str]) -> set[str]:
     if not tag_exists(cfg, tag):
         return set()
-    folder = f"{cfg.paths.specs}/{feature}/"
     cand = set(git(cfg, "diff", "--name-only", approved_tag(feature), tag, "--", folder).split())
     if not cand:
         return set()

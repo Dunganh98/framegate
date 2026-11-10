@@ -29,6 +29,7 @@ from agentflow.adapters.base import (
     TestRun,
     TestScope,
     diff_coverage_summary,
+    diff_hunks,
     incomplete_reason,
     incomplete_result,
     parse_junit,
@@ -244,17 +245,6 @@ def disable_mutations(path: pathlib.Path) -> None:
 
 
 STRYKER_RESTORE = "// Stryker restore all"
-_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.M)
-
-
-def diff_hunks(diff: str) -> list[tuple[int, int]]:
-    """Changed line ranges (1-based, inclusive, new file) of a `git diff -U0` of one file. A
-    pure deletion marks the lines around the gap."""
-    hunks = []
-    for m in _HUNK.finditer(diff):
-        start, count = int(m.group(1)), int(m.group(2) or "1")
-        hunks.append((max(start, 1), start + 1) if count == 0 else (start, start + count - 1))
-    return hunks
 
 
 def scope_mutations(text: str, hunks: Sequence[tuple[int, int]]) -> tuple[str, list[int]]:
@@ -379,9 +369,19 @@ def _rel_to(root: pathlib.Path, path: pathlib.Path) -> str:
 
 
 # ---------- adapter ----------
+#: a loop / All() over cases picked from data (`foreach (var r in xs.Where(...))`,
+#: `xs.Where(...).All(...)`): passes vacuously when the data has no such case
+VACUOUS_LOOP = re.compile(
+    r"\bforeach\s*\([^;{]*?\.\s*Where\s*\(|\.\s*Where\s*\([^;]*\)\s*\.\s*All\s*\("
+)
+#: anything that shows the test checks that the picked cases are not zero
+NON_EMPTY = re.compile(r"\bNotEmpty\b|\bSingle\s*\(|\.\s*Any\s*\(|\bCount\b|\bLength\b")
+
+
 class DotnetAdapter(LanguageAdapter):
     name = "dotnet"
     source_suffixes = (".cs",)
+    line_scoped_format = True
 
     def __init__(self, cfg: Any) -> None:
         super().__init__(cfg)
@@ -705,6 +705,11 @@ class DotnetAdapter(LanguageAdapter):
                     problems.append(f"TRIVIAL ASSERTION (Assert.True(true)): {where}")
                 if re.search(r"\bAssert\s*\.\s*Skip\w*\s*\(|\bSkip\s*\.\s*If\w*\s*\(", m.body):
                     problems.append(f"INLINE SKIP: {where}")
+                if VACUOUS_LOOP.search(m.body) and not NON_EMPTY.search(m.body):
+                    problems.append(
+                        "LOOP OVER PICKED CASES WITHOUT A NON-EMPTY CHECK (passes with zero "
+                        f"cases; assert there is at least one): {where}"
+                    )
         return problems
 
     def test_classes(self, paths: Sequence[str]) -> list[str]:
@@ -798,6 +803,17 @@ class DotnetAdapter(LanguageAdapter):
             return CheckResult("PASS", "No changed C# files.")
         env = self.env() if pathlib.Path(argv[0]).stem.lower() == "dotnet" else None
         code, out = run_command(argv, self.root, env=env, timeout=self.settings.build_timeout)
+        if code != 0 and "--verify-no-changes" in argv:
+            # findings on lines the feature did not change are not its business: they would
+            # make agents reformat old code (or loop on a file they may not edit)
+            scoped, kept, ignored = self.scope_diagnostics(out, base_ref)
+            if ignored and not kept:
+                return CheckResult(
+                    "PASS",
+                    f"{ignored} finding(s) only on lines this feature did not change (ignored).",
+                )
+            if ignored:
+                out = scoped + f"\n({ignored} finding(s) on unchanged lines ignored)"
         return CheckResult("PASS" if code == 0 else "FAIL", out)
 
     def _typecheck(self, cmd: Sequence[str], base_ref: str | None) -> CheckResult:

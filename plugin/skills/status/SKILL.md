@@ -14,7 +14,7 @@ Show the output above in a code block, unchanged, then at most two short lines:
   `/agentflow:feature <f>`."
 - A feature shown as `DONE, run files cleaned up; tags left: ...`: if the user says its PR is
   merged, offer
-  `agentflow cleanup <f> --tags` (deletes the local spec-approved/tests-approved/spec-update
+  `agentflow cleanup <f> --tags` (deletes the local spec-approved/tests-approved/spec-update/tests-update
   tags; the CI frame diff needs them until the merge) and run it only on their yes.
 
 Do not start, approve or change anything else from here.

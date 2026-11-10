@@ -56,7 +56,8 @@ language = "{language}"            # "python" | "dotnet"
 # regression_timeout = 3600        # seconds for the uninstrumented whole-suite run
 # coverage_timeout = 1800          # seconds per coverage run; killed -> "ERROR: test run incomplete"
 # mutation_timeout = 3600          # seconds per mutation run (same)
-# format_fix = true                # the gates format the changed source files before checking
+# format_fix = true                # the gates format the changed source files (and review
+#                                  # tests; the test writer's files after its runs) before checking
 #                                  # (only with the adapter's own format check)
 # extra_timeout = 1800             # seconds per [gates.extra] check
 

@@ -29,8 +29,9 @@ from typing import Any
 
 from agentflow import notify, procs
 from agentflow.adapters import get_adapter
-from agentflow.adapters.base import LanguageAdapter
+from agentflow.adapters.base import GATE_NAMES, LanguageAdapter
 from agentflow.checks import red_stubs, test_smells, traceability
+from agentflow.checks.frame_diff import path_matches, tests_update_tag
 from agentflow.config import Config
 from agentflow.gates import gate_report
 from agentflow.hooks import AGENT_ENV
@@ -41,11 +42,12 @@ from agentflow.report import (
     parse_test_review,
     parse_triage,
     phase_table,
+    short_name,
     since_spec_approval,
     triage_verdict,
 )
 from agentflow.retro import build as build_retro_input
-from agentflow.retro import missing_ids, split_questions
+from agentflow.retro import missing_ids, parse_answer_items, split_questions
 from agentflow.specs import PlanStep, feature_ids, plan_steps
 from agentflow.state import (
     GitError,
@@ -77,7 +79,16 @@ PHASES = ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "REVIEW", "PR", "FINAL", "RETRO",
 METRICS_HEADER = (
     "date,feature,human_rejections,escalations,questions,gate_failures,cost_usd,parked,assumptions"
 )
-BRIEF_PHASES = {"TESTS", "TEST_REVIEW", "IMPLEMENT", "IMPLEMENT_STEPS", "FIX", "REVIEW", "TRIAGE"}
+BRIEF_PHASES = {
+    "TESTS",
+    "TESTS_AMEND",
+    "TEST_REVIEW",
+    "IMPLEMENT",
+    "IMPLEMENT_STEPS",
+    "FIX",
+    "REVIEW",
+    "TRIAGE",
+}
 #: Only the plain command forms are pre-approved (--allowedTools); a `cd`/PATH prefix, a pipe
 #: or a `;`/`&&` chain makes the permission check deny the call (seen in live runs on Windows:
 #: `dotnet test ... | Select-String`, `...; echo`). The PreToolUse hook blocks them with this
@@ -90,11 +101,23 @@ COMMAND_FORM = (
     "verbosity, quiet flags) or read the result file it writes with the Read tool; to search "
     "files use Grep / Glob / Read."
 )
+#: first lines of every task: most denied calls in live runs were chained `ls; cat; git log`
+#: calls just to look around
+LOOK_AROUND = (
+    "Look around with the Read, Glob and Grep tools (never `ls`, `cat`, `head`, `grep` or "
+    "`git show` in a shell). The shell is only for the commands your task and the conventions "
+    "name, one plain command per call. Write files with the Write / Edit tools, never with shell "
+    "redirection (`>`, `>>`, heredocs)."
+)
+#: names left out of the orientation's file lists
+ORIENTATION_SKIP = {"prompts", "progress.log", "progress.cursor", "progress.json", "parked"}
 NO_STOP = (
     "Nobody answers questions during the run. Where the spec is ambiguous, assume what fits the "
-    "spec best and log it in {out}/{f}/steps.md (`- ASSUMPTION [<spec ID>]: ...`). Only if no "
+    "spec best and log it in your step note (`- ASSUMPTION [<spec ID>]: ...`). Only if no "
     "reasonable assumption is possible, write the question to {out}/{f}/park.md and stop: the "
-    "work is parked and the run continues."
+    "work is parked and the run continues.\n"
+    "Step note: write it with the Write tool to {note} (agentflow appends it to "
+    "{out}/{f}/steps.md; do not edit steps.md yourself)."
 )
 REDO_NOTE = (
     "\n\nThis is a redo of parked work: the human answered the parked question(s) in "
@@ -105,6 +128,15 @@ TASKS = {
     "TESTS": "Feature '{f}': write the tests from {specs}/{f}/ and the interface stubs in {src}/. "
     "Write the summary table to {out}/{f}/test_summary.md. A question the spec does not settle "
     "goes to {out}/{f}/questions.md; then continue with the rest (do not stop).",
+    "TESTS_AMEND": "Feature '{f}': the human answered questions at the final gate (answer "
+    "reference {ref}; answers: {out}/{f}/answers.md, the questions: the last section of "
+    "{out}/{f}/questions_archive.md); the spec was updated from them where needed. The "
+    "implementation exists and the tests are frozen for everyone but you. Change the tests only "
+    "where an answer requires it: fixtures or seeds, expected values, tests for spec IDs that "
+    "have none yet, a review test in {review_tests}/ that an answer names. Change nothing else; "
+    "if no answer needs a test change, change nothing. Then append to {out}/{f}/test_summary.md "
+    "a section '## Changes from {ref}' (what changed, or 'No test change: <why>'). A question the "
+    "answers do not settle goes to {out}/{f}/questions.md.",
     "TEST_REVIEW": "Feature '{f}': review the tests against {specs}/{f}/ (round {round} of at "
     "most {rounds}). Inputs: the tests tagged with the feature's spec IDs, "
     "{out}/{f}/test_summary.md, the mechanical checks in {out}/{f}/test_checks.md, and "
@@ -309,10 +341,42 @@ class Orchestrator:
 
     def task_text(self, kind: str, feature: str, **extra: str) -> str:
         task = TASKS[kind].format(**self.placeholders(feature), **extra)
+        task += "\n\n" + LOOK_AROUND + "\n\n" + self.orientation(feature)
         if kind in BRIEF_PHASES:
             task += "\n\n## Conventions\n" + self.adapter.conventions_brief().strip()
             task += "\n" + COMMAND_FORM
         return task
+
+    def orientation(self, feature: str) -> str:
+        """What agents otherwise look up with chained `ls` / `git log --stat` calls at the start
+        of a run (denied in a run): the feature's spec and run files and the last commits."""
+
+        def files(folder: pathlib.Path) -> str:
+            if not folder.is_dir():
+                return "(none)"
+            names = sorted(
+                p.relative_to(folder).as_posix() + ("/" if p.is_dir() else "")
+                for p in folder.iterdir()
+                if p.name not in ORIENTATION_SKIP
+            )
+            return ", ".join(names) or "(empty)"
+
+        try:
+            log = git(self.cfg, "log", "-3", "--stat", "--format=%h %s").strip().splitlines()
+        except GitError:
+            log = []
+        if len(log) > 40:
+            log = [*log[:40], "..."]
+        p = self.cfg.paths
+        return "\n".join(
+            [
+                "## Orientation (gathered by agentflow just now; no need to look it up again)",
+                f"- {p.specs}/{feature}/: {files(self.cfg.spec_dir(feature))}",
+                f"- {p.out}/{feature}/: {files(self.cfg.feature_out(feature))}",
+                "- Last commits (git log -3 --stat):",
+                *(f"    {line}" for line in log or ["(none)"]),
+            ]
+        )
 
     def claude_cmd(self) -> list[str]:
         if self._claude is None:
@@ -480,8 +544,8 @@ class Orchestrator:
                 f"No retro: agentflow finish {f} --no-retro   (DONE)\n"
                 f"Parked:   write {out}/{f}/answers.md, then agentflow answer {f} and "
                 f"agentflow run {f}\n"
-                "          (answers go into the spec, then only the parked items are redone and "
-                "this gate comes again)"
+                "          (answers go into the spec and, where needed, the tests; then only the "
+                "parked items are redone and this gate comes again)"
             )
         return f"=== GATE: {gate} ({f}) ===\n{files}\n{msg}"
 
@@ -643,6 +707,24 @@ class Orchestrator:
                 p.unlink()
         return text.strip()
 
+    def note_path(self, feature: str, slug: str) -> str:
+        """The implementer's step note (written with the Write tool, appended to steps.md by
+        agentflow: an append through the shell is denied in a run)."""
+        return f"{self.cfg.paths.out}/{feature}/notes/{slug}.md"
+
+    def take_step_notes(self, feature: str) -> None:
+        """Append the implementer's step notes to steps.md (oldest first) and remove them."""
+        notes = self.fdir(feature) / "notes"
+        if not notes.is_dir():
+            return
+        found = sorted(notes.glob("*.md"), key=lambda p: p.stat().st_mtime)
+        for p in found:
+            text = p.read_text(encoding="utf-8").strip()
+            if text:
+                with open(self.fdir(feature) / "steps.md", "a", encoding="utf-8") as fh:
+                    fh.write("\n" + text + "\n")
+            p.unlink()
+
     def implement_loop(
         self,
         feature: str,
@@ -674,6 +756,7 @@ class Orchestrator:
                     retry_turn_cap=False,
                 )
                 question = self.take_park_request(feature)
+                self.take_step_notes(feature)
                 self.report_new_assumptions(feature, prog)
                 t0 = time.time()
                 rep = None if question else gate_report(self.adapter, feature, "step")
@@ -711,6 +794,18 @@ class Orchestrator:
                 prog["feedback"] = ""
                 save_progress(self.cfg, feature, prog)
                 return True
+            unfixable = self.unfixable(rep)
+            if unfixable:
+                self.park(
+                    feature,
+                    prog,
+                    item,
+                    f"unfixable in IMPLEMENT: {unfixable}",
+                    attempts=attempt,
+                    failed=rep.failed,
+                    excerpt=rep.excerpt(),
+                )
+                return False
             kind = hit_cap(res)
             capped = turn_cap_note(self.cap_value("IMPLEMENT", kind), kind) if kind else ""
             prog["feedback"] = (
@@ -735,6 +830,37 @@ class Orchestrator:
                     excerpt=rep.excerpt(),
                 )
                 return False
+
+    def unfixable(self, rep: Any) -> str:
+        """If every failing check of a step gate is a lint / format check whose findings are all
+        in files the implementer may not edit (frozen tests, review tests): what and where, so
+        the item parks at once instead of looping through attempts it cannot win. "" else."""
+        style = {GATE_NAMES["lint"], GATE_NAMES["format"]}
+        if not rep.failed or any(name not in style for name in rep.failed):
+            return ""
+        writable = self.cfg.write_paths("IMPLEMENT")
+        parts = []
+        for name in rep.failed:
+            paths = self.failure_paths(rep.outputs.get(name, ""))
+            if not paths or any(path_matches(p, writable) for p in paths):
+                return ""
+            parts.append(f"{name} fails only in files it may not edit: {', '.join(sorted(paths))}")
+        return "; ".join(parts)
+
+    def failure_paths(self, text: str) -> set[str]:
+        """Repository files (posix, relative) named in a check's output."""
+        sfx = "|".join(re.escape(s.lstrip(".")) for s in self.adapter.source_suffixes) or r"\w+"
+        root = self.cfg.root.resolve()
+        found = set()
+        for m in re.finditer(rf"(?:[A-Za-z]:)?[\w.\-/\\]+\.(?:{sfx})\b", text):
+            path = pathlib.Path(m.group(0).replace("\\", "/"))
+            try:
+                rel = (path if path.is_absolute() else root / path).resolve().relative_to(root)
+            except (ValueError, OSError):
+                continue
+            if (root / rel).is_file():
+                found.add(rel.as_posix())
+        return found
 
     def revert_src(self, feature: str, label: str) -> str:
         """Save the parked work's uncommitted source changes as a diff and restore the sources
@@ -792,12 +918,37 @@ class Orchestrator:
         )
 
     # ---------- TESTS: writer <-> reviewer, then the tests gate ----------
+    def changed_tests(self) -> list[str]:
+        """Test files changed since the last commit (incl. untracked), posix, relative."""
+        tests = self.cfg.paths.tests.rstrip("/") + "/"
+        changed = set(git(self.cfg, "diff", "--name-only", "HEAD", "--", tests).split())
+        changed |= set(
+            git(self.cfg, "ls-files", "--others", "--exclude-standard", "--", tests).split()
+        )
+        return sorted(f for f in changed if (self.cfg.root / f).is_file())
+
+    def format_written_tests(self, feature: str) -> None:
+        """Format the test writer's files ([gates] format_fix): the implementer may not edit
+        tests, so a formatting slip in them would fail every later gate."""
+        if not self.adapter.format_fix_enabled():
+            return
+        try:
+            note = self.adapter.format_files(self.changed_tests(), "HEAD")
+        except Exception as e:  # the format check still reports it
+            note = f"skipped ({type(e).__name__}: {e})"
+        if note:
+            self.progress(feature, f"[TESTS] format fix: {note}")
+
     def phase_tests(self, feature: str, prog: dict[str, Any]) -> None:
         sub = prog.get("sub") or "write"
+        if sub == "amend":
+            self.amend_tests(feature, prog)
+            return
         while True:
             if sub == "write":
                 self.agent("TESTS", feature, prog, self.task_text("TESTS", feature))
                 self.collect_questions(feature, "TESTS", "test writer")
+                self.format_written_tests(feature)
                 sub = self.set_sub(feature, prog, "checks")
             if sub == "checks":
                 self.run_test_checks(feature, prog)
@@ -851,6 +1002,49 @@ class Orchestrator:
                 sub = self.set_sub(feature, prog, "gate")
             break
         self.tests_gate(feature, prog)
+
+    def amend_tests(self, feature: str, prog: dict[str, Any]) -> None:
+        """After answers at the final gate (and their spec update): the test writer applies
+        the answers that need a test change (fixtures, seeds, expectations, tests for new IDs,
+        a review test an answer names); the implementer may not touch tests, so without this
+        such an answer could never be applied. Changed tests get one test-reviewer pass (its
+        objections go to the final gate), are committed and tagged tests-update/<f>, the one
+        test change the frame diff allows after the tests were approved."""
+        amend = dict(prog.get("amend") or {})
+        ref = str(amend.get("ref") or "ANS-?")
+        nxt = dict(amend.get("then") or {"phase": "REVIEW", "sub": "final"})
+        self.agent("TESTS", feature, prog, self.task_text("TESTS_AMEND", feature, ref=ref))
+        self.collect_questions(feature, "TESTS", "test writer")
+        self.format_written_tests(feature)
+        changed = self.changed_tests()
+        if changed:
+            note = (
+                f"\n\nThis pass reviews only the test changes made from the answers {ref} "
+                f"(git diff HEAD -- {self.cfg.paths.tests}/); objections go to the human."
+            )
+            (self.fdir(feature) / "test_review.md").unlink(missing_ok=True)
+            task = self.task_text("TEST_REVIEW", feature, round="1", rounds="1", note=note)
+            self.agent("TEST_REVIEW", feature, prog, task, role="test_review")
+            self.collect_questions(feature, "TEST_REVIEW", "test reviewer")
+            review = self.read_test_review(feature)
+            if review.objections:
+                with open(self.fdir(feature) / "open_questions.md", "a", encoding="utf-8") as fh:
+                    for o in review.objections:
+                        fh.write(f"- [tests amended] test reviewer objection: {o}\n")
+            git(self.cfg, "add", "-A", "--", self.cfg.paths.tests)
+            git(self.cfg, "commit", "-q", "-m", f"{feature}: tests updated from answers {ref}")
+            git(self.cfg, "tag", "-f", tests_update_tag(feature))
+            prog["tests_amended"] = True  # the review fixes make the changed tests pass
+            if nxt.get("phase") == "PR":  # nothing else to redo
+                nxt = {"phase": "REVIEW", "sub": "fix"}
+        log_event(self.cfg, feature, "tests_amended", ref=ref, files=changed)
+        self.progress(
+            feature,
+            f"[TESTS] answers {ref}: "
+            + (f"{len(changed)} test file(s) changed, committed" if changed else "no test change"),
+        )
+        prog.update(phase=nxt.get("phase"), sub=nxt.get("sub"), amend=None, attempt=0)
+        save_progress(self.cfg, feature, prog)
 
     def run_test_checks(self, feature: str, prog: dict[str, Any]) -> None:
         sections = []
@@ -1066,33 +1260,52 @@ class Orchestrator:
                 batches.append([step])
         return batches
 
-    def parked_context(
-        self, feature: str, prog: dict[str, Any], steps: list[PlanStep], batch: list[PlanStep]
-    ) -> str:
-        """Task lines about parked earlier steps; records declared dependencies on them."""
+    def parked_ids(self, prog: dict[str, Any], steps: list[PlanStep]) -> list[str]:
+        """The spec IDs of the parked plan steps."""
+        parked = self.parked_steps(prog)
+        return [i for s in steps if s.num in parked for i in s.reqs]
+
+    def parked_context(self, prog: dict[str, Any], steps: list[PlanStep]) -> str:
+        """Task lines about parked steps: their IDs are off limits until they are redone."""
         parked = self.parked_steps(prog)
         if not parked:
             return ""
         names = ", ".join(dict.fromkeys(p["label"] for n, p in sorted(parked.items())))
-        text = (
+        return (
             f"\n\nParked steps (not implemented; their tests are not part of your check): {names}."
-            " Do not implement them."
+            f" Their spec IDs: {', '.join(self.parked_ids(prog, steps))}. Do not implement any of "
+            "them, also not the parts your work shares code with: they are redone after the "
+            "human's answer."
         )
+
+    def block_dependents(
+        self, feature: str, prog: dict[str, Any], batch: list[PlanStep]
+    ) -> list[PlanStep]:
+        """Steps of the batch that depend on a parked step (plan.md "Depends on") wait for it:
+        parked without a run, redone with it. Returns the steps that can run."""
+        runnable = []
         for step in batch:
-            for dep in step.depends:
-                if dep in parked:
-                    rec = parked[dep]
-                    if step.num not in rec.setdefault("dependents", []):
-                        rec["dependents"].append(step.num)
-                        save_progress(self.cfg, feature, prog)
-                        log_event(
-                            self.cfg, feature, "parked_dependency", step=step.num, depends_on=dep
-                        )
-                    text += (
-                        f" Step {step.num} depends on parked step {dep} (plan.md): build what "
-                        "you can without it and log what is missing as an assumption."
-                    )
-        return text
+            parked = self.parked_steps(prog)
+            dep = next((d for d in step.depends if d in parked), None)
+            if dep is None:
+                runnable.append(step)
+                continue
+            rec = parked[dep]
+            rec.setdefault("dependents", []).append(step.num)
+            log_event(self.cfg, feature, "step_blocked", step=step.num, depends_on=dep)
+            item = {"kind": "step", "step": step.num, "label": f"step {step.num} - {step.title}"}
+            self.park(feature, prog, item, f"waits for parked step {dep} (plan.md)", attempts=0)
+            if prog.get("redo_mode"):  # its redo ends here: it waits again
+                ended = [
+                    r
+                    for r in prog.get("redo") or []
+                    if r.get("kind") == "step" and step.num in item_steps(r)
+                ]
+                for r in ended:
+                    log_event(self.cfg, feature, "redo_result", label=r["label"], passed=False)
+                prog["redo"] = [r for r in prog.get("redo") or [] if r not in ended]
+                save_progress(self.cfg, feature, prog)
+        return runnable
 
     def phase_implement(self, feature: str, prog: dict[str, Any]) -> None:
         steps = plan_steps(self.cfg, feature)
@@ -1116,6 +1329,9 @@ class Orchestrator:
             and (redo_for([s.num]) if redo_mode else s.num not in self.parked_steps(prog))
         ]
         for batch in self.step_batches(pending):
+            batch = self.block_dependents(feature, prog, batch)
+            if not batch:
+                continue
             nums = [s.num for s in batch]
             redo = redo_for(nums)
             reqs = [i for s in batch for i in s.reqs]
@@ -1131,6 +1347,7 @@ class Orchestrator:
             )
             covered = self.done_ids(prog, steps) + reqs
             check = self.adapter.test_command(covered)
+            note = self.note_path(feature, "step-" + "-".join(map(str, nums)))
             if one:
                 task = self.task_text(
                     "IMPLEMENT",
@@ -1139,6 +1356,7 @@ class Orchestrator:
                     title=batch[0].title,
                     ids=", ".join(reqs),
                     check=check,
+                    note=note,
                 )
             else:
                 task = self.task_text(
@@ -1148,8 +1366,9 @@ class Orchestrator:
                     titles="; ".join(f"{s.num}. {s.title} ({', '.join(s.reqs)})" for s in batch),
                     ids=", ".join(reqs),
                     check=check,
+                    note=note,
                 )
-            task += self.parked_context(feature, prog, steps, batch)
+            task += self.parked_context(prog, steps)
             if redo:
                 task += REDO_NOTE.format(**self.placeholders(feature))
             item: dict[str, Any] = {"kind": "step", "step": nums[0], "label": label}
@@ -1165,7 +1384,8 @@ class Orchestrator:
         clear_reqs(self.cfg)
         if redo_mode:
             findings = [r for r in prog.get("redo") or [] if r.get("kind") == "finding"]
-            self.advance(feature, prog, "REVIEW", sub="fix" if findings else "final")
+            fix = findings or prog.get("tests_amended")
+            self.advance(feature, prog, "REVIEW", sub="fix" if fix else "final")
         else:
             self.advance(feature, prog, "REVIEW", sub="agent")
 
@@ -1185,15 +1405,26 @@ class Orchestrator:
     def phase_review(self, feature: str, prog: dict[str, Any]) -> None:
         sub = prog.get("sub") or "agent"
         if sub == "agent":
-            self.agent("REVIEW", feature, prog, self.task_text("REVIEW", feature))
+            task = self.task_text("REVIEW", feature)
+            parked = self.parked_ids(prog, plan_steps(self.cfg, feature))
+            if parked:
+                task += (
+                    f"\n\nParked plan steps (not implemented yet, redone after the human's answer)"
+                    f" own these spec IDs: {', '.join(parked)}. Write no findings about them."
+                )
+            self.agent("REVIEW", feature, prog, task)
             self.collect_questions(feature, "REVIEW", "adversarial reviewer")
             findings = self.review_failures(feature)
             if findings:
                 log_event(self.cfg, feature, "review_findings", tests=findings)
                 prog["findings"] = findings
-            sub = self.set_sub(feature, prog, "triage" if findings else "final")
+            amended = prog.get("tests_amended")
+            sub = self.set_sub(
+                feature, prog, "triage" if findings else "fix" if amended else "final"
+            )
         if sub == "triage":
-            sub = self.set_sub(feature, prog, "fix" if self.triage(feature, prog) else "final")
+            fix = self.triage(feature, prog) or prog.get("tests_amended")
+            sub = self.set_sub(feature, prog, "fix" if fix else "final")
         if sub == "fix":
             self.fix_findings(feature, prog)
             sub = self.set_sub(feature, prog, "final")
@@ -1263,15 +1494,48 @@ class Orchestrator:
             for t in remaining
             if t not in findings
         ]
+        deferred = self.defer_parked_findings(feature, prog, remaining)
+        for r in records:
+            if r["test"] in deferred:
+                r["verdict"] = "DEFERRED"
+                r["reason"] = f"{r['reason']}; only IDs of a parked step: fixed with its redo"
+        remaining = [t for t in remaining if t not in deferred]
         log_event(self.cfg, feature, "triage", findings=records, remaining=remaining)
         valid = sum(1 for r in records if r["verdict"] == "VALID")
         self.progress(
-            feature, f"[TRIAGE] {valid} valid finding(s), {len(records) - valid} dismissed."
+            feature,
+            f"[TRIAGE] {valid} valid finding(s), "
+            + (f"{len(deferred)} deferred to parked steps, " if deferred else "")
+            + f"{len(records) - valid - len(deferred)} dismissed.",
         )
         commit(self.cfg, f"{feature}: review findings triaged ({valid} valid)")
         prog["valid_findings"] = remaining
         save_progress(self.cfg, feature, prog)
         return bool(remaining)
+
+    def defer_parked_findings(
+        self, feature: str, prog: dict[str, Any], findings: list[str]
+    ) -> list[str]:
+        """Valid findings whose review test is tagged only with IDs of parked steps: not for the
+        review fixes (they would build the parked step); the step's redo covers them (its check
+        runs the tests of its IDs, review tests included). Returns them."""
+        parked = set(self.parked_ids(prog, plan_steps(self.cfg, feature)))
+        if not parked or not findings:
+            return []
+        try:
+            tags = self.adapter.collect_req_tags()
+        except Exception:  # a broken test file: nothing is deferred
+            return []
+        review = self.cfg.paths.review_tests.rstrip("/") + "/"
+        ids_of: dict[str, set[str]] = {}
+        for req, where in tags.items():
+            for w in where:
+                if w.startswith(review):
+                    ids_of.setdefault(short_name(w), set()).add(req)
+        deferred = [t for t in findings if ids_of.get(short_name(t), {""}) <= parked]
+        if deferred:
+            log_event(self.cfg, feature, "findings_deferred", tests=deferred, ids=sorted(parked))
+        return deferred
 
     def fix_findings(self, feature: str, prog: dict[str, Any]) -> None:
         steps = plan_steps(self.cfg, feature)
@@ -1281,7 +1545,26 @@ class Orchestrator:
             tests += [t for t in r.get("tests") or [] if t not in tests]
         # with parked steps, their tests are red by design: check only the done steps' IDs
         reqs = self.done_ids(prog, steps) if self.parked_steps(prog) else None
-        task = self.task_text("FIX", feature, check=self.adapter.test_command(reqs))
+        amended = bool(prog.pop("tests_amended", False))
+        save_progress(self.cfg, feature, prog)
+        if amended and not tests and not redo:
+            # only tests changed from answers: no fix run if they pass already
+            if reqs:
+                set_reqs(self.cfg, reqs)
+            else:
+                clear_reqs(self.cfg)
+            rep = gate_report(self.adapter, feature, "step")
+            clear_reqs(self.cfg)
+            if rep.ok:
+                self.progress(feature, "[review fixes] the changed tests pass; no fix needed")
+                return
+        task = self.task_text(
+            "FIX",
+            feature,
+            check=self.adapter.test_command(reqs),
+            note=self.note_path(feature, "review-fixes"),
+        )
+        task += self.parked_context(prog, steps)
         if redo:
             task += REDO_NOTE.format(**self.placeholders(feature))
         item = {"kind": "finding", "step": None, "label": "review fixes", "tests": tests}
@@ -1486,9 +1769,10 @@ class Orchestrator:
         self.echo(f"Spec changes from the answers approved: spec-approved/{feature} moved.")
 
     def drop_spec_update_tag(self, feature: str) -> None:
-        tag = f"spec-update/{feature}"
-        if tag_exists(self.cfg, tag):
-            git(self.cfg, "tag", "-d", tag)
+        """A new spec approval restarts from the tests: the answer tags of the old one go."""
+        for tag in (f"spec-update/{feature}", tests_update_tag(feature)):
+            if tag_exists(self.cfg, tag):
+                git(self.cfg, "tag", "-d", tag)
 
     def phase_spec_update(self, feature: str, prog: dict[str, Any]) -> None:
         """One agent run writes the answers into requirements.md / design.md (/ plan.md Covers
@@ -1554,10 +1838,7 @@ class Orchestrator:
         if not marked:
             notes.append(f"{ref}: the changes are not marked with '{ref}'")
         if gate == "final" and new_ids:
-            notes.append(
-                f"{ref}: new IDs after the tests were approved have no tests yet (traceability "
-                "fails); to add tests, change the spec and run agentflow approve-spec"
-            )
+            notes.append(f"{ref}: new IDs get their tests from the test writer next")
         prog["spec_update_notes"] = [*(prog.get("spec_update_notes") or []), *notes]
         log_event(
             self.cfg,
@@ -1581,6 +1862,9 @@ class Orchestrator:
             )
         if not changed and su.get("unchanged"):  # nothing to redo for an unchanged spec
             then = su["unchanged"]
+        if su.get("amend"):  # final gate: the test writer applies answers that need tests
+            prog["amend"] = {"ref": ref, "then": then}
+            then = {"phase": "TESTS", "sub": "amend"}
         prog.update(
             phase=then.get("phase"),
             sub=then.get("sub"),
@@ -2031,9 +2315,22 @@ class Orchestrator:
         open_q = oq.read_text(encoding="utf-8") if oq.is_file() else ""
         ref = self.answer_ref(feature)
         reply = f"### Answer {ref} (answers.md)\n{text}"
+        # the numbered items as the gate showed them (final: parked first), so the retro can
+        # pair every question with its own answer
+        shown = split_questions(open_q)
+        if gate == "final":
+            shown = [
+                f"[{p['label']}] {p.get('question') or p.get('reason')}"
+                for p in prog.get("parked") or []
+            ] + shown
+        items = [
+            dict(it, q=it["q"] or (shown[it["n"] - 1] if 0 < it["n"] <= len(shown) else ""))
+            for it in parse_answer_items(text)
+        ]
+        logged: dict[str, Any] = {"ref": ref, "answer": text[:20000], "items": items}
         if gate == "tests":
             self.archive_questions(feature, "tests gate", open_q, reply)
-            log_event(self.cfg, feature, "answer", gate="tests", ref=ref, answer=text[-2000:])
+            log_event(self.cfg, feature, "answer", gate="tests", **logged)
             prog.update(
                 waiting=None,
                 phase="SPEC_UPDATE",
@@ -2072,8 +2369,7 @@ class Orchestrator:
                     "answer",
                     gate="final",
                     parked=[],
-                    ref=ref,
-                    answer=text[-2000:],
+                    **logged,
                 )
                 prog.update(
                     waiting=None,
@@ -2087,13 +2383,15 @@ class Orchestrator:
                         "then": {"phase": "REVIEW", "sub": "agent"},
                         "unchanged": {"phase": "PR", "sub": None},
                         "feedback": "",
+                        "amend": True,
                     },
                 )
                 save_progress(self.cfg, feature, prog)
                 self.echo(
-                    f"Answers recorded ({ref}); the next run writes them into the spec; if it "
-                    "changes, the reviewer checks the code against it again; then the final gate "
-                    "again."
+                    f"Answers recorded ({ref}); the next run writes them into the spec, the test "
+                    "writer applies the ones that need a test change; if the spec changed, the "
+                    "reviewer checks the code against it again (changed tests: the implementer "
+                    "makes them pass); then the final gate again."
                 )
                 self.echo(f"Next: agentflow run {feature}")
                 return EXIT_OK
@@ -2107,8 +2405,7 @@ class Orchestrator:
                 "answer",
                 gate="final",
                 parked=[p["label"] for p in parked],
-                ref=ref,
-                answer=text[-2000:],
+                **logged,
             )
             steps = [p for p in parked if p.get("kind") == "step"]
             then = (
@@ -2122,13 +2419,19 @@ class Orchestrator:
                 attempt=0,
                 phase="SPEC_UPDATE",
                 sub=None,
-                spec_update={"gate": "final", "ref": ref, "then": then, "feedback": ""},
+                spec_update={
+                    "gate": "final",
+                    "ref": ref,
+                    "then": then,
+                    "feedback": "",
+                    "amend": True,
+                },
             )
             save_progress(self.cfg, feature, prog)
             self.echo(
-                f"Answers recorded ({ref}); the next run writes them into the spec, then redoes "
-                f"only the parked items ({', '.join(p['label'] for p in parked)}), then the final "
-                "gate again."
+                f"Answers recorded ({ref}); the next run writes them into the spec, the test "
+                "writer applies the ones that need a test change, then only the parked items "
+                f"are redone ({', '.join(p['label'] for p in parked)}), then the final gate again."
             )
         self.echo(f"Next: agentflow run {feature}")
         return EXIT_OK

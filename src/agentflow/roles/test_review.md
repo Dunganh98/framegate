@@ -15,6 +15,9 @@ For every spec ID (R, E, I) check:
 - Wrong expectations: a value, exception type or message the spec does not say.
 - Tests coupled to implementation details: private names, call counts, internal structure,
   mocks of the module under test, exact float equality where the spec gives a tolerance.
+- Pinned data (seed, recording) without a fixture precondition test (`test_fixture_*` /
+  `Fixture_*`) proving that the data has the situation; a check over picked cases that passes
+  when zero cases are picked.
 Do not object to style, naming or file layout.
 
 Write {out}/{feature}/test_review.md:

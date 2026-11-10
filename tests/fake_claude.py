@@ -316,7 +316,8 @@ def main() -> int:
         step = nums[-1] if nums else 0
         parked = state.setdefault("parked", [])
         neg = (NEG_DONE if "# neg-done" in cur or step == 2 else NEG_STUB) if two else ""
-        strict = "type(a) is not int" in cur
+        # strict once the code is, or once a failing review test (gate feedback) asks for it
+        strict = "type(a) is not int" in cur or lang["valid_name"] in prompt
         fails = state.get("implement_failed", 0)
         park = [n for n in nums if n in scen.get("park_steps", []) and n not in parked]
         if park:
@@ -336,7 +337,11 @@ def main() -> int:
             if scen.get("assume") and not state.get("assumed"):
                 state["assumed"] = True
                 note = "- ASSUMPTION [DEMO-E-001]: bool counts as int (spec silent).\n"
-            with open("out/demo/steps.md", "a", encoding="utf-8") as f:
+            # the step note goes where the task says (agentflow appends it to steps.md)
+            m = re.search(r"Step note: write it with the Write tool to (\S+\.md)", prompt)
+            target = pathlib.Path(m.group(1) if m else "out/demo/steps.md")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(target, "a", encoding="utf-8") as f:
                 f.write(f"## Step {step or 'fix'} — add\nBuilt add().\n{note}")
     elif phase == "REVIEW":
         lines = ""

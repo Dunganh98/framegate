@@ -52,7 +52,7 @@ fail for no reason. Reading files and git log/diff/status are fine.
 | tests | answers to numbered questions | write `<out>/<f>/answers.md` (below), then `agentflow answer <f>` |
 | final | approval: "ok", "approve", "done", "finish", "looks good", "retro" | `agentflow approve <f>` (retro, then DONE) |
 | final | explicitly no retro: "no retro", "skip the retro", "without retro" | `agentflow finish <f> --no-retro` |
-| final | answers to parked items / numbered questions | write `<out>/<f>/answers.md`, then `agentflow answer <f>` |
+| final | answers to parked items / numbered questions | write `<out>/<f>/answers.md`, then `agentflow answer <f>` (answers that need a test change, e.g. other seeds or a fixed review test, are applied by the test writer; no need to ask the user to edit tests) |
 
    - The tests gate comes only with `[gates] tests = "human"` or `"auto"`; by default the run
      goes from the spec straight to the final gate, and the tests' questions are numbered there.
