@@ -73,6 +73,8 @@ def test_full_flow_human_mode(demo_repo: DemoRepo, capsys: pytest.CaptureFixture
     # TESTS: writer (asks, continues) -> checks -> reviewer objects -> writer -> reviewer OK
     assert r.af("run", "demo") == EXIT_GATE
     assert phases(r) == ["TESTS", "TEST_REVIEW", "TESTS", "TEST_REVIEW"]
+    # every agent run is marked for its hooks (a chat session next to the run is not)
+    assert [c["agent_env"] for c in r.calls()] == ["tests", "test_review", "tests", "test_review"]
     assert not (r.root / ".phase").exists()
     assert "The test reviewer objected" in r.calls()[2]["prompt"]
     assert "also check the message" in r.calls()[2]["prompt"]
@@ -473,6 +475,190 @@ def test_tests_gate_auto_stops_when_not_clean(
         assert phases(r) == ["TESTS", "TEST_REVIEW", "TESTS", "TEST_REVIEW"]
     assert r.af("approve", "demo") == 0  # the human decides as in human mode
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+
+
+def test_tests_gate_deferred_two_human_gates(
+    demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """[gates] tests = "defer" (the default): spec -> final gate without a stop. The test
+    writer's question and the objection left go to the final gate, are answered there (spec
+    updated, reviewer runs again), then approve -> retro -> DONE."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.defer_tests_gate()
+    r.set_toml("agents", "test_review_rounds", "0")
+    r.scenario(questions_in=["TESTS"], test_review_objections=1)
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+    assert phases(r) == ["TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "PR"]
+    assert git(r.root, "tag", "--list", "tests-approved/demo").strip()
+    deferred = [e for e in r.events() if e["kind"] == "tests_gate_deferred"]
+    assert len(deferred) == 1
+    assert "1 open question(s)" in deferred[0]["reasons"]
+    assert "test reviewer: 1 objection(s)" in deferred[0]["reasons"]
+    out = capsys.readouterr().out
+    assert 'Tests gate: no stop ([gates] tests = "defer"); for the final gate:' in out
+    assert "TESTS GATE" not in out
+    open_q = read(r, "out/demo/open_questions.md")
+    assert "[test writer]" in open_q and "[tests gate] test reviewer objection left:" in open_q
+    assert "2 open question(s)" in r.progress()["waiting"]["message"]
+
+    # answers to the questions only (nothing parked): spec update, review again, final gate
+    (r.root / "out/demo/answers.md").write_text("1. Floats are rejected.\n", encoding="utf-8")
+    assert r.af("answer", "demo") == 0
+    assert r.progress()["phase"] == "SPEC_UPDATE"
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+    assert phases(r)[5:] == ["SPEC_UPDATE", "REVIEW", "PR"]
+    assert not (r.root / "out/demo/open_questions.md").exists()
+    assert "Floats are rejected." in read(r, "out/demo/questions_archive.md")
+    finish_with_retro(r)
+
+
+def test_answers_with_an_unchanged_spec_skip_the_review(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    r.add_toml(FAST)
+    r.defer_tests_gate()
+    r.scenario(questions_in=["TESTS"], spec_update="none")
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+    (r.root / "out/demo/answers.md").write_text("1. As written.\n", encoding="utf-8")
+    assert r.af("answer", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+    assert phases(r)[5:] == ["SPEC_UPDATE", "PR"]  # no spec change: nothing to review again
+    assert r.af("answer", "demo") == 1  # nothing parked, no question open any more
+
+
+def flag(call: dict[str, object], name: str) -> str | None:
+    argv = list(call["argv"])  # type: ignore[call-overload]
+    return str(argv[argv.index(name) + 1]) if name in argv else None
+
+
+def test_models_per_phase(demo_repo: DemoRepo) -> None:
+    """Writers on Sonnet, checkers and the retro on Opus by default; [agents] / [phases.<P>]
+    override; the model of each run is in the events (to compare cost and failed attempts)."""
+    r = demo_repo
+    r.add_toml(FAST + '[phases.IMPLEMENT]\neffort = "high"\n')
+    r.defer_tests_gate()
+    r.scenario(review_finding=True)
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+    finish_with_retro(r)
+    models = {(c["phase"], flag(c, "--model"), flag(c, "--effort")) for c in r.calls()}
+    assert models == {
+        ("TESTS", "sonnet", None),
+        ("TEST_REVIEW", "opus", None),
+        ("IMPLEMENT", "sonnet", "high"),  # incl. the review fixes
+        ("REVIEW", "opus", None),
+        ("TRIAGE", "opus", None),
+        ("PR", "sonnet", None),
+        ("RETRO", "opus", None),
+    }
+    runs = [e for e in r.events() if e["kind"] == "agent_run"]
+    assert {e["model"] for e in runs} == {"sonnet", "opus"}
+
+
+def test_small_plan_in_one_implementer_run(demo_repo: DemoRepo) -> None:
+    """Default [agents] step_batch_ids: the two small steps run as one implementer run, are
+    committed together and count as done each."""
+    r = demo_repo
+    r.two_steps()
+    r.add_toml(FAST)
+    r.defer_tests_gate()
+    r.set_toml("agents", "step_batch_ids", "15")
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+    assert phases(r) == ["TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "PR"]
+    impl = r.calls()[2]["prompt"]
+    assert "implement plan steps 1, 2 in one go, in plan order: 1. add (DEMO-R-001" in impl
+    assert "2. neg (DEMO-R-002)" in impl
+    assert r.progress()["completed_steps"] == [1, 2]
+    assert "| step 2 - neg | done | 0 |" in read(r, "out/demo/final_facts.md")
+    assert "demo: steps 1, 2" in git(r.root, "log", "--format=%s")
+
+
+def test_a_parked_batch_is_redone_as_one(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    r.two_steps()
+    r.add_toml(FAST)
+    r.defer_tests_gate()
+    r.set_toml("agents", "step_batch_ids", "15")
+    r.scenario(park_steps=[2])
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+    parked = r.progress()["parked"]
+    assert [(p["label"], p["steps"]) for p in parked] == [("steps 1, 2", [1, 2])]
+    facts = read(r, "out/demo/final_facts.md")
+    assert "| step 1 - add | PARKED (no reasonable assumption possible (question)) | 0 |" in facts
+    (r.root / "out/demo/answers.md").write_text("1. neg(0) is 0.\n", encoding="utf-8")
+    assert r.af("answer", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+    assert phases(r)[-3:] == ["SPEC_UPDATE", "IMPLEMENT", "PR"]  # the batch once, as one run
+    assert r.progress()["completed_steps"] == [1, 2] and not r.progress()["parked"]
+    redo = [e for e in r.events() if e["kind"] == "redo_result"]
+    assert [(e["label"], e["passed"]) for e in redo] == [("steps 1, 2", True)]
+
+
+def test_format_fix_and_project_checks(demo_repo: DemoRepo) -> None:
+    """The gates format the changed source files before checking (no attempt lost on a
+    formatting slip); [gates.extra] project checks run at the final gates and are shown at the
+    final gate, never blocking."""
+    r = demo_repo
+    r.defer_tests_gate()
+    r.add_toml(
+        "[gates.extra]\n"
+        "balance = ['python', '-c', 'print(\"slide win rate 0.31\")']\n"
+        "broken = ['python', '-c', 'import sys; print(\"no data\"); sys.exit(3)']\n"
+    )
+    r.set_toml("gates", "mutation_tool", '"none"')
+    assert r.af("approve-spec", "demo") == 0
+    tag = "tests-approved/demo"
+    orch = Orchestrator(load_config(r.root), echo=lambda s: None)
+    # a badly formatted source change after the tests were approved
+    git(r.root, "tag", "-f", tag)
+    impl = r.root / "src/demo/__init__.py"
+    impl.write_text(
+        impl.read_text(encoding="utf-8") + "\n\ndef   helper( x ):\n    return  x\n",
+        encoding="utf-8",
+    )
+    from agentflow.gates import gate_report
+
+    rep = gate_report(orch.adapter, "demo", "step")
+    assert "Format fix: formatted 1 changed source file(s)" in rep.report
+    assert "def helper(x):\n    return x" in impl.read_text(encoding="utf-8")
+    assert "format" not in rep.failed
+    rep = gate_report(orch.adapter, "demo", "final")
+    assert rep.extra == {"balance": 0, "broken": 3}
+    assert "[OK] balance (full output: out/demo/extra_balance.log)" in rep.report
+    assert "slide win rate 0.31" in rep.report and "[EXIT 3] broken" in rep.report
+    assert not any("balance" in f or "broken" in f for f in rep.failed)
+    assert read(r, "out/demo/extra_broken.log").strip() == "no data"
+
+
+def test_retro_after_finish_without_it(
+    demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`finish --no-retro` by mistake: approve still runs the retro; the metrics row is not
+    written twice; the messages say what happened instead of "not at a gate"."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.defer_tests_gate()
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+    assert r.af("finish", "demo", "--no-retro") == 0
+    assert r.progress()["phase"] == "DONE"
+    capsys.readouterr()
+    assert r.af("reject", "demo", "--reason", "x") == 1
+    err = capsys.readouterr().err
+    assert "already DONE (finished without the retro; `agentflow approve demo` still runs" in err
+    assert r.af("approve", "demo") == 0
+    assert r.progress()["phase"] == "RETRO"
+    assert r.af("run", "demo") == 0
+    assert r.progress()["phase"] == "DONE" and phases(r)[-1] == "RETRO"
+    assert (r.root / "out/demo/retro_proposals.md").is_file()
+    rows = (r.root / "metrics/workflow_metrics.csv").read_text(encoding="utf-8").splitlines()
+    assert len(rows) == 2  # header + one row
+    assert r.af("approve", "demo") == 1  # DONE with the retro: nothing left to approve
+    assert "already DONE;" in capsys.readouterr().err
 
 
 def test_resume_after_interruption_at_each_gate(demo_repo: DemoRepo) -> None:

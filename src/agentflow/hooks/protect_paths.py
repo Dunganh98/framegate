@@ -10,7 +10,7 @@ from __future__ import annotations
 import pathlib
 from typing import Any
 
-from agentflow.hooks import find_root_fast, parse_input
+from agentflow.hooks import find_root_fast, in_agent_run, parse_input
 from agentflow.hooks.shell_form import SHELL_TOOLS, form_problem, message
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
@@ -18,7 +18,10 @@ WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
 def evaluate_shell(data: dict[str, Any]) -> tuple[int, str]:
     """Bash / PowerShell during an agentflow run (a .phase other than SPEC): block a pipe,
-    chain or prefix with an actionable reason instead of the permission check's silent denial."""
+    chain or prefix with an actionable reason instead of the permission check's silent denial.
+    Only for agents started by the run: a chat session at the same time is not restricted."""
+    if not in_agent_run():
+        return 0, ""
     command = (data.get("tool_input") or {}).get("command")
     if not isinstance(command, str):
         return 0, ""

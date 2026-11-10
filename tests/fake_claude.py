@@ -238,6 +238,7 @@ def main() -> int:
     with open(scen_path.with_name("calls.jsonl"), "a", encoding="utf-8") as f:
         call = {
             "phase": phase,
+            "agent_env": os.environ.get("AGENTFLOW_AGENT"),
             "argv": sys.argv[1:],
             "prompt": prompt,
             "role": pathlib.Path(role_file).read_text(encoding="utf-8"),
@@ -309,13 +310,17 @@ def main() -> int:
     elif phase == "IMPLEMENT":
         path = pathlib.Path(lang["impl"])
         cur = path.read_text(encoding="utf-8") if path.is_file() else ""
-        m = re.search(r"implement plan step (\d+)", prompt)
-        step = int(m.group(1)) if m else 0
+        # one step ("plan step 2") or a batch ("plan steps 1, 2 in one go"): the last one counts
+        m = re.search(r"implement plan steps? (\d+(?:, \d+)*)", prompt)
+        nums = [int(x) for x in m.group(1).split(", ")] if m else []
+        step = nums[-1] if nums else 0
         parked = state.setdefault("parked", [])
         neg = (NEG_DONE if "# neg-done" in cur or step == 2 else NEG_STUB) if two else ""
         strict = "type(a) is not int" in cur
         fails = state.get("implement_failed", 0)
-        if step in scen.get("park_steps", []) and step not in parked:
+        park = [n for n in nums if n in scen.get("park_steps", []) and n not in parked]
+        if park:
+            step = park[0]
             parked.append(step)
             write(lang["impl"], (lang["strict"] if strict else lang["loose"]) + NEG_PARTIAL)
             write("out/demo/park.md", f"- [DEMO-R-002] Step {step}: should neg(0) be 0 or -0?\n")

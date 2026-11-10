@@ -3,15 +3,18 @@ dotnet build, coverlet + diff-cover, Stryker.NET. See docs/adapters.md."""
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import json
 import os
 import pathlib
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -228,11 +231,98 @@ def run_summary(cases: Sequence[TestCase]) -> str:
     return ", ".join(f"{v} {k}" for k, v in counts.items())
 
 
+STRYKER_DISABLE = "// Stryker disable all"
+
+
+def disable_mutations(path: pathlib.Path) -> None:
+    """Prepend `// Stryker disable all` (after a BOM, in the file's line ending style): Stryker
+    neither compiles in nor tests the file's mutants."""
+    data = path.read_bytes()
+    bom = b"\xef\xbb\xbf" if data.startswith(b"\xef\xbb\xbf") else b""
+    eol = b"\r\n" if b"\r\n" in data else b"\n"
+    path.write_bytes(bom + STRYKER_DISABLE.encode() + eol + data[len(bom) :])
+
+
+STRYKER_RESTORE = "// Stryker restore all"
+_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.M)
+
+
+def diff_hunks(diff: str) -> list[tuple[int, int]]:
+    """Changed line ranges (1-based, inclusive, new file) of a `git diff -U0` of one file. A
+    pure deletion marks the lines around the gap."""
+    hunks = []
+    for m in _HUNK.finditer(diff):
+        start, count = int(m.group(1)), int(m.group(2) or "1")
+        hunks.append((max(start, 1), start + 1) if count == 0 else (start, start + count - 1))
+    return hunks
+
+
+def scope_mutations(text: str, hunks: Sequence[tuple[int, int]]) -> tuple[str, list[int]]:
+    """`text` with Stryker comments so that only the changed hunks are mutated (and compiled
+    with mutants): `// Stryker disable all` on top, `// Stryker restore all` before each hunk,
+    `// Stryker disable all` after it.
+
+    Stryker reads these comments only in front of a statement or member, so each hunk widens
+    to whole statements (a comment line goes only where the previous code line ends with `;`,
+    `{`, `}`, `]` or `:`, or is blank), and never into a string literal or block comment.
+    Returns (new text, original line number of each new line, 0 for an inserted line)."""
+    bom = "﻿" if text.startswith("﻿") else ""
+    body = text[len(bom) :]
+    eol = "\r\n" if "\r\n" in body else "\n"
+    lines = body.splitlines(keepends=True)
+    n = len(lines)
+    enclosed = csharp.enclosed_lines(body)
+    mask_lines = csharp.strip(body)[1].split("\n")
+
+    def opens_statement(k: int) -> bool:  # a comment may go before line k (1-based)
+        if k in enclosed:
+            return False
+        prev = k - 1
+        while prev >= 1 and not mask_lines[prev - 1].strip():
+            if prev - 1 < len(lines) and lines[prev - 1].strip():  # a comment line
+                return True
+            prev -= 1
+        return prev < 1 or mask_lines[prev - 1].rstrip()[-1:] in (";", "{", "}", "]", ":")
+
+    before: dict[int, str] = {1: STRYKER_DISABLE}
+    for start, end in sorted(hunks):
+        a = min(max(start, 1), n)
+        while a > 1 and not opens_statement(a):
+            a -= 1
+        b = end + 1
+        while b <= n and not opens_statement(b):
+            b += 1
+        if before.get(a) == STRYKER_DISABLE and a != 1:
+            del before[a]  # touches the previous hunk: one region
+        elif a == 1:
+            before[1] = STRYKER_DISABLE + eol + STRYKER_RESTORE
+        else:
+            before[a] = STRYKER_RESTORE
+        for k in [k for k in before if a < k < b]:
+            del before[k]
+        if b <= n:
+            before[b] = STRYKER_DISABLE
+    out: list[str] = []
+    orig: list[int] = []
+    for k, line in enumerate(lines, 1):
+        if k in before:
+            for comment in before[k].split(eol):
+                out.append(comment + eol)
+                orig.append(0)
+        out.append(line)
+        orig.append(k)
+    return bom + "".join(out), orig
+
+
 def stryker_results(
-    report: dict[str, Any], root: pathlib.Path, files: Sequence[str]
+    report: dict[str, Any],
+    root: pathlib.Path,
+    files: Sequence[str],
+    line_maps: dict[str, list[int]] | None = None,
 ) -> tuple[int, int, list[str]]:
     """(detected, undetected, survivor lines) for the given repo-relative files from a Stryker
-    mutation-report.json."""
+    mutation-report.json. line_maps: a scoped copy's line -> the original line (survivors are
+    listed with the line in the repository's file)."""
     wanted = {f.lower() for f in files}
     detected = undetected = 0
     survivors = []
@@ -247,8 +337,12 @@ def stryker_results(
             elif status in _STRYKER_UNDETECTED:
                 undetected += 1
                 start = (m.get("location") or {}).get("start") or {}
+                line = start.get("line", "?")
+                lmap = (line_maps or {}).get(rel.lower())
+                if lmap and isinstance(line, int) and 0 < line <= len(lmap) and lmap[line - 1]:
+                    line = lmap[line - 1]
                 survivors.append(
-                    f"- `{rel}:{start.get('line', '?')}:{start.get('column', '?')}` "
+                    f"- `{rel}:{line}:{start.get('column', '?')}` "
                     f"{m.get('mutatorName', '?')} -> `{m.get('replacement', '')}` ({status})"
                 )
     return detected, undetected, survivors
@@ -323,6 +417,18 @@ class DotnetAdapter(LanguageAdapter):
         env = dict(os.environ)
         env.update(DOTNET_ENV)
         return env
+
+    def tool_env(self) -> dict[str, str] | None:
+        return self.env()
+
+    def format_fix_commands(self, files: list[str]) -> list[list[str]]:
+        """`dotnet format whitespace` (and `style`, while the lint check is the default one) on
+        the changed files: the same rules the format / lint checks verify."""
+        target = self.build_target()
+        cmds = [[self.dotnet, "format", "whitespace", target, "--include", *files]]
+        if "lint" not in self.cfg.gate_commands:
+            cmds.append([self.dotnet, "format", "style", target, "--include", *files])
+        return cmds
 
     def _exec(self, args: Sequence[str], timeout: int) -> tuple[int, str]:
         return run_command([self.dotnet, *args], self.root, env=self.env(), timeout=timeout)
@@ -883,6 +989,125 @@ class DotnetAdapter(LanguageAdapter):
         config_file = self._stryker_config(
             work, self.scope_filter(scope, self.settings.base_filter)
         )
+        with self._mutation_tree(groups, base_ref) as (tree, note, line_maps):
+            res = self._run_stryker(
+                feature, stryker, groups, test_projects, config_file, tree, line_maps
+            )
+        if note:
+            res.output = f"{res.output}\n{note}"
+        return res
+
+    @contextlib.contextmanager
+    def _mutation_tree(
+        self, groups: dict[pathlib.Path, list[str]], base_ref: str
+    ) -> Iterator[tuple[pathlib.Path, str, dict[str, list[int]]]]:
+        """A temporary git worktree of the working tree in which Stryker can mutate only the
+        changed code: every C# file of the mutated projects starts with
+        `// Stryker disable all`, and in a changed file `// Stryker restore all` /
+        `// Stryker disable all` frame each hunk changed since base_ref (scope_mutations; a
+        file without a diff, e.g. untracked, is mutated whole).
+
+        Stryker.NET's --mutate only filters the report: it still compiles a mutant into every
+        file of the project ("Removed by mutate filter"), and every instrumented line slows the
+        tests that run it (40,829 mutants for one changed file: the coverage run did not end in
+        an hour; hot code such as a match engine's inner loop is slow even when only its file
+        is instrumented). Mutants disabled by comment are not compiled in at all. The
+        repository's own files are never touched. Yields (root, note, line maps: repo-relative
+        lower-case path -> original line of each line of the scoped copy); when no worktree can
+        be made, (self.root, a note that the whole project is instrumented, {})."""
+        tmp = pathlib.Path(tempfile.mkdtemp(prefix="agentflow-stryker-"))
+        tree = tmp / self.root.name
+        created = False
+        line_maps: dict[str, list[int]] = {}
+        try:
+            try:
+                self._git("worktree", "add", "--detach", "--quiet", str(tree), "HEAD")
+                created = True
+                self._mirror_working_tree(tree)
+                keep = {
+                    (self.root / f).resolve(): f.replace("\\", "/")
+                    for fs in groups.values()
+                    for f in fs
+                }
+                for proj in groups:
+                    pdir = tree / proj.parent.resolve().relative_to(self.root.resolve())
+                    for cs in pdir.rglob("*.cs"):
+                        rel = cs.relative_to(tree)
+                        if SKIP_DIRS.intersection(rel.parts[:-1]):
+                            continue
+                        changed = keep.get((self.root / rel).resolve())
+                        if changed is None:
+                            disable_mutations(cs)
+                            continue
+                        try:
+                            diff = self._git("diff", "-U0", base_ref, "--", changed)
+                        except subprocess.SubprocessError:  # unknown ref: the whole file
+                            diff = ""
+                        hunks = diff_hunks(diff)
+                        if hunks:
+                            text = cs.read_bytes().decode("utf-8")
+                            scoped, orig = scope_mutations(text, hunks)
+                            cs.write_bytes(scoped.encode("utf-8"))
+                            line_maps[changed.lower()] = orig
+            except (OSError, subprocess.SubprocessError, ValueError) as e:
+                yield (
+                    self.root,
+                    (
+                        f"Note: Stryker ran in the repository itself ({e}); it instrumented every "
+                        "file of the project, not only the changed code."
+                    ),
+                    {},
+                )
+                return
+            yield tree, "", line_maps
+        finally:
+            if created:
+                with contextlib.suppress(OSError, subprocess.SubprocessError):
+                    self._git("worktree", "remove", "--force", str(tree))
+            shutil.rmtree(tmp, ignore_errors=True)
+            if created:
+                with contextlib.suppress(OSError, subprocess.SubprocessError):
+                    self._git("worktree", "prune")
+
+    def _git(self, *args: str) -> str:
+        r = subprocess.run(
+            ["git", *args],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=600,
+        )
+        if r.returncode != 0:
+            raise subprocess.SubprocessError(
+                f"git {args[0]} failed: {(r.stderr or r.stdout).strip()}"
+            )
+        return r.stdout
+
+    def _mirror_working_tree(self, tree: pathlib.Path) -> None:
+        """Bring uncommitted changes (modified, deleted, untracked-not-ignored) into `tree`."""
+        listed = self._git("ls-files", "-z", "--modified", "--others", "--exclude-standard")
+        deleted = set(self._git("ls-files", "-z", "--deleted").split("\0"))
+        for rel in filter(None, listed.split("\0")):
+            dst = tree / rel
+            if rel in deleted:
+                dst.unlink(missing_ok=True)
+            elif (self.root / rel).is_file():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(self.root / rel, dst)
+
+    def _run_stryker(
+        self,
+        feature: str,
+        stryker: list[str],
+        groups: dict[pathlib.Path, list[str]],
+        test_projects: Sequence[str],
+        config_file: pathlib.Path | None,
+        tree: pathlib.Path,
+        line_maps: dict[str, list[int]] | None = None,
+    ) -> CheckResult:
+        work = self.root / self.cfg.paths.out / feature / "stryker"
         detected = undetected = 0
         survivors: list[str] = []
         logs = []
@@ -898,7 +1123,7 @@ class DotnetAdapter(LanguageAdapter):
             if config_file is not None:
                 cmd += ["-f", str(config_file)]
             for tp in refs:
-                cmd += ["-tp", str(self.root / tp)]
+                cmd += ["-tp", str(tree / tp)]
             cmd += ["--project", proj.name]
             for f in files:
                 rel = (self.root / f).resolve().relative_to(proj.parent.resolve()).as_posix()
@@ -917,7 +1142,7 @@ class DotnetAdapter(LanguageAdapter):
                 "0",
             ]
             timeout = self.settings.mutation_timeout or self.cfg.mutation_timeout
-            code, out = run_command(cmd, self.root, env=self.env(), timeout=timeout)
+            code, out = run_command(cmd, tree, env=self.env(), timeout=timeout)
             (work / f"{proj.stem}.log").write_text(out, encoding="utf-8")
             report = out_dir / "reports" / "mutation-report.json"
             reason = incomplete_reason(code, out, timeout)
@@ -929,7 +1154,7 @@ class DotnetAdapter(LanguageAdapter):
                 tail = "\n".join(out.splitlines()[-25:])
                 return CheckResult("FAIL", f"Stryker failed for {proj.name} (exit {code}):\n{tail}")
             d, u, s = stryker_results(
-                json.loads(report.read_text(encoding="utf-8-sig")), self.root, files
+                json.loads(report.read_text(encoding="utf-8-sig")), tree, files, line_maps
             )
             detected, undetected, survivors = detected + d, undetected + u, survivors + s
             logs.append(f"{proj.name}: {d} detected, {u} undetected")

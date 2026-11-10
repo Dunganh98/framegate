@@ -18,7 +18,7 @@ Rules:
 - **Never renumber, rename or delete an existing ID.** agentflow checks this; if an existing ID
   disappears, your whole update is reverted.
 - A new behavior or edge case gets a **new ID**: the next free number in its table
-  (`<CODE>-R-`, `-E-`, `-I-`). It needs tests: the tests gate shows it in the traceability check.
+  (`<CODE>-R-`, `-E-`, `-I-`). It needs tests: the traceability check shows it.
 - Mark every change with the answer reference in the changed line or row, e.g.
   `... raises TypeError matching "ints only" (answer ANS-2)`, or an HTML comment
   `<!-- answer ANS-2 -->` after a changed paragraph.

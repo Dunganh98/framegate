@@ -107,6 +107,11 @@ def run_state(orch: Orchestrator, feature: str) -> str:
     if w.get("kind") == "gate":
         return f"waiting at the {w.get('gate')} gate -> agentflow gate-summary {feature}"
     if prog.get("phase") == "DONE":
+        if prog.get("retro") == "skipped":
+            return (
+                f"DONE without the retro (agentflow approve {feature} still runs it) -> PR / "
+                f"agentflow cleanup {feature}"
+            )
         return "DONE -> retro proposals / PR / agentflow cleanup " + feature
     if prog.get("interrupted"):
         i = prog["interrupted"]
@@ -279,7 +284,8 @@ def gate_summary(orch: Orchestrator, feature: str) -> int:
             f"Cost per phase: {per_phase or '-'}",
             f"Full: {out}/{feature}/final_summary.md, {out}/{feature}/final_gates.md; "
             f"answers file: {out}/{feature}/answers.md",
-            "Reply: approve (then the retro) | done (no retro) | answers to the parked items",
+            "Reply: approve (retro, then DONE) | skip the retro (DONE now) | answers to the "
+            "numbered items",
         ]
     print("\n".join(lines))
     return 0
@@ -339,8 +345,17 @@ def _final_gate(
     findings = triage[-1].get("findings") if triage else []
     valid = sum(1 for r in findings or [] if r.get("verdict") == "VALID")
     assumptions = orch.assumptions(feature)
+    extra = last.get("extra") or {}
     lines = [
         f"Final gates: {verdict}",
+        *(
+            [
+                "Project checks (not blocking; output in final_gates.md): "
+                + ", ".join(f"{n} {'OK' if c == 0 else f'exit {c}'}" for n, c in extra.items())
+            ]
+            if extra
+            else []
+        ),
         f"Plan steps: {done}/{len(steps)} green, {len(prog.get('parked') or [])} parked",
         "Failed attempts: "
         + (

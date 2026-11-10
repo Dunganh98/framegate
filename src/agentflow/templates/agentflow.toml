@@ -30,11 +30,20 @@ language = "{language}"            # "python" | "dotnet"
 # test_review_rounds = 2           # test reviewer objections sent back to the test writer
 #                                  # (per gate cycle) before the tests gate
 # permission_mode = "acceptEdits"
+# model = ""                       # one `claude --model` for all phases; default per phase:
+#                                  # "sonnet" for TESTS, IMPLEMENT, SPEC_UPDATE, PR (they follow
+#                                  # the approved spec / frozen tests); "opus" for TEST_REVIEW,
+#                                  # REVIEW, TRIAGE, RETRO (the checkers); "" = Claude Code's own
+# effort = ""                      # one `claude --effort` (low|medium|high|xhigh|max); "" = default
+# step_batch_ids = 15              # consecutive plan steps share one implementer run while their
+#                                  # spec IDs add up to at most this; 0 = one run per step
 
 [gates]
-# tests = "human"                  # tests gate: "human" = always stop; "auto" = pass without a
-#                                  # stop when the checks pass, the test reviewer has no
-#                                  # objections and no question is open (else stop as "human")
+# tests = "defer"                  # tests gate: "defer" = never stop, its questions, objections
+#                                  # and failed checks go to the final gate (gates: spec, final);
+#                                  # "human" = always stop; "auto" = pass without a stop when
+#                                  # the checks pass, the test reviewer has no objections and
+#                                  # no question is open (else stop as "human")
 # diff_coverage = 90
 # mutation_score = 80
 # mutation_tool = "mutmut"         # default: mutmut (python), stryker (dotnet); "none" = off
@@ -47,6 +56,13 @@ language = "{language}"            # "python" | "dotnet"
 # regression_timeout = 3600        # seconds for the uninstrumented whole-suite run
 # coverage_timeout = 1800          # seconds per coverage run; killed -> "ERROR: test run incomplete"
 # mutation_timeout = 3600          # seconds per mutation run (same)
+# format_fix = true                # the gates format the changed source files before checking
+#                                  # (only with the adapter's own format check)
+# extra_timeout = 1800             # seconds per [gates.extra] check
+
+# [gates.extra]                    # project checks run after the final gates and shown at the
+#                                  # final gate with their exit code and output; never blocking
+# readcheck = ["dotnet", "run", "--project", "tools/ReadCheck", "--", "--quick"]
 
 # [gates.commands]                 # override the adapter's commands; [] disables one
 #                                  # (python examples; dotnet: see docs/adapters.md)
@@ -70,6 +86,8 @@ language = "{language}"            # "python" | "dotnet"
 # tools = [...]                    # replaces the --allowedTools list for the phase
 # max_turns = 80                   # turn cap of the phase's agent runs (wins over [agents])
 # max_budget_usd = 1.5             # cost cap (USD) per agent run of the phase (wins over [agents])
+# model = "opus"                   # `claude --model` of the phase (wins over [agents])
+# effort = "high"                  # `claude --effort` of the phase (wins over [agents])
 
 [git]
 # base = "main"                    # `agentflow spec <f>` creates branch <branch_prefix><f> from it

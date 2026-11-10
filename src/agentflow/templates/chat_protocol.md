@@ -17,6 +17,11 @@ commands; keep your own messages short.
 Never start a second `agentflow run` while one is active (`agentflow status <f> --brief` says
 "run active"). If the user asks to stop: TaskStop on the run's task id; the next run resumes.
 
+While a run is active, do not build, test, format or run the checks yourself (no `dotnet
+build/test`, `pytest`, etc.), and do not stop or kill test processes: the run's agents build and
+test in the same checkout, and a second run next to theirs locks files and makes their checks
+fail for no reason. Reading files and git log/diff/status are fine.
+
 ## B. Live view
 
 - Each Monitor event is one or more progress lines (`HH:MM:SS <what> [$cost so far]`). Relay
@@ -45,10 +50,15 @@ Never start a second `agentflow run` while one is active (`agentflow status <f> 
 | tests | approval ("ok", "approve", "looks good", "go") | `agentflow approve <f>` |
 | tests | rejection with a reason | `agentflow reject <f> --reason '<reason in the user's words>'` |
 | tests | answers to numbered questions | write `<out>/<f>/answers.md` (below), then `agentflow answer <f>` |
-| final | "retro", approval | `agentflow approve <f>` |
-| final | "done", "no retro", "finish" | `agentflow finish <f> --no-retro` |
-| final | answers to parked items / questions | write `<out>/<f>/answers.md`, then `agentflow answer <f>` |
+| final | approval: "ok", "approve", "done", "finish", "looks good", "retro" | `agentflow approve <f>` (retro, then DONE) |
+| final | explicitly no retro: "no retro", "skip the retro", "without retro" | `agentflow finish <f> --no-retro` |
+| final | answers to parked items / numbered questions | write `<out>/<f>/answers.md`, then `agentflow answer <f>` |
 
+   - The tests gate comes only with `[gates] tests = "human"` or `"auto"`; by default the run
+     goes from the spec straight to the final gate, and the tests' questions are numbered there.
+   - `finish --no-retro` only when the reply says "no retro" (or the same in other words).
+     "done" and "finish" mean approve. If the user wants the retro after a `finish --no-retro`:
+     `agentflow approve <f>` still queues it, then A.2.
    - Reject reason in single quotes; write a `'` inside as `'\''`.
    - A rejection without a reason, a final-gate "reject", or a reply that fits two rows: ask one
      short clarifying question and wait. A wish to change the spec at the final gate: explain

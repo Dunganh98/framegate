@@ -15,6 +15,12 @@ def hook_json(cwd: pathlib.Path, tool: str = "Write", **tool_input: str) -> str:
     return json.dumps({"cwd": str(cwd), "tool_name": tool, "tool_input": tool_input})
 
 
+@pytest.fixture(autouse=True)
+def agent_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The hooks run as part of an agent of `agentflow run` unless a test removes this."""
+    monkeypatch.setenv("AGENTFLOW_AGENT", "implement")
+
+
 @pytest.fixture
 def project(tmp_path: pathlib.Path) -> pathlib.Path:
     (tmp_path / "agentflow.toml").write_text('[project]\nlanguage = "python"\n', encoding="utf-8")
@@ -187,6 +193,16 @@ def test_stop_allowed_when_parked(green_red: pathlib.Path) -> None:
     assert require_green.evaluate(stop_json(green_red)) == (0, "")
 
 
+def test_stop_ignores_a_chat_session(
+    green_red: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chat session next to the run (no AGENTFLOW_AGENT) never starts a test run: parallel
+    runs lock each other's build output and fail for no reason."""
+    set_phase(green_red, "IMPLEMENT")
+    monkeypatch.delenv("AGENTFLOW_AGENT")
+    assert require_green.evaluate(stop_json(green_red)) == (0, "")
+
+
 def test_stop_hook_active_allows_stop(green_red: pathlib.Path) -> None:
     set_phase(green_red, "IMPLEMENT")
     assert require_green.evaluate(stop_json(green_red, active=True)) == (0, "")
@@ -245,6 +261,17 @@ def test_shell_block_only_during_a_run(project: pathlib.Path) -> None:
     assert "a pipe (|)" in msg and "one command per call" in msg and "-k <expr>" in msg
     plain = hook_json(project, "Bash", command="python -m pytest -q")
     assert protect_paths.evaluate(plain) == (0, "")
+
+
+def test_shell_form_not_checked_in_a_chat_session(
+    project: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    set_phase(project, "IMPLEMENT")
+    monkeypatch.delenv("AGENTFLOW_AGENT")
+    piped = hook_json(project, "Bash", command="git log --oneline | head")
+    assert protect_paths.evaluate(piped) == (0, "")
+    # write protection still applies to everyone while a run is active
+    assert protect_paths.evaluate(hook_json(project, file_path=str(project / "tests/x.py")))[0] == 2
 
 
 def test_shell_block_names_the_dotnet_options(tmp_path: pathlib.Path) -> None:

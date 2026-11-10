@@ -33,6 +33,7 @@ from agentflow.adapters.base import LanguageAdapter
 from agentflow.checks import red_stubs, test_smells, traceability
 from agentflow.config import Config
 from agentflow.gates import gate_report
+from agentflow.hooks import AGENT_ENV
 from agentflow.report import (
     TestReview,
     final_facts,
@@ -76,7 +77,7 @@ PHASES = ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "REVIEW", "PR", "FINAL", "RETRO",
 METRICS_HEADER = (
     "date,feature,human_rejections,escalations,questions,gate_failures,cost_usd,parked,assumptions"
 )
-BRIEF_PHASES = {"TESTS", "TEST_REVIEW", "IMPLEMENT", "FIX", "REVIEW", "TRIAGE"}
+BRIEF_PHASES = {"TESTS", "TEST_REVIEW", "IMPLEMENT", "IMPLEMENT_STEPS", "FIX", "REVIEW", "TRIAGE"}
 #: Only the plain command forms are pre-approved (--allowedTools); a `cd`/PATH prefix, a pipe
 #: or a `;`/`&&` chain makes the permission check deny the call (seen in live runs on Windows:
 #: `dotnet test ... | Select-String`, `...; echo`). The PreToolUse hook blocks them with this
@@ -111,6 +112,9 @@ TASKS = {
     "edit tests.{note}",
     "IMPLEMENT": "Feature '{f}': implement plan step {n} ('{title}'). Make the tests for these "
     "IDs pass: {ids}. Tests of earlier steps must stay green. Check with: {check}\n" + NO_STOP,
+    "IMPLEMENT_STEPS": "Feature '{f}': implement plan steps {n} in one go, in plan order: "
+    "{titles}. Make the tests for these IDs pass: {ids}. Tests of earlier steps must stay green. "
+    "Check with: {check}\n" + NO_STOP,
     "FIX": "Feature '{f}': make all currently failing tests pass without editing tests. "
     "Check with: {check}\n" + NO_STOP,
     "REVIEW": "Feature '{f}': review the implementation against {specs}/{f}/. "
@@ -221,6 +225,12 @@ def turn_cap_note(cap: float, kind: str = "turns") -> str:
         "file changes are kept: check what is already done, then finish the rest with fewer, "
         "larger steps (batch reads and edits, no exploratory commands)."
     )
+
+
+def item_steps(item: dict[str, Any]) -> list[int]:
+    """The plan steps of a step item (park / redo record): a batch lists them in "steps"."""
+    steps = item.get("steps")
+    return list(steps) if steps else [item["step"]]
 
 
 class WorkflowError(Exception):
@@ -363,6 +373,11 @@ class Orchestrator:
         budget = self.cfg.budget_cap(phase)
         if budget is not None:
             args += ["--max-budget-usd", f"{budget:g}"]
+        model, effort = self.cfg.agent_model(phase), self.cfg.agent_effort(phase)
+        if model:
+            args += ["--model", model]
+        if effort:
+            args += ["--effort", effort]
         runs = self.cfg.out_dir / "runs"
         runs.mkdir(parents=True, exist_ok=True)
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -371,7 +386,9 @@ class Orchestrator:
         try:
             # own process group + kill-on-close job: Ctrl+C / SIGTERM / a killed agentflow
             # take the whole agent tree (claude, node, shells, dotnet) down with it
-            _, stdout, stderr = procs.run(args, input=prompt, cwd=self.cfg.root, job=True)
+            # AGENTFLOW_AGENT marks the agent's hooks as part of this run (hooks/__init__.py)
+            env = {**os.environ, AGENT_ENV: role_name}
+            _, stdout, stderr = procs.run(args, input=prompt, cwd=self.cfg.root, job=True, env=env)
         except OSError as e:
             stdout, stderr = "", f"could not start claude: {e}"
         res = parse_result(stdout, stderr)
@@ -387,6 +404,8 @@ class Orchestrator:
             feature,
             "agent_run",
             phase=phase,
+            model=model or None,
+            effort=effort or None,
             seconds=round(time.time() - t0),
             cost=res.get("total_cost_usd"),
             # API round trips (what --max-turns caps); num_turns counts messages
@@ -678,6 +697,7 @@ class Orchestrator:
                 "gate",
                 phase=prog["phase"],
                 step=label,
+                steps=item.get("steps"),
                 attempt=attempt,
                 passed=rep.ok,
                 failed=rep.failed,
@@ -891,6 +911,9 @@ class Orchestrator:
             reasons.append(f"{len(questions)} open question(s)")
         if self.spec_diff(feature):
             reasons.append("spec changed from your answers (approve the diff)")
+        if self.cfg.tests_gate == "defer":
+            self.defer_tests_gate(feature, prog, review, failed, reasons)
+            return
         if self.cfg.tests_gate == "auto":
             log_event(self.cfg, feature, "tests_gate_auto", passed=not reasons, reasons=reasons)
             if not reasons:
@@ -973,9 +996,39 @@ class Orchestrator:
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
 
-    def pass_tests_gate(self, feature: str, prog: dict[str, Any]) -> None:
+    def defer_tests_gate(
+        self,
+        feature: str,
+        prog: dict[str, Any],
+        review: TestReview,
+        failed: list[str],
+        reasons: list[str],
+    ) -> None:
+        """[gates] tests = "defer": no stop. Objections the test reviewer still has and failed
+        test checks join the open questions, which the final gate shows (numbered, answerable)."""
+        items = [
+            f"test check failed: {n} (see {self.cfg.paths.out}/{feature}/test_checks.md)"
+            for n in failed
+        ]
+        items += [f"test reviewer objection left: {o}" for o in review.objections]
+        if items:
+            with open(self.fdir(feature) / "open_questions.md", "a", encoding="utf-8") as fh:
+                for item in items:
+                    fh.write("- [tests gate] " + item.replace("\n", "\n  ") + "\n")
+        log_event(self.cfg, feature, "tests_gate_deferred", reasons=reasons)
+        self.progress(
+            feature,
+            'Tests gate: no stop ([gates] tests = "defer")'
+            + (f"; for the final gate: {'; '.join(reasons)}" if reasons else "; all clean")
+            + ".",
+        )
+        self.pass_tests_gate(feature, prog, keep_questions=True)
+
+    def pass_tests_gate(
+        self, feature: str, prog: dict[str, Any], keep_questions: bool = False
+    ) -> None:
         questions = self.fdir(feature) / "open_questions.md"
-        if questions.is_file():
+        if questions.is_file() and not keep_questions:
             self.archive_questions(
                 feature,
                 "tests gate",
@@ -989,36 +1042,56 @@ class Orchestrator:
         prog["round"] = 0
         self.advance(feature, prog, "IMPLEMENT")
 
-    # ---------- IMPLEMENT: per plan step, no stops ----------
+    # ---------- IMPLEMENT: per plan step (or batch of small steps), no stops ----------
     def parked_steps(self, prog: dict[str, Any]) -> dict[int, dict[str, Any]]:
-        return {p["step"]: p for p in prog.get("parked") or [] if p.get("kind") == "step"}
+        """Plan step number -> its park record (a batch's record under each of its steps)."""
+        return {
+            n: p for p in prog.get("parked") or [] if p.get("kind") == "step" for n in item_steps(p)
+        }
 
     def done_ids(self, prog: dict[str, Any], steps: list[PlanStep]) -> list[str]:
         return [i for s in steps if s.num in prog["completed_steps"] for i in s.reqs]
 
+    def step_batches(self, steps: list[PlanStep]) -> list[list[PlanStep]]:
+        """Consecutive steps share one implementer run while their spec IDs add up to at most
+        [agents] step_batch_ids (0 = one run per step): a small plan costs one run instead of
+        one per step (each run re-reads the spec and the code)."""
+        cap = self.cfg.step_batch_ids
+        batches: list[list[PlanStep]] = []
+        for step in steps:
+            last = batches[-1] if batches else None
+            if last and cap and sum(len(s.reqs) for s in last) + len(step.reqs) <= cap:
+                last.append(step)
+            else:
+                batches.append([step])
+        return batches
+
     def parked_context(
-        self, feature: str, prog: dict[str, Any], steps: list[PlanStep], step: PlanStep
+        self, feature: str, prog: dict[str, Any], steps: list[PlanStep], batch: list[PlanStep]
     ) -> str:
         """Task lines about parked earlier steps; records declared dependencies on them."""
         parked = self.parked_steps(prog)
         if not parked:
             return ""
-        names = ", ".join(p["label"] for n, p in sorted(parked.items()))
+        names = ", ".join(dict.fromkeys(p["label"] for n, p in sorted(parked.items())))
         text = (
             f"\n\nParked steps (not implemented; their tests are not part of your check): {names}."
             " Do not implement them."
         )
-        for dep in step.depends:
-            if dep in parked:
-                rec = parked[dep]
-                if step.num not in rec.setdefault("dependents", []):
-                    rec["dependents"].append(step.num)
-                    save_progress(self.cfg, feature, prog)
-                    log_event(self.cfg, feature, "parked_dependency", step=step.num, depends_on=dep)
-                text += (
-                    f" This step depends on parked step {dep} (plan.md): build what you can "
-                    "without it and log what is missing as an assumption."
-                )
+        for step in batch:
+            for dep in step.depends:
+                if dep in parked:
+                    rec = parked[dep]
+                    if step.num not in rec.setdefault("dependents", []):
+                        rec["dependents"].append(step.num)
+                        save_progress(self.cfg, feature, prog)
+                        log_event(
+                            self.cfg, feature, "parked_dependency", step=step.num, depends_on=dep
+                        )
+                    text += (
+                        f" Step {step.num} depends on parked step {dep} (plan.md): build what "
+                        "you can without it and log what is missing as an assumption."
+                    )
         return text
 
     def phase_implement(self, feature: str, prog: dict[str, Any]) -> None:
@@ -1028,39 +1101,66 @@ class Orchestrator:
                 f"No '## Step N:' sections found in {self.cfg.paths.specs}/{feature}/plan.md"
             )
         redo_mode = bool(prog.get("redo_mode"))
-        for step in steps:
-            if step.num in prog["completed_steps"]:
-                continue
-            redo = [r for r in prog.get("redo") or [] if r.get("step") == step.num]
-            if redo_mode and not redo:
-                continue
-            if not redo_mode and step.num in self.parked_steps(prog):
-                continue
-            label = f"step {step.num} - {step.title}"
+
+        def redo_for(nums: list[int]) -> list[dict[str, Any]]:
+            return [
+                r
+                for r in prog.get("redo") or []
+                if r.get("kind") == "step" and set(item_steps(r)) & set(nums)
+            ]
+
+        pending = [
+            s
+            for s in steps
+            if s.num not in prog["completed_steps"]
+            and (redo_for([s.num]) if redo_mode else s.num not in self.parked_steps(prog))
+        ]
+        for batch in self.step_batches(pending):
+            nums = [s.num for s in batch]
+            redo = redo_for(nums)
+            reqs = [i for s in batch for i in s.reqs]
+            one = len(batch) == 1
+            label = (
+                f"step {nums[0]} - {batch[0].title}"
+                if one
+                else "steps " + ", ".join(map(str, nums))
+            )
             self.progress(
                 feature,
-                f"[{label}] {'redo' if redo else 'start'} ({len(steps)} steps; "
-                f"{', '.join(step.reqs)})",
+                f"[{label}] {'redo' if redo else 'start'} ({len(steps)} steps; {', '.join(reqs)})",
             )
-            covered = self.done_ids(prog, steps) + step.reqs
-            task = self.task_text(
-                "IMPLEMENT",
-                feature,
-                n=str(step.num),
-                title=step.title,
-                ids=", ".join(step.reqs),
-                check=self.adapter.test_command(covered),
-            ) + self.parked_context(feature, prog, steps, step)
+            covered = self.done_ids(prog, steps) + reqs
+            check = self.adapter.test_command(covered)
+            if one:
+                task = self.task_text(
+                    "IMPLEMENT",
+                    feature,
+                    n=str(nums[0]),
+                    title=batch[0].title,
+                    ids=", ".join(reqs),
+                    check=check,
+                )
+            else:
+                task = self.task_text(
+                    "IMPLEMENT_STEPS",
+                    feature,
+                    n=", ".join(map(str, nums)),
+                    titles="; ".join(f"{s.num}. {s.title} ({', '.join(s.reqs)})" for s in batch),
+                    ids=", ".join(reqs),
+                    check=check,
+                )
+            task += self.parked_context(feature, prog, steps, batch)
             if redo:
                 task += REDO_NOTE.format(**self.placeholders(feature))
-            ok = self.implement_loop(
-                feature, prog, task, covered, {"kind": "step", "step": step.num, "label": label}
-            )
+            item: dict[str, Any] = {"kind": "step", "step": nums[0], "label": label}
+            if not one:
+                item["steps"] = nums
+            ok = self.implement_loop(feature, prog, task, covered, item)
             if ok:
-                prog["completed_steps"].append(step.num)
+                prog["completed_steps"] += nums
             if redo:
                 log_event(self.cfg, feature, "redo_result", label=label, passed=ok)
-                prog["redo"] = [r for r in prog["redo"] if r.get("step") != step.num]
+                prog["redo"] = [r for r in prog["redo"] if r not in redo]
             save_progress(self.cfg, feature, prog)
         clear_reqs(self.cfg)
         if redo_mode:
@@ -1115,12 +1215,19 @@ class Orchestrator:
             excerpt=rep.excerpt() if not rep.ok else "",
             seconds=round(time.time() - t0),
             durations=rep.durations,
+            extra=rep.extra,
         )
         self.progress(
             feature,
             f"[REVIEW] final gates: {'PASSED' if rep.ok else 'FAILED'}"
             + (f" ({', '.join(rep.failed)})" if rep.failed else "")
-            + (f"; skipped: {', '.join(rep.skipped)}" if rep.skipped else ""),
+            + (f"; skipped: {', '.join(rep.skipped)}" if rep.skipped else "")
+            + (
+                "; project checks (not blocking): "
+                + ", ".join(f"{n} {'OK' if c == 0 else f'exit {c}'}" for n, c in rep.extra.items())
+                if rep.extra
+                else ""
+            ),
         )
         self.advance(feature, prog, "PR")
 
@@ -1255,6 +1362,9 @@ class Orchestrator:
             if parked
             else "nothing parked"
         )
+        questions = self.open_questions(feature)
+        if questions:
+            state += f"; {len(questions)} open question(s)"
         if self.spec_diff(feature):
             state += "; spec changed from your answers (diff in final_summary.md)"
         d = self.fdir(feature)
@@ -1469,6 +1579,8 @@ class Orchestrator:
                 f"{self.cfg.paths.specs}/{feature}/`)."
                 + (f" New spec IDs that need tests: {', '.join(new_ids)}." if new_ids else "")
             )
+        if not changed and su.get("unchanged"):  # nothing to redo for an unchanged spec
+            then = su["unchanged"]
         prog.update(
             phase=then.get("phase"),
             sub=then.get("sub"),
@@ -1526,7 +1638,9 @@ class Orchestrator:
                 f"WARNING: retro_proposals.md still doesn't address {', '.join(missing)} "
                 f"(see {self.cfg.paths.out}/{feature}/retro_input.md).",
             )
-        self.write_metrics(feature)
+        if not prog.get("metrics_written"):  # finish --no-retro wrote it already
+            self.write_metrics(feature)
+            prog["metrics_written"] = True
         self.progress(
             feature,
             f"\nRetro proposals: {self.cfg.paths.out}/{feature}/retro_proposals.md — "
@@ -1842,13 +1956,31 @@ class Orchestrator:
         prog = load_progress(self.cfg, feature)
         w = prog.get("waiting")
         if not w or w.get("kind") != "gate" or w.get("gate") not in gates:
-            now = f"waiting at the {w.get('gate')} gate" if w else "not at a gate"
+            if prog.get("phase") == "DONE":
+                now = "already DONE" + (
+                    f" (finished without the retro; `agentflow approve {feature}` still runs it)"
+                    if prog.get("retro") == "skipped"
+                    else ""
+                )
+            else:
+                now = f"waiting at the {w.get('gate')} gate" if w else "not at a gate"
             raise WorkflowError(
                 f"{feature} is {now}; this command needs the {' or '.join(gates)} gate"
             )
         return prog
 
     def approve(self, feature: str) -> int:
+        prog = load_progress(self.cfg, feature)
+        if prog.get("phase") == "DONE" and prog.get("retro") == "skipped":
+            # `finish --no-retro` cannot be taken back, but the retro can still run after it
+            log_event(self.cfg, feature, "retro_after_finish")
+            prog["retro"] = None
+            self.advance(feature, prog, "RETRO")
+            self.echo(
+                "The feature was finished without the retro; the next run does the retro, then "
+                f"DONE again (the metrics row stays as written).\nNext: agentflow run {feature}"
+            )
+            return EXIT_OK
         prog = self._require_gate(feature)
         gate = prog["waiting"]["gate"]
         log_event(self.cfg, feature, "human_gate", gate=gate, approved=True, reason=None)
@@ -1925,10 +2057,46 @@ class Orchestrator:
         else:
             parked = prog.get("parked") or []
             if not parked:
-                raise WorkflowError(
-                    f"Nothing is parked. Approve (agentflow approve {feature}) or finish "
-                    f"(agentflow finish {feature} --no-retro)."
+                if not open_q.strip():
+                    raise WorkflowError(
+                        f"Nothing is parked and no question is open. Approve (agentflow approve "
+                        f"{feature}) or finish (agentflow finish {feature} --no-retro)."
+                    )
+                # only questions (e.g. deferred from the tests gate): the answers go into the
+                # spec; if it changed, the reviewer checks the code against it again (findings
+                # -> fix loop), else straight back to this gate
+                self.archive_questions(feature, "final gate: questions", open_q, reply)
+                log_event(
+                    self.cfg,
+                    feature,
+                    "answer",
+                    gate="final",
+                    parked=[],
+                    ref=ref,
+                    answer=text[-2000:],
                 )
+                prog.update(
+                    waiting=None,
+                    redo_mode=False,
+                    attempt=0,
+                    phase="SPEC_UPDATE",
+                    sub=None,
+                    spec_update={
+                        "gate": "final",
+                        "ref": ref,
+                        "then": {"phase": "REVIEW", "sub": "agent"},
+                        "unchanged": {"phase": "PR", "sub": None},
+                        "feedback": "",
+                    },
+                )
+                save_progress(self.cfg, feature, prog)
+                self.echo(
+                    f"Answers recorded ({ref}); the next run writes them into the spec; if it "
+                    "changes, the reviewer checks the code against it again; then the final gate "
+                    "again."
+                )
+                self.echo(f"Next: agentflow run {feature}")
+                return EXIT_OK
             questions = "\n".join(
                 f"- [{p['label']}] {p.get('question') or p.get('reason')}" for p in parked
             )
@@ -1972,6 +2140,10 @@ class Orchestrator:
         log_event(self.cfg, feature, "finished", retro=False)
         self.reapprove_spec(feature, prog, "final")
         self.write_metrics(feature)
+        prog.update(retro="skipped", metrics_written=True)
         self.advance(feature, prog, "DONE")
-        self.echo(f"Feature {feature}: DONE (no retro).")
+        self.echo(
+            f"Feature {feature}: DONE (no retro). Changed your mind? `agentflow approve {feature}` "
+            "then `agentflow run` still does the retro."
+        )
         return EXIT_OK

@@ -11,7 +11,7 @@ chat run protocol, `agentflow protocol`); the plugin only registers things. Inst
 ```
 .claude-plugin/marketplace.json     # marketplace "agentflow", one entry: source "./plugin"
 plugin/
-  .claude-plugin/plugin.json        # name agentflow, version 0.2.0
+  .claude-plugin/plugin.json        # name agentflow, version 0.2.1
   hooks/hooks.json                  # PreToolUse (Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell) + Stop
   scripts/agentflow-hook.js         # wrapper: node agentflow-hook.js <event> -> agentflow hook <event>
   skills/feature/SKILL.md           # /agentflow:feature <f>: branch + spec dialogue, then the run

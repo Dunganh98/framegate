@@ -278,7 +278,7 @@ def test_gate_summary_spec_diff_and_final_gate_parked(
     assert "Assumptions: 1\n  - [DEMO-E-001] bool counts as int" in out
     assert "Parked (answer by number to redo them):\n  1. step 2 - neg: no reasonable" in out
     assert "Cost per phase: SPEC_UPDATE $" not in out  # since the (re)approval only
-    assert out.rstrip().endswith("answers to the parked items")
+    assert out.rstrip().endswith("skip the retro (DONE now) | answers to the numbered items")
     assert r.af("finish", "demo", "--no-retro") == 0
     capsys.readouterr()
     assert r.af("gate-summary", "demo") == 1

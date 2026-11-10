@@ -8,6 +8,10 @@
 //   exit code and output unchanged (exit 2 + stderr = block).
 // - agentflow.toml found but the CLI is missing: PreToolUse blocks (exit 2) with an install hint;
 //   other events report a non-blocking error (exit 1), since Claude can't fix a missing CLI.
+// - Stop and Bash/PowerShell checks are for the agents of `agentflow run` only: the orchestrator
+//   starts them with AGENTFLOW_AGENT set, which reaches this hook through Claude Code's
+//   environment. Without it (a chat session, also while a run is active) exit 0 at once, so the
+//   chat never starts a second test run next to the agent's.
 // Node is used because hook exec form needs a real executable on Windows (node.exe) and the same
 // file then runs unchanged on Linux/macOS. See docs/plugin.md.
 'use strict';
@@ -76,6 +80,8 @@ function main() {
   }
   if (!config) return 0;
   const shell = SHELL_TOOLS.has(data && data.tool_name);
+  const agent = Boolean((process.env.AGENTFLOW_AGENT || '').trim());
+  if ((event === 'stop' || shell) && !agent) return 0;
   if (shell && !phaseFileExists(config)) return 0;
 
   const bin = process.env.AGENTFLOW_BIN || 'agentflow';

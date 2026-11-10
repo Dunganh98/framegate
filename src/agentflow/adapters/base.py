@@ -300,6 +300,46 @@ class LanguageAdapter(abc.ABC):
                 checks.append(command_check(GATE_NAMES[key], self.resolve_command(cmd), self.root))
         return checks
 
+    def tool_env(self) -> dict[str, str] | None:
+        """Environment for the adapter's tool commands (None = inherit)."""
+        return None
+
+    def format_fix_commands(self, files: list[str]) -> list[list[str]]:
+        """Commands that format `files` (changed source files) in place; [] = none."""
+        return []
+
+    def format_fix(self, base_ref: str | None) -> str:
+        """Before the checks of a gate: format the source files changed since base_ref, so a
+        formatting slip costs no implementer attempt ([gates] format_fix; only with the
+        adapter's own format check: a configured [gates.commands] format means the project runs
+        its own formatter). Returns a one-line note ("" = nothing done). Tests are never touched
+        (only files under [paths] src)."""
+        if not self.cfg.format_fix or not base_ref or "format" in self.cfg.gate_commands:
+            return ""
+        from agentflow.checks.frame_diff import changed_src_files
+        from agentflow.state import GitError, tag_exists
+
+        try:
+            if not tag_exists(self.cfg, base_ref):
+                return ""
+            files = [
+                f
+                for f in changed_src_files(self, base_ref)
+                if not self.source_suffixes or f.endswith(self.source_suffixes)
+            ]
+        except GitError:
+            return ""
+        cmds = self.format_fix_commands(files) if files else []
+        failed = []
+        for cmd in cmds:
+            code, out = run_command(cmd, self.root, env=self.tool_env(), timeout=900)
+            if code != 0:
+                failed.append(f"{cmd[0]} exit {code}: {out.strip().splitlines()[-1:] or ''}")
+        if not cmds:
+            return ""
+        note = f"formatted {len(files)} changed source file(s)"
+        return note + (f" (formatter problems: {'; '.join(failed)})" if failed else "")
+
     @abc.abstractmethod
     def regression_check(self) -> Check:
         """Final scope with a feature-scoped coverage run: the whole suite (the adapter's final
