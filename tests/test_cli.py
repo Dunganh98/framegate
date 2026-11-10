@@ -155,7 +155,10 @@ def test_final_gate_commands(demo_repo: DemoRepo, capsys: pytest.CaptureFixture[
     set_waiting(r, "FINAL", final, parked=[item])
     assert r.af("answer", "demo") == 0
     prog = r.progress()
-    assert (prog["phase"], prog["sub"], prog["redo"]) == ("REVIEW", "fix", [item])
+    # the answers go into the spec first, then the parked finding is redone in REVIEW / fix
+    assert (prog["phase"], prog["redo"]) == ("SPEC_UPDATE", [item])
+    then = prog["spec_update"]["then"]
+    assert (then["phase"], then["sub"], prog["spec_update"]["gate"]) == ("REVIEW", "fix", "final")
 
 
 def test_old_pause_kinds_are_dropped(demo_repo: DemoRepo) -> None:
