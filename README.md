@@ -3,6 +3,67 @@
 Spec-driven, test-first workflow orchestrator for Claude Code (package + plugin). Design:
 docs/AGENTIC_WORKFLOW_SETUP.md (Part 8 = target architecture).
 
+## Getting started
+
+You write the requirements and make two decisions per feature (spec OK, final result OK).
+Agents write the tests and the code in between, inside checks they cannot switch off.
+
+1. **Install once per machine.** The CLI: `uv tool install --editable <path to this repo>`
+   (or `pip install`). The Claude Code plugin: `claude plugin marketplace add <path>` and
+   `claude plugin install agentflow@agentflow` (docs/plugin.md).
+2. **Set up a repository once.** In Claude Code, in the repo: `/agentflow:setup`. It reads
+   the repo, drafts `agentflow.toml` and `.agentflow/project.md` (facts about the project
+   every agent reads), asks you one batch of questions, and checks everything with
+   `agentflow doctor`. Commit the files it lists. Allow the CLI for the chat:
+   `"Bash(agentflow *)"` and `"PowerShell(agentflow *)"` in `permissions.allow` of
+   `.claude/settings.local.json`.
+3. **Build a feature.** `/agentflow:feature <name>` (a short slug, e.g. `slide-tackle`). Describe
+   what you want; answer the clarifying questions; check the spec it writes
+   (`specs/<name>/`). Say "spec OK".
+4. **Let it run.** The chat shows one progress line per step with the cost so far. Nothing
+   stops in between: unclear points become logged assumptions or parked items.
+5. **Decide at the final gate.** The chat shows a digest: check results, parked items and
+   questions (numbered), costs. Reply in plain words: "ok" (approve; the retro runs, then
+   DONE), "no retro", or answers to the numbered items (they go into the spec and, where
+   needed, the tests; only the affected work is redone, then the gate comes again).
+6. **Wrap up.** The chat lists the retro's proposals and the project facts it learned (pick
+   which to keep), offers a PR with the final summary, and cleans up the run files.
+
+Lost the chat? `/agentflow:resume <name>`. Where do things stand? `/agentflow:status`.
+
+## Commands
+
+In the chat you only use the four skills; they call the CLI for you. The CLI works the same from
+a terminal.
+
+| Command | What it means | When |
+|---|---|---|
+| `/agentflow:setup` | set up agentflow in this repo (draft config + project facts, questions, doctor) | once per repo |
+| `/agentflow:feature <f>` | start or continue feature `<f>`: spec dialogue, run, gates, wrap-up | each feature |
+| `/agentflow:resume [f]` | reattach the chat to a running or waiting feature | after a restart |
+| `/agentflow:status [f]` | where features stand; tag cleanup after the PR is merged | any time |
+| `agentflow init` | write the starter files (config, spec templates, project facts, .gitignore lines) | once per repo |
+| `agentflow doctor [--full]` | check the setup without agents; `--full` also runs the whole test suite | after setup or config changes |
+| `agentflow spec <f>` | create the branch `feat/<f>` and open the spec phase | start of a feature |
+| `agentflow approve-spec <f>` | freeze the spec ("spec OK"); restarts the feature if the spec changed later | gate 1 |
+| `agentflow run <f>` | run the agents until the next human gate or DONE | after every decision |
+| `agentflow watch <f>` | follow the progress lines of a run | while it runs |
+| `agentflow status [f] [--brief]` | state of one or all features | any time |
+| `agentflow gate-summary <f>` | the digest of the waiting gate | at a gate |
+| `agentflow approve <f>` | accept the gate: final gate -> retro, then DONE (tests gate -> implement) | at a gate |
+| `agentflow answer <f>` | apply your answers in `out/<f>/answers.md` (spec, tests, redo of parked work) | at a gate |
+| `agentflow reject <f> --reason "..."` | send the tests back to the test writer (only with `[gates] tests = "human"`) | tests gate |
+| `agentflow finish <f> --no-retro` | accept the final gate and skip the retro | final gate |
+| `agentflow learn <f> K1 [K3 ...\|all]` | keep the project facts the retro proposed (into `.agentflow/project.md`) | after the retro |
+| `agentflow cleanup <f> [--tags]` | delete the run files; `--tags` also the feature's git tags (after the merge) | after DONE |
+| `agentflow gates <f> --scope step\|final` | run the checks by hand (also used in CI) | debugging, CI |
+| `agentflow spec-brief <f>` | the project's spec conventions (the feature skill reads it) | internal |
+| `agentflow protocol` | the chat run protocol (the skills read it) | internal |
+| `agentflow unlock [--force]` | clear a lock left by a killed run | after a crash |
+| `agentflow hook ...` | the Claude Code hooks (called by the plugin) | internal |
+
+Exit codes: 0 done, 1 error, 10 waiting at a gate, 130 interrupted (run again to resume).
+
 Two human gates, forward only: **SPEC -> FINAL** (the test reviewer checks the tests against the
 spec; its open points and all questions come to the final gate; `[gates] tests = "human"` adds
 a stop at the tests gate). Everything between them runs as
