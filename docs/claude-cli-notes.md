@@ -37,7 +37,7 @@ in its own process group and, on Windows, suspended in a kill-on-close job objec
 assignment. From the result: `permission_denials` -> `permission_denials` event + retro D items;
 `subtype: "error_max_turns"` (or `terminal_reason: "max_turns"`) -> `max_turns` event,
 `subtype: "error_max_budget_usd"` (or `terminal_reason: "budget_exhausted"`) -> `max_budget`
-event; both take the cap handling (README).
+event; both take the cap handling (docs/reference.md).
 
 ## Turns: `--max-turns` vs `num_turns`
 
