@@ -36,16 +36,58 @@ def test_defaults_match_the_guide(tmp_path: pathlib.Path) -> None:
     assert cfg.write_paths("TRIAGE") == ["tests/review/", "out/"]
     assert cfg.turn_cap("TEST_REVIEW") == 30 and cfg.turn_cap("TRIAGE") == 30
     assert cfg.frame_exceptions() == ["tests/review/"]
-    assert cfg.tests_gate == "human" and cfg.test_review_rounds == 2
+    assert cfg.tests_gate == "defer" and cfg.test_review_rounds == 2
 
 
 def test_tests_gate_and_review_rounds(tmp_path: pathlib.Path) -> None:
     cfg = parse_config(tmp_path, {"gates": {"tests": "auto"}, "agents": {"test_review_rounds": 0}})
     assert cfg.tests_gate == "auto" and cfg.test_review_rounds == 0
-    with pytest.raises(ConfigError, match="human, auto"):
+    with pytest.raises(ConfigError, match="defer, human, auto"):
         parse_config(tmp_path, {"gates": {"tests": "skip"}})
     with pytest.raises(ConfigError, match="test_review_rounds must be >= 0"):
         parse_config(tmp_path, {"agents": {"test_review_rounds": -1}})
+
+
+def test_models_effort_batches_format_fix_and_extra_checks(tmp_path: pathlib.Path) -> None:
+    cfg = parse_config(tmp_path, {})
+    # defaults: the spec-following writers on Sonnet, the checkers and the retro on Opus
+    assert {p: cfg.agent_model(p) for p in ("TESTS", "IMPLEMENT", "SPEC_UPDATE", "PR")} == {
+        "TESTS": "sonnet",
+        "IMPLEMENT": "sonnet",
+        "SPEC_UPDATE": "sonnet",
+        "PR": "sonnet",
+    }
+    assert {cfg.agent_model(p) for p in ("TEST_REVIEW", "REVIEW", "TRIAGE", "RETRO")} == {"opus"}
+    assert cfg.agent_effort("IMPLEMENT") == ""
+    assert (cfg.step_batch_ids, cfg.format_fix, cfg.extra_checks) == (15, True, {})
+    cfg = parse_config(
+        tmp_path,
+        {
+            "agents": {"model": "opus", "effort": "high", "step_batch_ids": 0},
+            "phases": {"IMPLEMENT": {"model": "claude-sonnet-5-5", "effort": "medium"}},
+            "gates": {
+                "format_fix": False,
+                "extra": {"readcheck": ["dotnet", "run", "--", "{out}"]},
+                "extra_timeout": 600,
+            },
+        },
+    )
+    assert cfg.agent_model("TESTS") == "opus" and cfg.agent_effort("TESTS") == "high"
+    assert cfg.agent_model("IMPLEMENT") == "claude-sonnet-5-5"
+    assert cfg.agent_effort("IMPLEMENT") == "medium"
+    assert parse_config(tmp_path, {"agents": {"model": ""}}).agent_model("TESTS") == ""
+    assert (cfg.step_batch_ids, cfg.format_fix, cfg.extra_timeout) == (0, False, 600)
+    assert cfg.extra_checks == {"readcheck": ["dotnet", "run", "--", "{out}"]}
+    for bad, msg in [
+        ({"agents": {"effort": "huge"}}, r"\[agents\] effort must be one of low"),
+        ({"phases": {"PR": {"effort": "x"}}}, r"\[phases.PR\] effort must be one of"),
+        ({"phases": {"PR": {"model": 3}}}, r"\[phases.PR\] model must be a string"),
+        ({"agents": {"step_batch_ids": -1}}, "step_batch_ids must be >= 0"),
+        ({"gates": {"extra": {"x": []}}}, r"\[gates.extra\] x must not be empty"),
+        ({"gates": {"extra": {"x": "cmd"}}}, r"\[gates.extra\] x must be a list of strings"),
+    ]:
+        with pytest.raises(ConfigError, match=msg):
+            parse_config(tmp_path, bad)
 
 
 def test_full_config(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:

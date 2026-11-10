@@ -30,7 +30,7 @@ Write {out}/{feature}/test_review.md:
 One bullet per objection; "None." under Objections when the verdict is OK. Your objections go
 back to the test writer automatically. If the spec does not settle whether a test is right,
 do not object: write the question to {out}/{feature}/questions.md (one bullet, naming the ID)
-and continue. Questions are shown to the human together at the tests gate; do not stop.
+and continue. Questions are shown to the human together at the next gate; do not stop.
 
 ## Mode 2: triage review findings (review phase)
 

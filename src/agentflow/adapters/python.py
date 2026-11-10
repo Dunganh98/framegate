@@ -219,6 +219,9 @@ class PythonAdapter(LanguageAdapter):
             cmds["imports"] = [self.tool_path("lint-imports", self.python) or "lint-imports"]
         return cmds
 
+    def format_fix_commands(self, files: list[str]) -> list[list[str]]:
+        return [[self.python, "-m", "ruff", "format", *files]]
+
     def scope_args(self, scope: TestScope | None) -> list[str]:
         """pytest options selecting the tests of a scope (agentflow plugin)."""
         if scope is None or scope.whole_suite:

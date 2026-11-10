@@ -48,6 +48,9 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "max_budget_usd": (int, float),
         "permission_mode": (str,),
         "test_review_rounds": (int,),
+        "model": (str,),
+        "effort": (str,),
+        "step_batch_ids": (int,),
     },
     "gates": {
         "tests": (str,),
@@ -61,6 +64,9 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "coverage_timeout": (int,),
         "mutation_timeout": (int,),
         "commands": (dict,),
+        "format_fix": (bool,),
+        "extra": (dict,),
+        "extra_timeout": (int,),
     },
     "protected": {"paths": (list,), "extra": (list,), "exceptions": (list,)},
     "frame": {"forbidden_patterns": (list,)},
@@ -92,10 +98,29 @@ MUTATION_RUNNERS = ("auto", "native", "wsl")
 #: tests the final coverage / mutation runs use: the feature's tests (its spec IDs + the review
 #: tests; the whole suite then runs once more without instrumentation) or the whole suite
 GATE_SCOPES = ("feature", "suite")
-#: [gates] tests: "human" = always stop at the tests gate; "auto" = pass it without a stop when
-#: the mechanical checks pass, the test reviewer has no objections and no question is open
-TESTS_GATE_MODES = ("human", "auto")
-PHASE_KEYS = ("write", "tools", "max_turns", "max_budget_usd")
+#: [gates] tests: "defer" (default) = never stop at the tests gate: the test reviewer has checked
+#: the tests against the spec; open questions, objections left and failed test checks go to the
+#: final gate (two human gates: spec and final); "human" = always stop at the tests gate;
+#: "auto" = pass it without a stop when the mechanical checks pass, the test reviewer has no
+#: objections and no question is open (else stop as "human")
+TESTS_GATE_MODES = ("defer", "human", "auto")
+PHASE_KEYS = ("write", "tools", "max_turns", "max_budget_usd", "model", "effort")
+#: `claude --effort` levels
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+#: `claude --model` per phase when neither [phases.<P>] model nor [agents] model is set: the
+#: writers that follow the approved spec and frozen tests run on Sonnet (half the token price of
+#: Opus); the checkers (test reviewer, adversarial reviewer, triage) and the retro stay on Opus,
+#: because a weaker checker defeats the frame. Aliases follow the latest model of each family.
+DEFAULT_MODELS = {
+    "TESTS": "sonnet",
+    "IMPLEMENT": "sonnet",
+    "SPEC_UPDATE": "sonnet",
+    "PR": "sonnet",
+    "TEST_REVIEW": "opus",
+    "REVIEW": "opus",
+    "TRIAGE": "opus",
+    "RETRO": "opus",
+}
 #: --max-turns per phase when neither [phases.<P>] max_turns nor [agents] max_turns is set.
 #: --max-turns caps the model's API round trips (one assistant message, with any number of
 #: parallel tool calls). The result's `num_turns` counts messages (prompt + one per tool result),
@@ -163,8 +188,24 @@ class Config:
     permission_mode: str = "acceptEdits"
     #: how often the test reviewer's objections go back to the test writer before the gate
     test_review_rounds: int = 2
-    #: [gates] tests: "human" | "auto" (see TESTS_GATE_MODES)
-    tests_gate: str = "human"
+    #: [agents] model / effort: one `claude --model` / `--effort` for every phase without its own
+    #: (model None = DEFAULT_MODELS; effort None = Claude Code's default)
+    model: str | None = None
+    effort: str | None = None
+    phase_model: dict[str, str] = field(default_factory=dict)
+    phase_effort: dict[str, str] = field(default_factory=dict)
+    #: [agents] step_batch_ids: consecutive plan steps share one implementer run while their
+    #: spec IDs add up to at most this many (a small plan = one run); 0 = one run per step
+    step_batch_ids: int = 15
+    #: [gates] format_fix: the gates apply the formatter to the changed source files before
+    #: checking (a formatting slip costs no implementer attempt)
+    format_fix: bool = True
+    #: [gates.extra] name -> command: project checks run at the final gates and shown at the
+    #: final gate, never blocking (e.g. a balance measurement)
+    extra_checks: dict[str, list[str]] = field(default_factory=dict)
+    extra_timeout: int = 1800
+    #: [gates] tests: "defer" | "human" | "auto" (see TESTS_GATE_MODES)
+    tests_gate: str = "defer"
     diff_coverage: float = 90
     mutation_score: float = 80
     mutation_tool: str | None = None  # None -> the adapter's default tool
@@ -228,6 +269,19 @@ class Config:
         if self.max_turns is not None:
             return self.max_turns
         return DEFAULT_MAX_TURNS.get(phase, FALLBACK_MAX_TURNS)
+
+    def agent_model(self, phase: str) -> str:
+        """`claude --model` for an agent run in this phase: [phases.<P>] model, else
+        [agents] model, else DEFAULT_MODELS ("" = Claude Code's default)."""
+        if phase in self.phase_model:
+            return self.phase_model[phase]
+        if self.model is not None:
+            return self.model
+        return DEFAULT_MODELS.get(phase, "")
+
+    def agent_effort(self, phase: str) -> str:
+        """`claude --effort` for this phase ("" = Claude Code's default)."""
+        return self.phase_effort.get(phase, self.effort or "")
 
     def budget_cap(self, phase: str) -> float | None:
         """--max-budget-usd of an agent run in this phase: [phases.<P>] max_budget_usd, else
@@ -308,6 +362,12 @@ def _str_list(where: str, value: Any) -> list[str]:
     return list(value)
 
 
+def _effort(where: str, value: Any) -> str:
+    if value == "" or value in EFFORT_LEVELS:
+        return str(value)
+    raise ConfigError(f"{where} must be one of {', '.join(EFFORT_LEVELS)} (or empty)")
+
+
 def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     cfg = Config(root=root)
     for section, body in data.items():
@@ -341,6 +401,13 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     cfg.test_review_rounds = agents.get("test_review_rounds", cfg.test_review_rounds)
     if cfg.test_review_rounds < 0:
         raise ConfigError("[agents] test_review_rounds must be >= 0")
+    if "model" in agents:
+        cfg.model = agents["model"].strip()
+    if "effort" in agents:
+        cfg.effort = _effort("[agents] effort", agents["effort"])
+    cfg.step_batch_ids = agents.get("step_batch_ids", cfg.step_batch_ids)
+    if cfg.step_batch_ids < 0:
+        raise ConfigError("[agents] step_batch_ids must be >= 0 (0 = one run per step)")
 
     gates = data.get("gates", {})
     cfg.tests_gate = gates.get("tests", cfg.tests_gate)
@@ -364,7 +431,8 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
                 f"[gates] {key} must be one of {', '.join(GATE_SCOPES)}, got '{value}'"
             )
         setattr(cfg, key, value)
-    for key in ("regression_timeout", "coverage_timeout", "mutation_timeout"):
+    cfg.format_fix = gates.get("format_fix", cfg.format_fix)
+    for key in ("regression_timeout", "coverage_timeout", "mutation_timeout", "extra_timeout"):
         value = gates.get(key, getattr(cfg, key))
         if value < 1:
             raise ConfigError(f"[gates] {key} must be >= 1")
@@ -375,6 +443,11 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
                 f"[gates.commands] unknown key '{key}' (allowed: {GATE_COMMAND_KEYS})"
             )
         cfg.gate_commands[key] = _str_list(f"[gates.commands] {key}", cmd)
+    for name, cmd in gates.get("extra", {}).items():
+        argv = _str_list(f"[gates.extra] {name}", cmd)
+        if not argv:
+            raise ConfigError(f"[gates.extra] {name} must not be empty")
+        cfg.extra_checks[name] = argv
 
     prot = data.get("protected", {})
     if "paths" in prot:
@@ -425,6 +498,14 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
                         f"[phases.{phase}] max_budget_usd must be a number >= 0 (0 = no cap)"
                     )
                 cfg.phase_max_budget[phase] = float(value)
+                continue
+            if key == "model":
+                if not isinstance(value, str):
+                    raise ConfigError(f"[phases.{phase}] model must be a string")
+                cfg.phase_model[phase] = value.strip()
+                continue
+            if key == "effort":
+                cfg.phase_effort[phase] = _effort(f"[phases.{phase}] effort", value)
                 continue
             target = cfg.phase_write if key == "write" else cfg.phase_tools
             target[phase] = _str_list(f"[phases.{phase}] {key}", value)

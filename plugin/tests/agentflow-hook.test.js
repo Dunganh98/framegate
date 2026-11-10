@@ -18,7 +18,7 @@ function run(event, payload, { cwd, env = {} } = {}) {
   const r = spawnSync(process.execPath, [WRAPPER, event], {
     cwd,
     input: typeof payload === 'string' ? payload : JSON.stringify(payload),
-    env: { ...process.env, CLAUDE_PROJECT_DIR: '', ...env },
+    env: { ...process.env, CLAUDE_PROJECT_DIR: '', AGENTFLOW_AGENT: '', ...env },
     encoding: 'utf8',
   });
   return { code: r.status, stdout: r.stdout, stderr: r.stderr };
@@ -39,6 +39,8 @@ function agentflowRepo() {
 }
 
 const MISSING = { AGENTFLOW_BIN: 'agentflow-not-installed-xyz' };
+// an agent process of `agentflow run` (the orchestrator sets AGENTFLOW_AGENT=<role>)
+const AGENT = { AGENTFLOW_AGENT: 'implement' };
 
 test('no agentflow.toml: pre-tool-use exits 0 silently, CLI not started', () => {
   const dir = tmpdir();
@@ -71,9 +73,16 @@ test('agentflow.toml + missing CLI: pre-tool-use blocks with exit 2 and a clear 
 
 test('agentflow.toml + missing CLI: stop is a non-blocking error (exit 1)', () => {
   const root = agentflowRepo();
-  const r = run('stop', { cwd: root, hook_event_name: 'Stop', stop_hook_active: false }, { cwd: root, env: MISSING });
+  const r = run('stop', { cwd: root, hook_event_name: 'Stop', stop_hook_active: false }, { cwd: root, env: { ...MISSING, ...AGENT } });
   assert.strictEqual(r.code, 1);
   assert.match(r.stderr, /not found on PATH/);
+});
+
+test('stop outside an agent run (a chat session): exit 0 at once, CLI not started', () => {
+  const root = agentflowRepo();
+  fs.writeFileSync(path.join(root, '.phase'), 'IMPLEMENT');
+  const r = run('stop', { cwd: root, hook_event_name: 'Stop', stop_hook_active: false }, { cwd: root, env: MISSING });
+  assert.deepStrictEqual(r, { code: 0, stdout: '', stderr: '' });
 });
 
 test('target file inside an agentflow repo is detected even when cwd is outside', () => {
@@ -88,7 +97,7 @@ test('CLAUDE_PROJECT_DIR pointing at an agentflow repo is detected', () => {
   const root = agentflowRepo();
   const outside = tmpdir();
   const r = run('stop', { cwd: outside, hook_event_name: 'Stop' },
-    { cwd: outside, env: { ...MISSING, CLAUDE_PROJECT_DIR: root } });
+    { cwd: outside, env: { ...MISSING, ...AGENT, CLAUDE_PROJECT_DIR: root } });
   assert.strictEqual(r.code, 1);
 });
 
@@ -131,21 +140,30 @@ test('Bash with the phase file (default or [paths] phase_file): the CLI checks i
   const root = agentflowRepo();
   fakeCli(root);
   fs.writeFileSync(path.join(root, '.phase'), 'IMPLEMENT');
-  let r = run('pre-tool-use', shellPayload(root, 'Bash', 'ls | head'), { cwd: root, env: { AGENTFLOW_BIN: process.execPath } });
+  const cli = { AGENTFLOW_BIN: process.execPath, ...AGENT };
+  let r = run('pre-tool-use', shellPayload(root, 'Bash', 'ls | head'), { cwd: root, env: cli });
   assert.deepStrictEqual(r, { code: 2, stdout: '', stderr: 'checked Bash' });
   fs.writeFileSync(path.join(root, 'agentflow.toml'), '[paths]\nphase_file = "out/.phase"\n');
-  r = run('pre-tool-use', shellPayload(root, 'Bash', 'ls | head'), { cwd: root, env: { AGENTFLOW_BIN: process.execPath } });
+  r = run('pre-tool-use', shellPayload(root, 'Bash', 'ls | head'), { cwd: root, env: cli });
   assert.strictEqual(r.code, 0); // .phase is not the configured file
   fs.mkdirSync(path.join(root, 'out'));
   fs.writeFileSync(path.join(root, 'out', '.phase'), 'TESTS');
-  r = run('pre-tool-use', shellPayload(root, 'PowerShell', 'ls | head'), { cwd: root, env: { AGENTFLOW_BIN: process.execPath } });
+  r = run('pre-tool-use', shellPayload(root, 'PowerShell', 'ls | head'), { cwd: root, env: cli });
   assert.deepStrictEqual(r, { code: 2, stdout: '', stderr: 'checked PowerShell' });
+});
+
+test('Bash during a run but outside an agent (a chat session): exit 0, CLI not started', () => {
+  const root = agentflowRepo();
+  fakeCli(root);
+  fs.writeFileSync(path.join(root, '.phase'), 'IMPLEMENT');
+  const r = run('pre-tool-use', shellPayload(root, 'Bash', 'ls | head'), { cwd: root, env: { AGENTFLOW_BIN: process.execPath } });
+  assert.deepStrictEqual(r, { code: 0, stdout: '', stderr: '' });
 });
 
 test('Bash with a phase file but no CLI: not blocked (the permission check still applies)', () => {
   const root = agentflowRepo();
   fs.writeFileSync(path.join(root, '.phase'), 'IMPLEMENT');
-  const r = run('pre-tool-use', shellPayload(root, 'Bash', 'ls | head'), { cwd: root, env: MISSING });
+  const r = run('pre-tool-use', shellPayload(root, 'Bash', 'ls | head'), { cwd: root, env: { ...MISSING, ...AGENT } });
   assert.strictEqual(r.code, 1);
   assert.match(r.stderr, /not found on PATH/);
 });

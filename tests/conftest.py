@@ -140,6 +140,10 @@ class DemoRepo:
         git(self.root, "add", "-A")
         git(self.root, "commit", "-q", "-m", "config")
 
+    def defer_tests_gate(self) -> None:
+        """The default: no stop at the tests gate (two human gates, spec and final)."""
+        self.set_toml("gates", "tests", '"defer"')
+
     def add_toml(self, text: str) -> None:
         p = self.root / "agentflow.toml"
         p.write_text(p.read_text(encoding="utf-8") + "\n" + text, encoding="utf-8")
@@ -167,12 +171,15 @@ def demo_repo(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> DemoRe
     repo = DemoRepo(root)
     repo.scenario()
     assert repo.af("init") == 0
-    # fast suite: never start WSL for mutmut (test_python_mutation_e2e.py covers that, slow)
+    # fast suite: never start WSL for mutmut (test_python_mutation_e2e.py covers that, slow).
+    # The tests gate stops here ("human") and every plan step gets its own implementer run;
+    # the defaults ("defer", step batches) have their own tests (DemoRepo.defer_tests_gate,
+    # set_toml("agents", "step_batch_ids", ...)).
     toml = root / "agentflow.toml"
     toml.write_text(
-        toml.read_text(encoding="utf-8").replace(
-            "[gates]\n", '[gates]\nmutation_runner = "native"\n', 1
-        ),
+        toml.read_text(encoding="utf-8")
+        .replace("[gates]\n", '[gates]\nmutation_runner = "native"\ntests = "human"\n', 1)
+        .replace("[agents]\n", "[agents]\nstep_batch_ids = 0\n", 1),
         encoding="utf-8",
     )
     (root / "src" / "demo").mkdir(parents=True)

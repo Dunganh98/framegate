@@ -12,7 +12,7 @@ from collections.abc import Sequence
 import pytest
 
 from agentflow import cli
-from agentflow.adapters import detect_language, get_adapter
+from agentflow.adapters import csharp, detect_language, get_adapter
 from agentflow.adapters import dotnet as dn
 from agentflow.adapters.base import TestCase, parse_junit
 from agentflow.adapters.csharp import has_assertion, method_bodies, scan, strip
@@ -643,22 +643,42 @@ def test_mutation_runs_stryker_per_project(
         'Microsoft.NET.Test.Sdk <ProjectReference Include="..\\..\\src\\App\\App.csproj" />',
     )
     write(tagged, "stryker-config.json", json.dumps({"stryker-config": {"concurrency": 2}}))
+    other = b"\xef\xbb\xbfclass Other {\r\n}\r\n"  # untracked, unchanged: BOM + CRLF kept
+    (tagged / "src/App/Other.cs").write_bytes(other)
     seen: list[list[str]] = []
+    trees: list[pathlib.Path] = []
 
     def fake_run(
         cmd: Sequence[str], cwd: pathlib.Path, env: dict | None = None, timeout: float | None = None
     ) -> tuple[int, str]:
         seen.append(list(cmd))
+        # Stryker runs in a temporary worktree with the uncommitted files, where only the
+        # changed files can be mutated: the others start with `// Stryker disable all`
+        assert cwd != tagged and (cwd / ".git").is_file()
+        trees.append(cwd)
+        app = cwd / "src/App"
+        for rel in ("Calc.cs", "Sub/Deep.cs"):  # the changed files: as in the working tree
+            mine = (tagged / "src/App" / rel).read_bytes()
+            mutated = f"**/{rel}" in cmd
+            assert (app / rel).read_bytes().endswith(mine)
+            assert (app / rel).read_bytes().startswith(b"// Stryker") != mutated
+        same = (tagged / "src/App/Same.cs").read_bytes()
+        eol = b"\r\n" if b"\r\n" in same else b"\n"
+        assert (app / "Same.cs").read_bytes() == b"// Stryker disable all" + eol + same
+        assert (app / "Other.cs").read_bytes() == (
+            b"\xef\xbb\xbf// Stryker disable all\r\nclass Other {\r\n}\r\n"
+        )
+        assert cmd[cmd.index("-tp") + 1] == str(cwd / "tests/App.Tests/App.Tests.csproj")
         out_dir = pathlib.Path(cmd[cmd.index("-O") + 1])
         (out_dir / "reports").mkdir(parents=True)
         files = {
-            str((tagged / "src/App/Calc.cs").resolve()): {
+            str((cwd / "src/App/Calc.cs").resolve()): {
                 "mutants": [
                     {"status": "Killed"},
                     {"status": "Survived", "location": {"start": {"line": 1, "column": 1}}},
                 ]
             },
-            str((tagged / "src/App/Sub/Deep.cs").resolve()): {"mutants": [{"status": "Killed"}]},
+            str((cwd / "src/App/Sub/Deep.cs").resolve()): {"mutants": [{"status": "Killed"}]},
         }
         (out_dir / "reports" / "mutation-report.json").write_text(
             json.dumps({"files": files}), encoding="utf-8"
@@ -684,10 +704,101 @@ def test_mutation_runs_stryker_per_project(
     survivors = (tagged / "out/f/mutation_survivors.md").read_text(encoding="utf-8")
     assert "`src/App/Calc.cs:1:1`" in survivors
     assert "--mutation-level" not in cmd  # default: Stryker's own (Standard)
+    # the worktree is gone, the repository's own files are untouched
+    assert not trees[0].exists()
+    assert len(git(tagged, "worktree", "list").splitlines()) == 1
+    assert (tagged / "src/App/Other.cs").read_bytes() == other
+    assert b"Stryker" not in (tagged / "src/App/Same.cs").read_bytes()
     a2 = adapter(tagged, {"mutation_level": "Basic"}, gates={"mutation_score": 80})
     monkeypatch.setattr(a2, "stryker_command", lambda: ["dotnet-stryker"])
     assert a2.mutation_check("f", "x", ["src/App/Calc.cs"]).status == "FAIL"
     assert seen[-1][seen[-1].index("--mutation-level") + 1] == "Basic"
+
+
+def test_diff_hunks() -> None:
+    diff = (
+        "diff --git a/x.cs b/x.cs\n@@ -3 +3 @@\n-a\n+b\n@@ -10,0 +11,4 @@\n+c\n+d\n+e\n+f\n"
+        "@@ -20,2 +24,0 @@\n-g\n-h\n"
+    )
+    assert dn.diff_hunks(diff) == [(3, 3), (11, 14), (24, 25)]
+    assert dn.diff_hunks("") == []
+
+
+SCOPED_SRC = """\
+namespace Demo
+{
+    public static class Engine
+    {
+        public static int Hot(int x) => x * 2;
+
+        public static string Text() => @"line one
+line two";
+
+        public static bool Changed(int x)
+        {
+            var y = x + 1;
+            return y > 3
+                && y != 7;
+        }
+
+        public static int Other(int x) => x - 1;
+    }
+}
+"""
+
+
+def test_scope_mutations_frames_the_changed_statements() -> None:
+    """Only the changed hunk is mutated: disable on top, restore before the hunk's first
+    statement, disable after its last one; never inside a literal or mid-expression."""
+    assert csharp.enclosed_lines(SCOPED_SRC) == {8}  # inside the verbatim string
+    text, orig = dn.scope_mutations(SCOPED_SRC, [(14, 14)])  # `&& y != 7;` changed
+    lines = text.splitlines()
+    assert lines[0] == "// Stryker disable all"
+    restore = lines.index("// Stryker restore all")
+    # widened up to the statement start (`return y > 3` begins after `var y = x + 1;`)
+    assert lines[restore + 1].strip() == "return y > 3"
+    assert lines[restore + 3] == "// Stryker disable all"  # after `&& y != 7;`
+    assert lines[restore + 4].strip() == "}"
+    assert len(lines) == len(SCOPED_SRC.splitlines()) + 3
+    assert [orig[i] for i in range(len(lines)) if orig[i] == 0] == [0, 0, 0]
+    assert orig[restore + 1] == 13 and orig[-1] == 19
+    # a hunk inside the literal moves the restore up to the statement before the string
+    text, _ = dn.scope_mutations(SCOPED_SRC, [(8, 8)])
+    assert '@"line one\nline two";' in text.replace("\r\n", "\n")
+    lines = text.splitlines()
+    assert lines[lines.index("// Stryker restore all") + 1].strip().startswith("public static str")
+    # adjacent hunks are one region; CRLF and a BOM are kept
+    crlf = "﻿" + SCOPED_SRC.replace("\n", "\r\n")
+    text, _ = dn.scope_mutations(crlf, [(12, 12), (13, 14)])
+    assert text.startswith("﻿// Stryker disable all\r\n")
+    assert text.count("// Stryker restore all") == 1 and "\n" not in text.replace("\r\n", "")
+
+
+def test_stryker_survivor_lines_map_back(tmp_path: pathlib.Path) -> None:
+    report = {
+        "files": {
+            str(tmp_path / "src/A.cs"): {
+                "mutants": [
+                    {"status": "Survived", "location": {"start": {"line": 3, "column": 5}}},
+                    {"status": "Killed"},
+                ]
+            }
+        }
+    }
+    d, u, s = dn.stryker_results(report, tmp_path, ["src/A.cs"], {"src/a.cs": [0, 1, 7]})
+    assert (d, u) == (1, 1) and s[0].startswith("- `src/A.cs:7:5`")
+
+
+def test_format_fix_commands(tagged: pathlib.Path) -> None:
+    """The gates fix with the rules the format (whitespace) and lint (style) checks verify."""
+    a = adapter(tagged)
+    cmds = a.format_fix_commands(["src/App/Calc.cs"])
+    assert [c[1:3] for c in cmds] == [["format", "whitespace"], ["format", "style"]]
+    assert cmds[0][-3:] == ["App.slnx", "--include", "src/App/Calc.cs"]
+    a = adapter(tagged, gates={"commands": {"lint": []}})
+    assert [c[2] for c in a.format_fix_commands(["src/App/Calc.cs"])] == ["whitespace"]
+    a = adapter(tagged, gates={"commands": {"format": ["my-formatter"]}})
+    assert a.format_fix("tests-approved/f") == ""  # the project's own formatter: not touched
 
 
 # ---------- config, agents, init ----------

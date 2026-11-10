@@ -4,14 +4,20 @@ Runs the tests for the current and earlier steps (IDs in .reqs; full suite if .r
 stop_hook_active prevents an endless loop: after one forced continuation the agent may stop,
 and the orchestrator's gates catch whatever is still red. An agent that parks its work (wrote
 <out>/<feature>/park.md: no reasonable assumption possible) may stop with red tests.
+
+Only agents started by `agentflow run` are held (AGENTFLOW_AGENT set): a chat session in the same
+repository must never start a second test run while the agent's build and tests are running
+(parallel runs lock each other's build output and produce fake failures).
 """
 
 from __future__ import annotations
 
-from agentflow.hooks import find_root_fast, parse_input
+from agentflow.hooks import find_root_fast, in_agent_run, parse_input
 
 
 def evaluate(stdin_text: str) -> tuple[int, str]:
+    if not in_agent_run():
+        return 0, ""
     data = parse_input(stdin_text)
     if data.get("stop_hook_active"):
         return 0, ""

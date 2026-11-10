@@ -2,6 +2,11 @@
 
 Contract: hook JSON on stdin; exit 0 = allow / nothing to do; exit 2 = block, reason on stderr.
 Both hooks are no-ops (fast, silent exit 0) outside an agentflow project or without a .phase.
+
+The orchestrator starts its agents with AGENTFLOW_AGENT=<role> in the environment, and Claude Code
+passes its environment on to hook commands. Checks meant for those agents only (the Stop hook's
+test run, the shell-form block) use it to stay out of an interactive chat session that runs at
+the same time in the same repository (in_agent_run).
 """
 
 from __future__ import annotations
@@ -12,6 +17,14 @@ import pathlib
 from typing import Any
 
 from agentflow.config import CONFIG_FILE
+
+#: set by the orchestrator on every `claude -p` agent run (value: the role, e.g. "implement")
+AGENT_ENV = "AGENTFLOW_AGENT"
+
+
+def in_agent_run() -> bool:
+    """True inside an agent process started by `agentflow run` (and in its hooks)."""
+    return bool(os.environ.get(AGENT_ENV, "").strip())
 
 
 def parse_input(text: str) -> dict[str, Any]:

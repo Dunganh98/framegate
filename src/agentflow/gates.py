@@ -1,7 +1,10 @@
 """Gate runner: run the frame checks for a feature.
 
 scope step   fast checks after each implementation step (tests of current + earlier steps)
-scope final  everything, including coverage on the diff, traceability and mutation testing
+scope final  everything, including coverage on the diff, traceability and mutation testing,
+             then the project's own [gates.extra] checks (reported, never blocking)
+
+Both scopes first format the changed source files ([gates] format_fix).
 """
 
 from __future__ import annotations
@@ -10,7 +13,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from agentflow.adapters.base import Check, CheckResult, LanguageAdapter, TestScope
+from agentflow.adapters.base import Check, CheckResult, LanguageAdapter, TestScope, run_command
 from agentflow.checks import frame_diff, mutation, test_smells, traceability
 from agentflow.specs import feature_ids
 from agentflow.state import read_reqs
@@ -93,6 +96,8 @@ class GateReport:
     outputs: dict[str, str] = field(default_factory=dict)
     #: check name -> wall-clock seconds
     durations: dict[str, float] = field(default_factory=dict)
+    #: [gates.extra] check name -> exit code (reported at the final gate, never blocking)
+    extra: dict[str, int] = field(default_factory=dict)
 
     def excerpt(self, lines_per_check: int = 12, limit: int = 2000) -> str:
         """A trimmed excerpt of the failing checks' output (for events and the retro)."""
@@ -140,6 +145,12 @@ def gate_report(
         for line in scope_lines(adapter, feature, skip_mutation):
             emit(line)
         emit("")
+    try:
+        note = adapter.format_fix(frame_diff.approved_tag(feature))
+    except Exception as e:  # the checks below still report the formatting
+        note = f"skipped ({type(e).__name__}: {e})"
+    if note:
+        emit(f"Format fix: {note}")
     for check in checks(adapter, feature, scope, skip_mutation):
         t0 = time.monotonic()
         try:
@@ -167,4 +178,40 @@ def gate_report(
     if skipped:
         summary += f" (SKIPPED: {', '.join(skipped)})"
     emit(f"\n{summary}")
-    return GateReport(not failed, "\n".join(lines), failed, skipped, outputs, durations)
+    extra = run_extra_checks(adapter, feature, emit, durations) if scope == "final" else {}
+    return GateReport(not failed, "\n".join(lines), failed, skipped, outputs, durations, extra)
+
+
+def run_extra_checks(
+    adapter: LanguageAdapter,
+    feature: str,
+    emit: Callable[[str], None],
+    durations: dict[str, float],
+) -> dict[str, int]:
+    """[gates.extra]: the project's own checks (e.g. a balance measurement), after the gates.
+    Reported with their exit code and output tail, full output in {out}/{f}/extra_<name>.log;
+    never part of the verdict."""
+    cfg = adapter.cfg
+    if not cfg.extra_checks:
+        return {}
+    emit("\nProject checks ([gates.extra], not blocking):")
+    codes: dict[str, int] = {}
+    for name, cmd in cfg.extra_checks.items():
+        t0 = time.monotonic()
+        code, out = run_command(
+            adapter.resolve_command(cmd),
+            cfg.root,
+            env=adapter.tool_env(),
+            timeout=cfg.extra_timeout,
+        )
+        durations[f"extra: {name}"] = round(time.monotonic() - t0, 1)
+        codes[name] = code
+        log = cfg.feature_out(feature) / f"extra_{name}.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(out, encoding="utf-8")
+        status = "OK" if code == 0 else f"EXIT {code}"
+        emit(f"[{status}] {name} (full output: {cfg.paths.out}/{feature}/{log.name})")
+        tail = out.strip().splitlines()[-30:]
+        if tail:
+            emit("\n".join(tail))
+    return codes

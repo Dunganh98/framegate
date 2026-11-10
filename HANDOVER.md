@@ -6,9 +6,21 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
 `claude -p` facts: docs/claude-cli-notes.md; language adapters (python, dotnet): docs/adapters.md.
 
 ## State (2026-11-10, main)
-- **Gates:** SPEC -> TESTS -> FINAL, forward only. Between them fresh `claude -p` runs in a frame
-  of checks (red stubs, traceability, smells, tag-based frame diff, lint/types, feature-scoped
-  diff coverage + mutation, whole-suite regression). Exit codes 0/1/10 (gate)/130.
+- **Gates:** SPEC -> FINAL (tests gate only with `[gates] tests = "human"|"auto"`), forward only.
+  Between them fresh `claude -p` runs in a frame of checks (red stubs, traceability, smells,
+  tag-based frame diff, lint/types, feature-scoped diff coverage + mutation, whole-suite
+  regression, then `[gates.extra]` project checks, not blocking). Exit codes 0/1/10 (gate)/130.
+- **First FCSim feature (M5-slide-gamble, 2026-11-10):** 4h42 wall, ~3h agent+check time,
+  $12.35 for ~60 lines. ~2h of it were agentflow bugs, fixed the same day: the chat's Stop hook
+  ran tests next to the agent (hooks now act only with `AGENTFLOW_AGENT`, set on agent runs);
+  Stryker instrumented all of FCSim.Core (now a temp worktree where only the changed hunks are
+  mutable, via `// Stryker disable/restore all`); "done" mapped to finish without retro.
+- **Speed/cost defaults since then:** writers (TESTS, IMPLEMENT, SPEC_UPDATE, PR) on Sonnet,
+  checkers + retro on Opus (`[agents] model`, `[phases.<P>] model`/`effort`); small plans in one
+  implementer run (`step_batch_ids` 15); implementer runs only its step check; gates format the
+  changed files first (`format_fix`). **Not yet measured on a real feature** — compare the
+  `agent_run` events (model, cost) and failed attempts of the next FCSim feature with the table
+  above.
 - **Adapters:** python (pytest, mutmut via WSL on Windows), dotnet (xUnit, Stryker opt-in level).
 - **Chat flow (plugin 0.2.0):** `/agentflow:feature <f>` (branch `feat/<f>` from `[git] base`,
   spec dialogue, approve, background `agentflow run` + Monitor on `agentflow watch`, gate digests
@@ -24,7 +36,10 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
 - Tests: `uv run pytest` (fast), `-m slow` (dotnet e2e, WSL mutmut), node hook tests; ruff + mypy.
 
 ## User decisions so far
-1. Three human gates, forward only; an auto mode later (`[gates] tests = "auto"` exists).
+1. Two human gates, forward only: spec and final (2026-11-10, after the first FCSim feature;
+   was three). The test reviewer checks the tests against the spec; its questions, objections
+   left and failed test checks go to the final gate (`[gates] tests = "defer"`, the default;
+   `"human"` / `"auto"` still exist).
 2. Between gates never stop: assume (logged) or park; parked work is answered at the final gate.
 3. Test reviewer checks the tests (writer <-> reviewer rounds) and triages review findings.
 4. Answers go into the spec (SPEC_UPDATE, `ANS-n` marks, re-approval moves the tag).

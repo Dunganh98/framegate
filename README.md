@@ -3,7 +3,9 @@
 Spec-driven, test-first workflow orchestrator for Claude Code (package + plugin). Design:
 docs/AGENTIC_WORKFLOW_SETUP.md (Part 8 = target architecture).
 
-Three human gates, forward only: **SPEC -> TESTS -> FINAL**. Everything between them runs as
+Two human gates, forward only: **SPEC -> FINAL** (the test reviewer checks the tests against the
+spec; its open points and all questions come to the final gate; `[gates] tests = "human"` adds
+a stop at the tests gate). Everything between them runs as
 fresh headless `claude -p` runs inside a frame of deterministic checks (red-against-stubs,
 traceability, test smells, frozen tests via a tag-based frame diff, lint/types, diff coverage,
 mutation score) and never stops to ask.
@@ -42,11 +44,12 @@ Then you only type requirements, answers and gate decisions:
 2. "Spec OK": the skill approves the spec, starts `agentflow run` in the background and shows the
    live view: one line per phase start/end, check result, failed attempt, assumption, park and
    gate, each with the cost so far (~10-30 lines per feature). The chat stays usable.
-3. At a gate (tests, final) the chat shows a digest (`agentflow gate-summary`: checks, reviewer
-   verdict, spec IDs -> tests, numbered questions / parked items, spec diff, costs), Windows
-   shows a toast, and Claude Code waits for you. Reply in plain words: "ok" (approve), "reject:
-   <why>" (tests gate), answers to the numbered questions, "retro" or "done" (final gate). The
-   skill runs the matching command and continues the run in the background.
+3. At the final gate (and the tests gate, if `[gates] tests = "human"`) the chat shows a digest
+   (`agentflow gate-summary`: checks, reviewer verdict, spec IDs -> tests, numbered questions /
+   parked items, spec diff, costs), Windows shows a toast, and Claude Code waits for you. Reply
+   in plain words: "ok" / "done" (approve: retro, then DONE), "no retro", answers to the
+   numbered items, "reject: <why>" (tests gate only). The skill runs the matching command and
+   continues the run in the background.
 4. DONE: the skill lists the retro proposals, offers the final summary as the PR description
    (`gh pr create`, only on your yes; nothing is pushed without it) and cleans up the run files
    (`agentflow cleanup`; `specs/<name>/` and the metrics row stay). After the PR is merged,
@@ -101,7 +104,8 @@ forget, silent if it fails. `cleanup` keeps `specs/<f>/`, the metrics row and th
 prints the `git push origin --delete` line for tags that were pushed.
 
 `run` never waits on the keyboard. It advances TESTS -> IMPLEMENT (per plan step) -> REVIEW ->
-PR -> FINAL -> RETRO -> DONE and stops only at the tests gate and the final gate, writing
+PR -> FINAL -> RETRO -> DONE and stops only at the final gate (and the tests gate with
+`[gates] tests = "human"`, or `"auto"` when it isn't clean), writing
 `out/<f>/progress.json` (`waiting: {kind: gate, gate: tests|final}`) and printing what to read.
 Exit codes: 0 done/ok, 1 error, 10 human gate (tests or final; the output and `status` name it),
 130 interrupted. Run `agentflow run <f>` again after `approve` / `reject` / `answer`; it also
@@ -110,7 +114,9 @@ resumes after an interruption. The spec itself must change: edit it, `agentflow 
 
 Between the gates nothing stops:
 - Questions of the test writer and the test reviewer (`questions.md`) are collected in
-  `open_questions.md` and shown together at the tests gate.
+  `open_questions.md` and shown together at the next gate (by default the final gate, with the
+  test reviewer's objections still open and failed test checks). Answers there go into the spec;
+  if it changes, the reviewer checks the code against it again, then the final gate comes again.
 - The implementer assumes from the spec and logs each assumption in `steps.md`
   (`- ASSUMPTION [<spec ID>]: ...`). Only when no reasonable assumption is possible it writes
   `park.md` and stops (the Stop hook lets it); a step that fails `max_attempts` times is parked
@@ -163,6 +169,23 @@ either cap is logged (`max_turns` / `max_budget` event). IMPLEMENT: the step gat
 failed gate is a normal failed attempt whose feedback names the cap); other phases are re-run
 once with a note; if that run stops at a cap too, it is logged (`escalation` event with
 `cap_kind`, retro E item) and the run continues with what the agent wrote.
+
+Models and speed:
+- `--model` per phase: `[phases.<P>] model`, else `[agents] model`, else Sonnet for the writers
+  that follow the approved spec and the frozen tests (TESTS, IMPLEMENT incl. review fixes,
+  SPEC_UPDATE, PR summary) and Opus for the checkers and the retro (TEST_REVIEW, REVIEW, TRIAGE,
+  RETRO). `--effort` likewise (`effort`, default: Claude Code's). Each `agent_run` event records
+  the model, so cost and failed attempts per model can be compared across features.
+- Small plans run in one implementer run: consecutive steps share a run while their spec IDs add
+  up to at most `[agents] step_batch_ids` (15; 0 = one run per step). The batch is checked,
+  committed, parked and redone as one unit (`steps 1, 2, 3`).
+- The implementer checks only with the step command (its steps' tests and the earlier ones); the
+  step gate runs everything else. Before checking, the gates format the changed source files
+  (`[gates] format_fix`, default on, only with the adapter's own format check), so a formatting
+  slip costs no attempt.
+- `[gates.extra]` (name = command): project checks after the final gates, e.g. a balance
+  measurement. Shown at the final gate with exit code and output (full output in
+  `out/<f>/extra_<name>.log`); never part of the verdict.
 
 Final gates (`--scope final`): coverage + diff coverage and mutation testing run only on the
 feature's tests (tagged with any spec ID of the feature, or under `[paths] review_tests`); the

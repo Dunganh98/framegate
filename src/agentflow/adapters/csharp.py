@@ -156,9 +156,19 @@ def _skip_hole(text: str, j: int) -> int:
     return n
 
 
-def strip(text: str) -> tuple[str, str]:
+def enclosed_lines(text: str) -> set[int]:
+    """1-based numbers of the lines that start inside a string literal or a block comment
+    (a line inserted before them would change the literal or end up in the comment)."""
+    spans: list[tuple[int, int]] = []
+    strip(text, spans)
+    starts = [0] + [i + 1 for i, ch in enumerate(text) if ch == "\n"]
+    return {n for n, s in enumerate(starts, 1) if any(a < s < b for a, b in spans)}
+
+
+def strip(text: str, spans: list[tuple[int, int]] | None = None) -> tuple[str, str]:
     """(code, mask): code = comments and preprocessor lines blanked; mask = code with string and
-    char literal contents blanked too. Both keep every offset and newline of the input."""
+    char literal contents blanked too. Both keep every offset and newline of the input. `spans`
+    (if given) receives the (start, end) offsets of every string literal and block comment."""
     n = len(text)
     code = list(text)
     mask = list(text)
@@ -199,10 +209,14 @@ def strip(text: str) -> tuple[str, str]:
             end = n if end < 0 else end + 2
             blank(code, i, end)
             blank(mask, i, end)
+            if spans is not None:
+                spans.append((i, end))
             i = end
         elif ch == '"' or (ch in "$@" and nxt in '"$@' and _starts_string(text, i)):
             end = _skip_string(text, i)
             blank(mask, i, end)
+            if spans is not None:
+                spans.append((i, end))
             i = end
         elif ch == "'":
             end = i + 1
