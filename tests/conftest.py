@@ -147,6 +147,12 @@ class DemoRepo:
         git(self.root, "commit", "-q", "-m", "config")
 
 
+@pytest.fixture(autouse=True)
+def no_toast(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never show Windows toasts from the test suite (tests/test_chat.py checks the call)."""
+    monkeypatch.setenv("AGENTFLOW_TOAST", "0")
+
+
 @pytest.fixture
 def demo_repo(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> DemoRepo:
     """A tiny Python repo with agentflow initialised and the `demo` spec + stub written."""

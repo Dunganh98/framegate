@@ -66,6 +66,8 @@ def test_full_flow_human_mode(demo_repo: DemoRepo, capsys: pytest.CaptureFixture
         review_finding=True,
         review_invalid=True,
     )
+    # `agentflow spec demo` (fixture) created the feature branch from main
+    assert git(r.root, "rev-parse", "--abbrev-ref", "HEAD").strip() == "feat/demo"
     assert r.af("approve-spec", "demo") == 0
 
     # TESTS: writer (asks, continues) -> checks -> reviewer objects -> writer -> reviewer OK

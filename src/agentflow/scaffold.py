@@ -85,7 +85,12 @@ def init(
     note = adapter.init_note().rstrip() if adapter is not None else ""
     if note:
         echo("\nNote: " + note)
-    echo("\nNext: agentflow spec <feature>")
+    echo(
+        "\nNext: commit these files, then in Claude Code (agentflow plugin installed): "
+        "/agentflow:feature <feature>"
+        '\nAllow the CLI for the chat skills: add "Bash(agentflow *)" and '
+        '"PowerShell(agentflow *)" to permissions.allow in .claude/settings.local.json'
+    )
     return 0
 
 
@@ -103,6 +108,7 @@ def spec_brief(cfg: Config, feature: str) -> str:
             '- plan.md is parsed: "## Step N: <title>" headings, each with one '
             '"Covers: ID, ID" line. Every ID is covered by exactly one step.',
             f"- Interface stubs go in {p.src}/. Do not write tests or implementation.",
+            f"- Run files (gate digests, answers.md): {p.out}/{feature}/",
             "",
             adapter.conventions_brief().rstrip(),
             "",

@@ -23,7 +23,7 @@ stub", "covered by proposal 2"). The orchestrator checks this mechanically.
 How to treat the items:
 - A question (Q) means the spec had a gap: a fresh agent could not proceed from the spec alone.
   Questions are not failures. Propose a spec-template change (`specs/_template/`) or a new
-  question category for the `/spec` session, so the gap is asked at SPEC time next time; if the
+  question category for the `/agentflow:feature` spec dialogue, so the gap is asked at SPEC time next time; if the
   gap is specific to this project's domain, propose a project spec note instead.
 - A failed attempt (F) or escalation (E): find the cause (which check, why). Repeated failures of
   the same kind -> propose a check, a line in the adapter's conventions brief, or a role-prompt
@@ -32,7 +32,7 @@ How to treat the items:
   implementer have caught? A dismissed finding (V, DISMISSED): was the reviewer or the spec
   unclear? Prefer a spec-template category or a check over a prompt line.
 - An assumption (A) is a spec gap the implementer filled alone; a parked item (P) is one it
-  could not fill. Treat both like questions: which spec-template category or `/spec` question
+  could not fill. Treat both like questions: which spec-template category or spec-dialogue question
   would have closed the gap? Group assumptions of the same kind in one proposal.
 - A permission denial (D): an agent tried a command its allowed tools don't cover. Decide per
   kind: the command was needed (propose the tool rule for that phase, `[phases.<P>] tools`, or

@@ -66,6 +66,8 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
     "frame": {"forbidden_patterns": (list,)},
     "spec": {"id_pattern": (str,)},
     "roles": {"extra_dir": (str,)},
+    "git": {"base": (str,), "branch_prefix": (str,), "branch": (bool,)},
+    "notify": {"toast": (bool,)},
     "phases": {},
     # language adapter sections: validated here, read by the adapter (cfg.language_options)
     "dotnet": {
@@ -185,6 +187,13 @@ class Config:
     phase_max_turns: dict[str, int] = field(default_factory=dict)
     phase_max_budget: dict[str, float] = field(default_factory=dict)
     roles_extra_dir: str | None = None
+    #: [git] `agentflow spec <f>` creates/switches to branch_prefix + f from `base` (branch=false:
+    #: stay on the current branch)
+    git_branch: bool = True
+    git_base: str = "main"
+    branch_prefix: str = "feat/"
+    #: [notify] toast: Windows toast at each gate, DONE and on error (no-op elsewhere / on failure)
+    toast: bool = True
     #: raw, type-checked adapter sections, e.g. {"dotnet": {"configuration": "Release"}}
     language_options: dict[str, dict[str, Any]] = field(default_factory=dict)
     loaded_from_file: bool = False
@@ -382,6 +391,13 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
 
     cfg.id_pattern = data.get("spec", {}).get("id_pattern", cfg.id_pattern)
     cfg.roles_extra_dir = data.get("roles", {}).get("extra_dir")
+    git_cfg = data.get("git", {})
+    cfg.git_branch = git_cfg.get("branch", cfg.git_branch)
+    cfg.git_base = git_cfg.get("base", cfg.git_base)
+    cfg.branch_prefix = git_cfg.get("branch_prefix", cfg.branch_prefix)
+    if not cfg.git_base.strip():
+        raise ConfigError("[git] base must not be empty")
+    cfg.toast = data.get("notify", {}).get("toast", cfg.toast)
     for section in LANGUAGE_SECTIONS:
         if section in data:
             body = dict(data[section])

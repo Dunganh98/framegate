@@ -141,6 +141,7 @@ def dotnet_repo(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Demo
 @needs_dotnet
 def test_dotnet_full_flow(dotnet_repo: DemoRepo) -> None:
     r = dotnet_repo
+    assert git(r.root, "rev-parse", "--abbrev-ref", "HEAD").strip() == "feat/demo"
     r.scenario(language="dotnet", review_finding=True)
     gi = (r.root / ".gitignore").read_text(encoding="utf-8")
     assert "bin/" in gi and "obj/" in gi and "out/" in gi

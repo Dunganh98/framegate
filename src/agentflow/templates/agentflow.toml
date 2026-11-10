@@ -71,5 +71,14 @@ language = "{language}"            # "python" | "dotnet"
 # max_turns = 80                   # turn cap of the phase's agent runs (wins over [agents])
 # max_budget_usd = 1.5             # cost cap (USD) per agent run of the phase (wins over [agents])
 
+[git]
+# base = "main"                    # `agentflow spec <f>` creates branch <branch_prefix><f> from it
+# branch_prefix = "feat/"
+# branch = true                    # false: spec stays on the current branch
+
+[notify]
+# toast = true                     # Windows toast at each gate, DONE and on error (env
+#                                  # AGENTFLOW_TOAST=0 turns it off); no-op on other systems
+
 # [roles]
 # extra_dir = ".agentflow/roles"   # <phase>.md files appended to the base role prompts

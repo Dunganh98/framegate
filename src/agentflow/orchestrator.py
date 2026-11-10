@@ -27,7 +27,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from agentflow import procs
+from agentflow import notify, procs
 from agentflow.adapters import get_adapter
 from agentflow.adapters.base import LanguageAdapter
 from agentflow.checks import red_stubs, test_smells, traceability
@@ -67,6 +67,10 @@ EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_GATE = 10  # waiting at a human gate (tests or final): approve / reject / answer / finish
 EXIT_INTERRUPTED = 130  # Ctrl+C / SIGTERM: agents stopped, state cleared; run again
+PROGRESS_LOG = "progress.log"
+#: byte offset of progress.log that `agentflow watch` has printed (a re-armed watch goes on there)
+PROGRESS_CURSOR = "progress.cursor"
+PROGRESS_WIDTH = 160
 
 PHASES = ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "REVIEW", "PR", "FINAL", "RETRO", "DONE"]
 METRICS_HEADER = (
@@ -395,7 +399,9 @@ class Orchestrator:
             log_event(
                 self.cfg, feature, "permission_denials", phase=phase, step=step, denials=denials
             )
-            self.echo(f"[{phase}] {len(denials)} tool call(s) denied (logged for the retro).")
+            self.progress(
+                feature, f"[{phase}] {len(denials)} tool call(s) denied (logged for the retro)."
+            )
         kind = hit_cap(res)
         if kind == "turns":
             cap = self.cfg.turn_cap(phase)
@@ -409,7 +415,7 @@ class Orchestrator:
                 turns=res.get("api_turns"),
                 messages=res.get("num_turns"),
             )
-            self.echo(f"[{phase}] agent run stopped at the turn cap ({cap} turns).")
+            self.progress(feature, f"[{phase}] agent run stopped at the turn cap ({cap} turns).")
         elif kind == "budget":
             budget_cap = self.cfg.budget_cap(phase) or 0.0
             log_event(
@@ -421,9 +427,13 @@ class Orchestrator:
                 cap=budget_cap,
                 cost=res.get("total_cost_usd"),
             )
-            self.echo(f"[{phase}] agent run stopped at the budget cap ({budget_cap:g} USD).")
+            self.progress(
+                feature, f"[{phase}] agent run stopped at the budget cap ({budget_cap:g} USD)."
+            )
         elif res.get("is_error"):
-            self.echo(f"[{phase}] agent run reported an error: {str(res.get('result'))[:500]}")
+            self.progress(
+                feature, f"[{phase}] agent run reported an error: {str(res.get('result'))[:500]}"
+            )
         return res
 
     # ---------- waiting (only the tests gate and the final gate) ----------
@@ -460,13 +470,40 @@ class Orchestrator:
         prog["waiting"] = waiting
         save_progress(self.cfg, feature, prog)
         log_event(self.cfg, feature, "waiting", wait=waiting["kind"], gate=waiting.get("gate"))
+        gate = str(waiting.get("gate") or waiting["kind"]).upper()
+        message = str(waiting.get("message") or "")
+        self.progress(feature, f"{gate} GATE: waiting for you. {message}")
         self.echo("\n" + self.describe_waiting(feature, waiting))
+        self.notify(f"agentflow: {feature} at the {gate.lower()} gate", message)
         raise Paused(EXIT_GATE)
 
     def set_sub(self, feature: str, prog: dict[str, Any], sub: str | None) -> str | None:
         prog["sub"] = sub
         save_progress(self.cfg, feature, prog)
         return sub
+
+    # ---------- live view: one short line per milestone ----------
+    def cost_so_far(self, feature: str) -> float:
+        """USD of all agent runs of the current spec version."""
+        ev = since_spec_approval(read_events(self.cfg, feature))
+        return sum(float(e.get("cost") or 0) for e in ev if e.get("kind") == "agent_run")
+
+    def progress(self, feature: str, text: str) -> None:
+        """A progress line: printed and appended to {out}/{f}/progress.log, which the chat's live
+        view streams (`agentflow watch`). Milestones only (~10-30 per feature), never tool calls."""
+        text = " ".join(text.split())
+        if len(text) > PROGRESS_WIDTH:
+            text = text[: PROGRESS_WIDTH - 3] + "..."
+        stamp = datetime.datetime.now().strftime("%H:%M:%S")
+        line = f"{stamp} {text} [${self.cost_so_far(feature):.2f}]"
+        with open(self.fdir(feature) / PROGRESS_LOG, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+        self.echo(line)
+
+    def notify(self, title: str, text: str) -> None:
+        """Windows toast (no-op when off, not on Windows, or failing). Called only where the run
+        ends, so waiting a few seconds for the toast process costs the run nothing."""
+        notify.settle(notify.toast(self.cfg, title, text))
 
     # ---------- questions: collected, never a stop ----------
     def collect_questions(self, feature: str, phase: str, who: str) -> int:
@@ -485,7 +522,7 @@ class Orchestrator:
             for q in items:
                 fh.write(f"- [{who}] " + q.replace("\n", "\n  ") + "\n")
         log_event(self.cfg, feature, "questions", phase=phase, who=who, questions=text)
-        self.echo(f"[{phase}] {len(items)} question(s) collected for the next gate.")
+        self.progress(feature, f"[{phase}] {len(items)} question(s) collected for the next gate.")
         return len(items)
 
     def open_questions(self, feature: str) -> list[str]:
@@ -553,7 +590,7 @@ class Orchestrator:
             prog["turn_cap_retries"] = retries + 1
             prog["feedback"] = turn_cap_note(cap, kind)
             save_progress(self.cfg, feature, prog)
-            self.echo(f"[{label}] re-running once after the {name}.")
+            self.progress(feature, f"[{label}] re-running once after the {name}.")
             return True
         key = "max_turns" if kind == "turns" else "max_budget_usd"
         log_event(
@@ -568,9 +605,10 @@ class Orchestrator:
             resolution=f"continued without a stop with the files of the last run (raise "
             f"[phases.{phase}] {key} if this recurs)",
         )
-        self.echo(
+        self.progress(
+            feature,
             f"[{label}] stopped at the {name} ({cap:g}) {retries + 1} times; continuing with what "
-            "it wrote (logged for the final summary and the retro)."
+            "it wrote (logged for the final summary and the retro).",
         )
         return False
 
@@ -617,6 +655,7 @@ class Orchestrator:
                     retry_turn_cap=False,
                 )
                 question = self.take_park_request(feature)
+                self.report_new_assumptions(feature, prog)
                 t0 = time.time()
                 rep = None if question else gate_report(self.adapter, feature, "step")
             except KeyboardInterrupt:
@@ -647,6 +686,7 @@ class Orchestrator:
             )
             if rep.ok:
                 commit(self.cfg, f"{feature}: {label}")
+                self.progress(feature, f"[{label}] green (attempt {attempt}), committed")
                 prog["attempt"] = 0
                 prog["feedback"] = ""
                 save_progress(self.cfg, feature, prog)
@@ -659,7 +699,11 @@ class Orchestrator:
                 f"fix {self.cfg.paths.src}/.\n{rep.report[-6000:]}"
             )
             save_progress(self.cfg, feature, prog)
-            self.echo(f"[{label}] attempt {attempt} failed the step gates.")
+            self.progress(
+                feature,
+                f"[{label}] attempt {attempt} of {self.cfg.max_attempts} failed: "
+                + (", ".join(rep.failed) or "step gates"),
+            )
             if attempt >= self.cfg.max_attempts:
                 self.park(
                     feature,
@@ -721,9 +765,10 @@ class Orchestrator:
             excerpt=excerpt,
             diff=diff,
         )
-        self.echo(
+        self.progress(
+            feature,
             f"[{item['label']}] PARKED: {reason}. The run continues; it is listed at the final "
-            "gate" + (f" (its code changes: {diff})." if diff else ".")
+            "gate" + (f" (its code changes: {diff})." if diff else "."),
         )
 
     # ---------- TESTS: writer <-> reviewer, then the tests gate ----------
@@ -769,14 +814,20 @@ class Orchestrator:
                 if back:
                     prog["round"] = rnd + 1
                     prog["feedback"] = self.objection_feedback(feature, review, failed)
-                    self.echo(
+                    self.progress(
+                        feature,
                         f"[TESTS] test reviewer: {review.verdict} "
                         f"({len(review.objections)} objection(s), {len(failed)} failed check(s)); "
                         f"back to the test writer (round {rnd + 1} of "
-                        f"{self.cfg.test_review_rounds})."
+                        f"{self.cfg.test_review_rounds}).",
                     )
                     sub = self.set_sub(feature, prog, "write")
                     continue
+                self.progress(
+                    feature,
+                    f"[TESTS] test reviewer round {rnd + 1}: {review.verdict}, "
+                    f"{len(review.objections)} objection(s) left",
+                )
                 sub = self.set_sub(feature, prog, "gate")
             break
         self.tests_gate(feature, prog)
@@ -794,6 +845,9 @@ class Orchestrator:
             sections.append(f"### {name}: {res.status}\n~~~\n{res.output}\n~~~")
         path = self.fdir(feature) / "test_checks.md"
         path.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
+        self.progress(
+            feature, "[TESTS] checks: " + ", ".join(f"{n} {s}" for n, s in status.items())
+        )
         prog["test_checks"] = status
         save_progress(self.cfg, feature, prog)
 
@@ -840,13 +894,16 @@ class Orchestrator:
         if self.cfg.tests_gate == "auto":
             log_event(self.cfg, feature, "tests_gate_auto", passed=not reasons, reasons=reasons)
             if not reasons:
-                self.echo(
+                self.progress(
+                    feature,
                     'Tests gate passed without a stop ([gates] tests = "auto"): checks PASS, no '
-                    f"objections, no questions (see {self.rel(gate_file)})."
+                    f"objections, no questions (see {self.rel(gate_file)}).",
                 )
                 self.pass_tests_gate(feature, prog)
                 return
-            self.echo('[gates] tests = "auto", but the gate needs you: ' + "; ".join(reasons))
+            self.progress(
+                feature, '[gates] tests = "auto", but the gate needs you: ' + "; ".join(reasons)
+            )
         self.pause(
             feature,
             prog,
@@ -980,6 +1037,11 @@ class Orchestrator:
             if not redo_mode and step.num in self.parked_steps(prog):
                 continue
             label = f"step {step.num} - {step.title}"
+            self.progress(
+                feature,
+                f"[{label}] {'redo' if redo else 'start'} ({len(steps)} steps; "
+                f"{', '.join(step.reqs)})",
+            )
             covered = self.done_ids(prog, steps) + step.reqs
             task = self.task_text(
                 "IMPLEMENT",
@@ -1054,9 +1116,11 @@ class Orchestrator:
             seconds=round(time.time() - t0),
             durations=rep.durations,
         )
-        self.echo(
-            f"Final gates: {'PASSED' if rep.ok else 'FAILED'} "
-            f"(see {self.cfg.paths.out}/{feature}/final_gates.md)"
+        self.progress(
+            feature,
+            f"[REVIEW] final gates: {'PASSED' if rep.ok else 'FAILED'}"
+            + (f" ({', '.join(rep.failed)})" if rep.failed else "")
+            + (f"; skipped: {', '.join(rep.skipped)}" if rep.skipped else ""),
         )
         self.advance(feature, prog, "PR")
 
@@ -1094,7 +1158,9 @@ class Orchestrator:
         ]
         log_event(self.cfg, feature, "triage", findings=records, remaining=remaining)
         valid = sum(1 for r in records if r["verdict"] == "VALID")
-        self.echo(f"[TRIAGE] {valid} valid finding(s), {len(records) - valid} dismissed.")
+        self.progress(
+            feature, f"[TRIAGE] {valid} valid finding(s), {len(records) - valid} dismissed."
+        )
         commit(self.cfg, f"{feature}: review findings triaged ({valid} valid)")
         prog["valid_findings"] = remaining
         save_progress(self.cfg, feature, prog)
@@ -1169,6 +1235,16 @@ class Orchestrator:
     def assumptions(self, feature: str) -> list[Any]:
         p = self.fdir(feature) / "steps.md"
         return parse_assumptions(p.read_text(encoding="utf-8")) if p.is_file() else []
+
+    def report_new_assumptions(self, feature: str, prog: dict[str, Any]) -> None:
+        """One progress line per assumption the implementer added to steps.md."""
+        found = self.assumptions(feature)
+        seen = int(prog.get("assumptions_seen") or 0)
+        for a in found[seen:]:
+            self.progress(feature, f"assumption [{a.spec_id}]: {a.text}")
+        if len(found) != seen:
+            prog["assumptions_seen"] = len(found)
+            save_progress(self.cfg, feature, prog)
 
     def final_gate(self, feature: str, prog: dict[str, Any]) -> None:
         last = [e for e in read_events(self.cfg, feature) if e["kind"] == "final_gates"]
@@ -1385,7 +1461,7 @@ class Orchestrator:
             reverted=stray,
             marked=marked,
         )
-        self.echo("[SPEC_UPDATE] " + "; ".join(notes))
+        self.progress(feature, "[SPEC_UPDATE] " + "; ".join(notes))
         feedback = str(su.get("feedback") or "")
         if changed:
             feedback += (
@@ -1424,7 +1500,9 @@ class Orchestrator:
         missing = self.retro_missing(feature, ids)
         first = list(missing)
         if missing:
-            self.echo(f"[RETRO] proposals miss {', '.join(missing)}; re-running the retro once.")
+            self.progress(
+                feature, f"[RETRO] proposals miss {', '.join(missing)}; re-running the retro once."
+            )
             prog["feedback"] = (
                 f"{self.cfg.paths.out}/{feature}/retro_proposals.md does not address these items "
                 f"of {self.cfg.paths.out}/{feature}/retro_input.md: {', '.join(missing)}. Keep "
@@ -1443,14 +1521,16 @@ class Orchestrator:
             rerun=bool(first),
         )
         if missing:
-            self.echo(
+            self.progress(
+                feature,
                 f"WARNING: retro_proposals.md still doesn't address {', '.join(missing)} "
-                f"(see {self.cfg.paths.out}/{feature}/retro_input.md)."
+                f"(see {self.cfg.paths.out}/{feature}/retro_input.md).",
             )
         self.write_metrics(feature)
-        self.echo(
+        self.progress(
+            feature,
             f"\nRetro proposals: {self.cfg.paths.out}/{feature}/retro_proposals.md — "
-            "apply the ones you accept in a normal session."
+            "apply the ones you accept in a normal session.",
         )
         self.advance(feature, prog, "DONE")
 
@@ -1486,7 +1566,81 @@ class Orchestrator:
         save_progress(self.cfg, feature, prog)
 
     # ---------- commands ----------
+    def feature_branch(self, feature: str) -> str | None:
+        """Create the feature's branch (`[git] branch_prefix` + feature) from `[git] base` in
+        this checkout, or switch to it. Refuses with uncommitted changes to tracked files
+        (untracked ones are fine) and when a branch of that name exists that agentflow did not
+        create for this feature. None = `[git] branch = false`."""
+        if not self.cfg.git_branch:
+            return None
+        name = self.cfg.branch_prefix + feature
+        try:
+            current = git(self.cfg, "rev-parse", "--abbrev-ref", "HEAD").strip()
+        except GitError as e:
+            raise WorkflowError(f"cannot read the current branch (no commit yet?): {e}") from e
+        if current == name:
+            return name
+        exists = bool(git(self.cfg, "branch", "--list", name).strip())
+        if exists and not self.is_feature_branch(name, feature):
+            raise WorkflowError(
+                f"Branch {name} exists but is not agentflow's branch for '{feature}' (no "
+                f"{self.cfg.paths.specs}/{feature}/ on it, not created by `agentflow spec`). "
+                "Rename or delete that branch, or choose another feature name."
+            )
+        dirty = git(self.cfg, "status", "--porcelain", "--untracked-files=no").rstrip()
+        if dirty:
+            raise WorkflowError(
+                f"Uncommitted changes to tracked files on {current}; commit or stash them before "
+                f"agentflow switches to {name} (untracked files are fine):\n{dirty[:1500]}"
+            )
+        if exists:
+            git(self.cfg, "checkout", "-q", name)
+            self.echo(f"Switched to the feature branch {name}.")
+            return name
+        base = self.cfg.git_base
+        try:
+            git(self.cfg, "rev-parse", "--verify", "-q", f"{base}^{{commit}}")
+        except GitError as e:
+            raise WorkflowError(
+                f"Base branch '{base}' not found; set [git] base in agentflow.toml "
+                "(or [git] branch = false to stay on the current branch)."
+            ) from e
+        git(self.cfg, "checkout", "-q", "-b", name, base)
+        git(self.cfg, "config", f"branch.{name}.agentflowFeature", feature)
+        self.echo(f"Created the feature branch {name} from {base}.")
+        return name
+
+    def is_feature_branch(self, branch: str, feature: str) -> bool:
+        """Created by `agentflow spec <feature>` (git config mark) or holds the feature's spec."""
+        try:
+            if git(self.cfg, "config", "--get", f"branch.{branch}.agentflowFeature").strip() == (
+                feature
+            ):
+                return True
+        except GitError:
+            pass
+        try:
+            git(self.cfg, "cat-file", "-e", f"{branch}:{self.cfg.paths.specs}/{feature}")
+            return True
+        except GitError:
+            return False
+
     def spec(self, feature: str) -> int:
+        lock = procs.read_lock(self.cfg.out_dir)
+        if procs.lock_alive(lock):
+            raise WorkflowError(
+                f"an agentflow run is active (feature {(lock or {}).get('feature')}, pid "
+                f"{(lock or {}).get('pid')}); a branch switch or the SPEC phase now would break "
+                "it. Reattach with /agentflow:resume, or wait until it stops."
+            )
+        self.feature_branch(feature)
+        if tag_exists(self.cfg, f"spec-approved/{feature}"):
+            self.echo(
+                f"NOTE: the spec of {feature} is already approved (SPEC phase not set). Continue "
+                f"the feature (agentflow status {feature} --brief), or change the spec and run "
+                f"agentflow approve-spec {feature} again (restarts from the tests)."
+            )
+            return EXIT_OK
         target = self.cfg.spec_dir(feature)
         if not target.exists():
             local = self.cfg.root / self.cfg.paths.specs / "_template"
@@ -1501,8 +1655,11 @@ class Orchestrator:
                 (target / name).write_text(text, encoding="utf-8")
         set_phase(self.cfg, "SPEC")
         log_event(self.cfg, feature, "spec_started")
-        self.echo(f"SPEC phase set. Now run `claude` and type: /spec {feature}")
-        self.echo(f"When you're satisfied: agentflow approve-spec {feature}")
+        self.echo(f"SPEC phase set for {feature}.")
+        self.echo(
+            f"Spec dialogue: /agentflow:feature {feature} in Claude Code (it runs this command "
+            f"too); manual end of the phase: agentflow approve-spec {feature}"
+        )
         return EXIT_OK
 
     def approve_spec(self, feature: str) -> int:
@@ -1559,13 +1716,23 @@ class Orchestrator:
                 while prog["phase"] != "DONE":
                     if prog["phase"] not in runners:
                         raise WorkflowError(f"unknown phase in progress.json: {prog['phase']}")
-                    self.echo(f"--- {feature}: {prog['phase']} ---")
-                    runners[prog["phase"]](feature, prog)
+                    phase = prog["phase"]
+                    self.echo(f"--- {feature}: {phase} ---")
+                    self.progress(feature, f"{phase} start")
+                    runners[phase](feature, prog)
+                    self.progress(feature, f"{phase} done")
+                # before the lock goes: `agentflow watch` ends when it sees no lock
+                self.progress(feature, "DONE")
+                self.notify(f"agentflow: {feature} DONE", "Feature finished; see the chat.")
         except Paused as p:
             return p.code
         except KeyboardInterrupt as e:  # Ctrl+C, Ctrl+Break, SIGTERM (procs.Interrupted)
             self.record_interruption(feature, prog, procs.interrupt_name(e))
             return EXIT_INTERRUPTED
+        except Exception as e:
+            self.progress(feature, f"ERROR in {prog.get('phase')}: {type(e).__name__}: {e}")
+            self.notify(f"agentflow: {feature} stopped with an error", str(e))
+            raise
         finally:
             clear_phase(self.cfg)
             procs.remove_lock(self.cfg.out_dir)
@@ -1602,9 +1769,10 @@ class Orchestrator:
             completed_steps=prog.get("completed_steps"),
             how=how,
         )
-        self.echo(
-            f"\nInterrupted ({how}) in {prog.get('phase')}: agent processes stopped, phase lock "
-            f"cleared. Resume with: agentflow run {feature}"
+        self.progress(
+            feature,
+            f"INTERRUPTED ({how}) in {prog.get('phase')}: agent processes stopped, phase lock "
+            f"cleared. Resume with: agentflow run {feature}",
         )
 
     def recover_stale(self, lock: dict[str, Any] | None, by: str) -> None:
