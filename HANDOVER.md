@@ -22,7 +22,7 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
   `agent_run` events (model, cost) and failed attempts of the next FCSim feature with the table
   above.
 - **Adapters:** python (pytest, mutmut via WSL on Windows), dotnet (xUnit, Stryker opt-in level).
-- **Chat flow (plugin 0.2.0):** `/agentflow:feature <f>` (branch `feat/<f>` from `[git] base`,
+- **Chat flow (plugin 0.2.1):** `/agentflow:feature <f>` (branch `feat/<f>` from `[git] base`,
   spec dialogue, approve, background `agentflow run` + Monitor on `agentflow watch`, gate digests
   via `agentflow gate-summary`, plain-word replies mapped to approve/reject/answer/finish,
   wrap-up: retro proposals, PR offer, `agentflow cleanup`), `/agentflow:resume [f]`,
