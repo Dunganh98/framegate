@@ -13,10 +13,14 @@ from collections.abc import Sequence
 COMMANDS_HELP = """\
 commands:
   init                    scaffold agentflow.toml, spec templates, .gitignore lines
-  spec <feature>          copy the spec templates, set the SPEC phase lock
+  spec <feature>          create/switch to the branch feat/<feature> from [git] base, copy
+                          the spec templates, set the SPEC phase lock
   approve-spec <feature>  commit + tag spec-approved/<feature>, reset progress
   run <feature>           advance to the next human gate (tests, final) or DONE; no other stops
-  status <feature>        show progress and which gate is waiting
+  status [<feature>] [--brief]   progress and which gate is waiting; no feature: all
+                          features; --brief: short state + last progress lines (for the chat)
+  watch <feature>         live view: print new progress lines until the run ends
+  gate-summary <feature>  chat-friendly digest of the waiting gate (questions numbered)
   approve <feature>       approve the waiting gate (tests -> implement; final -> retro)
   reject <feature> --reason TEXT   reject the tests gate; writer + reviewer re-run with it
   answer <feature>        after writing out/<f>/answers.md: tests gate -> writer + reviewer
@@ -24,7 +28,10 @@ commands:
   finish <feature> --no-retro      final gate -> DONE without the retro
   gates <feature> --scope step|final [--skip-mutation]
   spec-brief <feature>    print the conventions brief for the SPEC session
+  cleanup <feature> [--tags] [--force]   delete out/<feature>/ and its run logs (DONE only);
+                          --tags: also the feature's spec-approved/tests-approved/spec-update tags
   unlock [--force]        clear a stale phase lock (.phase/.reqs) left by a killed run
+  protocol                the chat run protocol the plugin skills follow (printed)
   hook pre-tool-use|stop  Claude Code hooks (stdin = hook JSON; exit 2 = block)
 
 exit codes: 0 ok, 1 error, 10 human gate (tests or final), 130 interrupted (Ctrl+C /
@@ -46,8 +53,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("init", help="scaffold the workflow files into the current repository")
     p.add_argument("--language", choices=["python", "dotnet"], help="default: detected")
-    for name in ("spec", "approve-spec", "run", "status", "approve", "spec-brief"):
+    for name in ("spec", "approve-spec", "run", "approve", "spec-brief", "watch", "gate-summary"):
         sub.add_parser(name).add_argument("feature")
+    p = sub.add_parser("status")
+    p.add_argument("feature", nargs="?")
+    p.add_argument("--brief", action="store_true", help="short state for the chat")
+    p = sub.add_parser("cleanup", help="delete out/<feature>/ and its run logs (DONE only)")
+    p.add_argument("feature")
+    p.add_argument("--tags", action="store_true", help="also delete the feature's tags")
+    p.add_argument("--force", action="store_true", help="even if the feature is not DONE")
     p = sub.add_parser("reject")
     p.add_argument("feature")
     p.add_argument("--reason", required=True)
@@ -61,6 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--skip-mutation", action="store_true")
     p = sub.add_parser("unlock", help="clear a stale phase lock left by a killed run")
     p.add_argument("--force", action="store_true", help="even if a run looks active")
+    sub.add_parser("protocol", help="print the chat run protocol (used by the plugin skills)")
     p = sub.add_parser("hook")
     p.add_argument("event", choices=["pre-tool-use", "stop"])
     return ap
@@ -86,6 +101,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "hook":  # fast path: no config/adapter imports outside a project
         return run_hook(args.event)
+    if args.command == "protocol":
+        from agentflow.orchestrator import package_text
+
+        print(package_text("templates", "chat_protocol.md").rstrip())
+        return 0
 
     from agentflow.config import ConfigError, find_root, load_config
     from agentflow.orchestrator import Orchestrator, WorkflowError
@@ -128,8 +148,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             return orch.approve_spec(f)
         if args.command == "run":
             return orch.run(f)
-        if args.command == "status":
-            return orch.status(f)
+        if args.command in ("status", "watch", "gate-summary", "cleanup"):
+            from agentflow import chat
+
+            if args.command == "status":
+                if f is None:
+                    return chat.overview(orch)
+                return chat.brief(orch, f) if args.brief else orch.status(f)
+            if args.command == "watch":
+                return chat.watch(orch, f)
+            if args.command == "gate-summary":
+                return chat.gate_summary(orch, f)
+            return chat.cleanup(orch, f, tags=args.tags, force=args.force)
         if args.command == "approve":
             return orch.approve(f)
         if args.command == "reject":
