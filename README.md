@@ -10,7 +10,7 @@ mutation score) and never stops to ask.
 
 | Phase | Agent(s) | Ends with |
 |---|---|---|
-| SPEC | interactive `/spec` session | **gate 1**: `agentflow approve-spec` -> tag `spec-approved/<f>` |
+| SPEC | spec dialogue in the chat (`/agentflow:feature <f>`) | **gate 1**: `agentflow approve-spec` -> tag `spec-approved/<f>` |
 | TESTS | test writer -> mechanical checks -> **test reviewer** (`roles/test_review.md`); objections go back to the writer, at most `[agents] test_review_rounds` (2) times | **gate 2**: `out/<f>/tests_gate.md` (ID -> tests -> what it checks, check results, reviewer verdict + remaining objections, all open questions batched) -> approve (tag `tests-approved/<f>`) / reject / answer (answers go into the spec first: SPEC_UPDATE). `[gates] tests = "auto"` passes it without a stop when everything is clean |
 | IMPLEMENT | implementer, one fresh run per plan step | step gates green -> commit. Ambiguity: assume from the spec, log it in `steps.md`. No reasonable assumption, or `max_attempts` failed attempts: the step is **parked** (its code set aside as `out/<f>/parked/*.diff`), the run goes on |
 | REVIEW | adversarial reviewer -> **triage** by the test reviewer -> fixes | valid findings fixed (or parked), invalid ones removed with a reason; final gates |
@@ -22,17 +22,52 @@ mutation score) and never stops to ask.
 | Part | Where | Docs |
 |---|---|---|
 | Python package + CLI `agentflow` | `src/agentflow/` | this file, docs/adapters.md, docs/claude-cli-notes.md |
-| Claude Code plugin (`/spec`, hooks) | `plugin/` | docs/plugin.md |
+| Claude Code plugin (`/agentflow:feature`, `:resume`, `:status`, hooks) | `plugin/` | docs/plugin.md |
 
-## Daily use
+## Daily use: from the Claude Code chat
+
+Once per repository: `agentflow init [--language python|dotnet]` (agentflow.toml, spec templates,
+.gitignore lines; commit them), the plugin installed (docs/plugin.md), and an allow rule so the
+skills can run the CLI without a prompt after the first turn (an `allowed-tools` grant of a skill
+only lasts for the turn it was invoked in): `"Bash(agentflow *)"` and `"PowerShell(agentflow *)"`
+under `permissions.allow` in `.claude/settings.local.json` (or answer the first prompt with
+"always allow").
+
+Then you only type requirements, answers and gate decisions:
+
+1. `/agentflow:feature <name>`: creates the branch `feat/<name>` from `[git] base` (`main`) in
+   this checkout (refused with uncommitted changes to tracked files; an existing branch is used
+   only if it is this feature's), sets the SPEC phase and starts the spec dialogue: clarifying
+   questions, requirements/design/plan, interface stubs.
+2. "Spec OK": the skill approves the spec, starts `agentflow run` in the background and shows the
+   live view: one line per phase start/end, check result, failed attempt, assumption, park and
+   gate, each with the cost so far (~10-30 lines per feature). The chat stays usable.
+3. At a gate (tests, final) the chat shows a digest (`agentflow gate-summary`: checks, reviewer
+   verdict, spec IDs -> tests, numbered questions / parked items, spec diff, costs), Windows
+   shows a toast, and Claude Code waits for you. Reply in plain words: "ok" (approve), "reject:
+   <why>" (tests gate), answers to the numbered questions, "retro" or "done" (final gate). The
+   skill runs the matching command and continues the run in the background.
+4. DONE: the skill lists the retro proposals, offers the final summary as the PR description
+   (`gh pr create`, only on your yes; nothing is pushed without it) and cleans up the run files
+   (`agentflow cleanup`; `specs/<name>/` and the metrics row stay). After the PR is merged,
+   `/agentflow:status <name>` offers removing the feature's tags.
+
+After a session restart: `/agentflow:resume [name]` reattaches (live view, the waiting gate or the
+wrap-up). `/agentflow:status` lists the features and where they stand.
+
+## CLI (the engine; manual fallback)
+
+The skills only call these commands; everything works the same from a terminal.
 
 ```
 agentflow init [--language python|dotnet]   # agentflow.toml, specs/_template/, .gitignore lines
-git checkout -b feature/<f>
-agentflow spec <f>                          # then in claude: /spec <f>
+agentflow spec <f>                          # branch feat/<f> from [git] base + SPEC phase
 agentflow approve-spec <f>                  # tag spec-approved/<f>
-agentflow run <f>                           # runs to the next gate (tests, final) or DONE
-agentflow status <f>                        # which gate is waiting, and what to do
+agentflow run <f>                           # runs to the next gate (tests, final) or DONE;
+                                            # progress lines on stdout + out/<f>/progress.log
+agentflow watch <f>                         # live view: new progress lines until the run ends
+agentflow status [<f>] [--brief]            # all features / one; --brief = short, for the chat
+agentflow gate-summary <f>                  # chat digest of the waiting gate
 agentflow approve <f>                       # tests gate -> implement; final gate -> retro
 agentflow reject <f> --reason "..."         # tests gate: writer + test reviewer re-run with it
 agentflow answer <f>                        # after writing out/<f>/answers.md: the next run
@@ -40,10 +75,30 @@ agentflow answer <f>                        # after writing out/<f>/answers.md: 
                                             # tests gate -> writer + reviewer re-run; final
                                             # gate -> redoes only the parked items
 agentflow finish <f> --no-retro             # final gate -> DONE without the retro
+agentflow cleanup <f> [--tags] [--force]    # DONE: delete out/<f>/ + its run logs; --tags: also
+                                            # spec-approved/tests-approved/spec-update tags
 agentflow gates <f> --scope step|final      # the frame checks (also used in CI)
-agentflow spec-brief <f>                    # conventions for the SPEC session (used by /spec)
+agentflow spec-brief <f>                    # conventions for the spec dialogue (skill injects it)
+agentflow protocol                          # the chat run protocol (skills inject it)
 agentflow unlock [--force]                  # clear a stale .phase/.reqs left by a killed run
 ```
+
+Branch per feature (`[git]`): `spec` creates `<branch_prefix><f>` (`feat/`) from `base` (`main`)
+and marks it (`git config branch.<b>.agentflowFeature`); it switches to an existing branch only
+if it carries that mark or the feature's spec folder, refuses with uncommitted changes to tracked
+files (untracked files are fine) and while a run is active, and only notes an already approved
+spec (no SPEC phase). `[git] branch = false` stays on the current branch. A checkout whose
+agentflow.toml is not on `main` yet sets `base` to the branch that has it.
+
+Progress lines (`HH:MM:SS <what> [$cost since the spec approval]`, max 160 chars) go to stdout
+and `out/<f>/progress.log`; `watch` prints the new ones (it remembers its position in
+`progress.cursor`, so a re-armed watch neither repeats nor skips) and exits once no run of the
+feature holds `out/.run.lock` (or none appears within 30 s). Notifications (`[notify] toast =
+true`, Windows only; env `AGENTFLOW_TOAST=0` turns them off): a toast at each gate, at DONE and
+on an error, through PowerShell 5.1's WinRT ToastNotificationManager (no modules); fire and
+forget, silent if it fails. `cleanup` keeps `specs/<f>/`, the metrics row and the shared
+`out/events.jsonl`, refuses while the feature's run is active or before DONE (`--force`), and
+prints the `git push origin --delete` line for tags that were pushed.
 
 `run` never waits on the keyboard. It advances TESTS -> IMPLEMENT (per plan step) -> REVIEW ->
 PR -> FINAL -> RETRO -> DONE and stops only at the tests gate and the final gate, writing

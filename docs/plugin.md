@@ -1,18 +1,23 @@
 # agentflow Claude Code plugin
 
-The plugin is the Claude Code side of agentflow: the `/spec` command and two hooks that call the
-`agentflow` CLI (the Python package in `src/`). All logic lives in the package; the plugin only
-registers things. Installed **user-wide**, it stays inert in repos without `agentflow.toml`.
+The plugin is the Claude Code side of agentflow: three skills that drive the workflow from the chat
+(`/agentflow:feature`, `/agentflow:resume`, `/agentflow:status`) and two hooks, all calling the
+`agentflow` CLI (the Python package in `src/`). All logic lives in the package (including the
+chat run protocol, `agentflow protocol`); the plugin only registers things. Installed
+**user-wide**, it stays inert in repos without `agentflow.toml`.
 
 ## Layout
 
 ```
 .claude-plugin/marketplace.json     # marketplace "agentflow", one entry: source "./plugin"
 plugin/
-  .claude-plugin/plugin.json        # name agentflow, version 0.1.0
+  .claude-plugin/plugin.json        # name agentflow, version 0.2.0
   hooks/hooks.json                  # PreToolUse (Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell) + Stop
   scripts/agentflow-hook.js         # wrapper: node agentflow-hook.js <event> -> agentflow hook <event>
-  skills/spec/SKILL.md              # /spec (also /agentflow:spec)
+  skills/feature/SKILL.md           # /agentflow:feature <f>: branch + spec dialogue, then the run
+                                    # protocol (injected: agentflow protocol)
+  skills/resume/SKILL.md            # /agentflow:resume [f]: reattach after a session restart
+  skills/status/SKILL.md            # /agentflow:status [f]: where features stand, tag cleanup
   tests/agentflow-hook.test.js      # node --test "plugin/tests/*.test.js"
 ```
 
@@ -99,13 +104,52 @@ Timeouts: PreToolUse 30 s, Stop 600 s (the Stop hook may run a full test suite).
 | Install smoke test | Local scope in a temp repo: marketplace add + install OK; `claude plugin details agentflow` -> Skills (1) spec, Hooks (2) PreToolUse, Stop; then uninstalled and removed | run 2026-11-09 |
 
 Live check (FCSim smoke run, 2026-11-09, local-scope install): both hooks fire in `claude -p`
-runs (see docs/claude-cli-notes.md). Not yet tested: the `!` injection in `/spec` in an
-interactive session.
+runs (see docs/claude-cli-notes.md).
+
+## Chat flow: how the skills drive the CLI
+
+| Step | Mechanism |
+|---|---|
+| Skill load | `` !`agentflow spec <f>` ``, `` !`agentflow spec-brief <f>` ``, `` !`agentflow protocol` `` are injected (pre-approved by `allowed-tools: Bash(agentflow *) PowerShell(agentflow *)`). A refusal (dirty tree, foreign branch, active run) exits 1 and aborts the invocation with the message shown |
+| Run | Bash tool `run_in_background: true`: `agentflow run <f>`. One completion notification when it exits (exit 10 shows as status `failed`; the protocol reads the state from `agentflow status <f> --brief`, not from the code) |
+| Live view | Monitor tool: `agentflow watch <f>`, `timeout_ms` 1800000. Each progress line = one event (lines within 200 ms batch). The watch exits when the run's lock is gone (`watch ended: <state>`); at the 30-min deadline the skill re-arms it, and `progress.cursor` makes it continue without repeats or gaps |
+| Gate | `agentflow gate-summary <f>` shown in a code block; the skill ends its turn (Claude Code's own "waiting for input"); agentflow shows a Windows toast. The reply is mapped to approve / reject / answers.md + answer / finish (table in `src/agentflow/templates/chat_protocol.md`), then the run starts again in the background |
+| Resume | `/agentflow:resume [f]` injects `agentflow status [f] --brief` (always exit 0) and the protocol; a run started by another session has no task notification, so its end is the watch's last line |
+| Wrap-up | retro proposals, PR offer (`gh pr create --body-file out/<f>/final_summary.md`, only on yes, before the cleanup), `agentflow cleanup <f>`; later `--tags` |
+
+Permissions: an `allowed-tools` grant only lasts for the turn the skill was invoked in. Every
+later turn (gate replies, run restarts, the Monitor) needs `Bash(agentflow *)` /
+`PowerShell(agentflow *)` in the project's `permissions.allow` (or "always allow" at the first
+prompt); `gh` / `git push` stay unapproved on purpose.
+
+## Verified facts for the chat flow (Claude Code 2.1.322, docs read 2026-11-10)
+
+| Fact | Result | Source |
+|---|---|---|
+| Background Bash | `run_in_background: true` -> task id + output file; one notification when the command exits. A local interactive session has **no time limit** for background commands; `-p` runs: 10 min default (text prompt), max 2 h with `timeout`; `-p` waits for them after its result | [tools reference](https://code.claude.com/docs/en/tools-reference) "Background commands" |
+| Monitor | Runs a command in the background, each stdout line is an event fed back to Claude; deadline 5 min default, **max 30 min** (10 min in `-p`), one notice at expiry -> re-arm; same permission rules as Bash; on Windows only with Git Bash installed; a deferred tool (loaded via ToolSearch on first use) | tools reference "Monitor tool"; Monitor tool description; `-p` check below |
+| Monitor output | stdout only, must flush per line (`watch` prints with `flush=True`); too many events -> the monitor is stopped (the progress stream is ~10-30 lines per feature) | Monitor tool description |
+| Skill string substitutions | `$ARGUMENTS`, `$N`, `${CLAUDE_SKILL_DIR}`, `${CLAUDE_PROJECT_DIR}`, `${CLAUDE_PLUGIN_ROOT}` (plugin skills) | [skills](https://code.claude.com/docs/en/skills) |
+| `` !`cmd` `` injection | Bash when Git Bash exists, else PowerShell; **any non-zero exit aborts the invocation** (exit 1 tolerated only for search/compare commands); `cat` of a file outside the session's working directories is **blocked** ("may only concatenate files from the allowed working directories"), so the protocol comes from `agentflow protocol`, not a plugin file | skills; `-p` check below |
+| Skill content lifetime | The rendered SKILL.md stays in the conversation for later turns (not re-read); the `allowed-tools` grant clears at the next user message | skills |
+| Reading plugin files | A `Read` of a plugin file from a later turn needs a permission (denied in `-p`) | `-p` check below |
+
+Headless check (2026-11-10, temp git repo, `--plugin-dir plugin`, Haiku, total $0.05): (1)
+`/agentflow:feature demo` loaded, its injected commands ran (branch `feat/demo` created from
+`main`, `specs/demo/` copied), Claude opened the spec dialogue; (2) `/agentflow:status` printed
+the overview; (3) with a written spec and the fake claude (`AGENTFLOW_CLAUDE`), the reply "spec
+is OK, start the run" (`--resume`, `--allowedTools "Bash(agentflow *)" Monitor`) made Claude run
+`approve-spec`, start `agentflow run demo` in the background and `agentflow watch demo` in a
+Monitor; the run stopped at the tests gate (5 progress lines), the task notification came, Claude
+ran `status --brief` + `gate-summary`, showed the gate with the numbered question and waited; the
+watch then ended with `watch ended: waiting at the tests gate`. Not tested: an interactive
+session, and whether the toast is visible (`powershell.exe` exits 0; the user confirms).
 
 ## Contract notes for the package
 
-- `agentflow spec-brief <feature>` must exit 0 when it works; any non-zero exit aborts `/spec` and
-  shows its output, so print a clear error (e.g. no feature given, no `agentflow.toml`).
+- Injected commands (`spec`, `spec-brief`, `status --brief`, `protocol`) must exit 0 when they
+  work; any non-zero exit aborts the skill and shows its output, so print a clear error.
+  `status --brief` always exits 0 (also at a gate); `gate-summary` exits 0 at a gate, 1 otherwise.
 - The orchestrator must **not** pass `--bare` to `claude -p`, or the phase-lock and Stop hooks don't run.
 - In the hooks, read `tool_input.file_path` or `tool_input.notebook_path`; `file_path` is absolute.
 - Stop: honour `stop_hook_active`; exit 2 + stderr continues Claude with that text as the reason.
