@@ -74,6 +74,13 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
    only after the PR merge (`cleanup --tags`); PR only on the user's explicit OK.
 9. Notifications: chat + Claude Code's input alert + Windows toast.
 10. Publish (private GitHub repo + user-wide install) only after one real FCSim feature ran clean.
+11. Later (2026-11-10): **epics**. One big task, split by Opus into sub-features. Two
+    approvals: "split OK" first, then all sub-specs in one "spec OK". One agent per
+    sub-feature in parallel (own worktree), models as today (Sonnet writes, Opus checks), one
+    final gate with a summary for all. Planned in design doc §9.8, with what to port from
+    harnessOrch (a friend's repo, no license file; the author agreed to share it on 2026-11-10;
+    credit ported files). Starts after
+    single features run clean.
 
 ## FCSim integration
 - Worktree `D:\Me\Projects\FCSim-agentflow`, branch `feat/agentflow-setup` (agentflow.toml,

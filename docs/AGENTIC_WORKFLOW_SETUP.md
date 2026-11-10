@@ -1519,6 +1519,7 @@ Making the gate commands configurable is also what would later allow non-Python 
 | 5 | 9.5 Orchestrator modes | pstack playbooks | M | 9.2 | Bug fixes and refactors with the right first proof |
 | 6 | 9.6 Design-friction detection | pstack `/architect` (phase 5) | M | 9.1 | Stops blind retries; points to spec problems |
 | 7 | 9.7 Retro panel with backlog | pstack `/reflect` | S–M | 9.1, 9.2 | Fewer one-off rules, better proposals |
+| 8 | 9.8 Epics: split + parallel sub-features | ours (scheduling ideas from harnessOrch) | L | clean single features, 9.1 | One big task, one spec approval, one final summary |
 
 ---
 
@@ -1829,7 +1830,74 @@ A perf mode (baseline trace, then compare) is deferred until there is profiling 
 
 ---
 
-### 9.8 Files added or changed by Part 9
+### 9.8 Epics: one big task, split and run in parallel
+
+**Origin:** ours (user request, 2026-11-10). The parallel scheduling ideas (worktree per agent, write scopes, serialized merges) come from harnessOrch.
+
+**Trigger:** single features run clean end to end (decision 10 in HANDOVER.md), and 9.1 telemetry exists, so the cost and retries of an epic can be compared with single features.
+
+**Goal:** you give one big task. Opus splits it into sub-features. You approve the split, then all sub-specs **in one reply**. One agent per sub-feature then runs the existing loop, several at once. At the end you get **one** final gate with a summary of every sub-feature.
+
+```
+epic dialogue (Opus + you) -> split + contracts -> "split OK"      (gate 1)
+  -> Opus writes every sub-spec -> ONE "spec OK" for all of them   (gate 2)
+  -> contract commit (shared interfaces as stubs, frozen)
+  -> per sub-feature, in parallel, own worktree: tests -> code -> review   (existing loop)
+  -> merge each into feat/<epic> -> integration checks on the merged branch
+  -> ONE final gate (summary per sub-feature) -> ONE retro -> done
+```
+
+**Design decisions (the risks of the naive version, and the answer to each):**
+
+| Risk | Decision |
+|---|---|
+| The split is the costliest decision. A wrong cut is paid by every sub-feature. | **Two approvals before any code.** Gate 1, "split OK": sub-features, dependencies, shared interfaces, file ownership (`write_scope`). Only then does Opus write the sub-specs, so a rejected split costs no sub-spec work. Gate 2, "spec OK": all sub-specs in one reply. A change to the split during gate 2 sends it back to gate 1. Tags: `split-approved/<epic>`, then `spec-approved/<epic>/<sub>` for each. |
+| Parallel agents invent incompatible interfaces for each other. | Interfaces between sub-features are written in `specs/<epic>/epic.md` and committed as stubs **before** any sub-feature starts. They are frozen like tests (frame diff): a sub-feature can't change them, only park a question. |
+| Two agents edit the same file. | Each sub-feature has a `write_scope` (files/globs) in `epic.md`. Overlapping scopes never run at the same time. An edit outside the scope is reverted, or parked if the agent says it needs it. |
+| Dependencies between sub-features. | `depends_on` in `epic.md`. A sub-feature starts only when the ones it depends on are merged. A parked sub-feature holds back only its dependents. |
+| One shared checkout (today: `feat/<f>` in the current checkout). | Each sub-feature runs in its own git worktree on `feat/<epic>/<sub>`. Merges into `feat/<epic>` happen one at a time. Tags are per sub-feature (`spec-approved/<epic>/<sub>`, ...). |
+| Each sub-feature is green alone, but they break each other. | **Integration checks** after each merge and at the end on `feat/<epic>`: whole-suite regression, lint/types, frame diff against the contract commit. A failure there goes to the diagnosis run, which names the sub-feature to fix. |
+| Model choice per sub-feature. | Same as single features today: writers (tests, implement, spec update) on Sonnet, checkers (test reviewer, reviewer, diagnosis) and the split/sub-specs on Opus. The orchestrator stays deterministic (no LLM in the loop). |
+| Parallel `claude -p` runs hit the subscription's usage limits; mutation testing and .NET builds overload the machine. | `[epic] concurrency` (default 3). Mutation runs are queued, one at a time. A usage-limit error waits for the reset and continues; it is not counted as a failed attempt. |
+| One stuck sub-feature blocks the whole epic. | It parks; the others finish. The final gate lists it with its questions. |
+| The final gate becomes too long to read. | Summary grouped by sub-feature: status, cost, assumptions, parked questions (numbered across the epic). Answers redo only the affected sub-features, **plus their dependents if an answer changes a shared contract**. |
+| Sub-features too big or too many. | Opus targets sub-features the size of one current feature. At most `[epic] max_subs` (default 6). Above that, Opus proposes two epics. |
+
+**Files:**
+- `specs/<epic>/epic.md`: goal, split table (id, title, `depends_on`, `write_scope`), shared contracts, integration acceptance criteria.
+- `specs/<epic>/<sub>/`: the usual `requirements.md`, `design.md`, `plan.md` per sub-feature. Spec IDs are prefixed per sub-feature, so traceability stays per sub-feature.
+- `out/<epic>/progress.json`: one entry per sub-feature (phase, attempt, worktree, cost) plus the epic state.
+- `out/<epic>/final_summary.md`: the one summary.
+
+**Wiring:**
+- Chat: `/agentflow:epic <name>` (dialogue, split, "split OK", sub-specs, "spec OK", then background run + Monitor, one row per sub-feature). `/agentflow:status` and `/agentflow:resume` accept an epic.
+- CLI: `agentflow run <epic>` runs the scheduler; `approve`, `answer`, `cleanup` work on the epic.
+- Engine: a scheduler over sub-features (dependencies, scope overlap, concurrency), worktree setup and teardown, serialized merges, the integration gate. Each sub-feature reuses the existing single-feature pipeline unchanged, with its working directory set to its worktree.
+- Hooks: `AGENTFLOW_AGENT` plus the sub-feature's write scope, so the existing path protection also enforces the scope.
+- Telemetry: every event carries `epic` and `sub`. The report compares cost per accepted sub-feature with cost per single feature.
+- Retro: one per epic. It also looks at the split itself: wrong cuts, missing contracts, scope conflicts.
+
+**Reuse from harnessOrch** (github.com/kehuydietlatoi/harnessOrch, TypeScript, by a friend of the user). It solves the parallel half of this item already. The repo has no license file, but the author agreed to share it (2026-11-10). Credit it in each ported file's header. It is TypeScript, so every reuse is a port to Python, kept small:
+
+| harnessOrch (`packages/engine/src/`) | What it does | Use in agentflow |
+|---|---|---|
+| `scheduler/scheduler.ts` (`nextDispatches`, `blockedBy`, `planFinished`) | Pure, ~80 lines: start a task only when its dependencies are done, below the concurrency cap, and its write scope overlaps no running task. Which tasks wait on a task that needs you. | Epic scheduler over sub-features. Drop the agent-candidate part (Claude only). |
+| `git/path-locks.ts` (`lockPathsOverlap`, `pathMatchesGlob`) | Whether two globs can match the same file (an automaton, not a guess), and repo-relative path rules. | Scope-overlap test of the scheduler; scope check at gate 1 (overlapping scopes must be dependent). `frame_diff.path_matches` only matches one path against globs. |
+| `checks/checks.ts` (`changedPaths`, `scopeViolations`) + the README's write-scope policy | Changed files via `git status -z`, renames included. Unlisted out-of-scope edit: reverted silently. Listed one: parked, you allow or revert. | Write-scope check after each sub-feature run, next to the frame diff. |
+| `adapters/usage-limit.ts` | Detects a usage-limit message and parses its reset time. | Wait for the reset and continue, without counting a failed attempt. **Useful for single features now.** |
+| `checks/filter.ts` (`filterCheckOutput`) | Failure lines with 2 lines of context plus the summary tail, max 100 lines. Measured as the biggest token saver. | Fix prompts and diagnosis input (today: last 25–30 lines). **Useful for single features now.** |
+| `git/worktree.ts` (`worktreeRemovalSafety`, `removeWorktree`, `prepareWorktreeRemoval`) | Never delete a worktree with dirty files or unmerged commits; avoid Git for Windows recursing through junctions. | Worktree teardown and `agentflow cleanup` for epics. |
+| `engine/git.ts` (`provideSharedDirs`, `cloneTree`) | Gives a new worktree hard-linked copies of ignored dependency folders, so builds work at once. | Only if a project's worktrees are slow to build (Python `.venv` via `uv sync` and NuGet's global cache may make it unnecessary). Measure first. |
+| `engine/lifecycle.ts` | Task states and an explicit transition table, pure. | Sub-feature states (queued, running, parked, merged, done). |
+| Serialized merges and the merge-conflict prompt (`engine/runner.ts`) | One merge at a time into the plan branch; a conflict goes to an LLM with both sides. | Merges into `feat/<epic>`. A conflict should be rare when scopes don't overlap; park it rather than let an LLM resolve it, until data says otherwise. |
+
+Not reused: multi-vendor routing (Codex, OpenCode), the Electron app, resumed long-lived sessions (agentflow uses fresh runs on purpose), cross-vendor review, process containment (`procs.py` already uses a Windows job object).
+
+**Not in scope:** non-Claude workers (Codex, OpenCode). Revisit only if usage limits become the main bottleneck.
+
+---
+
+### 9.9 Files added or changed by Part 9
 
 | Item | New | Changed |
 |---|---|---|
@@ -1840,5 +1908,6 @@ A perf mode (baseline trace, then compare) is deferred until there is profiling 
 | 9.5 | `specs/_template_bugfix/`, `specs/_template_refactor/`, `roles/tests_{repro,characterize}.md`, `scripts/check_baseline.py` | `orchestrate.py` (`--mode`), `check_decision_log.py` |
 | 9.6 | `scripts/check_friction.py` | `orchestrate.py` (escalate on friction) |
 | 9.7 | `roles/retro_{process,spec}.md`, `roles/retro_synth.md`, `metrics/retro_backlog.md` | `orchestrate.py` (RETRO panel) |
+| 9.8 | `specs/_template_epic/epic.md`, epic scheduler module, `plugin/skills/epic/` | `orchestrator.py` (run in a given worktree), `gates.py` (integration gate), hooks (write scope), `chat.py` (status/resume/cleanup for epics), retro role (split review) |
 
 Each item is adopted on its own improvement branch, followed by the smoke test (Step 11) and one real feature before the next item starts.
