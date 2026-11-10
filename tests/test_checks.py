@@ -271,6 +271,65 @@ def test_red_stubs(tmp_path: pathlib.Path) -> None:
     assert "test_red" not in res.output
 
 
+FIXTURE_CHECKS = """\
+import pytest
+
+DATA = [1, 2, 3]
+
+
+def f() -> int:
+    raise NotImplementedError
+
+
+@pytest.mark.req("FT-R-001")
+def test_fixture_data_has_a_three() -> None:
+    assert 3 in DATA
+
+
+@pytest.mark.req("FT-R-001")
+def test_fixture_data_has_a_nine() -> None:
+    assert 9 in DATA
+
+
+@pytest.mark.req("FT-R-001")
+def test_red() -> None:
+    assert f() == 1
+"""
+
+
+def test_red_stubs_fixture_preconditions_must_pass(tmp_path: pathlib.Path) -> None:
+    """A fixture precondition test proves pinned data has its situation with existing code: it
+    must PASS against the stubs (a failing one = data picked wrong), unlike every other test."""
+    write(tmp_path, "specs/f/requirements.md", "FT-R-001")
+    write(tmp_path, "tests/test_f.py", FIXTURE_CHECKS)
+    res = red_stubs.check(adapter_for(tmp_path), "f")
+    assert res.status == "FAIL"
+    assert "3 tests for feature f (2 fixture precondition checks, which must pass)." in res.output
+    assert (
+        "FIXTURE PRECONDITION FAILS" in res.output and "test_fixture_data_has_a_nine" in res.output
+    )
+    assert "test_fixture_data_has_a_three" not in res.output and "PASSES AGAINST" not in res.output
+    write(tmp_path, "tests/test_f.py", FIXTURE_CHECKS.replace("9 in DATA", "1 in DATA"))
+    assert red_stubs.check(adapter_for(tmp_path), "f").status == "PASS"
+    assert red_stubs.is_fixture_check("Ns.LapTests.Fixture_LazyDuel(seed: 8)")
+    assert not red_stubs.is_fixture_check("tests.test_f::test_fixtures_load")
+
+
+def test_frame_allows_the_tagged_test_update(framed: pathlib.Path) -> None:
+    """Answers at the final gate may need a test change: the test writer's tagged commit
+    (tests-update/<f>) is allowed, any later test edit is a frame violation again."""
+    a = adapter_for(framed)
+    write(framed, "tests/test_a.py", "def test_a() -> None:\n    assert 1 == 1\n")
+    assert frame_diff.check(a, "f").status == "FAIL"
+    git(framed, "add", "-A")
+    git(framed, "commit", "-q", "-m", "tests updated from answers ANS-1")
+    git(framed, "tag", frame_diff.tests_update_tag("f"))
+    assert frame_diff.check(a, "f").status == "PASS"
+    write(framed, "tests/test_a.py", "def test_a() -> None:\n    assert 2 == 2\n")
+    res = frame_diff.check(a, "f")
+    assert res.status == "FAIL" and "PROTECTED PATH CHANGED: tests/test_a.py" in res.output
+
+
 def test_red_stubs_all_red_and_no_report(tmp_path: pathlib.Path) -> None:
     write(tmp_path, "specs/f/requirements.md", "FT-R-001")
     write(tmp_path, "tests/test_f.py", RED.split('@pytest.mark.req("FT-R-001")\ndef test_weak')[0])

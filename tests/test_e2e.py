@@ -262,10 +262,16 @@ def test_answer_parked_redoes_only_parked_items(demo_repo: DemoRepo) -> None:
 
     n = len(r.calls())
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    # the answers go into the spec first, then only the parked step: no review, no tests
-    assert phases(r)[n:] == ["SPEC_UPDATE", "IMPLEMENT", "PR"]
+    # the answers go into the spec first, the test writer applies the ones that need a test
+    # change (none here: no commit, no test review), then only the parked step: no review
+    assert phases(r)[n:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "PR"]
     assert "at the final gate" in r.calls()[n]["prompt"]
-    redo = r.calls()[n + 1]
+    amend = r.calls()[n + 1]["prompt"]
+    assert "the human answered questions at the final gate (answer reference ANS-1" in amend
+    assert "## Orientation" in amend and "specs/demo/: design.md, plan.md" in amend
+    assert [e["files"] for e in r.events() if e["kind"] == "tests_amended"] == [[]]
+    assert not git(r.root, "tag", "--list", "tests-update/demo").strip()
+    redo = r.calls()[n + 2]
     assert "implement plan step 2" in redo["prompt"] and "redo of parked work" in redo["prompt"]
     prog = r.progress()
     assert prog["completed_steps"] == [1, 2] and prog["parked"] == [] and not prog["redo"]
@@ -508,10 +514,16 @@ def test_tests_gate_deferred_two_human_gates(
     assert r.af("answer", "demo") == 0
     assert r.progress()["phase"] == "SPEC_UPDATE"
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    assert phases(r)[5:] == ["SPEC_UPDATE", "REVIEW", "PR"]
+    assert phases(r)[5:] == ["SPEC_UPDATE", "TESTS", "REVIEW", "PR"]
     assert not (r.root / "out/demo/open_questions.md").exists()
     assert "Floats are rejected." in read(r, "out/demo/questions_archive.md")
+    # the answer event pairs each numbered answer with the question the gate showed
+    ans = [e for e in r.events() if e["kind"] == "answer"][0]
+    assert ans["items"][0]["a"] == "Floats are rejected."
+    assert "Should add() accept floats?" in ans["items"][0]["q"]
     finish_with_retro(r)
+    ri = read(r, "out/demo/retro_input.md")
+    assert "Should add() accept floats?\nAnswer:\n~~~\nFloats are rejected.\n~~~" in ri
 
 
 def test_answers_with_an_unchanged_spec_skip_the_review(demo_repo: DemoRepo) -> None:
@@ -524,7 +536,8 @@ def test_answers_with_an_unchanged_spec_skip_the_review(demo_repo: DemoRepo) -> 
     (r.root / "out/demo/answers.md").write_text("1. As written.\n", encoding="utf-8")
     assert r.af("answer", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    assert phases(r)[5:] == ["SPEC_UPDATE", "PR"]  # no spec change: nothing to review again
+    # no spec change, no test change: nothing to review again
+    assert phases(r)[5:] == ["SPEC_UPDATE", "TESTS", "PR"]
     assert r.af("answer", "demo") == 1  # nothing parked, no question open any more
 
 
@@ -592,10 +605,112 @@ def test_a_parked_batch_is_redone_as_one(demo_repo: DemoRepo) -> None:
     (r.root / "out/demo/answers.md").write_text("1. neg(0) is 0.\n", encoding="utf-8")
     assert r.af("answer", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    assert phases(r)[-3:] == ["SPEC_UPDATE", "IMPLEMENT", "PR"]  # the batch once, as one run
+    # the batch once, as one run
+    assert phases(r)[-4:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "PR"]
     assert r.progress()["completed_steps"] == [1, 2] and not r.progress()["parked"]
     redo = [e for e in r.events() if e["kind"] == "redo_result"]
     assert [(e["label"], e["passed"]) for e in redo] == [("steps 1, 2", True)]
+
+
+def test_dependent_steps_wait_for_a_parked_step(demo_repo: DemoRepo) -> None:
+    """Step 2 depends on step 1 (plan.md): when step 1 parks, step 2 waits without a run instead
+    of building half of step 1; a review finding only on parked IDs is deferred to the redo (no
+    review-fix run on a parked step's work); the redo does both steps in plan order."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.two_steps()
+    r.defer_tests_gate()
+    r.scenario(park_steps=[1], review_finding=True)
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+    assert phases(r) == ["TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "TRIAGE", "PR"]
+    parked = r.progress()["parked"]
+    assert [(p["label"], p["reason"]) for p in parked] == [
+        ("step 1 - add", "no reasonable assumption possible (question)"),
+        ("step 2 - neg", "waits for parked step 1 (plan.md)"),
+    ]
+    assert parked[0]["dependents"] == [2]
+    review = r.calls()[3]["prompt"]
+    assert "own these spec IDs: DEMO-R-001, DEMO-E-001, DEMO-R-002. Write no findings" in review
+    triage = [e for e in r.events() if e["kind"] == "triage"][0]
+    assert [f["verdict"] for f in triage["findings"]] == ["DEFERRED"] and not triage["remaining"]
+    assert [e["kind"] for e in r.events()].count("findings_deferred") == 1
+    (r.root / "out/demo/answers.md").write_text("1. Q: step 1\n   A: Ints only.\n", "utf-8")
+    assert r.af("answer", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+    assert phases(r)[6:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "IMPLEMENT", "IMPLEMENT", "PR"]
+    redo = [e for e in r.events() if e["kind"] == "redo_result"]
+    assert [(e["label"], e["passed"]) for e in redo] == [
+        ("step 1 - add", True),
+        ("step 2 - neg", True),
+    ]
+    # the deferred review test ran with step 1's IDs: its redo failed once on it, then fixed it
+    gates = [e for e in r.events() if e["kind"] == "gate"]
+    assert [(e["step"], e["passed"]) for e in gates] == [
+        ("step 1 - add", False),
+        ("step 1 - add", True),
+        ("step 2 - neg", True),
+    ]
+    assert "nothing parked" in r.progress()["waiting"]["message"]
+    steps_md = read(r, "out/demo/steps.md")
+    assert steps_md.count("## Step ") == 3 and not list((r.root / "out/demo/notes").glob("*"))
+
+
+def test_a_check_on_files_the_implementer_may_not_edit_parks_at_once(demo_repo: DemoRepo) -> None:
+    """A lint / format failure only in frozen tests cannot be fixed in IMPLEMENT: park after the
+    first attempt instead of looping through all of them (seen live: 6 attempts on one space)."""
+    r = demo_repo
+    r.add_toml(
+        "[gates.commands]\nlint = []\ntypecheck = []\n"
+        "format = ['python', '-c', 'print(\"tests/test_demo.py: would reformat\"); exit(1)']\n"
+    )
+    r.defer_tests_gate()
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+    assert phases(r) == ["TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "PR"]
+    (p,) = r.progress()["parked"]
+    assert p["attempts"] == 1 and p["reason"] == (
+        "unfixable in IMPLEMENT: format fails only in files it may not edit: tests/test_demo.py"
+    )
+
+
+def test_answers_that_need_a_test_change_reach_the_tests(demo_repo: DemoRepo) -> None:
+    """An answer at the final gate adds an edge case (new ID): the test writer writes its test
+    (frozen for the implementer), the test reviewer checks the change, it is committed and
+    tagged tests-update/<f>, which the frame diff allows; the changed tests pass already, so no
+    fix run."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.defer_tests_gate()
+    r.scenario(questions_in=["TESTS"], spec_update="new_id")
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+    (r.root / "out/demo/answers.md").write_text(
+        "1. Q: [test writer] [TESTS] Should add() accept floats?\n   A: No; add(0, 0) is 0.\n",
+        encoding="utf-8",
+    )
+    assert r.af("answer", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+    assert phases(r)[5:] == ["SPEC_UPDATE", "TESTS", "TEST_REVIEW", "REVIEW", "PR"]
+    assert (
+        "This pass reviews only the test changes made from the answers ANS-1"
+        in (r.calls()[7]["prompt"])
+    )
+    amended = [e for e in r.events() if e["kind"] == "tests_amended"]
+    assert [e["files"] for e in amended] == [["tests/test_demo.py"]]
+    assert "tests updated from answers ANS-1" in git(r.root, "log", "--format=%s")
+    assert git(r.root, "tag", "--list", "tests-update/demo").strip()
+    final = read(r, "out/demo/final_gates.md")
+    assert "[PASS] frame diff" in final and "[PASS] traceability" in final
+    assert "the changed tests pass; no fix needed" in read(r, "out/demo/progress.log")
+    ans = [e for e in r.events() if e["kind"] == "answer"][0]
+    assert ans["items"] == [
+        {
+            "n": 1,
+            "q": "[test writer] [TESTS] Should add() accept floats?",
+            "a": "No; add(0, 0) is 0.",
+        }
+    ]
 
 
 def test_format_fix_and_project_checks(demo_repo: DemoRepo) -> None:
@@ -623,7 +738,7 @@ def test_format_fix_and_project_checks(demo_repo: DemoRepo) -> None:
     from agentflow.gates import gate_report
 
     rep = gate_report(orch.adapter, "demo", "step")
-    assert "Format fix: formatted 1 changed source file(s)" in rep.report
+    assert "Format fix: formatted 1 changed file(s)" in rep.report
     assert "def helper(x):\n    return x" in impl.read_text(encoding="utf-8")
     assert "format" not in rep.failed
     rep = gate_report(orch.adapter, "demo", "final")

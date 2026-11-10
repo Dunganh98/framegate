@@ -29,7 +29,8 @@ commands:
   gates <feature> --scope step|final [--skip-mutation]
   spec-brief <feature>    print the conventions brief for the SPEC session
   cleanup <feature> [--tags] [--force]   delete out/<feature>/ and its run logs (DONE only);
-                          --tags: also the feature's spec-approved/tests-approved/spec-update tags
+                          --tags: also the feature's tags (spec-approved, tests-approved,
+                          spec-update, tests-update)
   unlock [--force]        clear a stale phase lock (.phase/.reqs) left by a killed run
   protocol                the chat run protocol the plugin skills follow (printed)
   hook pre-tool-use|stop  Claude Code hooks (stdin = hook JSON; exit 2 = block)

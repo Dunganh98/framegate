@@ -35,11 +35,25 @@ would otherwise assume.
 2. Before writing anything, ask clarifying questions, grouped by: requirements and acceptance
    criteria; edge cases (empty, NaN, missing, out-of-range, units, timing, ordering); failure
    behavior; non-goals; test data and fixtures; verification harness on real data; dependencies
-   and architecture constraints. At most ~10 questions per round, numbered, each with a
-   recommended default. Repeat until nothing is open.
+   and architecture constraints. Always also ask (each gap below cost a live run questions,
+   assumptions or a parked step):
+   - overlaps: which requirements can apply to the same input, and which one wins; which stored
+     value is copied or derived from another, and can the source change afterwards;
+   - fixtures: for each case that needs particular data (a seed, a recording, a rare situation),
+     how a test sees from outside that the situation happened, and whether a check over picked
+     cases may pass with zero cases;
+   - input domain and copies: the valid range of each public method's inputs (NaN, infinity,
+     null, undefined enum values) and what a copy / clone shares;
+   - serialized data: which existing golden / hash / snapshot / save tests serialize a type
+     this feature changes, and is the new member in or out of them.
+   At most ~10 questions per round, numbered, each with a recommended default. Repeat until
+   nothing is open.
 3. Write requirements.md, design.md and plan.md following the templates exactly (the ID format,
    "## Step N: title" headings and "Covers:" lines described above). Every ID must be covered by
-   exactly one plan step.
+   exactly one plan step. Fill the "Overlaps and sources of truth", fixture, "Input domain and
+   copy semantics" and "Data flow" sections from the answers (if the project's templates lack
+   them, add them anyway). A step that builds on an earlier step's code, or changes the same
+   method, gets a "Depends on: Step N" line.
 4. Create interface stubs in the source paths named above, in the stub style named above: full
    typed signatures, doc comments that reference the IDs, bodies that only signal "not
    implemented". Stubs must compile or import cleanly.

@@ -56,15 +56,80 @@ def _block(text: str, limit: int = 1500) -> str:
     return f"~~~\n{text}\n~~~"
 
 
-def _answer_for_questions(events: list[dict[str, Any]], i: int) -> str:
-    """The human's reply to the questions event at index i: the next answer at a gate (or an
-    old-style questions answer), or an approval that left them open."""
+_ITEM_START = re.compile(r"^\s*(\d+)[.)]\s+(.*)$")
+_Q_PART = re.compile(r"^\s*\**Q\**\s*:\s*(.*)$", re.I)
+_A_PART = re.compile(r"^\s*\**A\**\s*:\s*(.*)$", re.I)
+
+
+def parse_answer_items(text: str) -> list[dict[str, Any]]:
+    """answers.md -> [{n, q, a}], one per numbered item. The chat writes `N. Q: <question>` /
+    `A: <answer>`; an item without `Q:`/`A:` is all answer (q = "")."""
+    items: list[dict[str, Any]] = []
+    part = "a"
+    for line in text.splitlines():
+        m = _ITEM_START.match(line)
+        if m and not line.startswith((" " * 6, "\t\t")):
+            rest = m.group(2)
+            q = _Q_PART.match(rest)
+            items.append({"n": int(m.group(1)), "q": q.group(1) if q else "", "a": ""})
+            part = "q" if q else "a"
+            if not q:
+                items[-1]["a"] = rest
+            continue
+        if not items:
+            continue
+        a = _A_PART.match(line)
+        if a:
+            part = "a"
+            items[-1]["a"] = (items[-1]["a"] + "\n" + a.group(1)).strip()
+        elif line.strip():
+            items[-1][part] = (items[-1][part] + "\n" + line.strip()).strip()
+    return [dict(i, q=i["q"].strip(), a=i["a"].strip()) for i in items]
+
+
+def _norm(text: str) -> str:
+    """Lowercase words only, without the `[who]` / `[label]` prefixes the gates add."""
+    text = re.sub(r"^\s*(\[[^\]]*\]\s*)+", "", text)
+    return " ".join(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def match_answer(question: str, items: list[dict[str, Any]]) -> str | None:
+    """The answer of the numbered item whose question is `question` (matched on the first words,
+    either way round: the gate may have clipped one of them), or None."""
+    nq = _norm(question)
+    if not nq:
+        return None
+
+    def within(short: str, long: str) -> bool:
+        """The first words of `short` (without its last word: the gate may have clipped it
+        mid-word) are words of `long`; at least 3 words, so it means something."""
+        words = short.split()[:12]
+        return len(words) >= 4 and f" {' '.join(words[:-1])} " in f" {long} "
+
+    for it in items:
+        ni = _norm(str(it.get("q") or ""))
+        if ni and (ni == nq or within(nq, ni) or within(ni, nq)):
+            return str(it.get("a") or "").strip() or "(empty answer)"
+    return None
+
+
+def _answer_for_questions(events: list[dict[str, Any]], i: int, question: str = "") -> str:
+    """The human's reply to `question` of the questions event at index i: the matching numbered
+    item of the next answer at a gate (or an old-style questions answer), or an approval that
+    left them open."""
     for a in events[i + 1 :]:
         kind = a.get("kind")
         if kind == "answer" and (a.get("gate") in ("tests", "final") or a.get("waiting")):
             if a.get("aborted"):
                 return "aborted: the spec had to change (agentflow answer --abort)"
-            return str(a.get("answer") or "(see answers.md)").strip()
+            text = str(a.get("answer") or "").strip()
+            items = a.get("items") or parse_answer_items(text)
+            found = match_answer(question, items) if question else None
+            if found is not None:
+                return found
+            if items and question:
+                return "(not answered: no numbered answer is about this question)"
+            return text or "(see answers.md)"
         if kind == "human_gate" and a.get("approved"):
             return f"(not answered: the {a.get('gate')} gate was approved with it open)"
         if kind == "tests_gate_auto" and a.get("passed"):
@@ -93,9 +158,9 @@ def build(
         kind = e.get("kind")
         if kind == "questions":
             rounds += 1
-            reply = _answer_for_questions(events, i)
             who = f" ({e['who']})" if e.get("who") else ""
             for q in split_questions(str(e.get("questions", ""))):
+                reply = _answer_for_questions(events, i, q)
                 item(
                     "Q",
                     (_where(e) or "unknown phase") + who,

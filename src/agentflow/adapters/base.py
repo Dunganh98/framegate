@@ -208,6 +208,55 @@ def diff_coverage_summary(output: str, threshold: float) -> str:
     return ""
 
 
+_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.M)
+
+
+def diff_hunks(diff: str) -> list[tuple[int, int]]:
+    """Changed line ranges (1-based, inclusive, new file) of a `git diff -U0` of one file. A
+    pure deletion marks the lines around the gap."""
+    hunks = []
+    for m in _HUNK.finditer(diff):
+        start, count = int(m.group(1)), int(m.group(2) or "1")
+        hunks.append((max(start, 1), start + 1) if count == 0 else (start, start + count - 1))
+    return hunks
+
+
+def changed_lines(cfg: Config, base_ref: str, rel: str) -> set[int] | None:
+    """The lines of `rel` (1-based, current content) changed since base_ref; None = all of it
+    (an untracked file, or git cannot tell)."""
+    from agentflow.state import GitError, git
+
+    try:
+        if not git(cfg, "ls-files", "--", rel).strip():
+            return None
+        diff = git(cfg, "diff", "-U0", base_ref, "--", rel)
+    except GitError:
+        return None
+    return {n for a, b in diff_hunks(diff) for n in range(a, b + 1)}
+
+
+def merge_scoped(before: str, after: str, lines: set[int]) -> str:
+    """`after` (a formatter's output for `before`) applied only where it touches `lines` (1-based
+    lines of `before`): formatting a changed file must not reformat the code nobody touched."""
+    import difflib
+
+    a, b = before.splitlines(keepends=True), after.splitlines(keepends=True)
+    out: list[str] = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if tag == "replace" and i2 - i1 == j2 - j1:  # line for line (e.g. re-indented block)
+            out += [b[j1 + k] if i1 + k + 1 in lines else a[i1 + k] for k in range(i2 - i1)]
+            continue
+        touched = range(i1 + 1, i2 + 1) if i2 > i1 else range(i1, i1 + 2)
+        out += b[j1:j2] if tag != "equal" and any(k in lines for k in touched) else a[i1:i2]
+    return "".join(out)
+
+
+#: `path(line,col): error CODE: message` (MSBuild / dotnet format / Roslyn diagnostics)
+DIAGNOSTIC = re.compile(
+    r"^\s*(?P<path>[^\s(][^(]*?)\((?P<line>\d+),\d+\):\s+(?:error|warning|info)\s"
+)
+
+
 def parse_junit(path: pathlib.Path) -> list[TestCase]:
     """Parse a JUnit XML report (pytest --junitxml, dotnet JUnit logger) into outcomes."""
     cases = []
@@ -308,37 +357,98 @@ class LanguageAdapter(abc.ABC):
         """Commands that format `files` (changed source files) in place; [] = none."""
         return []
 
+    #: the format / lint checks report only findings on changed lines, and the format fix keeps
+    #: only the formatter's changes on changed lines (no churn in code nobody touched)
+    line_scoped_format: ClassVar[bool] = False
+
+    def format_fix_enabled(self) -> bool:
+        """[gates] format_fix, and only with the adapter's own format check (a configured
+        [gates.commands] format means the project runs its own formatter)."""
+        return self.cfg.format_fix and "format" not in self.cfg.gate_commands
+
     def format_fix(self, base_ref: str | None) -> str:
         """Before the checks of a gate: format the source files changed since base_ref, so a
-        formatting slip costs no implementer attempt ([gates] format_fix; only with the
-        adapter's own format check: a configured [gates.commands] format means the project runs
-        its own formatter). Returns a one-line note ("" = nothing done). Tests are never touched
-        (only files under [paths] src)."""
-        if not self.cfg.format_fix or not base_ref or "format" in self.cfg.gate_commands:
+        formatting slip costs no implementer attempt, and the changed review tests (the frame
+        exceptions: written by the reviewer, which nobody formats otherwise and the implementer
+        may not edit). Frozen tests are never touched. Returns a one-line note ("" = nothing)."""
+        if not self.format_fix_enabled() or not base_ref:
             return ""
-        from agentflow.checks.frame_diff import changed_src_files
+        from agentflow.checks.frame_diff import changed_files, path_matches
         from agentflow.state import GitError, tag_exists
 
+        src = self.cfg.paths.src.rstrip("/") + "/"
+        allowed = [src, *self.cfg.frame_exceptions()]
         try:
             if not tag_exists(self.cfg, base_ref):
                 return ""
-            files = [
-                f
-                for f in changed_src_files(self, base_ref)
-                if not self.source_suffixes or f.endswith(self.source_suffixes)
-            ]
+            changed, _ = changed_files(self.cfg, base_ref)
         except GitError:
             return ""
-        cmds = self.format_fix_commands(files) if files else []
+        files = sorted(f for f in changed if path_matches(f, allowed))
+        return self.format_files(files, base_ref)
+
+    def format_files(self, files: Sequence[str], base_ref: str | None = None) -> str:
+        """Format `files` (posix, relative to the root; other suffixes and missing files are
+        left out) with the adapter's formatter. With line_scoped_format and a base_ref, only
+        the formatter's changes on lines changed since base_ref are kept. Returns a note."""
+        files = [
+            f
+            for f in files
+            if (self.root / f).is_file()
+            and (not self.source_suffixes or f.endswith(self.source_suffixes))
+        ]
+        cmds = self.format_fix_commands(list(files)) if files else []
+        if not cmds:
+            return ""
+        scoped = self.line_scoped_format and bool(base_ref)
+        before = {f: (self.root / f).read_bytes() for f in files} if scoped else {}
         failed = []
         for cmd in cmds:
             code, out = run_command(cmd, self.root, env=self.tool_env(), timeout=900)
             if code != 0:
                 failed.append(f"{cmd[0]} exit {code}: {out.strip().splitlines()[-1:] or ''}")
-        if not cmds:
-            return ""
-        note = f"formatted {len(files)} changed source file(s)"
+        for f, old in before.items():
+            path = self.root / f
+            new = path.read_bytes()
+            lines = changed_lines(self.cfg, str(base_ref), f) if new != old else None
+            if lines is not None:
+                merged = merge_scoped(old.decode("utf-8"), new.decode("utf-8"), lines)
+                path.write_bytes(merged.encode("utf-8"))
+        note = f"formatted {len(files)} changed file(s)" + (
+            " (changed lines only)" if scoped else ""
+        )
         return note + (f" (formatter problems: {'; '.join(failed)})" if failed else "")
+
+    def scope_diagnostics(self, output: str, base_ref: str | None) -> tuple[str, int, int]:
+        """A failing lint / format check's output with only the diagnostics on lines changed
+        since base_ref: (output, kept, ignored). Lines that are not diagnostics stay."""
+        if not base_ref:
+            return output, 0, 0
+        cache: dict[str, set[int] | None] = {}
+        kept_lines, kept, ignored = [], 0, 0
+        root = self.root.resolve()
+        for line in output.splitlines():
+            m = DIAGNOSTIC.match(line)
+            if not m:
+                kept_lines.append(line)
+                continue
+            path = pathlib.Path(m.group("path").strip())
+            try:
+                rel = (path if path.is_absolute() else root / path).resolve().relative_to(root)
+            except (ValueError, OSError):
+                kept_lines.append(line)
+                kept += 1
+                continue
+            key = rel.as_posix()
+            if key not in cache:
+                cache[key] = changed_lines(self.cfg, base_ref, key)
+            lines = cache[key]
+            if lines is None or int(m.group("line")) in lines:
+                kept_lines.append(line)
+                kept += 1
+            else:
+                ignored += 1
+        return "\n".join(kept_lines), kept, ignored
 
     @abc.abstractmethod
     def regression_check(self) -> Check:
