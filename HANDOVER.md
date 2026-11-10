@@ -43,6 +43,13 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
   the Python zero-case smell; zero-case smells are NOTEs (not blocking: 15 hits in FCSim's
   existing tests were mostly fine filters) and smells count only in the feature's test
   files. Per-path thresholds: not built; decide after the next FCSim feature.
+- **Check output + usage limit (2026-11-11, from harnessOrch):** a failing check's output in the
+  gate report and fix prompt keeps the failure lines (+ context, file:line locations, tail), not
+  the last 30 lines; the whole output goes to `out/<f>/check_logs/`. A run refused by the
+  Claude usage limit is not a failed attempt: agentflow waits until the reset (+1 min; 15 min
+  if unknown) and repeats it, or stops like Ctrl+C (exit 130) when the reset is more than
+  `[agents] limit_wait_max_hours` (6) away. Detection is tested only with the fake `claude`;
+  **the first real limit confirms the message format**.
 - **Adapters:** python (pytest, mutmut via WSL on Windows), dotnet (xUnit, Stryker opt-in level).
 - **Chat flow (plugin 0.3.0):** `/agentflow:setup` (new repo: scan, questions, toml +
   project.md, `agentflow doctor`, optional smoke run); `/agentflow:feature <f>` (branch `feat/<f>` from `[git] base`,

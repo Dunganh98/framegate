@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from agentflow import procs
+from agentflow import orchestrator, procs
 from agentflow.adapters import get_adapter
 from agentflow.checks import frame_diff
 from agentflow.config import load_config
@@ -1135,6 +1135,51 @@ def _to_implement(r: DemoRepo) -> None:
     assert r.af("approve-spec", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE
     assert r.af("approve", "demo") == 0
+
+
+def test_usage_limit_waits_then_runs_again(
+    demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IMPLEMENT is refused by the usage limit once: agentflow waits until the reset (+ margin)
+    and runs the same task again; it is not a failed attempt."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.scenario(usage_limit={"IMPLEMENT": 1}, usage_limit_reset_s=120)
+    waits: list[float] = []
+    monkeypatch.setattr(
+        "agentflow.orchestrator.sleep_until",
+        lambda until: waits.append((until - orchestrator.now_utc()).total_seconds()),
+    )
+    to_final_gate(r)
+    impl = [c for c in r.calls() if c["phase"] == "IMPLEMENT"]
+    assert len(impl) == 2 and impl[0]["prompt"] == impl[1]["prompt"]
+    assert len(waits) == 1 and 150 < waits[0] <= 185  # reset in 120 s + 60 s margin
+    ev = [e for e in r.events() if e["kind"] == "usage_limit"]
+    assert len(ev) == 1 and ev[0]["phase"] == "IMPLEMENT" and ev[0]["reset"]
+    gates = [e for e in r.events() if e["kind"] == "gate" and e.get("step")]
+    assert [(e["attempt"], e["passed"]) for e in gates] == [(1, True)]
+    log = read(r, "out/demo/progress.log")
+    assert "usage limit reached" in log and "not a failed attempt" in log
+    assert "agent run reported an error" not in log
+
+
+def test_usage_limit_far_away_stops_the_run_then_resume(demo_repo: DemoRepo) -> None:
+    """A reset beyond [agents] limit_wait_max_hours (a weekly limit): the run stops like Ctrl+C
+    (state kept, attempt not counted); `run` after the reset goes on."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.set_toml("agents", "limit_wait_max_hours", "2")
+    r.scenario(usage_limit={"IMPLEMENT": 1}, usage_limit_reset_s=10 * 3600)
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE
+    assert r.af("approve", "demo") == 0
+    assert r.af("run", "demo") == EXIT_INTERRUPTED
+    prog = r.progress()
+    assert prog["phase"] == "IMPLEMENT" and prog["attempt"] == 0
+    assert "usage limit, resets" in prog["interrupted"]["how"]
+    assert not (r.root / "out/.run.lock").exists()
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+    assert len([c for c in r.calls() if c["phase"] == "IMPLEMENT"]) == 2
 
 
 def test_sigterm_mid_implement_stops_agents_then_resume(demo_repo: DemoRepo) -> None:

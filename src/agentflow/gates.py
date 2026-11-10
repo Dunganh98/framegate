@@ -9,14 +9,19 @@ Both scopes first format the changed source files ([gates] format_fix).
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from agentflow.adapters.base import Check, CheckResult, LanguageAdapter, TestScope, run_command
 from agentflow.checks import frame_diff, mutation, test_smells, traceability
+from agentflow.failure_filter import filter_failure_output
 from agentflow.specs import feature_ids
 from agentflow.state import read_reqs
+
+#: most lines of a failing check's output in the gate report (and so in the fix prompt)
+OUTPUT_LINES = 40
 
 
 def feature_scope(adapter: LanguageAdapter, feature: str) -> TestScope:
@@ -92,8 +97,10 @@ class GateReport:
     report: str
     failed: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
-    #: failing check name -> its output (last 30 lines)
+    #: failing check name -> its output, filtered to the failure lines (failure_filter)
     outputs: dict[str, str] = field(default_factory=dict)
+    #: failing check name -> its whole output (for decisions, e.g. which files a lint names)
+    full_outputs: dict[str, str] = field(default_factory=dict)
     #: check name -> wall-clock seconds
     durations: dict[str, float] = field(default_factory=dict)
     #: [gates.extra] check name -> exit code (reported at the final gate, never blocking)
@@ -140,6 +147,7 @@ def gate_report(
     failed: list[str] = []
     skipped: list[str] = []
     outputs: dict[str, str] = {}
+    full_outputs: dict[str, str] = {}
     durations: dict[str, float] = {}
     if scope == "final":
         for line in scope_lines(adapter, feature, skip_mutation):
@@ -164,7 +172,12 @@ def gate_report(
             failed.append(check.name)
             if res.summary:
                 emit(f"  {res.summary}")
-            outputs[check.name] = "\n".join(out.splitlines()[-30:])
+            full_outputs[check.name] = out
+            outputs[check.name] = filter_failure_output(out, max_lines=OUTPUT_LINES)
+            if len(out.splitlines()) > OUTPUT_LINES:
+                log = save_full_output(adapter, feature, check.name, out)
+                if log:
+                    outputs[check.name] += f"\n(filtered to the failure lines; full output: {log})"
             if out:
                 emit(outputs[check.name])
         elif res.status == "SKIPPED":
@@ -179,7 +192,23 @@ def gate_report(
         summary += f" (SKIPPED: {', '.join(skipped)})"
     emit(f"\n{summary}")
     extra = run_extra_checks(adapter, feature, emit, durations) if scope == "final" else {}
-    return GateReport(not failed, "\n".join(lines), failed, skipped, outputs, durations, extra)
+    return GateReport(
+        not failed, "\n".join(lines), failed, skipped, outputs, full_outputs, durations, extra
+    )
+
+
+def save_full_output(adapter: LanguageAdapter, feature: str, check: str, text: str) -> str:
+    """Write a failing check's whole output to {out}/{feature}/check_logs/<check>.log (the gate
+    report shows only the failure lines). Returns the repo-relative path, "" if not written."""
+    cfg = adapter.cfg
+    slug = re.sub(r"[^\w-]+", "_", check).strip("_") or "check"
+    path = cfg.feature_out(feature) / "check_logs" / f"{slug}.log"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text + "\n", encoding="utf-8")
+        return path.relative_to(cfg.root).as_posix()
+    except (OSError, ValueError):
+        return ""
 
 
 def run_extra_checks(

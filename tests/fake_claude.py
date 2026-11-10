@@ -27,6 +27,9 @@ Scenario keys:
     (files are still written); the stream then has `cap` assistant messages, num_turns = cap + 1
   max_budget: {phase: n} -> the first n runs of that phase end with subtype error_max_budget_usd
   hang: phase whose first run starts a child process and sleeps (pid files in the scenario dir)
+  usage_limit: {phase: n} -> the first n runs of that phase are refused by the usage limit (no
+    files; a rejected rate_limit_event resetting in usage_limit_reset_s seconds, default 120);
+    they do not count as runs for the other keys
   spec_update: what SPEC_UPDATE does with specs/demo/requirements.md: "edit" (default: marks the
     DEMO-E-001 row with the answer reference), "new_id" (edit + a new row DEMO-E-002, added to
     plan.md Covers; TESTS then writes a test for it), "renumber" (DEMO-E-001 -> DEMO-E-009),
@@ -246,6 +249,26 @@ def main() -> int:
         f.write(json.dumps(call) + "\n")
 
     lang = DOTNET if scen.get("language") == "dotnet" else PYTHON
+    limited = state.setdefault("limited", {})
+    if limited.get(phase, 0) < scen.get("usage_limit", {}).get(phase, 0):
+        # refused at the start, like the real CLI: no files, a rejected rate_limit_event
+        limited[phase] = limited.get(phase, 0) + 1
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        reset = int(time.time()) + int(scen.get("usage_limit_reset_s", 120))
+        info = {"status": "rejected", "resetsAt": reset, "rateLimitType": "five_hour"}
+        result = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": True,
+            "result": "You've hit your limit · resets 4pm (UTC)",
+            "num_turns": 1,
+            "total_cost_usd": 0,
+            "session_id": "fake",
+        }
+        print(json.dumps({"type": "system", "subtype": "init", "session_id": "fake"}))
+        print(json.dumps({"type": "rate_limit_event", "rate_limit_info": info}))
+        print(json.dumps(result))
+        return 1
     runs = state.setdefault("runs", {})
     runs[phase] = runs.get(phase, 0) + 1
     if scen.get("hang") == phase and runs[phase] == 1:

@@ -71,6 +71,7 @@ from agentflow.state import (
     set_reqs,
     tag_exists,
 )
+from agentflow.usage_limit import UsageLimit, detect_usage_limit
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -258,6 +259,24 @@ def parse_result(stdout: str, stderr: str = "") -> dict[str, Any]:
 
 #: re-runs of a non-IMPLEMENT agent that stopped at a cap (turns or budget) before escalating
 TURN_CAP_RETRIES = 1
+#: usage limit: wait when claude names no reset time, the margin after a reset, and how often
+#: one agent run may wait before the run stops (a limit that does not lift as announced)
+LIMIT_DEFAULT_WAIT_S = 15 * 60
+LIMIT_MARGIN_S = 60
+LIMIT_MAX_WAITS = 4
+
+
+def now_utc() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def sleep_until(until: datetime.datetime) -> None:
+    """Sleep until `until` (aware), in short slices so Ctrl+C / SIGTERM stop it at once."""
+    while True:
+        left = (until - now_utc()).total_seconds()
+        if left <= 0:
+            return
+        time.sleep(min(left, 30.0))
 
 
 def hit_cap(res: dict[str, Any]) -> str | None:
@@ -457,7 +476,70 @@ class Orchestrator:
         step: str | None = None,
     ) -> dict[str, Any]:
         """One fresh headless Claude Code run. The task goes via stdin and the role via
-        --append-system-prompt-file (no multi-line text on the command line)."""
+        --append-system-prompt-file (no multi-line text on the command line). A run refused by
+        the usage limit waits for the reset and runs again (never a failed attempt)."""
+        waits = 0
+        while True:
+            res, limit = self.run_agent_once(phase, feature, task, feedback, role, step)
+            if limit is None:
+                return res
+            waits += 1
+            self.wait_for_usage_limit(feature, phase, step, limit, waits)
+
+    def wait_for_usage_limit(
+        self, feature: str, phase: str, step: str | None, limit: UsageLimit, waits: int
+    ) -> None:
+        """Sleep until the limit lifts (plus a margin). A reset further away than
+        [agents] limit_wait_max_hours, or a limit that is still there after LIMIT_MAX_WAITS
+        waits, stops the run like Ctrl+C: the state is kept, `agentflow run` resumes it."""
+        now = now_utc()
+        reset = limit.reset_at if limit.reset_at and limit.reset_at > now else None
+        until = (reset or now + datetime.timedelta(seconds=LIMIT_DEFAULT_WAIT_S)) + (
+            datetime.timedelta(seconds=LIMIT_MARGIN_S)
+        )
+        seconds = (until - now).total_seconds()
+        local = until.astimezone().strftime("%a %H:%M")
+        label = step or phase
+        log_event(
+            self.cfg,
+            feature,
+            "usage_limit",
+            phase=phase,
+            step=step,
+            message=limit.message,
+            reset=limit.reset_at.isoformat() if limit.reset_at else None,
+            wait_s=round(seconds),
+            waits=waits,
+        )
+        max_s = self.cfg.limit_wait_max_hours * 3600
+        if seconds > max_s or waits > LIMIT_MAX_WAITS:
+            why = "still there after waiting" if waits > LIMIT_MAX_WAITS else "too far away"
+            self.notify(
+                f"agentflow: {feature} stopped at the usage limit",
+                f"Resets {local}. Then: agentflow run {feature}",
+            )
+            raise procs.Interrupted(f"usage limit, resets {local} ({why})")
+        self.progress(
+            feature,
+            f"[{label}] usage limit reached ({limit.message[:80]}); waiting until {local}, then "
+            "the same run again (not a failed attempt).",
+        )
+        self.notify(
+            f"agentflow: {feature} waits for the usage limit", f"Continues by itself at {local}."
+        )
+        sleep_until(until)
+        self.progress(feature, f"[{label}] usage limit wait over; running again.")
+
+    def run_agent_once(
+        self,
+        phase: str,
+        feature: str,
+        task: str,
+        feedback: str = "",
+        role: str | None = None,
+        step: str | None = None,
+    ) -> tuple[dict[str, Any], UsageLimit | None]:
+        """One `claude -p` run: its result, and the usage limit that refused it (or None)."""
         cmd = self.claude_cmd()
         set_phase(self.cfg, phase)
         role_name = (role or phase).lower()
@@ -503,6 +585,7 @@ class Orchestrator:
         except OSError as e:
             stdout, stderr = "", f"could not start claude: {e}"
         res = parse_result(stdout, stderr)
+        limit = detect_usage_limit(stdout, res)
         # the result object (read by the retro), and the whole message stream for debugging
         (runs / f"{stamp}-{feature}-{phase}.json").write_text(
             json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8"
@@ -524,7 +607,10 @@ class Orchestrator:
             messages=res.get("num_turns"),
             error=res.get("is_error"),
             denials=len(denials),
+            **({"usage_limit": True} if limit else {}),
         )
+        if limit:
+            return res, limit
         if denials:
             log_event(
                 self.cfg, feature, "permission_denials", phase=phase, step=step, denials=denials
@@ -564,7 +650,7 @@ class Orchestrator:
             self.progress(
                 feature, f"[{phase}] agent run reported an error: {str(res.get('result'))[:500]}"
             )
-        return res
+        return res, None
 
     # ---------- waiting (only the tests gate and the final gate) ----------
     def describe_waiting(self, feature: str, waiting: dict[str, Any]) -> str:
@@ -987,7 +1073,7 @@ class Orchestrator:
         writable = self.cfg.write_paths("IMPLEMENT")
         parts = []
         for name in rep.failed:
-            paths = self.failure_paths(rep.outputs.get(name, ""))
+            paths = self.failure_paths(rep.full_outputs.get(name) or rep.outputs.get(name, ""))
             if not paths or any(path_matches(p, writable) for p in paths):
                 return ""
             parts.append(f"{name} fails only in files it may not edit: {', '.join(sorted(paths))}")
