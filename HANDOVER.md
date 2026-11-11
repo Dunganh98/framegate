@@ -130,8 +130,28 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
   - Tests gate (optional) unchanged: its questions still come straight from the agents.
   - **Not yet seen on a real feature:** whether Sonnet tags the items reliably and how often
     the rewrite fires; check the `brief_check` events of the next FCSim feature.
+- **Repair, risk, source folders (branch feat/repair-risk-roots, 2026-11-11, from a review of
+  the five FCSim runs: every feature needed 2-3 final-gate runs of 20-25 min, and a failed
+  final gate always went to the human):**
+  - Final gates: one repair run per owner before the human sees a failure (`[gates]
+    final_repair`; code failures -> implementer, weak diff coverage / mutation -> test writer +
+    reviewer pass, tag `tests-update/<f>`); mutation is not started after a red typecheck /
+    regression / coverage run. `src/agentflow/orchestrator.py` `repair_final`.
+  - Risk rating by the engine (`src/agentflow/risk.py`, `[risk]`): on every final brief and in
+    the `risk` / `human_gate` events (shadow mode); `[gates] final = "auto"` lets a low-risk
+    feature pass the final gate without a stop. Default stays `"human"`.
+  - `[paths] src` as a list (CausalCollapse: Godot, sources in core/, autoload/, scenes/).
+  - `agent_run` events carry role, step, attempt, session, tokens; progress.json is written
+    atomically; a cut-short events line is skipped.
+  - `agentflow doctor`: the chat's allow rules, agentflow.toml on `[git] base`.
+  - **Not yet seen on a real feature:** how well Sonnet strengthens tests from the survivors
+    file without copying the code's behavior; whether any FCSim feature rates low (they logged
+    10-12 assumptions, the limit is 3); the token fields against a real `claude -p` result.
+  - Deferred: session resume for mechanical retries (the last two features had 0 failed step
+    gates), retro backlog with applied-tracking (design doc 9.7), the orchestrator split
+    (before epics), `git add -A` limited to the phase's paths.
 - **Adapters:** python (pytest, mutmut via WSL on Windows), dotnet (xUnit, Stryker opt-in level).
-- **Chat flow (plugin 0.4.1):** `/agentflow:setup` (new repo: scan, questions, toml +
+- **Chat flow (plugin 0.4.2):** `/agentflow:setup` (new repo: scan, questions, toml +
   project.md, `agentflow doctor`, optional smoke run); `/agentflow:feature <f>` (branch `feat/<f>` from `[git] base`,
   spec dialogue + spec brief, approve, background `agentflow run` + Monitor on `agentflow watch`,
   gate briefs via `agentflow gate-summary`, plain-word replies mapped to approve/reject/answer/finish,

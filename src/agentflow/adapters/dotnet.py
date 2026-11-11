@@ -808,7 +808,7 @@ class DotnetAdapter(LanguageAdapter):
             if arg != "{changed}":
                 out += self.resolve_command([arg])
             elif changed is None:
-                out += [self.cfg.paths.src, self.cfg.paths.tests]
+                out += [*self.cfg.src_roots, self.cfg.paths.tests]
             elif not changed:
                 return None
             else:

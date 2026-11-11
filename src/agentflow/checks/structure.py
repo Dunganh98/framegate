@@ -178,7 +178,7 @@ def new_public_types(adapter: LanguageAdapter, feature: str) -> list[str]:
     if ref is None:
         return []
     try:
-        diff = git(cfg, "diff", "-U0", ref, "--", cfg.paths.src)
+        diff = git(cfg, "diff", "-U0", ref, "--", *cfg.src_roots)
     except GitError:
         return []
     pattern = PUBLIC_TYPE.get(adapter.name, GENERIC_TYPE)

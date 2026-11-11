@@ -303,13 +303,13 @@ def _declarations(
     if not names:
         return {}
     cfg = adapter.cfg
-    src = cfg.root / cfg.paths.src
-    if not src.is_dir():
+    roots = [cfg.root / r for r in cfg.src_roots if (cfg.root / r).is_dir()]
+    if not roots:
         return {}
     scan = _cs_declarations if suffix == ".cs" else _py_declarations
     pattern = re.compile(r"\b(?:" + "|".join(map(re.escape, sorted(names))) + r")\b")
     found: dict[str, list[Decl]] = {}
-    for path in sorted(src.rglob(f"*{suffix}")):
+    for path in sorted(p for root in roots for p in root.rglob(f"*{suffix}")):
         if {"bin", "obj", "__pycache__"} & set(path.relative_to(cfg.root).parts):
             continue
         try:

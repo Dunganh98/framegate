@@ -32,7 +32,7 @@ DEFAULT_ID_PATTERN = r"\b[A-Z][A-Z0-9]{1,9}-[REI]-\d{3}\b"
 SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
     "project": {"language": (str,), "knowledge": (str,)},
     "paths": {
-        "src": (str,),
+        "src": (str, list),
         "tests": (str,),
         "review_tests": (str,),
         "specs": (str,),
@@ -57,6 +57,8 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
     },
     "gates": {
         "tests": (str,),
+        "final": (str,),
+        "final_repair": (bool,),
         "diff_coverage": (int, float),
         "mutation_score": (int, float),
         "mutation_tool": (str,),
@@ -71,6 +73,14 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "extra": (dict,),
         "extra_timeout": (int,),
         "max_file_lines": (int,),
+    },
+    "risk": {
+        "max_changed_lines": (int,),
+        "max_changed_files": (int,),
+        "max_removed_lines": (int,),
+        "max_assumptions": (int,),
+        "min_features": (int,),
+        "never_auto": (list,),
     },
     "docs": {"code_map": (str,)},
     "protected": {"paths": (list,), "extra": (list,), "exceptions": (list,)},
@@ -131,6 +141,10 @@ GATE_SCOPES = ("feature", "suite")
 #: "auto" = pass it without a stop when the mechanical checks pass, the test reviewer has no
 #: objections and no question is open (else stop as "human")
 TESTS_GATE_MODES = ("defer", "human", "auto")
+#: [gates] final: "human" (default) = the final gate always waits for the human; "auto" = a
+#: feature the engine rates low risk (risk.py: clean run, small additive change, measured
+#: coverage and mutation, a track record) is approved without a stop; anything else waits
+FINAL_GATE_MODES = ("human", "auto")
 PHASE_KEYS = ("write", "tools", "max_turns", "max_budget_usd", "model", "effort")
 #: `claude --effort` levels
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
@@ -189,7 +203,26 @@ class ConfigError(Exception):
 
 
 @dataclass
+class Risk:
+    """[risk]: when the engine rates a finished feature low risk (risk.py). Every limit must
+    hold; a limit of 0 switches that test off."""
+
+    #: changed source lines (added + removed) and source files since the tests were approved
+    max_changed_lines: int = 200
+    max_changed_files: int = 8
+    #: removed lines in source files that existed before the feature (an additive change)
+    max_removed_lines: int = 30
+    #: assumptions the implementer logged (each is a spec gap it filled alone)
+    max_assumptions: int = 3
+    #: finished features in this repository before any feature counts as low risk
+    min_features: int = 3
+    #: paths (prefixes or globs) whose change is never low risk
+    never_auto: list[str] = field(default_factory=list)
+
+
+@dataclass
 class Paths:
+    #: the first source folder ([paths] src; a list there: Config.src_roots holds them all)
     src: str = "src"
     tests: str = "tests"
     review_tests: str = "tests/review"
@@ -205,6 +238,9 @@ class Config:
     root: pathlib.Path
     language: str = "python"
     paths: Paths = field(default_factory=Paths)
+    #: source folders after the first ([paths] src as a list, e.g. a Godot project's core/,
+    #: autoload/, scenes/); all of them: src_roots
+    extra_src: list[str] = field(default_factory=list)
     python: str | None = None
     #: WSL distribution for mutation_runner = "wsl" (None = the default distribution)
     wsl_distro: str | None = None
@@ -253,6 +289,12 @@ class Config:
     code_map: str = "docs/code-map.md"
     #: [gates] tests: "defer" | "human" | "auto" (see TESTS_GATE_MODES)
     tests_gate: str = "defer"
+    #: [gates] final: "human" | "auto" (see FINAL_GATE_MODES)
+    final_gate: str = "human"
+    #: [gates] final_repair: failed final gates get one repair run per owner (implementer for
+    #: code failures, test writer for a weak diff-coverage / mutation score) before the human
+    final_repair: bool = True
+    risk: Risk = field(default_factory=Risk)
     diff_coverage: float = 90
     mutation_score: float = 80
     mutation_tool: str | None = None  # None -> the adapter's default tool
@@ -287,6 +329,15 @@ class Config:
     loaded_from_file: bool = False
 
     # ---- paths ----
+    @property
+    def src_roots(self) -> list[str]:
+        """Every source folder (posix, no trailing slash): [paths] src, one or a list."""
+        return [self.paths.src, *self.extra_src]
+
+    def in_src(self, rel: str) -> bool:
+        """True for a repo-relative posix path inside one of the source folders."""
+        return any(rel.startswith(root.rstrip("/") + "/") for root in self.src_roots)
+
     def path(self, rel: str) -> pathlib.Path:
         return self.root / rel
 
@@ -347,13 +398,14 @@ class Config:
         if phase in self.phase_write:
             return [_as_prefix(p) for p in self.phase_write[phase]]
         p = self.paths
+        src = self.src_roots
         defaults = {
-            "SPEC": [p.specs, p.src],
+            "SPEC": [p.specs, *src],
             # the orchestrator reverts everything but specs/<f>/{requirements,design,plan}.md
             "SPEC_UPDATE": [p.specs, p.out],
             "TESTS": [p.tests, p.out],
             "TEST_REVIEW": [p.out],
-            "IMPLEMENT": [p.src, p.out],
+            "IMPLEMENT": [*src, p.out],
             "REVIEW": [p.review_tests, p.out],
             "TRIAGE": [p.review_tests, p.out],
             "DIAGNOSIS": [p.out],
@@ -431,6 +483,13 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     cfg.knowledge = _norm(proj.get("knowledge", cfg.knowledge))
 
     for key, value in data.get("paths", {}).items():
+        if key == "src":
+            roots = [value] if isinstance(value, str) else _str_list("[paths] src", value)
+            roots = [_norm(r).rstrip("/") for r in roots if r.strip()]
+            if not roots:
+                raise ConfigError("[paths] src must name at least one folder")
+            cfg.paths.src, cfg.extra_src = roots[0], roots[1:]
+            continue
         setattr(cfg.paths, key, _norm(value).rstrip("/"))
 
     cfg.python = data.get("env", {}).get("python")
@@ -470,6 +529,27 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
         raise ConfigError(
             f"[gates] tests must be one of {', '.join(TESTS_GATE_MODES)}, got '{cfg.tests_gate}'"
         )
+    cfg.final_gate = gates.get("final", cfg.final_gate)
+    if cfg.final_gate not in FINAL_GATE_MODES:
+        raise ConfigError(
+            f"[gates] final must be one of {', '.join(FINAL_GATE_MODES)}, got '{cfg.final_gate}'"
+        )
+    cfg.final_repair = gates.get("final_repair", cfg.final_repair)
+    risk = data.get("risk", {})
+    for key in (
+        "max_changed_lines",
+        "max_changed_files",
+        "max_removed_lines",
+        "max_assumptions",
+        "min_features",
+    ):
+        value = risk.get(key, getattr(cfg.risk, key))
+        if value < 0:
+            raise ConfigError(f"[risk] {key} must be >= 0 (0 = this test is off)")
+        setattr(cfg.risk, key, value)
+    cfg.risk.never_auto = [
+        _norm(x) for x in _str_list("[risk] never_auto", risk.get("never_auto", []))
+    ]
     cfg.diff_coverage = gates.get("diff_coverage", cfg.diff_coverage)
     cfg.mutation_score = gates.get("mutation_score", cfg.mutation_score)
     cfg.mutation_tool = gates.get("mutation_tool", cfg.mutation_tool)

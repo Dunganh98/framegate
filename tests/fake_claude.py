@@ -42,6 +42,9 @@ Scenario keys:
     writes the loose add() (bools pass) and a `Park kind: tests-wrong` park.md naming it
   contest_accept: true -> TESTS_AMEND deletes the contested test (the human approved the fix);
     false -> no test change (the fix was not approved), so the redo writes the strict add()
+  uncovered: true -> IMPLEMENT writes add() with a branch no test reaches (diff coverage
+    fails at the final gates); the TESTS run that the final-gate repair starts ("found the tests
+    too weak") adds a test for it. "stubborn" -> that TESTS run changes nothing
   spec_update: what SPEC_UPDATE does with specs/demo/requirements.md: "edit" (default: marks the
     DEMO-E-001 row with the answer reference), "new_id" (edit + a new row DEMO-E-002, added to
     plan.md Covers; TESTS then writes a test for it), "renumber" (DEMO-E-001 -> DEMO-E-009),
@@ -140,6 +143,20 @@ LOOSE = impl(
     '        raise TypeError("ints only")\n'
     "    return a + b\n"
 )
+#: LOOSE plus a branch the feature's tests never reach (scenario `uncovered`)
+UNCOVERED = impl(
+    "    if not isinstance(a, int) or not isinstance(b, int):\n"
+    '        raise TypeError("ints only")\n'
+    "    if a == 12345:\n"
+    "        return b + a\n"
+    "    return a + b\n"
+)
+TESTS_COVER = """
+
+@pytest.mark.req("DEMO-R-001")
+def test_add_special_value() -> None:
+    assert add(12345, 1) == 12346
+"""
 STRICT = impl(
     "    if type(a) is not int or type(b) is not int:\n"
     '        raise TypeError("ints only")\n'
@@ -341,6 +358,9 @@ def main() -> int:
         amend = "answered questions at the final gate" in prompt
         if scen.get("contest_steps") and not (amend and scen.get("contest_accept")):
             text += TESTS_CONTESTED
+        # the final-gate repair: tests for what the gates found uncovered
+        if "found the tests too weak" in prompt and scen.get("uncovered") is True:
+            text += TESTS_COVER
         write(rel, text)
         write("out/demo/test_summary.md", "| DEMO-R-001 | test_add_returns_sum | sum | example |\n")
     elif phase == "TEST_REVIEW":
@@ -366,6 +386,9 @@ def main() -> int:
         strict = "type(a) is not int" in cur or lang["valid_name"] in prompt
         # a provisional step whose test fix the human did not approve: the tests stand
         strict = strict or "did not approve changing its contested tests" in prompt
+        # the final-gate repair: an existing test the loose code broke
+        strict = strict or "the final gates failed these checks" in prompt
+        loose = UNCOVERED if scen.get("uncovered") and lang is PYTHON else lang["loose"]
         fails = state.get("implement_failed", 0)
         park = [n for n in nums if n in scen.get("park_steps", []) and n not in parked]
         contested = state.setdefault("contested", [])
@@ -391,7 +414,7 @@ def main() -> int:
         elif "currently failing tests" in prompt:
             write(lang["impl"], lang["strict"] + neg)
         else:
-            write(lang["impl"], (lang["strict"] if strict else lang["loose"]) + neg)
+            write(lang["impl"], (lang["strict"] if strict else loose) + neg)
         if not out.joinpath("park.md").exists():
             note = "Assumptions: none\n"
             if scen.get("assume") and not state.get("assumed"):

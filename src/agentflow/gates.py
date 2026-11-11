@@ -244,8 +244,20 @@ def checks(
         if not skip_mutation:
             name = "mutation score" + (" (feature tests)" if mut is not None else "")
             run = _skipped(reason) if waiting else (lambda: mutation.check(adapter, feature, mut))
-            c.append(Check(name, run))
+            # a switched-off tool says so itself; only a real run is worth waiting for green
+            off = (adapter.cfg.mutation_tool or "").lower() == "none"
+            c.append(Check(name, run, needs_green=not off))
     return c
+
+
+#: final checks whose failure means the build or the tests are red (by the start of their name)
+RED_CHECKS = ("typecheck", "regression", "coverage run", "full test suite")
+
+
+def red_blockers(failed: list[str]) -> list[str]:
+    """The failed checks that make a `needs_green` check pointless (its result would not count
+    and, for mutation testing, costs minutes)."""
+    return [n for n in failed if n.startswith(RED_CHECKS)]
 
 
 @dataclass
@@ -333,8 +345,17 @@ def gate_report(
         emit(f"Format fix: {note}")
     for check in checks(adapter, feature, scope, skip_mutation, exp):
         t0 = time.monotonic()
+        blockers = red_blockers(failed) if check.needs_green else []
         try:
-            res = check.run()
+            res = (
+                CheckResult(
+                    "SKIPPED",
+                    f"SKIPPED: not run, {', '.join(blockers)} failed first (it needs a green "
+                    "build and green tests; it runs once they pass)",
+                )
+                if blockers
+                else check.run()
+            )
         except Exception as e:  # a crashing check must fail the gate, not the runner
             res = CheckResult("FAIL", f"check crashed: {type(e).__name__}: {e}")
         durations[check.name] = round(time.monotonic() - t0, 1)

@@ -12,7 +12,7 @@ import time
 from typing import Any
 
 from agentflow import brief as briefs
-from agentflow import procs
+from agentflow import procs, risk
 from agentflow.orchestrator import (
     PROGRESS_CURSOR,
     PROGRESS_LOG,
@@ -429,6 +429,10 @@ def _final_brief(
     followed = _section(sections, "plan followed", "plan")
     lines += _titled("Plan followed?", followed or _step_lines(orch, feature, prog, events))
     lines += _outcomes(orch, feature, prog, events)
+    rated = prog.get("risk") or {}
+    if rated.get("level"):
+        rating = risk.Assessment(rated["level"], list(rated.get("reasons") or []))
+        lines.append(rating.line(auto=orch.cfg.final_gate == "auto"))
     struggles = _section(sections, "struggles")
     lines += _titled("Struggles", struggles or _struggle_lines(prog, events))
     for title, names in (
@@ -492,6 +496,12 @@ def _struggle_lines(prog: dict[str, Any], events: list[dict[str, Any]]) -> list[
             failed[str(e.get("step"))] = failed.get(str(e.get("step")), 0) + 1
     out = [f"- {k}: {v} failed attempt(s)" for k, v in failed.items()]
     out += [f"- {p['label']}: parked ({p.get('reason')})" for p in prog.get("parked") or []]
+    out += [
+        f"- final gates: {', '.join(e.get('failed') or [])} failed, repaired by the "
+        f"{'implementer' if e.get('owner') == 'src' else 'test writer'}"
+        for e in events
+        if e.get("kind") == "final_repair" and e.get("changed")
+    ]
     return out or ["No struggles."]
 
 

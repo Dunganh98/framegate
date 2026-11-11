@@ -28,14 +28,14 @@ from collections.abc import Callable
 from typing import Any
 
 from agentflow import brief as briefs
-from agentflow import notify, procs
+from agentflow import notify, procs, risk
 from agentflow.adapters import get_adapter
 from agentflow.adapters.base import GATE_NAMES, CheckResult, LanguageAdapter
 from agentflow.checks import existing_members, red_stubs, test_smells, traceability
 from agentflow.checks import structure as structure_check
 from agentflow.checks.frame_diff import knowledge_tag, path_matches, tests_update_tag
 from agentflow.config import Config
-from agentflow.gates import gate_report, split_failures
+from agentflow.gates import GateReport, expected_red, gate_report, split_failures
 from agentflow.hooks import AGENT_ENV
 from agentflow.report import (
     TestReview,
@@ -99,6 +99,8 @@ BRIEF_PHASES = {
     "IMPLEMENT",
     "IMPLEMENT_STEPS",
     "FIX",
+    "FIX_FINAL",
+    "TESTS_STRENGTHEN",
     "STRUCTURE",
     "DIAGNOSIS",
     "REVIEW",
@@ -128,6 +130,10 @@ KNOWLEDGE_ROLES = {
     "retro",
 }
 KNOWLEDGE_MAX_LINES = 300
+#: failed final checks one automatic repair may fix before the human sees them (by the start
+#: of the check's name): the implementer owns the first group, the test writer the second
+FINAL_SRC_CHECKS = (*GATE_NAMES.values(), "regression", "coverage run", "full test suite")
+FINAL_TESTS_CHECKS = ("diff coverage", "mutation score")
 FIX_OWNER_RE = re.compile(r"^\W*Fix owner\W*:\W*(src|tests|spec)\b", re.I | re.M)
 #: a park request (or diagnosis) saying only the frozen tests are wrong, and which ones
 TESTS_WRONG_RE = re.compile(r"^\W*Park kind\W*:\W*tests[ -]wrong\b", re.I | re.M)
@@ -220,6 +226,20 @@ TASKS = {
     "check command: {check}\nThe last gate output:\n{report}",
     "FIX": "Feature '{f}': make all currently failing tests pass without editing tests. "
     "Check with: {check}\n" + NO_STOP,
+    "FIX_FINAL": "Feature '{f}': the final gates failed these checks: {failed}. Make them pass "
+    "without editing tests: fix the code. A failing test that existed before this feature means "
+    "the feature broke behavior that test pins: restore it, unless the spec asks for the new "
+    "behavior (then park with that question). Check with: {check}\n" + NO_STOP,
+    "TESTS_STRENGTHEN": "Feature '{f}': the implementation passes its tests, but the final gates "
+    "found the tests too weak: {failed}. Add or sharpen tests so they catch what is listed "
+    "below (uncovered changed lines; surviving mutants in {out}/{f}/mutation_survivors.md). "
+    "Every new assertion must follow from {specs}/{f}/ and carry its spec ID; do not derive "
+    "expected values from the implementation. If such a test fails against the code, keep it: "
+    "it is a finding and the implementer fixes the code. A line or mutant the spec does not "
+    "cover (logging, an equivalent mutant, unreachable defensive code): write no test for it "
+    "and list it with the reason under '## Not covered on purpose' in "
+    "{out}/{f}/test_summary.md. Change no existing test beyond that. A question the spec does "
+    "not settle goes to {out}/{f}/questions.md.",
     "REVIEW": "Feature '{f}': review the implementation against {specs}/{f}/. "
     "Implementation diff: git diff tests-approved/{f}",
     "TRIAGE": "Feature '{f}': triage the adversarial reviewer's findings against {specs}/{f}/. "
@@ -331,6 +351,27 @@ def sleep_until(until: datetime.datetime) -> None:
         time.sleep(min(left, 30.0))
 
 
+#: `usage` fields of a `claude -p` result -> the agent_run event's token columns
+TOKEN_FIELDS = {
+    "input_tokens": "tokens_in",
+    "output_tokens": "tokens_out",
+    "cache_read_input_tokens": "cache_read",
+    "cache_creation_input_tokens": "cache_write",
+}
+
+
+def token_usage(res: dict[str, Any]) -> dict[str, int]:
+    """Token counts of a run for its agent_run event ({} when the result has no `usage`)."""
+    usage = res.get("usage")
+    if not isinstance(usage, dict):
+        return {}
+    return {
+        name: int(usage[key])
+        for key, name in TOKEN_FIELDS.items()
+        if isinstance(usage.get(key), (int, float))
+    }
+
+
 def hit_cap(res: dict[str, Any]) -> str | None:
     """'turns' if a `claude -p` result says the run stopped at --max-turns, 'budget' if it
     stopped at --max-budget-usd, else None."""
@@ -438,7 +479,8 @@ class Orchestrator:
             "feature": feature,
             "f": feature,
             "specs": p.specs,
-            "src": p.src,
+            # several source folders read "core/, autoload" (the texts add the last slash)
+            "src": "/, ".join(self.cfg.src_roots),
             "tests": p.tests,
             "review_tests": p.review_tests,
             "out": p.out,
@@ -553,13 +595,14 @@ class Orchestrator:
         feedback: str = "",
         role: str | None = None,
         step: str | None = None,
+        attempt: int | None = None,
     ) -> dict[str, Any]:
         """One fresh headless Claude Code run. The task goes via stdin and the role via
         --append-system-prompt-file (no multi-line text on the command line). A run refused by
         the usage limit waits for the reset and runs again (never a failed attempt)."""
         waits = 0
         while True:
-            res, limit = self.run_agent_once(phase, feature, task, feedback, role, step)
+            res, limit = self.run_agent_once(phase, feature, task, feedback, role, step, attempt)
             if limit is None:
                 return res
             waits += 1
@@ -617,6 +660,7 @@ class Orchestrator:
         feedback: str = "",
         role: str | None = None,
         step: str | None = None,
+        attempt: int | None = None,
     ) -> tuple[dict[str, Any], UsageLimit | None]:
         """One `claude -p` run: its result, and the usage limit that refused it (or None)."""
         cmd = self.claude_cmd()
@@ -677,6 +721,9 @@ class Orchestrator:
             feature,
             "agent_run",
             phase=phase,
+            role=role_name,
+            step=step,
+            attempt=attempt,
             model=model or None,
             effort=effort or None,
             seconds=round(time.time() - t0),
@@ -686,6 +733,8 @@ class Orchestrator:
             messages=res.get("num_turns"),
             error=res.get("is_error"),
             denials=len(denials),
+            session=res.get("session_id"),
+            **token_usage(res),
             **({"usage_limit": True} if limit else {}),
         )
         if limit:
@@ -854,7 +903,13 @@ class Orchestrator:
         caller handles it, e.g. the step gate decides)."""
         while True:
             res = self.run_agent(
-                phase, feature, task, prog.get("feedback", ""), role=role, step=step
+                phase,
+                feature,
+                task,
+                prog.get("feedback", ""),
+                role=role,
+                step=step,
+                attempt=int(prog.get("attempt") or 0) or None,
             )
             prog["feedback"] = ""
             save_progress(self.cfg, feature, prog)
@@ -1069,7 +1124,7 @@ class Orchestrator:
             prog["feedback"] = (
                 (capped + "\n" if capped else "")
                 + f"Attempt {attempt} failed these gates. Tests and config are frozen; "
-                f"fix {self.cfg.paths.src}/.\n{rep.report[-6000:]}"
+                f"fix {'/, '.join(self.cfg.src_roots)}/.\n{rep.report[-6000:]}"
                 + (
                     "\n\nA diagnosis of the repeated failure (follow it):\n" + diagnosis["text"]
                     if diagnosis.get("owner") == "src"
@@ -1193,18 +1248,18 @@ class Orchestrator:
     def revert_src(self, feature: str, label: str) -> str:
         """Save the parked work's uncommitted source changes as a diff and restore the sources
         to the last commit, so later steps start from code that passed its gates."""
-        src = self.cfg.paths.src
-        if not (self.cfg.root / src).exists():
+        src = [r for r in self.cfg.src_roots if (self.cfg.root / r).exists()]
+        if not src:
             return ""
-        git(self.cfg, "add", "-A", "--", src)
-        diff = git(self.cfg, "diff", "--cached", "HEAD", "--", src)
+        git(self.cfg, "add", "-A", "--", *src)
+        diff = git(self.cfg, "diff", "--cached", "HEAD", "--", *src)
         if not diff.strip():
             return ""
         pdir = self.fdir(feature) / "parked"
         pdir.mkdir(exist_ok=True)
         path = pdir / (re.sub(r"[^A-Za-z0-9]+", "-", label).strip("-").lower() + ".diff")
         path.write_text(diff, encoding="utf-8")
-        git(self.cfg, "restore", "--source=HEAD", "--staged", "--worktree", "--", src)
+        git(self.cfg, "restore", "--source=HEAD", "--staged", "--worktree", "--", *src)
         return self.rel(path)
 
     def park(
@@ -1390,7 +1445,7 @@ class Orchestrator:
         if not sha:
             return ""
         try:
-            diff = git(self.cfg, "show", "--format=", sha, "--", self.cfg.paths.src)
+            diff = git(self.cfg, "show", "--format=", sha, "--", *self.cfg.src_roots)
         except GitError:
             return ""
         if not diff.strip():
@@ -1515,24 +1570,13 @@ class Orchestrator:
         self.agent("TESTS", feature, prog, self.task_text("TESTS_AMEND", feature, ref=ref))
         self.collect_questions(feature, "TESTS", "test writer")
         self.format_written_tests(feature)
-        changed = self.changed_tests()
+        changed = self.commit_test_changes(
+            feature,
+            prog,
+            f"from the answers {ref}",
+            f"{feature}: tests updated from answers {ref}",
+        )
         if changed:
-            note = (
-                f"\n\nThis pass reviews only the test changes made from the answers {ref} "
-                f"(git diff HEAD -- {self.cfg.paths.tests}/); objections go to the human."
-            )
-            (self.fdir(feature) / "test_review.md").unlink(missing_ok=True)
-            task = self.task_text("TEST_REVIEW", feature, round="1", rounds="1", note=note)
-            self.agent("TEST_REVIEW", feature, prog, task, role="test_review")
-            self.collect_questions(feature, "TEST_REVIEW", "test reviewer")
-            review = self.read_test_review(feature)
-            if review.objections:
-                with open(self.fdir(feature) / "open_questions.md", "a", encoding="utf-8") as fh:
-                    for o in review.objections:
-                        fh.write(f"- [tests amended] test reviewer objection: {o}\n")
-            git(self.cfg, "add", "-A", "--", self.cfg.paths.tests)
-            git(self.cfg, "commit", "-q", "-m", f"{feature}: tests updated from answers {ref}")
-            git(self.cfg, "tag", "-f", tests_update_tag(feature))
             prog["tests_amended"] = True  # the review fixes make the changed tests pass
             if nxt.get("phase") == "PR":  # nothing else to redo
                 nxt = {"phase": "REVIEW", "sub": "fix"}
@@ -1544,6 +1588,34 @@ class Orchestrator:
         )
         prog.update(phase=nxt.get("phase"), sub=nxt.get("sub"), amend=None, attempt=0)
         save_progress(self.cfg, feature, prog)
+
+    def commit_test_changes(
+        self, feature: str, prog: dict[str, Any], what: str, message: str
+    ) -> list[str]:
+        """Test changes made after the tests were approved (`what`: where they come from): one
+        test-reviewer pass over just them (its objections go to the final gate), then the
+        commit and the tag tests-update/<f>, the one test change the frame diff allows.
+        Returns the changed files ([] = nothing changed, nothing done)."""
+        changed = self.changed_tests()
+        if not changed:
+            return []
+        note = (
+            f"\n\nThis pass reviews only the test changes made {what} "
+            f"(git diff HEAD -- {self.cfg.paths.tests}/); objections go to the human."
+        )
+        (self.fdir(feature) / "test_review.md").unlink(missing_ok=True)
+        task = self.task_text("TEST_REVIEW", feature, round="1", rounds="1", note=note)
+        self.agent("TEST_REVIEW", feature, prog, task, role="test_review")
+        self.collect_questions(feature, "TEST_REVIEW", "test reviewer")
+        review = self.read_test_review(feature)
+        if review.objections:
+            with open(self.fdir(feature) / "open_questions.md", "a", encoding="utf-8") as fh:
+                for o in review.objections:
+                    fh.write(f"- [tests amended] test reviewer objection: {o}\n")
+        git(self.cfg, "add", "-A", "--", self.cfg.paths.tests)
+        git(self.cfg, "commit", "-q", "-m", message)
+        git(self.cfg, "tag", "-f", tests_update_tag(feature))
+        return changed
 
     def run_test_checks(self, feature: str, prog: dict[str, Any]) -> None:
         sections = []
@@ -1964,40 +2036,10 @@ class Orchestrator:
             self.fix_findings(feature, prog)
             sub = self.set_sub(feature, prog, "final")
         self.fix_structure(feature, prog)
-        t0 = time.time()
-        rep = gate_report(self.adapter, feature, "final")
-        timing = "\n".join(f"| {name} | {secs:.0f} |" for name, secs in rep.durations.items())
-        (self.fdir(feature) / "final_gates.md").write_text(
-            f"~~~\n{rep.report}\n~~~\n\nTime per check (s):\n\n| Check | Seconds |\n|---|---|\n"
-            f"{timing}\n",
-            encoding="utf-8",
-        )
-        log_event(
-            self.cfg,
-            feature,
-            "final_gates",
-            passed=rep.ok,
-            failed=rep.failed,
-            skipped=rep.skipped,
-            excerpt=rep.excerpt() if not rep.ok else "",
-            seconds=round(time.time() - t0),
-            durations=rep.durations,
-            extra=rep.extra,
-            results=rep.results,
-            structure=rep.structure,
-        )
-        self.progress(
-            feature,
-            f"[REVIEW] final gates: {'PASSED' if rep.ok else 'FAILED'}"
-            + (f" ({', '.join(rep.failed)})" if rep.failed else "")
-            + (f"; skipped: {', '.join(rep.skipped)}" if rep.skipped else "")
-            + (
-                "; project checks (not blocking): "
-                + ", ".join(f"{n} {'OK' if c == 0 else f'exit {c}'}" for n, c in rep.extra.items())
-                if rep.extra
-                else ""
-            ),
-        )
+        rep = self.run_final_gates(feature, prog)
+        # at most one repair per owner (code, then tests) before the human sees a failure
+        while not rep.ok and self.repair_final(feature, prog, rep):
+            rep = self.run_final_gates(feature, prog)
         self.advance(feature, prog, "PR")
 
     def triage(self, feature: str, prog: dict[str, Any]) -> bool:
@@ -2118,6 +2160,129 @@ class Orchestrator:
             log_event(self.cfg, feature, "redo_result", label="review fixes", passed=ok)
             prog["redo"] = [r for r in prog.get("redo") or [] if r.get("kind") != "finding"]
             save_progress(self.cfg, feature, prog)
+
+    def run_final_gates(self, feature: str, prog: dict[str, Any]) -> GateReport:
+        """Run the final gates, write final_gates.md and log the result."""
+        t0 = time.time()
+        rep = gate_report(self.adapter, feature, "final")
+        timing = "\n".join(f"| {name} | {secs:.0f} |" for name, secs in rep.durations.items())
+        (self.fdir(feature) / "final_gates.md").write_text(
+            f"~~~\n{rep.report}\n~~~\n\nTime per check (s):\n\n| Check | Seconds |\n|---|---|\n"
+            f"{timing}\n",
+            encoding="utf-8",
+        )
+        log_event(
+            self.cfg,
+            feature,
+            "final_gates",
+            passed=rep.ok,
+            failed=rep.failed,
+            skipped=rep.skipped,
+            excerpt=rep.excerpt() if not rep.ok else "",
+            seconds=round(time.time() - t0),
+            durations=rep.durations,
+            extra=rep.extra,
+            results=rep.results,
+            structure=rep.structure,
+        )
+        self.progress(
+            feature,
+            f"[REVIEW] final gates: {'PASSED' if rep.ok else 'FAILED'}"
+            + (f" ({', '.join(rep.failed)})" if rep.failed else "")
+            + (f"; skipped: {', '.join(rep.skipped)}" if rep.skipped else "")
+            + (
+                "; project checks (not blocking): "
+                + ", ".join(f"{n} {'OK' if c == 0 else f'exit {c}'}" for n, c in rep.extra.items())
+                if rep.extra
+                else ""
+            ),
+        )
+        return rep
+
+    def repair_final(self, feature: str, prog: dict[str, Any], rep: GateReport) -> bool:
+        """One bounded repair of failed final gates, so only what the agents cannot fix reaches
+        the human: failures the code owns (lint, types, a red test) go to the implementer;
+        tests too weak for the diff-coverage or mutation threshold go to the test writer (new
+        tests reviewed against the spec, as after an answer). Each owner gets one round per
+        final-gate cycle ([gates] final_repair = false: none). False = nothing (more) to
+        repair: the gate report stands. Not while parked or provisional work waits: those
+        failures are expected and the human's answer comes first."""
+        if not self.cfg.final_repair or expected_red(self.cfg, feature):
+            return False
+        done = list(prog.get("final_repair") or [])
+        src = [n for n in rep.failed if n.startswith(FINAL_SRC_CHECKS)]
+        weak = [n for n in rep.failed if n.startswith(FINAL_TESTS_CHECKS)]
+        if src and "src" not in done:
+            owner, failed = "src", src
+        elif weak and not src and "tests" not in done:
+            owner, failed = "tests", weak
+        else:
+            return False
+        prog["final_repair"] = [*done, owner]
+        save_progress(self.cfg, feature, prog)
+        who = "implementer" if owner == "src" else "test writer"
+        self.progress(
+            feature, f"[final gates] {', '.join(failed)} failed; one repair run by the {who}."
+        )
+        detail = "\n\n".join(f"[FAIL] {n}\n{rep.outputs.get(n, '')}".rstrip() for n in failed)
+        prog["feedback"] = "The failing final checks:\n" + detail[:8000]
+        if owner == "src":
+            changed = self.repair_final_src(feature, prog, failed)
+        else:
+            changed = self.strengthen_tests(feature, prog, failed)
+        log_event(self.cfg, feature, "final_repair", owner=owner, failed=failed, changed=changed)
+        if not changed:
+            self.progress(feature, f"[final gates] the {who} changed nothing; the result stands.")
+        return changed
+
+    def repair_final_src(self, feature: str, prog: dict[str, Any], failed: list[str]) -> bool:
+        """The implementer fixes what the final gates found in the code (whole dev-loop suite
+        as its step check). True = fixed and committed; False = parked like a review fix."""
+        task = self.task_text(
+            "FIX_FINAL",
+            feature,
+            failed=", ".join(failed),
+            check=self.adapter.test_command([]),
+            note=self.note_path(feature, "final-gate-fixes"),
+        )
+        item: dict[str, Any] = {
+            "kind": "finding",
+            "step": None,
+            "label": "final gate fixes",
+            "tests": [],
+        }
+        head = git(self.cfg, "rev-parse", "HEAD").strip()
+        ok = self.implement_loop(feature, prog, task, None, item)
+        clear_reqs(self.cfg)
+        # green step gates without a commit: nothing changed, the same final result would come
+        return ok and git(self.cfg, "rev-parse", "HEAD").strip() != head
+
+    def strengthen_tests(self, feature: str, prog: dict[str, Any], failed: list[str]) -> bool:
+        """The test writer adds tests for uncovered lines / surviving mutants (from the spec,
+        not from the code). True = tests changed (reviewed, committed, and the code fixed if a
+        new test fails); False = no test change."""
+        task = self.task_text("TESTS_STRENGTHEN", feature, failed=", ".join(failed))
+        self.agent("TESTS", feature, prog, task)
+        self.collect_questions(feature, "TESTS", "test writer")
+        self.format_written_tests(feature)
+        changed = self.commit_test_changes(
+            feature,
+            prog,
+            "to cover what the final gates found too weak",
+            f"{feature}: tests strengthened (final gates)",
+        )
+        if not changed:
+            return False
+        self.progress(feature, f"[final gates] {len(changed)} test file(s) strengthened, committed")
+        # a new test that follows from the spec and fails: the code is wrong, the implementer
+        # fixes it (or parks it); green: nothing more to do before the gates run again
+        self.set_check_scope(prog, None)
+        step = gate_report(self.adapter, feature, "step")
+        clear_reqs(self.cfg)
+        if not step.ok:
+            prog["feedback"] = "The strengthened tests fail:\n" + step.report[-6000:]
+            self.repair_final_src(feature, prog, step.failed)
+        return True
 
     # ---------- structure: readability findings and file sizes ----------
     def take_structure_findings(self, feature: str, prog: dict[str, Any]) -> None:
@@ -2392,6 +2557,11 @@ class Orchestrator:
             state += f"; {len(questions)} open question(s)"
         if self.spec_diff(feature):
             state += "; spec changed from your answers (diff in final_summary.md)"
+        rating = self.assess_risk(feature, prog)
+        if rating.low and self.cfg.final_gate == "auto":
+            self.auto_approve_final(feature, prog)
+            return
+        state += f"; risk {rating.level}"
         d = self.fdir(feature)
         self.pause(
             feature,
@@ -2403,6 +2573,45 @@ class Orchestrator:
                 "message": state + ".",
             },
         )
+
+    def assess_risk(self, feature: str, prog: dict[str, Any]) -> risk.Assessment:
+        """Rate the finished feature (risk.py) from the run records and the change itself;
+        kept in progress.json for the brief and logged, so the rating can be compared with
+        the human's decision."""
+        events = since_spec_approval(read_events(self.cfg, feature))
+        rating = risk.assess(
+            self.adapter,
+            feature,
+            prog,
+            events,
+            items=len(self.final_items(feature, prog)),
+            assumptions=len(self.assumptions(feature)),
+        )
+        prog["risk"] = rating.as_dict()
+        save_progress(self.cfg, feature, prog)
+        log_event(self.cfg, feature, "risk", auto=self.cfg.final_gate == "auto", **rating.as_dict())
+        return rating
+
+    def auto_approve_final(self, feature: str, prog: dict[str, Any]) -> None:
+        """[gates] final = "auto" and the engine rates the feature low risk: the final gate is
+        passed without a stop (retro, then DONE). Nothing is pushed; the PR stays the human's."""
+        log_event(
+            self.cfg,
+            feature,
+            "human_gate",
+            gate="final",
+            approved=True,
+            reason="low risk",
+            auto=True,
+            risk=risk.LOW,
+        )
+        self.progress(
+            feature,
+            "FINAL GATE: approved automatically (low risk: clean run, small change, coverage "
+            "and mutation measured). The brief is kept; retro next.",
+        )
+        self.notify(f"agentflow: {feature} approved automatically", "Low risk; retro, then DONE.")
+        self.advance(feature, prog, "RETRO")
 
     def phase_final(self, feature: str, prog: dict[str, Any]) -> None:
         self.final_gate(feature, prog)
@@ -3011,7 +3220,16 @@ class Orchestrator:
         gate = prog["waiting"]["gate"]
         if gate == "final":
             self.refuse_open_provisional(feature, prog)
-        log_event(self.cfg, feature, "human_gate", gate=gate, approved=True, reason=None)
+        log_event(
+            self.cfg,
+            feature,
+            "human_gate",
+            gate=gate,
+            approved=True,
+            reason=None,
+            # the engine's rating next to the human's decision (final gate; risk.py)
+            **({"risk": (prog.get("risk") or {}).get("level")} if gate == "final" else {}),
+        )
         if gate == "tests":
             self.pass_tests_gate(feature, prog)
             self.echo(f"Tests approved, tagged tests-approved/{feature}.")
@@ -3206,6 +3424,7 @@ class Orchestrator:
                 redo=parked,
                 parked=[],
                 redo_mode=True,
+                final_repair=[],  # a new final-gate cycle: one repair per owner again
                 attempt=0,
                 phase="SPEC_UPDATE",
                 sub=None,

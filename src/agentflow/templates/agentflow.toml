@@ -6,7 +6,7 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 #                                  # the agents; `agentflow learn` adds accepted retro facts
 
 [paths]
-# src = "src"
+# src = "src"                      # one folder, or a list: ["core", "autoload", "scenes"]
 # tests = "tests"
 # review_tests = "tests/review"
 # specs = "specs"
@@ -51,6 +51,13 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 #                                  # "human" = always stop; "auto" = pass without a stop when
 #                                  # the checks pass, the test reviewer has no objections and
 #                                  # no question is open (else stop as "human")
+# final = "human"                  # final gate: "human" = always stop; "auto" = a feature the
+#                                  # engine rates low risk ([risk]) is approved without a
+#                                  # stop (retro, DONE; nothing is pushed). The rating is on
+#                                  # every final brief and in the events either way
+# final_repair = true              # failed final gates get one repair run per owner before
+#                                  # you see them: code failures (lint, types, a red test) ->
+#                                  # implementer; weak diff coverage / mutation -> test writer
 # diff_coverage = 90
 # mutation_score = 80
 # mutation_tool = "mutmut"         # default: mutmut (python), stryker (dotnet); "none" = off
@@ -81,6 +88,17 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 # format = ["ruff", "format", "--check", "{src}", "{tests}"]
 # typecheck = ["python", "-m", "mypy", "{src}"]
 # imports = ["lint-imports"]
+
+# [risk]                           # when a finished feature counts as low risk (all must
+#                                  # hold; 0 = that test off). Also needed: final gates
+#                                  # passed with diff coverage and mutation measured, nothing
+#                                  # parked or open, no answer round, no cap hit twice
+# max_changed_lines = 200          # changed source lines (added + removed)
+# max_changed_files = 8
+# max_removed_lines = 30           # removed lines in source files that existed before
+# max_assumptions = 3              # assumptions the implementer logged
+# min_features = 3                 # finished features in this repository (metrics file)
+# never_auto = ["src/billing/", "*.sql"]   # a change here is never low risk
 
 [docs]
 # code_map = "docs/code-map.md"    # living code map: per module its purpose, key classes, how

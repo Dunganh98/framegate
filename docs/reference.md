@@ -67,8 +67,8 @@ Once per repository: `/agentflow:setup` in the chat (it reads the repo, drafts a
 `.agentflow/project.md` and the code map, shows a short brief that asks only the real decisions, runs
 `agentflow init` and `agentflow doctor --brief`, and offers a small smoke feature in one line), or by hand `agentflow init [--language
 python|dotnet|generic]` (agentflow.toml, spec templates, `.agentflow/project.md`, .gitignore
-lines; commit them) and `agentflow doctor` (checks config, git, the claude CLI, the tools, the
-gate commands and the test selection by spec ID, without agents; `--full` also times the
+lines; commit them) and `agentflow doctor` (checks config, git, that agentflow.toml is on the base
+branch, the claude CLI, the chat's allow rules, the tools, the gate commands and the test selection by spec ID, without agents; `--full` also times the
 whole suite). Any language without a built-in adapter uses the generic adapter: test, coverage,
 mutation and format commands with placeholders in `[generic]` (docs/adapters.md), no agentflow
 code. Also the plugin installed (docs/plugin.md), and an allow rule so the
@@ -396,6 +396,41 @@ Models and speed:
   measurement. Shown at the final gate with exit code and output (full output in
   `out/<f>/extra_<name>.log`); never part of the verdict.
 
+Final-gate repair (`[gates] final_repair`, default on): a failed final gate gets one repair
+run per owner before the human sees it. Failures the code owns (lint, format, typecheck, a red
+test in the regression or coverage run) go to the implementer (`FIX_FINAL` task, the whole
+dev-loop suite as its step check; a failure parks like a review fix). When only the diff
+coverage or the mutation score is too low, the test writer adds tests (`TESTS_STRENGTHEN`:
+from the spec, never from the code; what the spec does not cover is listed under "Not covered
+on purpose" in test_summary.md); the new tests get one test-reviewer pass (objections go to the
+final gate), are committed (`<f>: tests strengthened (final gates)`) and tagged
+`tests-update/<f>`; a new test that fails goes to the implementer. Then the final gates run
+again; at most three runs per cycle (first, after the code repair, after the tests repair). A
+repair that changes nothing ends it. No repair while parked or provisional work waits (those
+failures are expected). Events: `final_repair` (owner, failed, changed). The mutation check is
+not started when the typecheck, the regression or the coverage run failed before it (SKIPPED
+with that reason): it needs a green build and green tests.
+
+Risk rating (`src/agentflow/risk.py`, `[risk]`): at every final gate the engine rates the
+feature `low` or `elevated` from its own records, never from an agent's opinion. Low needs all
+of: final gates passed with diff coverage and mutation measured (a project without them is
+never low risk); nothing parked, provisional or open; no answer round, no park and no cap hit
+twice in the run; at most `max_assumptions` (3) assumptions; at most `max_changed_lines` (200)
+changed source lines in `max_changed_files` (8) files and `max_removed_lines` (30) removed
+lines in existing code, measured against the feature's base; no changed path under
+`never_auto`; no changed file over `[gates] max_file_lines`; at least `min_features` (3)
+finished features in the metrics file. The brief shows `Risk: low` or `Risk: elevated: <the
+tests that failed>`; the `risk` event and the `human_gate` event (`risk`) record it next to
+your decision, so you can compare before switching on `[gates] final = "auto"`: then a low-risk
+feature passes the final gate without a stop (`human_gate` with `auto: true`, retro, DONE;
+nothing is pushed, the PR stays yours). Everything else stops as before.
+
+Several source folders: `[paths] src` takes one folder or a list (`["core", "autoload",
+"scenes"]`). The implementer may write all of them; the frame diff, the forbidden patterns,
+the format fix, the structure report, the park revert and the Python lint / type / coverage
+commands cover all of them; in a configured command an argument that is exactly `{src}`
+becomes one argument per folder.
+
 Final gates (`--scope final`): coverage + diff coverage and mutation testing run only on the
 feature's tests (tagged with any spec ID of the feature, or under `[paths] review_tests`); the
 whole suite runs once more without coverage instrumentation (`regression` check). Coverage over a
@@ -427,6 +462,11 @@ gate often rewords a question). No match although answer rounds and a spec updat
 The retro must mention every ID in `retro_proposals.md` (a proposal, or "Not acted on" with a
 one-line reason); if IDs are missing it is re-run once with them as feedback, then a warning is
 printed and logged (`retro_coverage` event).
+
+Each `agent_run` event also has `role`, `step`, `attempt`, `session` and the token counts
+(`tokens_in`, `tokens_out`, `cache_read`, `cache_write`), so cost per step and attempt can be
+read from `out/events.jsonl`. `progress.json` is written to a temp file and moved into place;
+a line of `events.jsonl` cut short by a killed run is skipped when reading.
 
 `metrics/workflow_metrics.csv` (one row per finished feature):
 

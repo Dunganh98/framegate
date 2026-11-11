@@ -15,7 +15,9 @@ Find out, from files only (Read / Glob / Grep):
 - language, build and test tools: `pyproject.toml`, `*.sln` / `*.csproj`, `package.json`,
   `go.mod`, `Cargo.toml`, ...; the test framework and how tests are run, filtered and reported
   (JUnit XML?), how slow tests are marked (traits, markers, categories);
-- the layout: source and test folders, where specs could live, generated / build folders;
+- the layout: source and test folders (several source folders are fine: `[paths] src` takes
+  a list, e.g. `["core", "autoload", "scenes"]`), where specs could live, generated / build
+  folders;
 - the modules (folders / namespaces / packages): what each is for, its key classes, how they
   work together (for the code map);
 - CI files (`.github/workflows/`, ...), formatter / linter / type checker configs;
@@ -61,7 +63,8 @@ note -> leave it out; the same question twice -> one. No limit on the number. As
 the code cannot tell; typical ones: which tests are slow or need special setup
 (they stay out of the step checks); what must never change and how tests leave new members out;
 how test data for a rare situation is found; what is off-limits for agents; whether mutation
-testing should run (and its threshold for glue code vs libraries); the base branch. The toml,
+testing should run (and its threshold for glue code vs libraries); the base branch; which
+paths must always get the user's own look at the final gate (`[risk] never_auto`). The toml,
 the knowledge file or the code map in full only on request.
 
 ## 4. Write
@@ -112,4 +115,5 @@ base branch and delete the branch `feat/smoke`.
 In two or three lines: what to commit (agentflow.toml, `.agentflow/project.md`, the code map,
 `specs/_template/`, `.gitignore`, a tag helper if added) and that the chat skills need the CLI
 allowed: `"Bash(agentflow *)"` and `"PowerShell(agentflow *)"` in `permissions.allow` of
-`.claude/settings.local.json`. Do not commit or push yourself.
+`.claude/settings.local.json` (`agentflow doctor` warns while they are missing; offer to add
+them, and write the file only on a yes). Do not commit or push yourself.

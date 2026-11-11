@@ -275,6 +275,17 @@ def final_facts(
             if r.get("question"):
                 out.append(f"  - proposed fix: {str(r['question']).strip()}")
 
+    repairs = [e for e in ev if e.get("kind") == "final_repair"]
+    if repairs:
+        out += ["", f"## Final-gate repairs (automatic, before this gate): {len(repairs)}", ""]
+        out += [
+            f"- {', '.join(e.get('failed') or [])} failed; the "
+            f"{'implementer' if e.get('owner') == 'src' else 'test writer'} "
+            + ("repaired it (the gates ran again)" if e.get("changed") else "changed nothing")
+            for e in repairs
+        ]
+        out.append("Name them under Struggles in the brief (one line).")
+
     out += ["", "## Final gates (final_gates.md)", "", "~~~", final_gates.strip(), "~~~"]
     out += ["", "## Open questions", "", open_questions.strip() or "None."]
     items = items or []
