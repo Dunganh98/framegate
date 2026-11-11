@@ -62,7 +62,7 @@ class TestReview:
         return self.verdict == "OK" and not self.objections
 
 
-def _section_bullets(text: str, heading: str) -> list[str]:
+def section_bullets(text: str, heading: str) -> list[str]:
     """Top-level bullets under a '## <heading>' section (continuation lines kept)."""
     items: list[str] = []
     inside = False
@@ -85,7 +85,7 @@ def parse_test_review(text: str | None) -> TestReview:
         return TestReview("MISSING", ["The test reviewer wrote no verdict (test_review.md)."])
     m = VERDICT_RE.search(text)
     verdict = m.group(1).upper() if m else "MISSING"
-    objections = _section_bullets(text, "Objections")
+    objections = section_bullets(text, "Objections")
     if verdict not in ("OK", "OBJECTIONS"):
         objections = objections or [f"Unreadable verdict in test_review.md ({verdict})."]
         verdict = "OBJECTIONS"
@@ -156,6 +156,11 @@ def phase_table(events: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _one_line(text: str, limit: int = 1500) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
 def fmt_s(seconds: float) -> str:
     s = int(round(seconds))
     return f"{s // 60} min {s % 60:02d} s" if s >= 60 else f"{s} s"
@@ -169,6 +174,8 @@ def final_facts(
     assumptions: list[Assumption],
     final_gates: str,
     open_questions: str,
+    items: list[str] | None = None,
+    code_map: str = "",
 ) -> str:
     """{out}/{f}/final_facts.md: what the summary agent must report, from the run's records."""
     ev = since_spec_approval(events)
@@ -270,5 +277,15 @@ def final_facts(
 
     out += ["", "## Final gates (final_gates.md)", "", "~~~", final_gates.strip(), "~~~"]
     out += ["", "## Open questions", "", open_questions.strip() or "None."]
+    items = items or []
+    out += ["", f"## Gate items (numbered as the final gate shows them): {len(items)}", ""]
+    out += [f"{n}. {_one_line(t)}" for n, t in enumerate(items, 1)] or ["None."]
+    out += [
+        "",
+        "Write each one in plain words under `## Items` in final_brief.md, with the same number. "
+        f"Questions you add (questions.md) are numbered after these ({len(items)} + 1, ...).",
+    ]
+    if code_map:
+        out += ["", "## Code map", "", code_map]
     out += ["", "## Cost, time, turns per phase", "", phase_table(ev)]
     return "\n".join(out).rstrip() + "\n"

@@ -70,7 +70,9 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "format_fix": (bool,),
         "extra": (dict,),
         "extra_timeout": (int,),
+        "max_file_lines": (int,),
     },
+    "docs": {"code_map": (str,)},
     "protected": {"paths": (list,), "extra": (list,), "exceptions": (list,)},
     "frame": {"forbidden_patterns": (list,)},
     "spec": {"id_pattern": (str,)},
@@ -243,6 +245,12 @@ class Config:
     #: final gate, never blocking (e.g. a balance measurement)
     extra_checks: dict[str, list[str]] = field(default_factory=dict)
     extra_timeout: int = 1800
+    #: [gates] max_file_lines: a changed source file longer than this is listed in the final
+    #: gate's structure report and asked about at the final gate (never blocking; 0 = off)
+    max_file_lines: int = 400
+    #: [docs] code_map: the living code map (per module: purpose, key classes, how they work
+    #: together, where to look for X); drafted by /agentflow:setup, updated by the PR phase
+    code_map: str = "docs/code-map.md"
     #: [gates] tests: "defer" | "human" | "auto" (see TESTS_GATE_MODES)
     tests_gate: str = "defer"
     diff_coverage: float = 90
@@ -349,7 +357,7 @@ class Config:
             "REVIEW": [p.review_tests, p.out],
             "TRIAGE": [p.review_tests, p.out],
             "DIAGNOSIS": [p.out],
-            "PR": [p.out],
+            "PR": [p.out, self.code_map],
             "RETRO": [p.out],
         }
         return [_as_prefix(x) for x in defaults.get(phase, [])]
@@ -479,6 +487,9 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
             )
         setattr(cfg, key, value)
     cfg.format_fix = gates.get("format_fix", cfg.format_fix)
+    cfg.max_file_lines = gates.get("max_file_lines", cfg.max_file_lines)
+    if cfg.max_file_lines < 0:
+        raise ConfigError("[gates] max_file_lines must be >= 0 (0 = no file size question)")
     for key in ("regression_timeout", "coverage_timeout", "mutation_timeout", "extra_timeout"):
         value = gates.get(key, getattr(cfg, key))
         if value < 1:
@@ -509,6 +520,10 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
             "[frame] forbidden_patterns", frame["forbidden_patterns"]
         )
 
+    code_map = data.get("docs", {}).get("code_map", cfg.code_map)
+    if not code_map.strip():
+        raise ConfigError("[docs] code_map must not be empty")
+    cfg.code_map = _norm(code_map)
     cfg.id_pattern = data.get("spec", {}).get("id_pattern", cfg.id_pattern)
     cfg.roles_extra_dir = data.get("roles", {}).get("extra_dir")
     git_cfg = data.get("git", {})

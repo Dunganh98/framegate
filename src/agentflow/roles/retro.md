@@ -41,8 +41,13 @@ How to treat the items:
   Group repeated denials of the same kind in one proposal.
 Also look at mutation survivors.
 
-Write {out}/{feature}/retro_proposals.md. Start with the counts line from retro_input.md. For
-each proposal:
+Write {out}/{feature}/retro_proposals.md. Start with the counts line from retro_input.md, then
+a section `## Brief`: what the human reads and answers by number. One line per proposal, same
+numbers as below, plain words (no item IDs, no spec IDs without their meaning):
+
+    1. <problem> -> <fix> (recommend: take | skip | fold into 3)
+
+Then one detailed section per proposal:
 - Problem and evidence (item IDs, counts, file references)
 - Fix, preferring in this order:
   1. a CI check / lint rule / hook (mechanically detectable)

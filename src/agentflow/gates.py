@@ -2,7 +2,8 @@
 
 scope step   fast checks after each implementation step (tests of current + earlier steps)
 scope final  everything, including coverage on the diff, traceability and mutation testing,
-             then the project's own [gates.extra] checks (reported, never blocking)
+             then the structure report (sizes of the changed files, longest methods) and the
+             project's own [gates.extra] checks (both reported, never blocking)
 
 Both scopes first format the changed source files ([gates] format_fix).
 
@@ -29,7 +30,7 @@ from agentflow.adapters.base import (
     incomplete_result,
     run_command,
 )
-from agentflow.checks import frame_diff, mutation, test_smells, traceability
+from agentflow.checks import frame_diff, mutation, structure, test_smells, traceability
 from agentflow.config import Config
 from agentflow.failure_filter import filter_failure_output
 from agentflow.report import short_name
@@ -263,6 +264,10 @@ class GateReport:
     durations: dict[str, float] = field(default_factory=dict)
     #: [gates.extra] check name -> exit code (reported at the final gate, never blocking)
     extra: dict[str, int] = field(default_factory=dict)
+    #: check name -> "PASS" / "FAIL" / "SKIPPED" plus its one-line result (score, coverage)
+    results: dict[str, str] = field(default_factory=dict)
+    #: final scope: the structure report (file sizes, longest methods; structure.Structure)
+    structure: dict[str, object] = field(default_factory=dict)
 
     def excerpt(self, lines_per_check: int = 12, limit: int = 2000) -> str:
         """A trimmed excerpt of the failing checks' output (for events and the retro)."""
@@ -307,6 +312,7 @@ def gate_report(
     outputs: dict[str, str] = {}
     full_outputs: dict[str, str] = {}
     durations: dict[str, float] = {}
+    results: dict[str, str] = {}
     exp = expected_red(adapter.cfg, feature) if scope == "final" else ExpectedRed()
     if scope == "final":
         for line in scope_lines(adapter, feature, skip_mutation):
@@ -332,6 +338,7 @@ def gate_report(
         except Exception as e:  # a crashing check must fail the gate, not the runner
             res = CheckResult("FAIL", f"check crashed: {type(e).__name__}: {e}")
         durations[check.name] = round(time.monotonic() - t0, 1)
+        results[check.name] = res.status + (f": {res.summary}" if res.summary else "")
         emit(f"[{res.status}] {check.name}")
         out = res.output.strip()
         if res.status == "FAIL":
@@ -357,9 +364,28 @@ def gate_report(
     if skipped:
         summary += f" (SKIPPED: {', '.join(skipped)})"
     emit(f"\n{summary}")
+    shape: dict[str, object] = {}
+    if scope == "final":
+        try:
+            report = structure.report(adapter, feature)
+        except Exception as e:  # a report, never a reason to fail the gate
+            report = structure.Structure(note=f"report failed: {type(e).__name__}: {e}")
+        emit("")
+        for line in report.lines():
+            emit(line)
+        shape = report.as_dict()
     extra = run_extra_checks(adapter, feature, emit, durations) if scope == "final" else {}
     return GateReport(
-        not failed, "\n".join(lines), failed, skipped, outputs, full_outputs, durations, extra
+        not failed,
+        "\n".join(lines),
+        failed,
+        skipped,
+        outputs,
+        full_outputs,
+        durations,
+        extra,
+        results,
+        shape,
     )
 
 

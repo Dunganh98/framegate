@@ -1,6 +1,7 @@
 """Chat-facing commands used by the Claude Code plugin skills (/agentflow:feature, :resume,
 :status): `watch` (the live view), `status --brief` / the feature overview, `gate-summary` (the
-gate digest the chat shows) and `cleanup`. Output is short plain text meant to be shown as is."""
+gate brief the chat shows: decision first, plain words) and `cleanup`. Output is short plain
+text meant to be shown as is."""
 
 from __future__ import annotations
 
@@ -16,7 +17,6 @@ from agentflow.orchestrator import (
     PROGRESS_LOG,
     Orchestrator,
     WorkflowError,
-    provisional_item,
 )
 from agentflow.report import since_spec_approval
 from agentflow.specs import feature_ids, plan_steps
@@ -25,7 +25,9 @@ from agentflow.state import GitError, git, load_progress, read_events, tag_exist
 #: how long `watch` waits for a run to take the lock before it decides none is running
 WATCH_START_WAIT = 30.0
 WATCH_POLL = 1.0
-DIFF_LINES = 40
+DIFF_LINES = 12
+#: most lines per plain-words section of a gate brief (the rest on request)
+BRIEF_SECTION_LINES = 8
 #: phase names in run log file names ({stamp}-{feature}-{PHASE}.json / .prompt.md / ...)
 RUN_LOG_PHASES = "SPEC_UPDATE|TESTS|TEST_REVIEW|IMPLEMENT|DIAGNOSIS|REVIEW|TRIAGE|PR|RETRO"
 TAG_PREFIXES = (
@@ -211,7 +213,7 @@ def brief(orch: Orchestrator, feature: str) -> int:
 def _spec_diff_lines(orch: Orchestrator, feature: str) -> list[str]:
     diff = orch.spec_diff(feature).strip()
     if not diff:
-        return ["Spec changes from your answers: none"]
+        return []
     files = re.findall(r"^\+\+\+ b/(.+)$", diff, re.M)
     plus = sum(1 for x in diff.splitlines() if x.startswith("+") and not x.startswith("+++"))
     minus = sum(1 for x in diff.splitlines() if x.startswith("-") and not x.startswith("---"))
@@ -230,187 +232,330 @@ def _spec_diff_lines(orch: Orchestrator, feature: str) -> list[str]:
     return out
 
 
-def _costs(events: list[dict[str, Any]]) -> tuple[float, float, str]:
-    """Total cost, total seconds, and 'TESTS $0.62; IMPLEMENT $1.10 ...' per phase."""
-    per: dict[str, float] = {}
-    secs = 0.0
+def _costs(events: list[dict[str, Any]]) -> tuple[float, float, float]:
+    """Total cost, agent seconds, check seconds (step and final gates)."""
+    cost = agent = checks = 0.0
     for e in events:
         if e.get("kind") == "agent_run":
-            per[str(e.get("phase"))] = per.get(str(e.get("phase")), 0.0) + float(e.get("cost") or 0)
-            secs += float(e.get("seconds") or 0)
+            cost += float(e.get("cost") or 0)
+            agent += float(e.get("seconds") or 0)
         elif e.get("kind") in ("gate", "final_gates"):
-            secs += float(e.get("seconds") or 0)
-    line = "; ".join(f"{p} {_money(c)}" for p, c in per.items())
-    return sum(per.values()), secs, line
+            checks += float(e.get("seconds") or 0)
+    return cost, agent, checks
 
 
-def _questions(orch: Orchestrator, feature: str) -> list[str]:
-    return [_clip(q, 400) for q in orch.open_questions(feature)]
+def brief_sections(text: str) -> dict[str, list[str]]:
+    """A brief file (final_brief.md, the `## What the tests check` part of test_review.md) ->
+    {heading in lower case: its non-empty lines}."""
+    out: dict[str, list[str]] = {}
+    current: list[str] | None = None
+    for line in text.splitlines():
+        if line.startswith("## "):
+            current = out.setdefault(line[3:].strip().lower(), [])
+        elif current is not None and line.strip() and not line.startswith("#"):
+            current.append(line.rstrip())
+    return out
+
+
+def _section(sections: dict[str, list[str]], *names: str) -> list[str]:
+    for key, lines in sections.items():
+        if any(key.startswith(n) for n in names):
+            return lines
+    return []
+
+
+def brief_items(lines: list[str]) -> dict[int, str]:
+    """`N. text` entries (continuation lines kept, joined by newlines) -> {N: text}."""
+    items: dict[int, str] = {}
+    n = 0
+    for line in lines:
+        m = re.match(r"^\s*(\d+)[.)]\s+(.*)$", line)
+        if m and not line.startswith("   "):
+            n = int(m.group(1))
+            items[n] = m.group(2).strip()
+        elif n:
+            items[n] += "\n" + line.strip()
+    return items
+
+
+def _block(lines: list[str], limit: int = BRIEF_SECTION_LINES, indent: str = "  ") -> list[str]:
+    shown = [indent + _clip(x.strip(), 300) for x in lines[:limit]]
+    if len(lines) > limit:
+        shown.append(f"{indent}... {len(lines) - limit} more line(s) (on request)")
+    return shown
+
+
+def _items_block(title: str, texts: list[str]) -> list[str]:
+    if not texts:
+        return []
+    out = [f"{title}:"]
+    for i, text in enumerate(texts, 1):
+        first, *rest = text.splitlines() or [""]
+        out.append(f"  {i}. {_clip(first, 600)}")
+        out += [f"     {_clip(x, 300)}" for x in rest[:6]]
+    return out
 
 
 def gate_summary(orch: Orchestrator, feature: str) -> int:
+    """The gate brief the chat shows: the decision and its default first, then about one
+    screen in plain words; the gate files hold the detail (shown on request)."""
     prog = load_progress(orch.cfg, feature)
     w = prog.get("waiting") or {}
     if w.get("kind") != "gate":
         print(f"{feature} is not at a gate: {run_state(orch, feature)}")
         return 1
     events = since_spec_approval(read_events(orch.cfg, feature))
-    total, secs, per_phase = _costs(events)
-    gate = str(w.get("gate"))
-    out = orch.cfg.paths.out
-    lines = [
-        f"{gate.upper()} GATE: {feature} ({_money(total)} so far, {_minutes(secs)} of agent and "
-        "check time)",
-        "State: " + (str(w.get("message") or "-").removeprefix("State: ")),
-    ]
-    if gate == "tests":
-        lines += _tests_gate(orch, feature, prog)
-        questions = _questions(orch, feature)
-        lines += _numbered("Questions (answer by number)", questions)
-        lines += _spec_diff_lines(orch, feature)
-        lines += [
-            f"Cost per phase: {per_phase or '-'}",
-            f"Full gate file: {out}/{feature}/tests_gate.md; answers file: "
-            f"{out}/{feature}/answers.md",
-            "Reply: approve | reject + what is wrong | answers to the numbered questions",
-        ]
-    else:
-        lines += _final_gate(orch, feature, prog, events)
-        parked = [
-            _clip(
-                f"{p['label']}: {p.get('reason')}"
-                + (f"; question: {p['question']}" if p.get("question") else ""),
-                900,  # a diagnosis (root cause + proposed fix) must stay readable
-            )
-            for p in prog.get("parked") or []
-        ]
-        lines += _numbered("Parked (answer by number to redo them)", parked)
-        prov = provisional_item(prog)
-        if prov:
-            lines += _numbered(
-                "Provisional steps (one answer approves all test fixes)",
-                [_clip(prov, 1500)],
-                start=len(parked) + 1,
-            )
-        start = len(parked) + (2 if prov else 1)
-        lines += _numbered("Open questions", _questions(orch, feature), start=start)
-        lines += _spec_diff_lines(orch, feature)
-        lines += [
-            f"Cost per phase: {per_phase or '-'}",
-            f"Full: {out}/{feature}/final_summary.md, {out}/{feature}/final_gates.md; "
-            f"answers file: {out}/{feature}/answers.md",
-            "Reply: approve (retro, then DONE) | skip the retro (DONE now) | answers to the "
-            "numbered items",
-        ]
+    lines = (
+        _tests_brief(orch, feature, prog)
+        if w.get("gate") == "tests"
+        else _final_brief(orch, feature, prog, events)
+    )
     print("\n".join(lines))
     return 0
 
 
-def _numbered(title: str, items: list[str], start: int = 1) -> list[str]:
-    if not items:
-        return [f"{title}: none"]
-    return [f"{title}:"] + [f"  {i}. {q}" for i, q in enumerate(items, start)]
+def _numbers(what: str, n: int) -> str:
+    return f"{what} 1" if n == 1 else f"{what}s 1-{n}"
 
 
-def _tests_gate(orch: Orchestrator, feature: str, prog: dict[str, Any]) -> list[str]:
-    checks = prog.get("test_checks") or {}
+def _money_time(events: list[dict[str, Any]]) -> str:
+    cost, agent, checks = _costs(events)
+    return f"{_money(cost)}, {_minutes(agent)} of agent time + {_minutes(checks)} of checks"
+
+
+def _tests_brief(orch: Orchestrator, feature: str, prog: dict[str, Any]) -> list[str]:
+    out = orch.cfg.paths.out
+    questions = orch.open_questions(feature)
     review = orch.read_test_review(feature)
-    lines = [
-        "Checks: " + (", ".join(f"{n} {s}" for n, s in checks.items()) or "not run"),
-        f"Test reviewer: {review.verdict}, {len(review.objections)} objection(s) left "
-        f"(rounds back to the writer: {int(prog.get('round') or 0)} of at most "
-        f"{orch.cfg.test_review_rounds})",
-    ]
-    lines += ["  - " + _clip(o) for o in review.objections[:8]]
-    if len(review.objections) > 8:
-        lines.append(f"  ... {len(review.objections) - 8} more (test_review.md)")
-    try:
-        tags = orch.adapter.collect_req_tags()
-    except Exception as e:  # a broken test file must not hide the gate
-        return [*lines, f"Spec IDs -> tests: scan failed ({type(e).__name__}: {e})"]
-    ids = sorted(feature_ids(orch.cfg, feature))
-    missing = [i for i in ids if not tags.get(i)]
-    counts = ", ".join(f"{i} ({len(tags.get(i, []))})" for i in ids)
-    n_tests = len({t for i in ids for t in tags.get(i, [])})
-    lines.append(
-        f"Spec IDs -> tests: {len(ids) - len(missing)}/{len(ids)} IDs have tests, {n_tests} tests"
-        + (f"; NO TESTS: {', '.join(missing)}" if missing else "")
+    events = since_spec_approval(read_events(orch.cfg, feature))
+    lines = [f"TESTS GATE: {feature} ({_money_time(events)})"]
+    if questions:
+        lines.append(
+            f'Decision: answer {_numbers("question", len(questions))} ("ok" takes every '
+            "default); the test writer and reviewer then re-run with your answers."
+        )
+    else:
+        lines.append('Decision: "ok" approves the tests (default); or say what is wrong.')
+    d = orch.cfg.feature_out(feature)
+    tr = d / "test_review.md"
+    checks = _section(
+        brief_sections(tr.read_text(encoding="utf-8") if tr.is_file() else ""),
+        "what the tests check",
     )
-    lines.append("  " + counts)
+    if not checks:
+        checks = _summary_column(d / "test_summary.md")
+    lines.append("What the tests check:")
+    lines += _block(checks) if checks else ["  (not written; on request: test_summary.md)"]
+    if review.objections:
+        lines.append(
+            f"Test reviewer: {len(review.objections)} objection(s) left after "
+            f"{int(prog.get('round') or 0)} round(s) with the writer:"
+        )
+        lines += _block(review.objections, 6)
+    else:
+        lines.append("Test reviewer: no objections.")
+    lines.append(_tests_checks_line(orch, feature, prog))
+    lines += _items_block('Questions (answer by number; "ok" takes every default)', questions)
+    lines += _spec_diff_lines(orch, feature)
+    lines.append(
+        f"On request: the full gate file ({out}/{feature}/tests_gate.md), the test table "
+        f"({out}/{feature}/test_summary.md), the cost per phase."
+    )
     return lines
 
 
-def _final_gate(
+def _summary_column(path: pathlib.Path) -> list[str]:
+    """The "What it checks" column of test_summary.md (plain words, without the IDs)."""
+    if not path.is_file():
+        return []
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) >= 3 and cells[2] and not set(cells[2]) <= set("-: "):
+            if cells[2].lower().startswith("what it checks"):
+                continue
+            rows.append("- " + cells[2])
+    return rows
+
+
+def _tests_checks_line(orch: Orchestrator, feature: str, prog: dict[str, Any]) -> str:
+    checks = prog.get("test_checks") or {}
+    failed = [n for n, s in checks.items() if s != "PASS"]
+    text = (
+        "Mechanical checks: " + ("all pass" if checks and not failed else "not run")
+        if not failed
+        else "Mechanical checks FAILED: " + ", ".join(failed)
+    )
+    try:
+        tags = orch.adapter.collect_req_tags()
+    except Exception as e:  # a broken test file must not hide the gate
+        return f"{text}; test scan failed ({type(e).__name__}: {e})"
+    ids = sorted(feature_ids(orch.cfg, feature))
+    missing = [i for i in ids if not tags.get(i)]
+    n_tests = len({t for i in ids for t in tags.get(i, [])})
+    return (
+        f"{text}; {n_tests} test(s), "
+        + (
+            f"NO TESTS for {', '.join(missing)} ({_spec_meaning(orch, feature, missing)})"
+            if missing
+            else "every requirement has tests"
+        )
+        + "."
+    )
+
+
+def _spec_meaning(orch: Orchestrator, feature: str, ids: list[str]) -> str:
+    """The words a spec ID stands for (its requirements.md row), for the human."""
+    req = orch.cfg.spec_dir(feature) / "requirements.md"
+    text = req.read_text(encoding="utf-8") if req.is_file() else ""
+    parts = []
+    for i in ids:
+        row = next((x for x in text.splitlines() if i in x), "")
+        words = " ".join(c.strip() for c in row.strip().strip("|").split("|")[1:2])
+        parts.append(f"{i}: {_clip(words, 80)}" if words else i)
+    return "; ".join(parts)
+
+
+def _final_brief(
     orch: Orchestrator, feature: str, prog: dict[str, Any], events: list[dict[str, Any]]
 ) -> list[str]:
-    fg = [e for e in events if e.get("kind") == "final_gates"]
-    last = fg[-1] if fg else {}
-    verdict = "PASSED" if last.get("passed") else "FAILED" if last else "not run"
-    if last.get("failed"):
-        verdict += f" ({', '.join(last['failed'])})"
-    if last.get("skipped"):
-        verdict += f"; skipped: {', '.join(last['skipped'])}"
-    steps = plan_steps(orch.cfg, feature)
-    done = len(prog.get("completed_steps") or [])
+    out = orch.cfg.paths.out
+    d = orch.cfg.feature_out(feature)
+    bfile = d / "final_brief.md"
+    sections = brief_sections(bfile.read_text(encoding="utf-8") if bfile.is_file() else "")
+    raw = orch.final_items(feature, prog)
+    plain = brief_items(_section(sections, "items", "open questions", "decisions"))
+    items = [plain.get(n) or text for n, text in enumerate(raw, 1)]
+    prov = bool(prog.get("provisional"))
+    lines = [f"FINAL GATE: {feature}"]
+    if items:
+        lines.append(
+            f'Decision: answer {_numbers("item", len(items))} ("ok" takes every default below)'
+            + (
+                "; the provisional-steps item must be answered before the gate can be approved."
+                if prov
+                else '; "approve as is" leaves them open (retro, then DONE).'
+            )
+        )
+    else:
+        lines.append(
+            'Decision: "ok" approves (default: retro, then DONE); "no retro" finishes now.'
+        )
+    plan = _section(sections, "plan followed")
+    lines.append("Plan followed?")
+    lines += _block(plan) if plan else _block(_step_lines(orch, feature, prog, events))
+    lines += _outcomes(orch, feature, prog, events)
+    struggles = _section(sections, "struggles")
+    lines.append("Struggles and how they were solved:")
+    lines += _block(struggles) if struggles else _block(_struggle_lines(prog, events))
+    for title, names in (
+        ("Proven by the tests", ("proven",)),
+        ("Not proven (check it by using it)", ("not proven",)),
+    ):
+        found = _section(sections, *names)
+        lines.append(f"{title}:")
+        lines += _block(found) if found else ["  (not written; on request: final_summary.md)"]
+    lines.append(_code_map_line(orch, prog, _section(sections, "code map")))
+    lines += _items_block('Items (answer by number; "ok" takes every default)', items)
+    lines += _spec_diff_lines(orch, feature)
+    lines.append(
+        f"On request: the full summary ({out}/{feature}/final_summary.md), the gate report "
+        f"({out}/{feature}/final_gates.md), the assumptions, the cost per phase."
+    )
+    return lines
+
+
+def _step_lines(
+    orch: Orchestrator, feature: str, prog: dict[str, Any], events: list[dict[str, Any]]
+) -> list[str]:
+    """Generated "Plan followed?" lines (when the summary agent wrote no brief)."""
+    parked = {n for p in prog.get("parked") or [] for n in (p.get("steps") or [p.get("step")])}
+    prov = {n for p in prog.get("provisional") or [] for n in (p.get("steps") or [p.get("step")])}
+    done = set(prog.get("completed_steps") or [])
+    out = []
+    for s in plan_steps(orch.cfg, feature):
+        state = (
+            "kept as provisional (its tests are contested)"
+            if s.num in prov
+            else "done"
+            if s.num in done
+            else "parked (see the items)"
+            if s.num in parked
+            else "not run"
+        )
+        out.append(f"- Step {s.num} ({s.title}): {state}")
+    return out
+
+
+def _struggle_lines(prog: dict[str, Any], events: list[dict[str, Any]]) -> list[str]:
     failed: dict[str, int] = {}
     for e in events:
         if e.get("kind") == "gate" and not e.get("passed"):
             failed[str(e.get("step"))] = failed.get(str(e.get("step")), 0) + 1
-    triage = [e for e in events if e.get("kind") == "triage"]
-    findings = triage[-1].get("findings") if triage else []
-    valid = sum(1 for r in findings or [] if r.get("verdict") == "VALID")
-    assumptions = orch.assumptions(feature)
-    extra = last.get("extra") or {}
-    lines = [
-        f"Final gates: {verdict}",
-        *(
-            [
-                "Project checks (not blocking; output in final_gates.md): "
-                + ", ".join(f"{n} {'OK' if c == 0 else f'exit {c}'}" for n, c in extra.items())
-            ]
-            if extra
-            else []
-        ),
-        f"Plan steps: {done}/{len(steps)} green, {len(prog.get('parked') or [])} parked"
-        + (
-            f", {len(prog['provisional'])} of them provisional (tests contested)"
-            if prog.get("provisional")
-            else ""
-        ),
-        "Failed attempts: "
-        + (
-            f"{sum(failed.values())} (" + ", ".join(f"{k}: {v}" for k, v in failed.items()) + ")"
-            if failed
-            else "0"
-        ),
-        f"Review findings: {len(findings or [])} ({valid} valid, "
-        f"{len(findings or []) - valid} dismissed)",
-        f"Assumptions: {len(assumptions)}",
+    out = [f"- {k}: {v} failed attempt(s)" for k, v in failed.items()]
+    out += [f"- {p['label']}: parked ({p.get('reason')})" for p in prog.get("parked") or []]
+    return out or ["- none"]
+
+
+def _outcomes(
+    orch: Orchestrator, feature: str, prog: dict[str, Any], events: list[dict[str, Any]]
+) -> list[str]:
+    fg = [e for e in events if e.get("kind") == "final_gates"]
+    last = fg[-1] if fg else {}
+    verdict = (
+        "final gates PASSED"
+        if last.get("passed")
+        else f"final gates FAILED ({', '.join(last.get('failed') or [])})"
+        if last
+        else "final gates not run"
+    )
+    if last.get("skipped"):
+        verdict += f"; skipped: {', '.join(last['skipped'])}"
+    scores = [
+        f"{name} {_clip(res, 90)}"
+        for name, res in (last.get("results") or {}).items()
+        if ("coverage" in name or "mutation" in name)
+        and "regression" not in name
+        and not res.startswith("SKIPPED")
     ]
-    lines += [f"  - [{a.spec_id}] {_clip(a.text, 160)}" for a in assumptions[:10]]
-    if len(assumptions) > 10:
-        lines.append(f"  ... {len(assumptions) - 10} more (steps.md)")
-    summary = orch.cfg.feature_out(feature) / "final_summary.md"
-    if summary.is_file():
-        para = _first_paragraph(summary.read_text(encoding="utf-8"))
-        if para:
-            lines.append(f"Summary: {_clip(para, 600)}")
+    fails = sum(1 for e in events if e.get("kind") == "gate" and not e.get("passed"))
+    lines = [
+        f"Outcomes: {verdict}; {fails} failed attempt(s), {len(prog.get('parked') or [])} "
+        f"parked; {_money_time(events)}."
+    ]
+    lines += [f"  {s}" for s in scores]
+    extra = last.get("extra") or {}
+    if extra:
+        lines.append(
+            "  project checks (not blocking): "
+            + ", ".join(f"{n} {'OK' if c == 0 else f'exit {c}'}" for n, c in extra.items())
+        )
+    shape = last.get("structure") or {}
+    longest = shape.get("longest") or []
+    if shape.get("files"):
+        biggest = sorted((shape.get("files") or {}).items(), key=lambda x: -x[1])[:3]
+        lines.append(
+            "  structure (not blocking): "
+            + ", ".join(f"{pathlib.PurePosixPath(p).name} {n} lines" for p, n in biggest)
+            + (
+                "; longest method "
+                + f"{longest[0][1]} ({longest[0][2]} lines, "
+                + f"{pathlib.PurePosixPath(longest[0][0]).name})"
+                if longest
+                else ""
+            )
+        )
     return lines
 
 
-def _first_paragraph(text: str) -> str:
-    """The first non-heading paragraph of a markdown text."""
-    para: list[str] = []
-    for line in text.splitlines():
-        s = line.strip()
-        if s.startswith("#") or (not s and not para):
-            if para:
-                break
-            continue
-        if not s:
-            break
-        para.append(s)
-    return " ".join(para)
+def _code_map_line(orch: Orchestrator, prog: dict[str, Any], written: list[str]) -> str:
+    state = prog.get("code_map") or {}
+    text = "Code map: " + (" ".join(x.strip().lstrip("-* ") for x in written[:2]) or "-")
+    if state and not state.get("exists"):
+        text += f" (WARN: no code map at {orch.cfg.code_map})"
+    elif state.get("missing"):
+        text += f" (WARN: new public types not in it: {', '.join(state['missing'])})"
+    return _clip(text, 400)
 
 
 # ---------- cleanup ----------

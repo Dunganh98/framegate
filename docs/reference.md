@@ -10,18 +10,18 @@ a terminal.
 
 | Command | What it means | When |
 |---|---|---|
-| `/agentflow:setup` | set up agentflow in this repo (draft config + project facts, questions, doctor) | once per repo |
+| `/agentflow:setup` | set up agentflow in this repo (draft config, project facts and code map; a short brief with at most 5 questions; doctor) | once per repo |
 | `/agentflow:feature <f>` | start or continue feature `<f>`: spec dialogue, run, gates, wrap-up | each feature |
 | `/agentflow:resume [f]` | reattach the chat to a running or waiting feature | after a restart |
 | `/agentflow:status [f]` | where features stand; tag cleanup after the PR is merged | any time |
 | `agentflow init` | write the starter files (config, spec templates, project facts, .gitignore lines) | once per repo |
-| `agentflow doctor [--full]` | check the setup without agents; `--full` also runs the whole test suite | after setup or config changes |
+| `agentflow doctor [--full] [--brief]` | check the setup without agents; ends with a verdict and only what needs action (`--brief`: only that); `--full` also runs the whole test suite | after setup or config changes |
 | `agentflow spec <f>` | create the branch `feat/<f>` and open the spec phase | start of a feature |
 | `agentflow approve-spec <f>` | freeze the spec ("spec OK"); restarts the feature if the spec changed later | gate 1 |
 | `agentflow run <f>` | run the agents until the next human gate or DONE | after every decision |
 | `agentflow watch <f>` | follow the progress lines of a run | while it runs |
 | `agentflow status [f] [--brief]` | state of one or all features | any time |
-| `agentflow gate-summary <f>` | the digest of the waiting gate | at a gate |
+| `agentflow gate-summary <f>` | the brief of the waiting gate (decision and default first, plain words) | at a gate |
 | `agentflow approve <f>` | accept the gate: final gate -> retro, then DONE (tests gate -> implement) | at a gate |
 | `agentflow answer <f>` | apply your answers in `out/<f>/answers.md` (spec, tests, redo of parked work) | at a gate |
 | `agentflow reject <f> --reason "..."` | send the tests back to the test writer (only with `[gates] tests = "human"`) | tests gate |
@@ -47,11 +47,11 @@ mutation score) and never stops to ask.
 
 | Phase | Agent(s) | Ends with |
 |---|---|---|
-| SPEC | spec dialogue in the chat (`/agentflow:feature <f>`) | **gate 1**: `agentflow approve-spec` -> tag `spec-approved/<f>` |
+| SPEC | spec dialogue in the chat (`/agentflow:feature <f>`) | **gate 1**: the spec brief (`out/<f>/spec_brief.md`), then `agentflow approve-spec` -> tag `spec-approved/<f>` |
 | TESTS | test writer -> mechanical checks -> **test reviewer** (`roles/test_review.md`); objections go back to the writer, at most `[agents] test_review_rounds` (2) times | **gate 2**: `out/<f>/tests_gate.md` (ID -> tests -> what it checks, check results, reviewer verdict + remaining objections, all open questions batched) -> approve (tag `tests-approved/<f>`) / reject / answer (answers go into the spec first: SPEC_UPDATE). `[gates] tests = "auto"` passes it without a stop when everything is clean |
 | IMPLEMENT | implementer, one fresh run per plan step | step gates green -> commit. Ambiguity: assume from the spec, log it in `steps.md`. No reasonable assumption, or `max_attempts` failed attempts: the step is **parked** (its code set aside as `out/<f>/parked/*.diff`), the run goes on |
-| REVIEW | adversarial reviewer -> **triage** by the test reviewer -> fixes | valid findings fixed (or parked), invalid ones removed with a reason; final gates |
-| PR | summary agent (`roles/pr.md`) | **gate 3**: `out/<f>/final_summary.md` -> approve (retro) / `finish --no-retro` / answer the parked questions (into the spec, then redo only those) |
+| REVIEW | adversarial reviewer (bugs as failing tests, structure findings without tests) -> **triage** by the test reviewer -> fixes -> structure fixes | valid findings fixed (or parked), invalid ones removed with a reason, the code restructured with every test green; final gates + structure report |
+| PR | summary agent (`roles/pr.md`): `final_summary.md` (detail), `final_brief.md` (the gate brief), the code map update (committed) | **gate 3**: the final brief -> approve (retro) / `finish --no-retro` / answer the numbered items (into the spec, then redo only those) |
 | RETRO | retro agent | `retro_proposals.md` + metrics row -> DONE |
 
 ## Parts
@@ -63,9 +63,9 @@ mutation score) and never stops to ask.
 
 ## Daily use: from the Claude Code chat
 
-Once per repository: `/agentflow:setup` in the chat (it reads the repo, drafts agentflow.toml and
-`.agentflow/project.md`, asks one batch of questions, runs `agentflow init` and `agentflow
-doctor`, and offers a small smoke feature), or by hand `agentflow init [--language
+Once per repository: `/agentflow:setup` in the chat (it reads the repo, drafts agentflow.toml,
+`.agentflow/project.md` and the code map, shows a short brief with at most 5 questions, runs
+`agentflow init` and `agentflow doctor --brief`, and offers a small smoke feature in one line), or by hand `agentflow init [--language
 python|dotnet|generic]` (agentflow.toml, spec templates, `.agentflow/project.md`, .gitignore
 lines; commit them) and `agentflow doctor` (checks config, git, the claude CLI, the tools, the
 gate commands and the test selection by spec ID, without agents; `--full` also times the
@@ -81,24 +81,72 @@ Then you only type requirements, answers and gate decisions:
 
 1. `/agentflow:feature <name>`: creates the branch `feat/<name>` from `[git] base` (`main`) in
    this checkout (refused with uncommitted changes to tracked files; an existing branch is used
-   only if it is this feature's), sets the SPEC phase and starts the spec dialogue: clarifying
-   questions, requirements/design/plan, interface stubs.
+   only if it is this feature's), sets the SPEC phase and starts the spec dialogue. Claude
+   decides what the docs, the code map, the code and `.agentflow/project.md` settle, asks only
+   the rest (at most 5 questions per round, each with a default), writes
+   requirements/design/plan and the interface stubs, and shows the **spec brief** instead of the
+   spec files (see "Manager-style briefs" below).
 2. "Spec OK": the skill approves the spec, starts `agentflow run` in the background and shows the
    live view: one line per phase start/end, check result, failed attempt, assumption, park and
    gate, each with the cost so far (~10-30 lines per feature). The chat stays usable.
-3. At the final gate (and the tests gate, if `[gates] tests = "human"`) the chat shows a digest
-   (`agentflow gate-summary`: checks, reviewer verdict, spec IDs -> tests, numbered questions /
-   parked items, spec diff, costs), Windows shows a toast, and Claude Code waits for you. Reply
-   in plain words: "ok" / "done" (approve: retro, then DONE), "no retro", answers to the
-   numbered items, "reject: <why>" (tests gate only). The skill runs the matching command and
-   continues the run in the background.
-4. DONE: the skill lists the retro proposals, offers the final summary as the PR description
-   (`gh pr create`, only on your yes; nothing is pushed without it) and cleans up the run files
-   (`agentflow cleanup`; `specs/<name>/` and the metrics row stay). After the PR is merged,
-   `/agentflow:status <name>` offers removing the feature's tags.
+3. At the final gate (and the tests gate, if `[gates] tests = "human"`) the chat shows the
+   gate brief (`agentflow gate-summary`), Windows shows a toast, and Claude Code waits for you.
+   Reply in plain words: "ok" (with numbered items: take every default; without: approve, retro,
+   then DONE), answers by number, "approve as is", "no retro", "reject: <why>" (tests gate
+   only). The skill runs the matching command and continues the run in the background.
+4. DONE: the skill shows the retro's numbered proposals (problem -> fix, with a recommendation)
+   and its knowledge facts, you answer with numbers; it offers the final summary as the PR
+   description (`gh pr create`, only on your yes; nothing is pushed without it) and cleans up the
+   run files (`agentflow cleanup`; `specs/<name>/` and the metrics row stay). After the PR is
+   merged, `/agentflow:status <name>` offers removing the feature's tags.
 
 After a session restart: `/agentflow:resume [name]` reattaches (live view, the waiting gate or the
 wrap-up). `/agentflow:status` lists the features and where they stand.
+
+## Manager-style briefs
+
+The human is the manager of a feature: clear input, outcomes checked. The spec files stay
+precise and are written for the agents; wherever the human reads or decides, the chat shows a
+short brief instead: the decision and its default first, about one screen in plain words, no
+spec ID without its meaning, the detail files only on request ("more detail on step 2"). There
+is no mode or switch for this.
+
+| Where | The brief |
+|---|---|
+| Spec gate (`out/<f>/spec_brief.md`, written by the chat) | Task (2-4 lines) / Plan (one line per step) / How it is proven / Not proven (what to check by using it) / Decisions I made for you (at most 5, each with what it rules out) / Project details that matter / Questions (at most 5, each with a default) |
+| Tests gate (`[gates] tests = "human"`/`"auto"`) | what the tests check in plain words (the test reviewer's `## What the tests check` in test_review.md), objections left, one line of mechanical checks, questions with defaults |
+| Final gate (`agentflow gate-summary`, from `final_brief.md` + run records) | Plan followed? (one line per step: done as planned / changed, why) / Outcomes with numbers (gates, diff coverage, mutation, failed attempts, parks, cost, agent and check time, structure) / Struggles and how they were solved / Proven / Not proven / Code map (one line; a WARN when new public types are missing) / numbered items (parked work, provisional steps, questions; each as the problem in words, options with what they cost, a default) |
+| Setup | what I found, the settings that differ from the defaults (with why), the knowledge facts in short lines, the code map's modules, at most 5 questions with defaults |
+| `agentflow doctor --brief` | one verdict line (ready / not ready), then only the FAILs with the fix and the WARNs that need a decision |
+| Retro (`## Brief` in retro_proposals.md) | numbered proposals, problem -> fix, recommend take / skip / fold into N; the knowledge facts; answered with numbers |
+| Smoke run offer, DONE wrap-up, status, resume, errors, interruptions | one or two lines: the state and the one decision needed, with a default |
+
+At a gate with numbered items, "ok" takes every default (the chat writes them to answers.md);
+answers by number work as before; "approve as is" approves and leaves the items open.
+
+## Structure and the code map
+
+The human owns what the classes are for and how they work together, not every line.
+- The implementer writes for that (role): one concept per file, domain names, a one-line doc
+  comment on every public type and method, no single-use interfaces or speculative
+  abstraction, no dead defensive branches, no fragmentation into one-method helpers.
+- The adversarial reviewer checks the same list and writes `## Structure findings` in
+  review.md (`- <file>: <problem> -> <change>`; no test needed). Before the final gates the
+  implementer applies them without changing behavior, every test green (`structure fixes`;
+  failing it parks like a review fix).
+- The final gates end with a structure report (not blocking): the size of every source file
+  the feature changed (and before it), the longest methods. A file over `[gates]
+  max_file_lines` (400; 0 = off) becomes a numbered item at the final gate with a default:
+  split it now if this feature took it over the limit, else leave it for later. The answer
+  goes to the structure run (split, or leave it), and the file is not asked about again.
+  Seen live: FCSim M5-freekick-review grew SetPieceShotModel.cs to 694 lines, mixing the kick
+  model with the review calculators.
+- The code map (`[docs] code_map`, default `docs/code-map.md`): a living Markdown doc, per
+  module its purpose, its key classes (one line each), how they work together (short flow,
+  mermaid optional), "where to look for X"; under ~300 lines. `/agentflow:setup` drafts it
+  from the code; the PR phase updates the sections the feature touched (agentflow commits it
+  as `<f>: code map`); a new public type in the feature's diff that the map does not name is a
+  WARN on the final brief's code map line. `agentflow doctor` WARNs when it is missing.
 
 ## Project knowledge
 
@@ -120,7 +168,8 @@ The skills only call these commands; everything works the same from a terminal.
 ```
 agentflow init [--language python|dotnet|generic]  # agentflow.toml, specs/_template/,
                                             # .agentflow/project.md, .gitignore lines
-agentflow doctor [--full]                   # check the setup without agents
+agentflow doctor [--full] [--brief]         # check the setup without agents; ends with a
+                                            # verdict + what needs action (--brief: only that)
 agentflow spec <f>                          # branch feat/<f> from [git] base + SPEC phase
 agentflow approve-spec <f>                  # tag spec-approved/<f>
 agentflow run <f>                           # runs to the next gate (tests, final) or DONE;
@@ -238,8 +287,11 @@ Between the gates nothing stops:
   Write / Edit, the shell only for the named commands) and an orientation block: the files in
   `specs/<f>/` and `out/<f>/` and `git log -3 --stat`, which agents otherwise fetched with
   chained shell calls that the run denies.
-- The final summary (`final_summary.md`) is written from `final_facts.md` (generated from the
-  run records); agentflow appends the cost / time / turns table per phase.
+- The final summary (`final_summary.md`, the detail and the PR description) and the final brief
+  (`final_brief.md`, what `gate-summary` shows) are written from `final_facts.md` (generated
+  from the run records, with the final gate's numbered items, so the brief rewords each one in
+  plain words under the same number) and `spec_brief.md`; agentflow appends the cost / time /
+  turns table per phase to the summary and adds the numbers to the brief itself.
 
 Answers go into the spec (the spec stays the source of truth): `agentflow answer` gives the answers
 a reference `ANS-<n>` (in `questions_archive.md` and the `answer` event), and the next `run` starts

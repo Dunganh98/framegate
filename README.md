@@ -1,7 +1,9 @@
 # agentflow
 
 Build features with Claude Code agents, test-first, inside checks they cannot switch off. You
-write the requirements and make two decisions per feature: **spec OK** and **result OK**.
+are the manager: you write the requirements and make two decisions per feature, **spec OK**
+and **result OK**, each from a short brief in plain words (the detailed files are there on
+request).
 
 ```
 spec (you) -> tests -> code -> review -> final gate (you) -> retro -> done
@@ -19,16 +21,19 @@ claude plugin install agentflow@agentflow
 
 1. **Set up the repo (once):** in Claude Code run `/agentflow:setup`, answer its questions,
    commit the files it lists.
-2. **Start a feature:** `/agentflow:feature <name>`, describe what you want, answer the
-   questions, check `specs/<name>/`, then say **"spec OK"**.
+2. **Start a feature:** `/agentflow:feature <name>`, describe what you want, answer the few
+   questions (each has a default), check the spec brief (above all "Decisions I made for
+   you"), then say **"spec OK"**.
 3. **Wait:** the agents run in the background; the chat shows progress and cost. If a step
    fails the same way twice, a diagnosis agent finds the cause: a code fix is retried at
    once, a test or spec fix waits for you at the final gate. If only a step's tests are
    wrong, its code is kept as provisional and later steps build on it; you approve the
    proposed test fixes at the final gate in one reply.
-4. **Final gate:** read the summary, then reply **"ok"**, **"no retro"**, or answer the
-   numbered questions (only the affected work is redone).
-5. **Done:** keep the retro facts you like, create the PR if you want.
+4. **Final gate:** read the brief (plan followed?, numbers, struggles, what is proven and what
+   to check by hand), then reply **"ok"** (takes every default of the numbered items, or
+   approves when there are none), **"no retro"**, or answer items by number (only the affected
+   work is redone).
+5. **Done:** pick the retro proposals and facts by number, create the PR if you want.
 
 Chat closed? `/agentflow:resume <name>`. Overview: `/agentflow:status`.
 

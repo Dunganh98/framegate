@@ -31,12 +31,13 @@ def test_defaults_match_the_guide(tmp_path: pathlib.Path) -> None:
     assert cfg.write_paths("IMPLEMENT") == ["src/", "out/"]
     assert cfg.write_paths("REVIEW") == ["tests/review/", "out/"]
     assert cfg.write_paths("SPEC") == ["specs/", "src/"]
-    assert cfg.write_paths("PR") == ["out/"]
+    assert cfg.write_paths("PR") == ["out/", "docs/code-map.md"]
     assert cfg.write_paths("TEST_REVIEW") == ["out/"]
     assert cfg.write_paths("TRIAGE") == ["tests/review/", "out/"]
     assert cfg.turn_cap("TEST_REVIEW") == 30 and cfg.turn_cap("TRIAGE") == 30
     assert cfg.frame_exceptions() == ["tests/review/"]
     assert cfg.tests_gate == "defer" and cfg.test_review_rounds == 2
+    assert cfg.code_map == "docs/code-map.md" and cfg.max_file_lines == 400
 
 
 def test_tests_gate_and_review_rounds(tmp_path: pathlib.Path) -> None:

@@ -31,6 +31,7 @@ from agentflow import notify, procs
 from agentflow.adapters import get_adapter
 from agentflow.adapters.base import GATE_NAMES, CheckResult, LanguageAdapter
 from agentflow.checks import existing_members, red_stubs, test_smells, traceability
+from agentflow.checks import structure as structure_check
 from agentflow.checks.frame_diff import knowledge_tag, path_matches, tests_update_tag
 from agentflow.config import Config
 from agentflow.gates import gate_report, split_failures
@@ -42,6 +43,7 @@ from agentflow.report import (
     parse_test_review,
     parse_triage,
     phase_table,
+    section_bullets,
     short_name,
     since_spec_approval,
     triage_verdict,
@@ -83,6 +85,8 @@ PROGRESS_LOG = "progress.log"
 PROGRESS_CURSOR = "progress.cursor"
 PROGRESS_WIDTH = 160
 
+#: who asks the generated file-size questions at the final gate (open_questions.md tag)
+STRUCTURE_WHO = "structure report"
 PHASES = ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "REVIEW", "PR", "FINAL", "RETRO", "DONE"]
 METRICS_HEADER = (
     "date,feature,human_rejections,escalations,questions,gate_failures,cost_usd,parked,assumptions"
@@ -94,6 +98,7 @@ BRIEF_PHASES = {
     "IMPLEMENT",
     "IMPLEMENT_STEPS",
     "FIX",
+    "STRUCTURE",
     "DIAGNOSIS",
     "REVIEW",
     "TRIAGE",
@@ -219,11 +224,19 @@ TASKS = {
     "TRIAGE": "Feature '{f}': triage the adversarial reviewer's findings against {specs}/{f}/. "
     "Failing review tests:\n{findings}\nReviewer notes: {out}/{f}/review.md. Delete the tests of "
     "INVALID findings from {review_tests}/ and write one line per finding to {out}/{f}/triage.md.",
-    "PR": "Feature '{f}': write the final summary for the human's final gate to "
-    "{out}/{f}/final_summary.md. Start with {out}/{f}/final_facts.md (generated facts). Other "
-    "inputs: {specs}/{f}/, {out}/{f}/test_summary.md, {out}/{f}/steps.md, {out}/{f}/review.md, "
-    "{out}/{f}/triage.md, {out}/{f}/final_gates.md, {out}/{f}/mutation_survivors.md and "
-    "{out}/{f}/answers.md if present.",
+    "PR": "Feature '{f}': write the final summary ({out}/{f}/final_summary.md, the detailed "
+    "file) and the final brief ({out}/{f}/final_brief.md, what the human reads at the final "
+    "gate), and update the code map {code_map} for what this feature changed. Start with "
+    "{out}/{f}/final_facts.md (generated facts, with the numbered gate items). Other inputs: "
+    "{out}/{f}/spec_brief.md (what the human approved at the spec gate), {specs}/{f}/, "
+    "{out}/{f}/test_summary.md, {out}/{f}/steps.md, {out}/{f}/review.md, {out}/{f}/triage.md, "
+    "{out}/{f}/final_gates.md, {out}/{f}/mutation_survivors.md and {out}/{f}/answers.md if "
+    "present.",
+    "STRUCTURE": "Feature '{f}': restructure the code without changing its behavior, as these "
+    "structure findings say:\n{findings}\nMove code, split files and rename private parts as "
+    "needed; keep the public signatures the tests use. Every test must stay green; do not edit "
+    "tests. A finding that says to leave the code as it is: change nothing for it. Check with: "
+    "{check}\n" + NO_STOP,
     "SPEC_UPDATE": "Feature '{f}': write the human's answers at the {gate} gate (answer "
     "reference {ref}) into the spec in {specs}/{f}/. Answers: {out}/{f}/answers.md; the questions "
     "they answer: the last section of {out}/{f}/questions_archive.md. Mark every change with "
@@ -429,6 +442,8 @@ class Orchestrator:
             "review_tests": p.review_tests,
             "out": p.out,
             "knowledge": self.cfg.knowledge,
+            "code_map": self.cfg.code_map,
+            "max_file_lines": str(self.cfg.max_file_lines),
         }
 
     def render(self, text: str, feature: str) -> str:
@@ -1932,6 +1947,7 @@ class Orchestrator:
                 )
             self.agent("REVIEW", feature, prog, task)
             self.collect_questions(feature, "REVIEW", "adversarial reviewer")
+            self.take_structure_findings(feature, prog)
             findings = self.review_failures(feature)
             if findings:
                 log_event(self.cfg, feature, "review_findings", tests=findings)
@@ -1946,6 +1962,7 @@ class Orchestrator:
         if sub == "fix":
             self.fix_findings(feature, prog)
             sub = self.set_sub(feature, prog, "final")
+        self.fix_structure(feature, prog)
         t0 = time.time()
         rep = gate_report(self.adapter, feature, "final")
         timing = "\n".join(f"| {name} | {secs:.0f} |" for name, secs in rep.durations.items())
@@ -1965,6 +1982,8 @@ class Orchestrator:
             seconds=round(time.time() - t0),
             durations=rep.durations,
             extra=rep.extra,
+            results=rep.results,
+            structure=rep.structure,
         )
         self.progress(
             feature,
@@ -2080,6 +2099,13 @@ class Orchestrator:
             note=self.note_path(feature, "review-fixes"),
         )
         task += self.parked_context(prog, steps) + self.provisional_context(prog)
+        shape = [x for r in redo for x in r.get("structure") or []]
+        if shape:
+            task += (
+                "\n\nAlso apply these structure findings (restructure without changing "
+                "behavior; a finding the human said to leave: change nothing for it):\n"
+                + "\n".join(f"- {x}" for x in shape)
+            )
         if redo:
             task += REDO_NOTE.format(**self.placeholders(feature))
         item = {"kind": "finding", "step": None, "label": "review fixes", "tests": tests}
@@ -2092,13 +2118,116 @@ class Orchestrator:
             prog["redo"] = [r for r in prog.get("redo") or [] if r.get("kind") != "finding"]
             save_progress(self.cfg, feature, prog)
 
+    # ---------- structure: readability findings and file sizes ----------
+    def take_structure_findings(self, feature: str, prog: dict[str, Any]) -> None:
+        """The reviewer's `## Structure findings` (review.md): restructuring without a behavior
+        change, done by the implementer before the final gates (fix_structure)."""
+        review = self.fdir(feature) / "review.md"
+        text = review.read_text(encoding="utf-8") if review.is_file() else ""
+        pending = list(prog.get("structure_findings") or [])
+        found = [x for x in section_bullets(text, "Structure findings") if x not in pending]
+        if found:  # (a resumed review run must not add the same findings twice)
+            prog["structure_findings"] = [*pending, *found]
+            log_event(self.cfg, feature, "structure_findings", findings=found)
+            save_progress(self.cfg, feature, prog)
+
+    def fix_structure(self, feature: str, prog: dict[str, Any]) -> None:
+        """One implementer item (with attempts) that restructures the code as the pending
+        structure findings say (the reviewer's, or the human's answers to file-size questions),
+        with every test green. Failing it parks the work like a review fix."""
+        findings = list(prog.get("structure_findings") or [])
+        if not findings:
+            return
+        steps = plan_steps(self.cfg, feature)
+        reqs = self.done_ids(prog, steps) if self.parked_steps(prog) else None
+        task = self.task_text(
+            "STRUCTURE",
+            feature,
+            findings="\n".join(f"- {x}" for x in findings),
+            check=self.adapter.test_command(reqs),
+            note=self.note_path(feature, "structure-fixes"),
+        )
+        task += self.parked_context(prog, steps) + self.provisional_context(prog)
+        item = {
+            "kind": "finding",
+            "step": None,
+            "label": "structure fixes",
+            "tests": [],
+            "structure": findings,
+        }
+        self.progress(feature, f"[structure fixes] {len(findings)} finding(s) to apply")
+        ok = self.implement_loop(feature, prog, task, reqs, item)
+        clear_reqs(self.cfg)
+        prog.pop("structure_findings", None)
+        save_progress(self.cfg, feature, prog)
+        if ok:
+            log_event(self.cfg, feature, "structure_fixed", findings=findings)
+
+    def file_size_questions(self, feature: str, prog: dict[str, Any]) -> None:
+        """A question at the final gate for every changed source file over [gates]
+        max_file_lines (from the last final-gate structure report), with a default: split it
+        now when this feature took it over the limit, else leave it for later."""
+        last = [e for e in read_events(self.cfg, feature) if e.get("kind") == "final_gates"]
+        shape = (last[-1].get("structure") if last else None) or {}
+        over = shape.get("over") or []
+        if not over:
+            return
+        asked = "\n".join(self.open_questions(feature))
+        before = shape.get("before") or {}
+        files = shape.get("files") or {}
+        limit = int(shape.get("limit") or 0)
+        lines = []
+        for path in over:
+            if path in asked or path in (prog.get("size_answered") or []):
+                continue
+            was = before.get(path)
+            grew = was is None or was <= limit
+            default = (
+                "split it now by concept (the implementer restructures it, the tests stay as "
+                "they are; one more check round)"
+                if grew
+                else f"leave it for a later cleanup (it had {was} lines before this feature)"
+            )
+            lines.append(
+                f"{path} has {files.get(path)} lines (limit {limit}). Split it into one file per "
+                f"concept? Default: {default}."
+            )
+        if not lines:
+            return
+        with open(self.fdir(feature) / "open_questions.md", "a", encoding="utf-8") as fh:
+            for q in lines:
+                fh.write(f"- [{STRUCTURE_WHO}] {q}\n")
+        text = "\n".join(lines)
+        log_event(self.cfg, feature, "questions", phase="PR", who=STRUCTURE_WHO, questions=text)
+
+    def commit_code_map(self, feature: str) -> bool:
+        """Commit the summary agent's code map update (its only file outside the out folder)."""
+        path = self.cfg.code_map
+        if not (self.cfg.root / path).is_file():
+            return False
+        git(self.cfg, "add", "--", path)
+        if not git(self.cfg, "diff", "--cached", "--name-only", "--", path).strip():
+            return False
+        git(self.cfg, "commit", "-q", "-m", f"{feature}: code map", "--", path)
+        return True
+
+    def code_map_state(self, feature: str, updated: bool) -> dict[str, Any]:
+        """Is there a code map, did this PR phase update it, which new public types it lacks."""
+        exists, missing = structure_check.missing_from_code_map(self.adapter, feature)
+        state = {"exists": exists, "updated": updated, "missing": missing}
+        log_event(self.cfg, feature, "code_map", **state)
+        return state
+
     # ---------- PR: final summary -> FINAL gate ----------
     def phase_pr(self, feature: str, prog: dict[str, Any]) -> None:
         d = self.fdir(feature)
+        self.file_size_questions(feature, prog)
         self.write_final_facts(feature, prog)
         (d / "final_summary.md").unlink(missing_ok=True)
+        (d / "final_brief.md").unlink(missing_ok=True)
         self.agent("PR", feature, prog, self.task_text("PR", feature))
         self.collect_questions(feature, "PR", "summary agent")
+        prog["code_map"] = self.code_map_state(feature, self.commit_code_map(feature))
         summary = d / "final_summary.md"
         text = (
             summary.read_text(encoding="utf-8").rstrip()
@@ -2134,8 +2263,33 @@ class Orchestrator:
             self.assumptions(feature),
             gates.read_text(encoding="utf-8") if gates.is_file() else "(no final gate run)",
             oq.read_text(encoding="utf-8") if oq.is_file() else "",
+            self.final_items(feature, prog),
+            self.code_map_note(feature),
         )
         (d / "final_facts.md").write_text(facts, encoding="utf-8")
+
+    def final_items(self, feature: str, prog: dict[str, Any]) -> list[str]:
+        """The numbered items of the final gate, in the order it shows them: parked work, the
+        provisional steps (one item), then the open questions."""
+        parked = [
+            f"[parked] {p['label']}: {p.get('reason')}"
+            + (f"; question: {p['question']}" if p.get("question") else "")
+            for p in prog.get("parked") or []
+        ]
+        prov = [f"[provisional] {provisional_item(prog)}"] if prog.get("provisional") else []
+        return [*parked, *prov, *self.open_questions(feature)]
+
+    def code_map_note(self, feature: str) -> str:
+        """For the summary agent: where the code map is and which new public types it lacks."""
+        exists, missing = structure_check.missing_from_code_map(self.adapter, feature)
+        if not exists:
+            return (
+                f"{self.cfg.code_map} does not exist yet: create it (format: the code map "
+                "template in your role) with the modules this feature touched."
+            )
+        return f"{self.cfg.code_map}: update the sections this feature touched." + (
+            f" New public types it does not name yet: {', '.join(missing)}." if missing else ""
+        )
 
     def assumptions(self, feature: str) -> list[Any]:
         p = self.fdir(feature) / "steps.md"
@@ -2867,6 +3021,22 @@ class Orchestrator:
             for it in parse_answer_items(text)
         ]
         logged: dict[str, Any] = {"ref": ref, "answer": text[:20000], "items": items}
+        if gate == "final":
+            # answers to the file-size questions: the structure fix run applies them (split,
+            # or leave as is) before the final gates
+            tag = f"[{STRUCTURE_WHO}] "
+            shape = [
+                f"{shown[it['n'] - 1].removeprefix(tag)}\n  The human's answer: {it['a']}"
+                for it in parse_answer_items(text)
+                if 0 < it["n"] <= len(shown) and shown[it["n"] - 1].startswith(tag) and it["a"]
+            ]
+            if shape:
+                prog["structure_findings"] = [*(prog.get("structure_findings") or []), *shape]
+                # answered once: not asked again in a later round
+                prog["size_answered"] = [
+                    *(prog.get("size_answered") or []),
+                    *(x.split(" ", 1)[0] for x in shape),
+                ]
         if gate == "tests":
             self.archive_questions(feature, "tests gate", open_q, reply)
             log_event(self.cfg, feature, "answer", gate="tests", **logged)
@@ -2920,7 +3090,10 @@ class Orchestrator:
                         "gate": "final",
                         "ref": ref,
                         "then": {"phase": "REVIEW", "sub": "agent"},
-                        "unchanged": {"phase": "PR", "sub": None},
+                        # a file-size answer needs the structure run even without a spec change
+                        "unchanged": {"phase": "REVIEW", "sub": "final"}
+                        if prog.get("structure_findings")
+                        else {"phase": "PR", "sub": None},
                         "feedback": "",
                         "amend": True,
                     },

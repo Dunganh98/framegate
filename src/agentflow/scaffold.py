@@ -138,7 +138,12 @@ def spec_brief(cfg: Config, feature: str) -> str:
             '- plan.md is parsed: "## Step N: <title>" headings, each with one '
             '"Covers: ID, ID" line. Every ID is covered by exactly one step.',
             f"- Interface stubs go in {p.src}/. Do not write tests or implementation.",
-            f"- Run files (gate digests, answers.md): {p.out}/{feature}/",
+            f"- Run files (gate briefs, answers.md, the spec gate brief spec_brief.md): "
+            f"{p.out}/{feature}/",
+            f"- Code map (per module: purpose, key classes, how they work together): "
+            f"{cfg.code_map} ("
+            + ("exists: read it first" if (cfg.root / cfg.code_map).is_file() else "missing")
+            + ")",
             "",
             adapter.conventions_brief().rstrip(),
             "",

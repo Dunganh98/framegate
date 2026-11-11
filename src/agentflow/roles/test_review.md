@@ -34,13 +34,20 @@ Write {out}/{feature}/test_review.md:
     ## Objections
     - <spec ID> <test name>: <problem> -> <what the test writer must change>
 
+    ## What the tests check
+    - <in plain words, what the user can rely on: "adding two ints gives their sum", "a
+      non-int argument is refused with the message 'ints only'">
+
     ## Notes
     <optional, short>
 
-One bullet per objection; "None." under Objections when the verdict is OK. Your objections go
+One bullet per objection; "None." under Objections when the verdict is OK. "What the tests
+check" is for the human at the gate: 3-8 bullets, no spec IDs, no test names; behaviors, not
+test mechanics; also one bullet for what the tests do NOT check if that matters (speed, feel,
+UI). Your objections go
 back to the test writer automatically. If the spec does not settle whether a test is right,
-do not object: write the question to {out}/{feature}/questions.md (one bullet, naming the ID)
-and continue. Questions are shown to the human together at the next gate; do not stop.
+do not object: write the question to {out}/{feature}/questions.md (one bullet: the question in
+plain words, the ID with what it means, the options and your recommended default) and continue. Questions are shown to the human together at the next gate; do not stop.
 
 ## Mode 2: triage review findings (review phase)
 

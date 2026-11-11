@@ -516,7 +516,7 @@ class LanguageAdapter(abc.ABC):
             "REVIEW": READ_TOOLS + WRITE_TOOLS + tests + GIT_READ_TOOLS,
             "TRIAGE": READ_TOOLS + WRITE_TOOLS + tests + GIT_READ_TOOLS,
             "DIAGNOSIS": READ_TOOLS + ["Write"] + tests + GIT_READ_TOOLS,
-            "PR": READ_TOOLS + ["Write"] + GIT_READ_TOOLS,
+            "PR": READ_TOOLS + WRITE_TOOLS + GIT_READ_TOOLS,  # WRITE_TOOLS: the code map
             "RETRO": READ_TOOLS + ["Write"],
             "SPEC_UPDATE": READ_TOOLS + WRITE_TOOLS,
         }
