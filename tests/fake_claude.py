@@ -18,7 +18,11 @@ Scenario keys:
   review_invalid: true -> the reviewer also writes an invalid finding (negative ints rejected);
     TRIAGE deletes it and marks it INVALID
   structure: true -> the first REVIEW run lists one structure finding in review.md
-  brief: true -> PR also writes out/demo/final_brief.md (plain-words sections, item 1 reworded)
+  brief: true -> PR also writes out/demo/final_brief.md (plain-words sections, gate item 1
+    asked as question 1); "filtered" -> asks item 2 first, then item 1, one untagged decision,
+    item 3 left out as the same as item 2 (use with park_steps=[2],
+    questions_in=["REVIEW", "PR"]); "bad" -> the first PR run's brief asks item 1 without its
+    number and with one option (for the brief check), later runs as true
   code_map: true -> PR also writes docs/code-map.md
   language: "python" (default) or "dotnet" (C# files for the .NET fixture, see test_dotnet_e2e)
   retro_omit: item IDs (e.g. ["F1"]) the RETRO run leaves out of retro_proposals.md (every
@@ -432,14 +436,29 @@ def main() -> int:
             )
     elif phase == "PR":
         write("out/demo/final_summary.md", "# Final summary\nSummary.\n")
-        if scen.get("brief"):
-            write(
-                "out/demo/final_brief.md",
+        mode = scen.get("brief")
+        if mode:
+            head = (
                 "# Final brief\n\n## Plan followed?\n- Step 1 (add two numbers): done as planned\n"
-                "\n## Struggles\n- none\n\n## Proven\n- adding two ints gives their sum\n"
+                "- Step 2 (negate): parked: the sign of zero is open\n"
+                "\n## Struggles\n- No struggles.\n\n## Proven\n- adding two ints gives their sum\n"
+                "- adding zero changes nothing\n- the order does not matter\n- a fourth point\n"
                 "\n## Not proven\n- nothing to check by hand\n\n## Code map\nadd() listed under "
-                "demo\n\n## Items\n1. Should neg(0) give 0 or -0?\n   Default: 0.\n",
+                "demo\n\n"
             )
+            neg = "[1] Should neg(0) give 0 or -0?\n   A: 0 (default) / B: -0\n"
+            if mode == "bad" and runs[phase] == 1:
+                body = "## Questions\n1. Should neg(0) give 0 or -0?\n   Default: 0.\n"
+            elif mode == "filtered":
+                body = (
+                    "## Questions\n1. [2] Should add() accept floats?\n"
+                    "   A: no, ints only (default) / B: yes, floats too\n2. " + neg + "\n"
+                    "## Decisions I made\n- bools count as ints (Python says so)\n\n"
+                    "## Left out\n- [3] same as [2]\n"
+                )
+            else:
+                body = "## Questions\n1. " + neg
+            write("out/demo/final_brief.md", head + body)
         if scen.get("code_map"):
             write("docs/code-map.md", "# Code map\n\n## demo\n- add(): adds two ints\n")
     elif phase == "RETRO":

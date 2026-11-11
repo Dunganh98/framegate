@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Set up agentflow in this repository - read the repo, draft agentflow.toml, the project knowledge file and the code map, show a short brief with at most 5 questions, check the setup with agentflow doctor, offer a smoke run. Run only when the user invokes it.
+description: Set up agentflow in this repository - read the repo, draft agentflow.toml, the project knowledge file and the code map, show a short brief that asks only the real decisions, check the setup with agentflow doctor, offer a smoke run. Run only when the user invokes it.
 disable-model-invocation: true
 allowed-tools: Bash(agentflow *) PowerShell(agentflow *) Read Write Edit Glob Grep
 ---
@@ -50,9 +50,15 @@ Show the user a brief of about one screen, no toml and no file dumps:
       ("diff coverage 80, not 90: the UI glue has no tests")
     **What agents will know** — the knowledge facts, short lines
     **Code map** — the modules it lists, one line
-    **Questions** — at most 5, numbered, each with your recommended default
+    **Questions** — numbered, by impact; each: the problem in one line, then
+      "A: ... (default) / B: ..." on one line ("None." when nothing is open)
 
-Ask only what the code cannot tell; typical ones: which tests are slow or need special setup
+One line per bullet; a section with nothing in it is one line. A point is a question only when
+it is a real decision: two or more reasonable options with different outcomes, and the repo,
+`.agentflow/project.md` and earlier answers don't settle it. Otherwise: one sensible option ->
+decide it (a line under "Settings I chose" or "What agents will know"); already settled or a
+note -> leave it out; the same question twice -> one. No limit on the number. Ask only what
+the code cannot tell; typical ones: which tests are slow or need special setup
 (they stay out of the step checks); what must never change and how tests leave new members out;
 how test data for a rare situation is found; what is off-limits for agents; whether mutation
 testing should run (and its threshold for glue code vs libraries); the base branch. The toml,

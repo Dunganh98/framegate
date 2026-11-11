@@ -58,7 +58,9 @@ fail for no reason. Reading files and git log/diff/status are fine.
 
 1. Run `agentflow gate-summary <f>` and show its output unchanged (it is the brief: the
    decision line first, then about one screen in plain words). Add nothing but one line if a
-   numbered item needs a word of context.
+   numbered question needs a word of context. Number the answers as the brief numbers its
+   questions; agentflow maps them to the gate items (and answers the decided and left-out
+   ones itself). The left-out items: on request (final_brief.md).
 2. End the turn and wait. Never decide a gate yourself.
 3. Map the user's reply:
 

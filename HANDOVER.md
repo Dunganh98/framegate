@@ -5,7 +5,7 @@
 Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plugin.md;
 `claude -p` facts: docs/claude-cli-notes.md; language adapters (python, dotnet): docs/adapters.md.
 
-## State (2026-11-11, main; this work on feat/manager-briefs)
+## State (2026-11-11, main; this work on feat/brief-questions)
 - **Gates:** SPEC -> FINAL (tests gate only with `[gates] tests = "human"|"auto"`), forward only.
   Between them fresh `claude -p` runs in a frame of checks (red stubs, traceability, smells,
   tag-based frame diff, lint/types, feature-scoped diff coverage + mutation, whole-suite
@@ -107,8 +107,31 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
     map, the brace heuristic for C# method lengths on FCSim, whether "ok = take the defaults"
     reads naturally at the gate. FCSim has no code map yet: run the setup's code-map step (or
     write it by hand) before the next feature.
+- **Stryker on untested projects (PR #9, 2026-11-11):** a changed .NET project no test project
+  references (ProjectReferences followed transitively) is not mutated but listed; all of them
+  untested -> SKIPPED; a failed Stryker run keeps the finished projects' counts. The PR role
+  quotes a failing gate's reason from final_gates.md. FCSim M5-moment-scan's mutation gate is
+  still a real FAIL (Core 77.5% < 80).
+- **Questions filtered by rule, shorter briefs (branch feat/brief-questions, plugin 0.4.1):** no
+  count cap on questions or decisions anywhere (spec dialogue, spec / final gate briefs, setup).
+  A question only when it is a real decision (two or more reasonable options with different
+  outcomes, not settled by spec / code / project.md / earlier answers); one sensible option ->
+  "Decisions I made"; answered / resolved / note -> left out; duplicates -> one; ordered by
+  impact. Briefs: same sections, one line per bullet, empty sections one line, Proven / Not
+  proven the top 3, a question = one line + `A: ... (default) / B: ...`; final brief ~20 lines.
+  - **Final gate mechanics** (`src/agentflow/brief.py`): the PR agent places every gate item
+    under `## Questions` / `## Decisions I made` / `## Left out` of final_brief.md by `[N]`;
+    parked work and the provisional steps are always asked; unplaced items are asked as they
+    are. The human answers questions 1..k; `agentflow answer` rewrites answers.md by gate item
+    (decided -> `Default: <decision>`, same-as -> the other's answer, else "No answer needed";
+    the chat's file in the `answer` event's `as_given`). A brief check after the PR run
+    (one-option questions, untagged, duplicates, closed / note items, parked work left out,
+    unplaced items) re-runs the PR agent once (event `brief_check`; not blocking).
+  - Tests gate (optional) unchanged: its questions still come straight from the agents.
+  - **Not yet seen on a real feature:** whether Sonnet tags the items reliably and how often
+    the rewrite fires; check the `brief_check` events of the next FCSim feature.
 - **Adapters:** python (pytest, mutmut via WSL on Windows), dotnet (xUnit, Stryker opt-in level).
-- **Chat flow (plugin 0.4.0):** `/agentflow:setup` (new repo: scan, questions, toml +
+- **Chat flow (plugin 0.4.1):** `/agentflow:setup` (new repo: scan, questions, toml +
   project.md, `agentflow doctor`, optional smoke run); `/agentflow:feature <f>` (branch `feat/<f>` from `[git] base`,
   spec dialogue + spec brief, approve, background `agentflow run` + Monitor on `agentflow watch`,
   gate briefs via `agentflow gate-summary`, plain-word replies mapped to approve/reject/answer/finish,
@@ -150,6 +173,8 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
     asked to review the spec files and showed full gate summaries is gone; the files stay for
     the agents and for "more detail". The user owns the structure (what classes are for, how
     they work together), not every line or test.
+13. Questions filtered by rule, not capped (2026-11-11): only real decisions are asked, by
+    impact; single-option points are decided and listed; the final brief fits one screen.
 
 ## FCSim integration
 - Worktree `D:\Me\Projects\FCSim-agentflow`, branch `feat/agentflow-setup` (agentflow.toml,

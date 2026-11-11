@@ -26,42 +26,64 @@ Sections:
 
 Do not write a cost table: agentflow appends cost, time and turns per phase.
 
-## 2. {out}/{feature}/final_brief.md (what the human reads; about one screen)
+## 2. {out}/{feature}/final_brief.md (what the human reads; ~20 lines when nothing went wrong)
 
 Plain words. No spec IDs and no test names unless their meaning is next to them in words ("the
 'no shot without a free-kick' rule", not "FK-R-004"). No numbers agentflow already shows (gates,
 coverage, mutation, cost, time): it adds them. When a gate failed, quote its reason as
 final_gates.md states it; never paraphrase or guess a cause (a project listed as "not mutated"
-is not a failure). Exactly these sections, short bullets:
+is not a failure). One line per bullet; no sentence that repeats a heading or another section;
+a section where nothing happened is one line. Exactly these sections:
 
     ## Plan followed?
-    - Step 1 (<what it does, in words>): done as planned
-    - Step 2 (...): changed: <what and why>        (or: parked: <why>)
+    - All 3 steps as planned.                      (or one line per step that changed / parked:
+    - Step 2 (<what it does>): changed: <what, why>   the others are "as planned")
 
     ## Struggles
-    - <what went wrong and how it was solved: parks, failed attempts, test fixes>  ("- none")
+    - No struggles.        (or: what went wrong and how it was solved: parks, failed attempts)
 
     ## Proven
-    - <what the tests check, as behaviors the user can rely on>
+    - <the 3 most important behaviors the tests check, one line each; the rest on request>
 
     ## Not proven
-    - <what the user must check by using it: feel, balance, UI, speed, real data>
+    - <the 3 most important things to check by using it: feel, balance, UI, speed, real data>
 
     ## Code map
     <one line: what changed in it>
 
-    ## Items
-    1. <the gate item 1 as the problem in plain words: what the user would see, why it is open>
-       Options: <A: what it costs or breaks>; <B: ...>
-       Default: <your recommendation, in one line>
-    2. ...
+    ## Questions
+    1. [<gate item>] <the problem in one line>
+       A: <option> (default) / B: <option>
+    2. [<gate item>] ...
 
-"Plan followed?" compares with the spec brief's plan: one line per step. "Not proven" repeats
-the spec brief's list where it still holds, plus what the run showed. "Items": one entry per
-gate item in final_facts.md, with the same number, every one with a default. An assumption
-from steps.md that changes what the user sees, or a review finding that was dismissed but
-looks like a real gap: write it to {out}/{feature}/questions.md as a question with a default
-(it becomes the next numbered item) and add its entry under Items with that number.
+    ## Decisions I made
+    - [<gate item>] <the decision, one line>
+    - <a decision from the run that changes what the user sees, one line>
+
+    ## Left out
+    - [<gate item>] same as [<gate item>] | answered: <where> | resolved: <how> | note: <what>
+
+Every gate item in final_facts.md (and every question you add to questions.md: numbered after
+them) goes into exactly one of Questions / Decisions I made / Left out, named by its number in
+brackets. A gate item is a question only when it is a real decision: two or more reasonable
+options with different outcomes, and the spec, the code, .agentflow/project.md and earlier
+answers (answers.md, questions_archive.md) don't settle it. Otherwise it is not a question:
+- only one sensible option: decide it, one line under "Decisions I made";
+- already answered, already resolved (e.g. by a scan), or a note: "Left out" with the reason;
+- the same question from two agents: ask it once, the other under "Left out" as `same as [N]`.
+Parked work and the proposed test fixes (provisional steps) are always questions: they block
+the run; give your recommendation as the default. No limit on the number of questions; order
+them by impact (what changes most if answered differently first). agentflow numbers them 1, 2,
+... for the human and maps the answers back to the gate items; a decided item gets its decision
+as the answer, a repeated one the answer of the item it repeats.
+
+"Plan followed?" compares with the spec brief's plan. "Not proven" starts from the spec brief's
+list where it still holds, plus what the run showed. An assumption from steps.md that changes
+what the user sees: a decision ("Decisions I made"), or a question in questions.md when two
+answers are reasonable. A review finding that was dismissed but looks like a real gap: a
+question in questions.md. agentflow checks the brief (duplicates, closed items or notes asked
+as questions, questions with one option, gate items placed nowhere) and sends it back to you
+once to rewrite.
 
 ## 3. The code map ({code_map})
 
