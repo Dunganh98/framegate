@@ -21,7 +21,7 @@ imported lazily). An adapter instance gets the loaded `Config` (`self.cfg`, `sel
 | `TestScope` | `req_ids`, `paths` | The tests a final coverage / mutation run uses: tagged with any of `req_ids` OR under `paths` (review tests); both empty = whole suite. `describe()` gives the text for the report header |
 | `TestCase` | `name`, `outcome`, `message` | `outcome`: `passed` / `failed` / `error` / `skipped`; `message`: failure/error text ("" if none) |
 | `CheckResult` | `status`, `output`, `summary` | `status`: `PASS` / `FAIL` / `SKIPPED`. SKIPPED never fails a gate but is printed and lands in `final_gates.md` (the PR role must report it). `summary` (optional): one line shown under a `[PASS]` line, e.g. the mutation score |
-| `Check` | `name`, `run()` | A named, lazily-run check for the gate runner |
+| `Check` | `name`, `run()`, `needs_green` | A named, lazily-run check for the gate runner. `needs_green` (the mutation check): not started, SKIPPED with the reason, when the typecheck, the regression or the coverage run failed before it |
 
 Helpers: `run_command(cmd, cwd, env=None, timeout=None)` (missing tool -> code 127, "Tool not
 found"; timeout -> process tree killed, code 124, "TIMEOUT: ..."; Ctrl+C / SIGTERM -> tree killed,
@@ -46,7 +46,7 @@ pytest `--junitxml` and the .NET `JunitXml.TestLogger`), `tool_path(name, near)`
 | `red_stub_run(req_ids, report)` | default | Runs the feature's tests with a JUnit report; the core fails the TESTS gate on any `passed` / `error` / `skipped` case or zero cases. Override if the framework needs special handling |
 | `stub_failure_problem(case)` | default | For a case that failed against the stubs: a reason why the failure doesn't count (e.g. not caused by the stub), else `None` (default: every failure counts). Listed as `FAILS FOR ANOTHER REASON THAN THE STUB` and fails the TESTS gate |
 | `default_gate_commands()` | abstract | `{"lint"|"format"|"typecheck"|"imports": [argv]}`; omit a key to skip it. `[gates.commands]` overrides per key (`[]` disables) |
-| `resolve_command(cmd)` | default | Expands `{src}`, `{tests}`, `{out}` in configured commands (python also maps a leading `python` to the project interpreter) |
+| `resolve_command(cmd)` | default | Expands `{src}`, `{tests}`, `{out}` in configured commands; an argument that is exactly `{src}` becomes one argument per source folder (`[paths] src` as a list), inside a longer argument it is the first (python also maps a leading `python` to the project interpreter) |
 | `lint_checks(base_ref=None)` | default | Builds the `Check`s from the merged commands. The gate runner passes `base_ref` (= `tests-approved/<f>`) so an adapter can limit checks to the files changed since then (the .NET adapter does) |
 | `regression_check()` | abstract | Final scope with feature-scoped coverage: the whole suite (the adapter's final selection) once, without coverage, `cfg.regression_timeout`. Check name `regression: whole suite, no coverage` |
 | `coverage_checks(base_ref, scope=None)` | abstract | Final scope: the tests of `scope` (`None` = whole suite) with coverage (`cfg.coverage_timeout`), then diff coverage against `base_ref` (= `tests-approved/<f>`) `>= cfg.diff_coverage`, with `diff_coverage_summary` as `summary`. Names: `coverage run (feature tests)` / `diff coverage >= N% (feature tests)`, or `full test suite + coverage` / `diff coverage >= N%` for the whole suite. SKIPPED (with reason) when a coverage tool is missing, but the tests must still run. A cut-short coverage run fails both checks with `ERROR: ... incomplete` (no 0 %) |

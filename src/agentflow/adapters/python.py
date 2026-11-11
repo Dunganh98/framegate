@@ -284,9 +284,17 @@ class PythonAdapter(LanguageAdapter):
     def default_gate_commands(self) -> dict[str, list[str]]:
         p = self.cfg.paths
         cmds = {
-            "lint": [self.python, "-m", "ruff", "check", p.src, p.tests],
-            "format": [self.python, "-m", "ruff", "format", "--check", p.src, p.tests],
-            "typecheck": [self.python, "-m", "mypy", p.src],
+            "lint": [self.python, "-m", "ruff", "check", *self.cfg.src_roots, p.tests],
+            "format": [
+                self.python,
+                "-m",
+                "ruff",
+                "format",
+                "--check",
+                *self.cfg.src_roots,
+                p.tests,
+            ],
+            "typecheck": [self.python, "-m", "mypy", *self.cfg.src_roots],
         }
         if (self.root / ".importlinter").exists():
             cmds["imports"] = [self.tool_path("lint-imports", self.python) or "lint-imports"]
@@ -329,7 +337,8 @@ class PythonAdapter(LanguageAdapter):
             note = ""
             collect = self._has_module("pytest_cov")
             if collect:
-                cmd += [f"--cov={self.cfg.paths.src}", "--cov-branch", f"--cov-report=xml:{xml}"]
+                cmd += [f"--cov={root}" for root in self.cfg.src_roots]
+                cmd += ["--cov-branch", f"--cov-report=xml:{xml}"]
             else:
                 note = "\nSKIPPED coverage: pytest-cov is not installed in the project environment"
             timeout = self.cfg.coverage_timeout
@@ -422,8 +431,13 @@ class PythonAdapter(LanguageAdapter):
     # ---------- mutmut internals ----------
     def _mutmut_modules(self, changed: Sequence[str]) -> list[str]:
         """Changed files -> module names as mutmut names them (relative to `src/`)."""
-        src = self.cfg.paths.src.rstrip("/") + "/"
-        mods = [(f[len(src) :] if f.startswith(src) else f)[:-3].replace("/", ".") for f in changed]
+        roots = [r.rstrip("/") + "/" for r in self.cfg.src_roots]
+
+        def module(f: str) -> str:
+            root = next((r for r in roots if f.startswith(r)), "")
+            return f[len(root) : -3].replace("/", ".")
+
+        mods = [module(f) for f in changed]
         return sorted({m[: -len(".__init__")] if m.endswith(".__init__") else m for m in mods})
 
     def _mutmut_dir(self) -> pathlib.Path:

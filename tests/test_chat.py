@@ -150,7 +150,7 @@ def test_progress_lines_through_a_feature(
         "IMPLEMENT done",
         # the parked step's tests are expected red; coverage and mutation wait for the redo
         "[REVIEW] final gates: PASSED; skipped: ",
-        "FINAL GATE: waiting for you. Final gates PASSED; 1 parked: step 2 - neg.",
+        "FINAL GATE: waiting for you. Final gates PASSED; 1 parked: step 2 - neg; risk elevated.",
     ):
         assert part in text, part
     assert 10 <= len(log_lines(r)) <= 30  # the live view stays short

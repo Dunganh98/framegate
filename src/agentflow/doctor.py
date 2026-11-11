@@ -13,15 +13,19 @@ fix and the WARNs that need a decision (warnings about findings in the existing 
 
 from __future__ import annotations
 
+import json
+import pathlib
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from agentflow.adapters import get_adapter
 from agentflow.adapters.base import LanguageAdapter
-from agentflow.config import Config, ConfigError
+from agentflow.config import CONFIG_FILE, Config, ConfigError
 from agentflow.state import GitError, git
 
+#: shell tools the chat skills run `agentflow ...` with
+CHAT_TOOLS = ("Bash", "PowerShell")
 KNOWLEDGE_LINES_WARN = 150
 CODE_MAP_LINES_WARN = 300
 SPEC_ID_PROBE = "DOCTOR-R-000"  # an ID no test has: the selection must run and select nothing
@@ -66,6 +70,45 @@ def outdated_templates(cfg: Config) -> dict[str, list[str]]:
         if lacks:
             out[name] = lacks
     return out
+
+
+def on_base(cfg: Config, rel: str) -> bool:
+    """True if the file exists on the base branch (`[git] base`)."""
+    try:
+        git(cfg, "cat-file", "-e", f"{cfg.git_base}:{rel}")
+        return True
+    except GitError:
+        return False
+
+
+def settings_files(cfg: Config) -> list[pathlib.Path]:
+    """Claude Code settings that can allow the chat's agentflow commands: the project's and
+    the user's."""
+    return [
+        cfg.root / ".claude" / "settings.local.json",
+        cfg.root / ".claude" / "settings.json",
+        pathlib.Path.home() / ".claude" / "settings.json",
+    ]
+
+
+def missing_chat_rules(cfg: Config) -> list[str]:
+    """The allow rules the chat skills need after their first turn (a skill's own grant lasts
+    one turn) that no settings file has: `Bash(agentflow *)`, `PowerShell(agentflow *)`."""
+    allowed: set[str] = set()
+    for path in settings_files(cfg):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        rules = (data.get("permissions") or {}).get("allow") if isinstance(data, dict) else None
+        allowed |= {str(r).replace(" ", "") for r in rules or []}
+    wanted = [f"{tool}(agentflow *)" for tool in CHAT_TOOLS]
+    # `Bash(agentflow:*)` is the older spelling of the same rule; a bare tool name allows all
+    return [
+        f'"{rule}"'
+        for tool, rule in zip(CHAT_TOOLS, wanted, strict=True)
+        if not {rule.replace(" ", ""), f"{tool}(agentflow:*)", tool} & allowed
+    ]
 
 
 def brief(items: list[Item]) -> list[str]:
@@ -113,6 +156,16 @@ def run(
         try:
             git(cfg, "rev-parse", "--verify", "--quiet", cfg.git_base)
             add(Item("OK", f"git: base branch '{cfg.git_base}'"))
+            if cfg.git_branch and not on_base(cfg, CONFIG_FILE):
+                add(
+                    Item(
+                        "WARN",
+                        f"git: {CONFIG_FILE} is not on '{cfg.git_base}'",
+                        f"feature branches start from '{cfg.git_base}' and would lack the "
+                        f"config: commit {CONFIG_FILE} there, or set [git] base to the branch "
+                        "that has it",
+                    )
+                )
         except GitError:
             add(
                 Item(
@@ -131,6 +184,19 @@ def run(
         add(Item("OK", "claude CLI", " ".join(cmd)))
     except WorkflowError as e:
         add(Item("FAIL", "claude CLI", str(e)))
+
+    missing_rules = missing_chat_rules(cfg)
+    add(
+        Item(
+            "WARN" if missing_rules else "OK",
+            "chat: agentflow commands allowed",
+            f"add {', '.join(missing_rules)} to permissions.allow in "
+            ".claude/settings.local.json (else the chat asks before every agentflow command "
+            "after the first turn)"
+            if missing_rules
+            else "",
+        )
+    )
 
     kfile = cfg.root / cfg.knowledge
     if not kfile.is_file():

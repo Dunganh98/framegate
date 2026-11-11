@@ -137,7 +137,8 @@ def spec_brief(cfg: Config, feature: str) -> str:
             f"(invariant); regex {cfg.id_pattern}",
             '- plan.md is parsed: "## Step N: <title>" headings, each with one '
             '"Covers: ID, ID" line. Every ID is covered by exactly one step.',
-            f"- Interface stubs go in {p.src}/. Do not write tests or implementation.",
+            f"- Interface stubs go in {'/, '.join(cfg.src_roots)}/. Do not write tests or "
+            "implementation.",
             f"- Run files (gate briefs, answers.md, the spec gate brief spec_brief.md): "
             f"{p.out}/{feature}/",
             f"- Code map (per module: purpose, key classes, how they work together): "

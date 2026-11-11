@@ -87,3 +87,31 @@ def test_doctor_warns_about_an_outdated_template_copy(demo_repo: DemoRepo) -> No
     assert "[WARN] spec templates in specs/_template/" in out
     assert "requirements.md lacks: Existing data this spec reads" in out
     assert "delete the copy to use agentflow's" in out
+
+
+def test_doctor_checks_the_chat_side(demo_repo: DemoRepo) -> None:
+    """The allow rules the chat skills need, and agentflow.toml on the base branch."""
+    r = demo_repo
+    r.add_toml("[gates.commands]\nlint = []\nformat = []\ntypecheck = []\n")
+    code, out = run(r)
+    assert "[OK] chat: agentflow commands allowed" in out
+    assert "is not on 'main'" not in out  # the fixture committed agentflow.toml on main
+
+    settings = r.root / ".claude" / "settings.local.json"
+    settings.write_text('{"permissions": {"allow": ["Bash(agentflow:*)"]}}', encoding="utf-8")
+    code, out = run(r)
+    assert code == 0
+    assert "[WARN] chat: agentflow commands allowed" in out
+    assert 'add "PowerShell(agentflow *)" to permissions.allow' in out  # Bash: older spelling
+    settings.unlink()
+    _, out = run(r, brief=True)
+    assert '- WARN chat: agentflow commands allowed: add "Bash(agentflow *)", ' in out
+
+    # a base branch without the config: feature branches from it would start without it
+    git(r.root, "checkout", "-q", "--orphan", "empty")
+    git(r.root, "rm", "-r", "-q", "--cached", ".")
+    git(r.root, "commit", "-q", "--allow-empty", "-m", "empty")
+    git(r.root, "checkout", "-q", "-f", "feat/demo")
+    r.set_toml("git", "base", '"empty"')
+    _, out = run(r)
+    assert "[WARN] git: agentflow.toml is not on 'empty'" in out

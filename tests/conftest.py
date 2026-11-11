@@ -157,6 +157,15 @@ def no_toast(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AGENTFLOW_TOAST", "0")
 
 
+@pytest.fixture(autouse=True)
+def own_claude_settings(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`agentflow doctor` never reads the developer's own ~/.claude/settings.json."""
+    from agentflow import doctor
+
+    project = doctor.settings_files
+    monkeypatch.setattr(doctor, "settings_files", lambda cfg: project(cfg)[:2])
+
+
 @pytest.fixture
 def demo_repo(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> DemoRepo:
     """A tiny Python repo with agentflow initialised and the `demo` spec + stub written."""
@@ -185,6 +194,12 @@ def demo_repo(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> DemoRe
     )
     (root / "src" / "demo").mkdir(parents=True)
     (root / "tests").mkdir()
+    # the chat skills' allow rules (doctor checks them)
+    (root / ".claude").mkdir()
+    (root / ".claude" / "settings.local.json").write_text(
+        json.dumps({"permissions": {"allow": ["Bash(agentflow *)", "PowerShell(agentflow *)"]}}),
+        encoding="utf-8",
+    )
     git(root, "add", "-A")
     git(root, "commit", "-q", "-m", "init")
     assert repo.af("spec", "demo") == 0

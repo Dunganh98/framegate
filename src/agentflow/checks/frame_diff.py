@@ -118,8 +118,7 @@ def changed_files(cfg: Config, ref: str) -> tuple[set[str], set[str]]:
 def changed_src_files(adapter: LanguageAdapter, ref: str) -> list[str]:
     cfg = adapter.cfg
     changed, _ = changed_files(cfg, ref)
-    src = cfg.paths.src.rstrip("/") + "/"
-    return sorted(f for f in changed if f.startswith(src) and (cfg.root / f).is_file())
+    return sorted(f for f in changed if cfg.in_src(f) and (cfg.root / f).is_file())
 
 
 def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
@@ -129,7 +128,7 @@ def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
         if not tag_exists(cfg, tag):
             return CheckResult("FAIL", f"Tag {tag} not found — tests were never approved.")
         changed, untracked = changed_files(cfg, tag)
-        diff = git(cfg, "diff", "-U0", tag, "--", cfg.paths.src)
+        diff = git(cfg, "diff", "-U0", tag, "--", *cfg.src_roots)
     except GitError as e:
         return CheckResult("FAIL", str(e))
     try:
@@ -148,9 +147,8 @@ def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
         for line in diff.splitlines()
         if line.startswith("+") and not line.startswith("+++")
     ]
-    src = cfg.paths.src.rstrip("/") + "/"
     for f in sorted(untracked):
-        if f.startswith(src) and f.endswith(adapter.source_suffixes):
+        if cfg.in_src(f) and f.endswith(adapter.source_suffixes):
             path = cfg.root / f
             if path.is_file():
                 added += path.read_text(encoding="utf-8", errors="replace").splitlines()

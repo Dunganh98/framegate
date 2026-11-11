@@ -119,6 +119,9 @@ class CheckResult:
 class Check:
     name: str
     run: Callable[[], CheckResult]
+    #: only meaningful on a green build and green tests (mutation testing): the gate runner
+    #: skips it, with the reason, when one of those checks failed before it
+    needs_green: bool = False
 
 
 TIMEOUT_CODE = 124
@@ -334,9 +337,17 @@ class LanguageAdapter(abc.ABC):
         Overridden per key by [gates.commands] in agentflow.toml."""
 
     def resolve_command(self, cmd: Sequence[str]) -> list[str]:
-        """Expand {src}, {tests}, {out} placeholders in a configured command."""
+        """Expand {src}, {tests}, {out} placeholders in a configured command. An argument that
+        is exactly "{src}" becomes one argument per source folder ([paths] src as a list);
+        inside a longer argument it is the first one."""
         p = self.cfg.paths
-        return [a.format(src=p.src, tests=p.tests, out=p.out) for a in cmd]
+        out: list[str] = []
+        for a in cmd:
+            if a == "{src}":
+                out += self.cfg.src_roots
+            else:
+                out.append(a.format(src=p.src, tests=p.tests, out=p.out))
+        return out
 
     def lint_checks(self, base_ref: str | None = None) -> list[Check]:
         """The lint/format/typecheck/imports checks. base_ref (the tests-approved tag, when the
@@ -376,8 +387,7 @@ class LanguageAdapter(abc.ABC):
         from agentflow.checks.frame_diff import changed_files, path_matches
         from agentflow.state import GitError, tag_exists
 
-        src = self.cfg.paths.src.rstrip("/") + "/"
-        allowed = [src, *self.cfg.frame_exceptions()]
+        allowed = [*(r + "/" for r in self.cfg.src_roots), *self.cfg.frame_exceptions()]
         try:
             if not tag_exists(self.cfg, base_ref):
                 return ""

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 import pathlib
 import subprocess
 from typing import Any
@@ -14,6 +15,10 @@ from agentflow.config import Config
 
 class GitError(Exception):
     pass
+
+
+class StateError(GitError):
+    """A state file that cannot be read (reported like a git error: exit 1 with the message)."""
 
 
 def git(cfg: Config, *args: str) -> str:
@@ -106,15 +111,30 @@ def log_event(cfg: Config, feature: str, kind: str, **data: Any) -> None:
         "kind": kind,
         **data,
     }
-    with open(cfg.out_dir / "events.jsonl", "a", encoding="utf-8") as f:
-        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    path = cfg.out_dir / "events.jsonl"
+    lead = ""
+    if path.is_file() and path.stat().st_size:
+        with open(path, "rb") as fh:  # a line cut short by a killed run: start a new one
+            fh.seek(-1, 2)
+            lead = "" if fh.read(1) == b"\n" else "\n"
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(lead + json.dumps(rec, ensure_ascii=False) + "\n")
 
 
 def read_events(cfg: Config, feature: str | None = None) -> list[dict[str, Any]]:
     p = cfg.out_dir / "events.jsonl"
     if not p.is_file():
         return []
-    events = [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line]
+    events: list[dict[str, Any]] = []
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:  # a line cut short by a killed run: skip it, keep the rest
+            continue
+        if isinstance(rec, dict) and "kind" in rec:
+            events.append(rec)
     return [e for e in events if feature is None or e.get("feature") == feature]
 
 
@@ -136,11 +156,17 @@ def load_progress(cfg: Config, feature: str) -> dict[str, Any]:
     p = cfg.feature_out(feature) / "progress.json"
     prog = fresh_progress()
     if p.is_file():
-        prog.update(json.loads(p.read_text(encoding="utf-8")))
+        try:
+            prog.update(json.loads(p.read_text(encoding="utf-8")))
+        except ValueError as e:
+            raise StateError(f"{p} is not valid JSON ({e}); fix or delete it") from e
     return prog
 
 
 def save_progress(cfg: Config, feature: str, prog: dict[str, Any]) -> None:
     d = cfg.feature_out(feature)
     d.mkdir(parents=True, exist_ok=True)
-    (d / "progress.json").write_text(json.dumps(prog, indent=2), encoding="utf-8")
+    # written to a temp file and moved into place: a run killed mid-write leaves the old file
+    target, tmp = d / "progress.json", d / "progress.json.tmp"
+    tmp.write_text(json.dumps(prog, indent=2), encoding="utf-8")
+    os.replace(tmp, target)

@@ -101,6 +101,9 @@ def _fill(cmd: Sequence[str], values: dict[str, Any]) -> list[str]:
         if tok in ("{paths}", "{files}"):
             out += [str(x) for x in values.get(tok[1:-1], [])]
             continue
+        if tok == "{src}" and isinstance(values.get("src_roots"), list):
+            out += [str(x) for x in values["src_roots"]]  # one argument per source folder
+            continue
         for key, value in values.items():
             if isinstance(value, str):
                 tok = tok.replace("{" + key + "}", value)
@@ -134,7 +137,8 @@ class GenericAdapter(LanguageAdapter):
     # ---------- helpers ----------
     def values(self, **extra: Any) -> dict[str, Any]:
         p = self.cfg.paths
-        return {"src": p.src, "tests": p.tests, "out": p.out, **extra}
+        roots = list(self.cfg.src_roots)
+        return {"src": p.src, "src_roots": roots, "tests": p.tests, "out": p.out, **extra}
 
     def _id_values(self, ids: Sequence[str]) -> dict[str, str]:
         sep = self.opts.get("ids_separator", ",")
