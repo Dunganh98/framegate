@@ -27,6 +27,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from agentflow import brief as briefs
 from agentflow import notify, procs
 from agentflow.adapters import get_adapter
 from agentflow.adapters.base import GATE_NAMES, CheckResult, LanguageAdapter
@@ -2227,6 +2228,7 @@ class Orchestrator:
         (d / "final_brief.md").unlink(missing_ok=True)
         self.agent("PR", feature, prog, self.task_text("PR", feature))
         self.collect_questions(feature, "PR", "summary agent")
+        self.check_final_brief(feature, prog)
         prog["code_map"] = self.code_map_state(feature, self.commit_code_map(feature))
         summary = d / "final_summary.md"
         text = (
@@ -2278,6 +2280,72 @@ class Orchestrator:
         ]
         prov = [f"[provisional] {provisional_item(prog)}"] if prog.get("provisional") else []
         return [*parked, *prov, *self.open_questions(feature)]
+
+    def must_ask(self, prog: dict[str, Any]) -> set[int]:
+        """Final-gate items the brief always asks: parked work and the provisional steps (the
+        first items of final_items); they block the run until answered."""
+        n = len(prog.get("parked") or []) + (1 if prog.get("provisional") else 0)
+        return set(range(1, n + 1))
+
+    def final_brief_sections(self, feature: str) -> dict[str, list[str]]:
+        p = self.fdir(feature) / "final_brief.md"
+        return briefs.sections(p.read_text(encoding="utf-8") if p.is_file() else "")
+
+    def final_brief_plan(self, feature: str, prog: dict[str, Any]) -> briefs.BriefPlan:
+        """The final gate's questions as the brief shows them (numbered 1..k), mapped to the
+        gate items; the items the PR agent decided or left out."""
+        return briefs.plan(
+            self.final_brief_sections(feature),
+            self.final_items(feature, prog),
+            self.must_ask(prog),
+        )
+
+    def check_final_brief(self, feature: str, prog: dict[str, Any]) -> None:
+        """Not blocking: duplicates, closed items or notes asked as questions, questions with
+        one option, gate items placed nowhere -> the PR agent rewrites final_brief.md once."""
+        if not (self.fdir(feature) / "final_brief.md").is_file():
+            return  # the gate brief falls back to generated lines
+        n_items = len(self.final_items(feature, prog))
+        problems = briefs.check_brief(
+            self.final_brief_sections(feature), n_items, self.must_ask(prog)
+        )
+        log_event(self.cfg, feature, "brief_check", problems=problems, rewrite=bool(problems))
+        if not problems:
+            return
+        self.progress(feature, f"[PR] final brief: {len(problems)} problem(s), rewriting once")
+        out = self.cfg.paths.out
+        task = (
+            f"Feature '{feature}': rewrite {out}/{feature}/final_brief.md only (the PR role's "
+            "brief rules; the gate items: the end of "
+            f"{out}/{feature}/final_facts.md, plus any you added to questions.md, numbered "
+            f"after them). A check of the brief found:\n"
+            + "\n".join(f"- {x}" for x in problems)
+            + "\nFix these; keep the rest of the brief. Do not change final_summary.md or the "
+            "code map."
+        )
+        self.agent("PR", feature, prog, task)
+        self.collect_questions(feature, "PR", "summary agent")
+        n_items = len(self.final_items(feature, prog))
+        left = briefs.check_brief(self.final_brief_sections(feature), n_items, self.must_ask(prog))
+        log_event(self.cfg, feature, "brief_check", problems=left, rewrite=False)
+        if left:
+            self.progress(feature, f"[PR] final brief: {len(left)} problem(s) left (not blocking)")
+
+    def map_brief_answers(self, feature: str, prog: dict[str, Any], text: str) -> str:
+        """answers.md as the chat wrote it (numbered as the brief showed the questions) ->
+        numbered by gate item, with the answers the brief implies for the items it decided or
+        left out; written back to answers.md (the agents read that file). Unchanged when the
+        brief keeps the gate's numbers, or answers.md was mapped already."""
+        if text.startswith(briefs.MAPPED_HEADER):
+            return text
+        p = self.final_brief_plan(feature, prog)
+        if not p.remapped:
+            return text
+        mapped = briefs.expand_answers(
+            p, parse_answer_items(text), self.final_items(feature, prog)
+        ).strip()
+        (self.fdir(feature) / "answers.md").write_text(mapped + "\n", encoding="utf-8")
+        return mapped
 
     def code_map_note(self, feature: str) -> str:
         """For the summary agent: where the code map is and which new public types it lacks."""
@@ -2999,6 +3067,9 @@ class Orchestrator:
         text = answers.read_text(encoding="utf-8").strip() if answers.is_file() else ""
         if not text:
             raise WorkflowError(f"Write your answers to {out}/{feature}/answers.md first.")
+        given = text
+        if gate == "final":
+            text = self.map_brief_answers(feature, prog, text)
         oq = d / "open_questions.md"
         open_q = oq.read_text(encoding="utf-8") if oq.is_file() else ""
         ref = self.answer_ref(feature)
@@ -3021,6 +3092,8 @@ class Orchestrator:
             for it in parse_answer_items(text)
         ]
         logged: dict[str, Any] = {"ref": ref, "answer": text[:20000], "items": items}
+        if given != text:
+            logged["as_given"] = given[:20000]
         if gate == "final":
             # answers to the file-size questions: the structure fix run applies them (split,
             # or leave as is) before the final gates

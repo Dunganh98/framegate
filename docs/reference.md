@@ -10,7 +10,7 @@ a terminal.
 
 | Command | What it means | When |
 |---|---|---|
-| `/agentflow:setup` | set up agentflow in this repo (draft config, project facts and code map; a short brief with at most 5 questions; doctor) | once per repo |
+| `/agentflow:setup` | set up agentflow in this repo (draft config, project facts and code map; a short brief that asks only the real decisions; doctor) | once per repo |
 | `/agentflow:feature <f>` | start or continue feature `<f>`: spec dialogue, run, gates, wrap-up | each feature |
 | `/agentflow:resume [f]` | reattach the chat to a running or waiting feature | after a restart |
 | `/agentflow:status [f]` | where features stand; tag cleanup after the PR is merged | any time |
@@ -64,7 +64,7 @@ mutation score) and never stops to ask.
 ## Daily use: from the Claude Code chat
 
 Once per repository: `/agentflow:setup` in the chat (it reads the repo, drafts agentflow.toml,
-`.agentflow/project.md` and the code map, shows a short brief with at most 5 questions, runs
+`.agentflow/project.md` and the code map, shows a short brief that asks only the real decisions, runs
 `agentflow init` and `agentflow doctor --brief`, and offers a small smoke feature in one line), or by hand `agentflow init [--language
 python|dotnet|generic]` (agentflow.toml, spec templates, `.agentflow/project.md`, .gitignore
 lines; commit them) and `agentflow doctor` (checks config, git, the claude CLI, the tools, the
@@ -83,7 +83,7 @@ Then you only type requirements, answers and gate decisions:
    this checkout (refused with uncommitted changes to tracked files; an existing branch is used
    only if it is this feature's), sets the SPEC phase and starts the spec dialogue. Claude
    decides what the docs, the code map, the code and `.agentflow/project.md` settle, asks only
-   the rest (at most 5 questions per round, each with a default), writes
+   only the real decisions (see "Which questions are asked" below), writes
    requirements/design/plan and the interface stubs, and shows the **spec brief** instead of the
    spec files (see "Manager-style briefs" below).
 2. "Spec OK": the skill approves the spec, starts `agentflow run` in the background and shows the
@@ -113,16 +113,40 @@ is no mode or switch for this.
 
 | Where | The brief |
 |---|---|
-| Spec gate (`out/<f>/spec_brief.md`, written by the chat) | Task (2-4 lines) / Plan (one line per step) / How it is proven / Not proven (what to check by using it) / Decisions I made for you (at most 5, each with what it rules out) / Project details that matter / Questions (at most 5, each with a default) |
+| Spec gate (`out/<f>/spec_brief.md`, written by the chat) | Task (2-4 lines) / Plan (one line per step) / How it is proven (the 3 most important checks) / Not proven (the 3 most important things to check by using it) / Decisions I made for you (one line each, with what it rules out) / Project details that matter / Questions (the real decisions, by impact) |
 | Tests gate (`[gates] tests = "human"`/`"auto"`) | what the tests check in plain words (the test reviewer's `## What the tests check` in test_review.md), objections left, one line of mechanical checks, questions with defaults |
-| Final gate (`agentflow gate-summary`, from `final_brief.md` + run records) | Plan followed? (one line per step: done as planned / changed, why) / Outcomes with numbers (gates, diff coverage, mutation, failed attempts, parks, cost, agent and check time, structure) / Struggles and how they were solved / Proven / Not proven / Code map (one line; a WARN when new public types are missing) / numbered items (parked work, provisional steps, questions; each as the problem in words, options with what they cost, a default) |
-| Setup | what I found, the settings that differ from the defaults (with why), the knowledge facts in short lines, the code map's modules, at most 5 questions with defaults |
+| Final gate (`agentflow gate-summary`, from `final_brief.md` + run records; ~20 lines when nothing went wrong) | Plan followed? (one line when all steps went as planned, else one per changed / parked step) / Outcomes with numbers (gates, diff coverage, mutation, failed attempts, parks, cost, agent and check time, structure) / Struggles (one line when none) / Proven and Not proven (the 3 most important points each, the rest on request) / Code map (one line; a WARN when new public types are missing) / Questions numbered 1..k by impact (the problem in one line, then `A: ... (default) / B: ...`) / Decisions I made / how many gate items were left out |
+| Setup | what I found, the settings that differ from the defaults (with why), the knowledge facts in short lines, the code map's modules, the real decisions as questions with defaults |
 | `agentflow doctor --brief` | one verdict line (ready / not ready), then only the FAILs with the fix and the WARNs that need a decision |
 | Retro (`## Brief` in retro_proposals.md) | numbered proposals, problem -> fix, recommend take / skip / fold into N; the knowledge facts; answered with numbers |
 | Smoke run offer, DONE wrap-up, status, resume, errors, interruptions | one or two lines: the state and the one decision needed, with a default |
 
-At a gate with numbered items, "ok" takes every default (the chat writes them to answers.md);
-answers by number work as before; "approve as is" approves and leaves the items open.
+At a gate with numbered questions, "ok" takes every default (the chat writes them to
+answers.md); answers by number work as before; "approve as is" approves and leaves them open.
+One line per bullet; a section where nothing happened is one line; no sentence repeats a heading
+or another section.
+
+### Which questions are asked
+
+No count cap anywhere (spec dialogue, spec / final gate briefs, setup). A point is a question
+only when it is a real decision: two or more reasonable options with different outcomes, and the
+spec, the code, `.agentflow/project.md` and earlier answers don't settle it. Otherwise it is not
+a question: only one sensible option -> decided, one line under "Decisions I made"; already
+answered, already resolved (e.g. by a scan) or a note -> left out; the same question from two
+agents -> one item. Questions are ordered by impact (what changes most if answered differently
+first).
+
+At the final gate the PR agent sorts every numbered gate item (parked work, the provisional
+steps, the open questions) into `## Questions`, `## Decisions I made` or `## Left out` of
+final_brief.md, naming it `[N]`. Parked work and the provisional steps are always asked (they
+block the run); an item the brief places nowhere is asked as it is. The human sees the questions
+numbered 1..k; `agentflow answer` maps answers.md back to the gate items and rewrites it
+(`# Answers (final gate, numbered by gate item)`): a decided item gets `Default: <decision>`, a
+repeated one the answer of the item it repeats, any other left-out item "No answer needed"; the
+chat's own file is kept in the `answer` event (`as_given`). After the PR agent's run agentflow
+checks the brief (not blocking): questions without `[N]` or with one option, duplicates, closed
+items or notes asked as questions, parked work left out, gate items placed nowhere -> the PR
+agent rewrites final_brief.md once (event `brief_check`).
 
 ## Structure and the code map
 

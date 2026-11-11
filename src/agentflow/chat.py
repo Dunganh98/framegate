@@ -11,6 +11,7 @@ import shutil
 import time
 from typing import Any
 
+from agentflow import brief as briefs
 from agentflow import procs
 from agentflow.orchestrator import (
     PROGRESS_CURSOR,
@@ -28,6 +29,8 @@ WATCH_POLL = 1.0
 DIFF_LINES = 12
 #: most lines per plain-words section of a gate brief (the rest on request)
 BRIEF_SECTION_LINES = 8
+#: Proven / Not proven at the final gate: the most important points (the rest on request)
+BRIEF_PROVEN_LINES = 3
 #: phase names in run log file names ({stamp}-{feature}-{PHASE}.json / .prompt.md / ...)
 RUN_LOG_PHASES = "SPEC_UPDATE|TESTS|TEST_REVIEW|IMPLEMENT|DIAGNOSIS|REVIEW|TRIAGE|PR|RETRO"
 TAG_PREFIXES = (
@@ -244,17 +247,7 @@ def _costs(events: list[dict[str, Any]]) -> tuple[float, float, float]:
     return cost, agent, checks
 
 
-def brief_sections(text: str) -> dict[str, list[str]]:
-    """A brief file (final_brief.md, the `## What the tests check` part of test_review.md) ->
-    {heading in lower case: its non-empty lines}."""
-    out: dict[str, list[str]] = {}
-    current: list[str] | None = None
-    for line in text.splitlines():
-        if line.startswith("## "):
-            current = out.setdefault(line[3:].strip().lower(), [])
-        elif current is not None and line.strip() and not line.startswith("#"):
-            current.append(line.rstrip())
-    return out
+brief_sections = briefs.sections
 
 
 def _section(sections: dict[str, list[str]], *names: str) -> list[str]:
@@ -264,25 +257,19 @@ def _section(sections: dict[str, list[str]], *names: str) -> list[str]:
     return []
 
 
-def brief_items(lines: list[str]) -> dict[int, str]:
-    """`N. text` entries (continuation lines kept, joined by newlines) -> {N: text}."""
-    items: dict[int, str] = {}
-    n = 0
-    for line in lines:
-        m = re.match(r"^\s*(\d+)[.)]\s+(.*)$", line)
-        if m and not line.startswith("   "):
-            n = int(m.group(1))
-            items[n] = m.group(2).strip()
-        elif n:
-            items[n] += "\n" + line.strip()
-    return items
-
-
 def _block(lines: list[str], limit: int = BRIEF_SECTION_LINES, indent: str = "  ") -> list[str]:
     shown = [indent + _clip(x.strip(), 300) for x in lines[:limit]]
     if len(lines) > limit:
         shown.append(f"{indent}... {len(lines) - limit} more line(s) (on request)")
     return shown
+
+
+def _titled(title: str, lines: list[str], limit: int = BRIEF_SECTION_LINES) -> list[str]:
+    """A brief section: `Title: line` when it has one line, else the title and its lines."""
+    head = title if title.endswith("?") else title + ":"
+    if len(lines) == 1:
+        return [_clip(f"{head} {lines[0].strip().lstrip('-* ').strip()}", 300)]
+    return [head, *_block(lines, limit)]
 
 
 def _items_block(title: str, texts: list[str]) -> list[str]:
@@ -420,17 +407,15 @@ def _final_brief(
     orch: Orchestrator, feature: str, prog: dict[str, Any], events: list[dict[str, Any]]
 ) -> list[str]:
     out = orch.cfg.paths.out
-    d = orch.cfg.feature_out(feature)
-    bfile = d / "final_brief.md"
-    sections = brief_sections(bfile.read_text(encoding="utf-8") if bfile.is_file() else "")
-    raw = orch.final_items(feature, prog)
-    plain = brief_items(_section(sections, "items", "open questions", "decisions"))
-    items = [plain.get(n) or text for n, text in enumerate(raw, 1)]
+    sections = orch.final_brief_sections(feature)
+    plan = orch.final_brief_plan(feature, prog)
+    questions = [text for _, text in plan.questions]
     prov = bool(prog.get("provisional"))
     lines = [f"FINAL GATE: {feature}"]
-    if items:
+    if questions:
         lines.append(
-            f'Decision: answer {_numbers("item", len(items))} ("ok" takes every default below)'
+            f'Decision: answer {_numbers("question", len(questions))} ("ok" takes every '
+            "default below)"
             + (
                 "; the provisional-steps item must be answered before the gate can be approved."
                 if prov
@@ -441,22 +426,32 @@ def _final_brief(
         lines.append(
             'Decision: "ok" approves (default: retro, then DONE); "no retro" finishes now.'
         )
-    plan = _section(sections, "plan followed")
-    lines.append("Plan followed?")
-    lines += _block(plan) if plan else _block(_step_lines(orch, feature, prog, events))
+    followed = _section(sections, "plan followed", "plan")
+    lines += _titled("Plan followed?", followed or _step_lines(orch, feature, prog, events))
     lines += _outcomes(orch, feature, prog, events)
     struggles = _section(sections, "struggles")
-    lines.append("Struggles and how they were solved:")
-    lines += _block(struggles) if struggles else _block(_struggle_lines(prog, events))
+    lines += _titled("Struggles", struggles or _struggle_lines(prog, events))
     for title, names in (
         ("Proven by the tests", ("proven",)),
         ("Not proven (check it by using it)", ("not proven",)),
     ):
         found = _section(sections, *names)
-        lines.append(f"{title}:")
-        lines += _block(found) if found else ["  (not written; on request: final_summary.md)"]
+        lines += (
+            _titled(title, found, BRIEF_PROVEN_LINES)
+            if found
+            else [f"{title}: (not written; on request: final_summary.md)"]
+        )
     lines.append(_code_map_line(orch, prog, _section(sections, "code map")))
-    lines += _items_block('Items (answer by number; "ok" takes every default)', items)
+    lines += _items_block('Questions (answer by number; "ok" takes every default)', questions)
+    decided = [text for _, text in plan.decided]
+    if decided:
+        lines.append("Decisions I made:")
+        lines += [f"  - {_clip(x.splitlines()[0], 300)}" for x in decided]
+    if plan.left_out:
+        lines.append(
+            f"Left out of the questions: {len(plan.left_out)} gate item(s) (asked twice, "
+            "answered, or a note; on request)."
+        )
     lines += _spec_diff_lines(orch, feature)
     lines.append(
         f"On request: the full summary ({out}/{feature}/final_summary.md), the gate report "
@@ -472,8 +467,11 @@ def _step_lines(
     parked = {n for p in prog.get("parked") or [] for n in (p.get("steps") or [p.get("step")])}
     prov = {n for p in prog.get("provisional") or [] for n in (p.get("steps") or [p.get("step")])}
     done = set(prog.get("completed_steps") or [])
+    steps = plan_steps(orch.cfg, feature)
+    if steps and all(s.num in done and s.num not in prov for s in steps):
+        return [f"All {len(steps)} step(s) done."]
     out = []
-    for s in plan_steps(orch.cfg, feature):
+    for s in steps:
         state = (
             "kept as provisional (its tests are contested)"
             if s.num in prov
@@ -494,7 +492,7 @@ def _struggle_lines(prog: dict[str, Any], events: list[dict[str, Any]]) -> list[
             failed[str(e.get("step"))] = failed.get(str(e.get("step")), 0) + 1
     out = [f"- {k}: {v} failed attempt(s)" for k, v in failed.items()]
     out += [f"- {p['label']}: parked ({p.get('reason')})" for p in prog.get("parked") or []]
-    return out or ["- none"]
+    return out or ["No struggles."]
 
 
 def _outcomes(
@@ -523,7 +521,8 @@ def _outcomes(
         f"Outcomes: {verdict}; {fails} failed attempt(s), {len(prog.get('parked') or [])} "
         f"parked; {_money_time(events)}."
     ]
-    lines += [f"  {s}" for s in scores]
+    if scores:
+        lines.append("  " + "; ".join(scores))
     extra = last.get("extra") or {}
     if extra:
         lines.append(

@@ -57,10 +57,19 @@ knowledge. It overrides any default you would otherwise assume.
    - structure: which file each new concept goes in (one concept per file; the code map says
      where things live), so no file grows past ~400 lines or mixes two concepts.
 2. Ask only what those sources cannot decide: what the user wants (behavior, priorities,
-   trade-offs), not what the code can tell. At most 5 questions per round, numbered, plain
-   words, each with your recommended default ("1. A free kick inside the box: allowed? Default:
-   no, the rules forbid it."). Every point you decided yourself becomes a "decision I made for
-   you" in the brief (step 6), not a question. Repeat until nothing is open; usually one round.
+   trade-offs), not what the code can tell. Numbered, plain words.
+   A point is a question only when it is a real decision: two or more reasonable options with
+   different outcomes, and the docs, the code, `.agentflow/project.md` and earlier answers don't
+   settle it. Otherwise it is not a question: only one sensible option -> decide it (a "decision
+   I made for you", one line); already answered or resolved, or a note -> leave it out; the same
+   question twice -> one. No limit on the number; order them by impact (what changes most if
+   answered differently first). Each: the problem in one line, then "A: ... (default) / B: ..."
+   on one line:
+
+       1. A free kick inside the box?
+          A: not allowed, the rules forbid it (default) / B: allowed as an indirect kick
+
+   Repeat until nothing is open; usually one round.
 3. Write requirements.md, design.md and plan.md following the templates exactly (the ID format,
    "## Step N: title" headings and "Covers:" lines described above). Every ID must be covered by
    exactly one plan step. Fill the "Overlaps and sources of truth", fixture, "Input domain and
@@ -75,20 +84,21 @@ knowledge. It overrides any default you would otherwise assume.
    the TESTS phase uses them.
 6. Write the spec gate brief to `<out>/$ARGUMENTS/spec_brief.md` (the out folder above; the
    final gate compares the run with it) and show it in the chat. About one screen, plain words,
-   no spec IDs, exactly these sections:
+   no spec IDs, one line per bullet, no sentence that repeats a heading or another section, a
+   section with nothing in it is one line ("None."); exactly these sections:
 
        **Task** — how I understand it (2-4 lines)
        **Plan** — the steps in plain words, one line each
-       **How it is proven** — what the tests and gates will check, in plain words
-       **Not proven** — what you must check by using it (play feel, balance, UI, speed ...)
-       **Decisions I made for you** — at most 5, each with what it rules out
+       **How it is proven** — the 3 most important checks of the tests and gates (rest on request)
+       **Not proven** — the 3 most important things to check by using it (feel, balance, UI ...)
+       **Decisions I made for you** — one line each, with what it rules out
          ("Goals from rebounds count for the free kick: rules out crediting the rebounder.")
        **Project details that matter** — existing code / data it relies on, invariants it
          must keep (saves, hashes, public APIs)
-       **Questions** — at most 5 still open, each with a recommended default ("none")
+       **Questions** — the real decisions still open (step 2's rule), by impact ("None.")
 
-   "Decisions I made for you" is the part the user really checks: pick the ones that change
-   what they will see or that close off an option, not the mechanical ones.
+   "Decisions I made for you" is the part the user really checks: list the ones that change
+   what they will see or that close off an option; the mechanical ones stay in the spec.
 7. Ask: "Is the spec OK? Then I start the run." (default: yes, with the defaults of any open
    questions). An "ok" while questions are open: write their defaults into the spec and
    spec_brief.md first, say so in one line, then Part 2. Answers or changes: update the spec,

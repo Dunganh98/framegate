@@ -282,7 +282,8 @@ def final_facts(
     out += [f"{n}. {_one_line(t)}" for n, t in enumerate(items, 1)] or ["None."]
     out += [
         "",
-        "Write each one in plain words under `## Items` in final_brief.md, with the same number. "
+        "Put each one in final_brief.md under `## Questions`, `## Decisions I made` or "
+        "`## Left out`, named by its number in brackets (`[3]`; the PR role says which). "
         f"Questions you add (questions.md) are numbered after these ({len(items)} + 1, ...).",
     ]
     if code_map:

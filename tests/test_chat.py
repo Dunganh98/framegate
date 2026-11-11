@@ -277,7 +277,7 @@ def test_gate_summary_spec_diff_and_final_gate_parked(
     out = capsys.readouterr().out
     lines = out.splitlines()
     assert lines[0] == "FINAL GATE: demo"
-    assert lines[1].startswith('Decision: answer item 1 ("ok" takes every default below)')
+    assert lines[1].startswith('Decision: answer question 1 ("ok" takes every default below)')
     # no brief from the summary agent: generated plan lines and struggles
     assert "Plan followed?\n  - Step 1 (add): done\n  - Step 2 (neg): parked (see the items)" in out
     # the parked step's tests are expected red, not a failure
@@ -285,9 +285,10 @@ def test_gate_summary_spec_diff_and_final_gate_parked(
     assert "0 failed attempt(s), 1 parked; $" in out
     assert "regression" not in out  # only coverage / mutation scores, and none ran
     assert "structure (not blocking): __init__.py " in out
-    assert "  - step 2 - neg: parked (no reasonable assumption possible" in out
+    # one line when a section has one point
+    assert "\nStruggles: step 2 - neg: parked (no reasonable assumption possible" in out
     assert "Code map: - (WARN: no code map at docs/code-map.md)" in out
-    assert 'Items (answer by number; "ok" takes every default):\n  1. [parked] step 2' in out
+    assert 'Questions (answer by number; "ok" takes every default):\n  1. [parked] step 2' in out
     assert "bool counts as int" not in out  # assumptions: on request
     assert lines[-1].startswith("On request: the full summary (out/demo/final_summary.md)")
     assert r.af("finish", "demo", "--no-retro") == 0
@@ -300,7 +301,7 @@ def test_final_gate_brief_from_the_summary_agent(
     demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The summary agent's final_brief.md fills the plain-words sections and rewords the
-    numbered items (numbers stay the gate's); the code map it writes is committed."""
+    gate items as questions; the code map it writes is committed."""
     r = demo_repo
     r.add_toml(FAST)
     r.two_steps()
@@ -312,13 +313,75 @@ def test_final_gate_brief_from_the_summary_agent(
     assert r.af("gate-summary", "demo") == 0
     out = capsys.readouterr().out
     assert "Plan followed?\n  - Step 1 (add two numbers): done as planned" in out
+    assert "Struggles: No struggles." in out
+    # the 3 most important points, the rest on request
     assert "Proven by the tests:\n  - adding two ints gives their sum" in out
-    assert "Not proven (check it by using it):\n  - nothing to check by hand" in out
+    assert "  - the order does not matter\n  ... 1 more line(s) (on request)" in out
+    assert "Not proven (check it by using it): nothing to check by hand" in out
     assert "Code map: add() listed under demo" in out and "WARN" not in out
-    assert "  1. Should neg(0) give 0 or -0?\n     Default: 0." in out
+    assert "  1. Should neg(0) give 0 or -0?\n     A: 0 (default) / B: -0" in out
+    assert len(out.splitlines()) <= 20
+    assert [e["problems"] for e in r.events() if e["kind"] == "brief_check"] == [[]]
     assert "demo: code map" in git(r.root, "log", "--format=%s", "-3")
     prog = r.progress()
     assert prog["code_map"] == {"exists": True, "updated": True, "missing": []}
+
+
+def test_final_gate_questions_filtered_by_the_brief(
+    demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The brief asks gate items by impact under its own numbers, lists its decisions and
+    leaves out a repeated question; the answers are mapped back to the gate items, and the
+    left-out item gets the answer of the one it repeats."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.two_steps()
+    r.scenario(park_steps=[2], questions_in=["REVIEW", "PR"], brief="filtered")
+    to_final_gate(r)
+    capsys.readouterr()
+    assert r.af("gate-summary", "demo") == 0
+    out = capsys.readouterr().out
+    assert out.splitlines()[1].startswith('Decision: answer questions 1-2 ("ok" takes')
+    assert (
+        "  1. Should add() accept floats?\n     A: no, ints only (default) / B: yes, floats too\n"
+        "  2. Should neg(0) give 0 or -0?\n     A: 0 (default) / B: -0\n"
+        "Decisions I made:\n  - bools count as ints (Python says so)\n"
+        "Left out of the questions: 1 gate item(s)"
+    ) in out
+    answers = r.root / "out/demo/answers.md"
+    answers.write_text(
+        "# Answers (final gate)\n\n1. Q: Should add() accept floats?\n   A: yes, floats too\n"
+        "2. Q: Should neg(0) give 0 or -0?\n   A: Default: 0\n",
+        encoding="utf-8",
+    )
+    assert r.af("answer", "demo") == 0
+    mapped = answers.read_text(encoding="utf-8")
+    assert mapped.startswith("# Answers (final gate, numbered by gate item)")
+    assert "1. Q: Should neg(0) give 0 or -0?\n   A: Default: 0\n" in mapped
+    assert "2. Q: Should add() accept floats?\n   A: yes, floats too\n" in mapped
+    assert "3. Q: [summary agent] [PR] Should add() accept floats?\n" in mapped
+    assert "   A: Same as item 2: yes, floats too" in mapped
+    ev = [e for e in r.events() if e["kind"] == "answer"][-1]
+    assert ev["as_given"].startswith("# Answers (final gate)\n")
+
+
+def test_final_brief_check_asks_for_one_rewrite(demo_repo: DemoRepo) -> None:
+    """A brief whose question has no gate-item number and one option goes back to the PR
+    agent once; the rewrite passes the check."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.two_steps()
+    r.scenario(park_steps=[2], brief="bad")
+    to_final_gate(r)
+    checks = [e for e in r.events() if e["kind"] == "brief_check"]
+    assert [c["rewrite"] for c in checks] == [True, False]
+    first = "\n".join(checks[0]["problems"])
+    assert "name the gate item it answers as [N]" in first and "has one option" in first
+    assert "gate items [1] are in none of" in first
+    assert checks[1]["problems"] == []
+    prompts = [c for c in r.calls() if c["phase"] == "PR"]
+    assert len(prompts) == 2 and "rewrite out/demo/final_brief.md only" in prompts[1]["prompt"]
+    assert any("final brief: 3 problem(s), rewriting once" in x for x in log_lines(r))
 
 
 def test_status_brief_and_overview(demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]) -> None:

@@ -250,7 +250,8 @@ You are in the SPEC phase for feature `$ARGUMENTS`. Templates are in specs/$ARGU
 Claude first settles everything the docs, the code map, the code and `.agentflow/project.md`
 can decide (a checklist: overlaps, fixtures, input domain, serialized data, existing data,
 mirrored code, new functions, which file each concept goes in), then asks only what they
-cannot: at most 5 questions per round, each with a recommended default. Step 6 becomes the spec
+cannot, and only the real decisions (no count cap; 9.10 "Which questions"), each with a
+recommended default. Step 6 becomes the spec
 brief, shown instead of a list of files to review.
 
 ### Step 6 — Role prompts
@@ -1306,7 +1307,7 @@ python scripts/orchestrate.py status health-index-v2
 |---|---|---|
 | Spec | The spec brief: is the task understood right? Is the plan sensible? Above all "Decisions I made for you": does each one rule out something you want? What is "Not proven" and must you check it by hand? | The spec files themselves (they are for the agents), wording |
 | Tests (only with `[gates] tests = "human"`) | "What the tests check" in plain words: does it match what you want? Questions and their defaults | Test code, counts |
-| Final | Plan followed (changed steps and why), the numbers, the struggles, "Not proven" (try it), the code map line, every numbered item and its default | Code that is fully covered and unremarkable |
+| Final | Plan followed (changed steps and why), the numbers, the struggles, "Not proven" (try it), the code map line, every question and its default, the decisions made | Code that is fully covered and unremarkable |
 | PR | Assumptions, survivors, high-risk areas, the structure (file sizes, the code map), then code | Code that is fully covered and unremarkable |
 
 **Changing the spec mid-way:** answer ABORT at a question prompt, edit the spec in a normal session, run `approve-spec` again, then set `"phase": "TESTS"` in `out/<feature>/progress.json` and run again. Tests get re-approved against the new spec.
@@ -1954,11 +1955,11 @@ decision and its default first, details only on request.
 
 | Point | Brief | Built by |
 |---|---|---|
-| Spec gate | **Task** (2-4 lines) / **Plan** (one line per step) / **How it is proven** / **Not proven** (what to check by using it: feel, balance, UI, speed) / **Decisions I made for you** (at most 5, each with what it rules out: the part the human really checks) / **Project details that matter** (existing code and data it relies on, invariants it must keep) / **Questions** (at most 5, each with a default) | the chat (feature skill), saved as `out/<f>/spec_brief.md` for the final gate |
-| Spec dialogue | draft everything from the docs, the code map, the code and `.agentflow/project.md` first; ask only what they cannot decide, at most 5 questions per round, with defaults | the chat |
+| Spec gate | **Task** (2-4 lines) / **Plan** (one line per step) / **How it is proven** / **Not proven** (what to check by using it: feel, balance, UI, speed) / **Decisions I made for you** (one line each, with what it rules out: the part the human really checks) / **Project details that matter** (existing code and data it relies on, invariants it must keep) / **Questions** (the real decisions, by impact, each with a default) | the chat (feature skill), saved as `out/<f>/spec_brief.md` for the final gate |
+| Spec dialogue | draft everything from the docs, the code map, the code and `.agentflow/project.md` first; ask only the real decisions they cannot settle, by impact, with defaults | the chat |
 | Tests gate (`[gates] tests = "human"` / `"auto"` only) | what the tests check in plain words, objections left, one line of mechanical checks, questions with defaults; no counts-only summary | `gate-summary` from the test reviewer's `## What the tests check` (test_review.md; fallback: test_summary.md's column) |
-| Final gate | **Plan followed?** (one line per step: done as planned / changed, why) / **Outcomes** with numbers (gates, diff coverage, mutation, failed attempts, parks, cost, agent and check time, structure) / **Struggles** and how they were solved / **Proven** / **Not proven** / **Code map** (one line) / numbered **Items**: parked work, provisional steps and questions, each as the problem in plain words, the options with what each costs or breaks, a recommended default | `gate-summary`: the PR agent's `final_brief.md` for the words, the run records for the numbers; `final_facts.md` lists the numbered items so the brief rewords each under the same number |
-| Setup | what I found (language, tests, slow tests, protected things), the settings that differ from the defaults and why, the knowledge facts in short lines, the code map's modules, at most 5 questions with defaults; files on request | the setup skill |
+| Final gate | **Plan followed?** (one line per step: done as planned / changed, why) / **Outcomes** with numbers (gates, diff coverage, mutation, failed attempts, parks, cost, agent and check time, structure) / **Struggles** and how they were solved / **Proven** / **Not proven** / **Code map** (one line) / **Questions** numbered 1..k by impact (parked work, provisional steps and the open questions that are real decisions; the problem in one line, then `A: ... (default) / B: ...`) / **Decisions I made** / how many gate items were left out | `gate-summary`: the PR agent's `final_brief.md` for the words, the run records for the numbers; `final_facts.md` lists the numbered gate items; the brief places each under Questions / Decisions I made / Left out by its `[N]`, and `agentflow answer` maps the answers back |
+| Setup | what I found (language, tests, slow tests, protected things), the settings that differ from the defaults and why, the knowledge facts in short lines, the code map's modules, the real decisions as questions with defaults; files on request | the setup skill |
 | `agentflow doctor` | one verdict line (ready / not ready), then only the FAILs with the fix and the WARNs that need a decision (findings in the existing code need none); `--brief` prints only that | `doctor.py` |
 | Smoke run offer | one line, cost and time | the setup skill |
 | Retro | `## Brief`: numbered proposals, problem -> fix, recommend take / skip / fold into N; the knowledge facts; the user answers with numbers | the retro role |
@@ -1969,6 +1970,19 @@ decision and its default first, details only on request.
 item); "approve as is" approves and leaves the items open; without items "ok" approves.
 Every question an agent writes (test writer, test reviewer, park requests) has the options and
 a recommended default, so the brief always has one to offer.
+
+**Which questions (2026-11-11, plugin 0.4.1).** The first briefs capped questions and decisions at
+5; the M5-moment-scan final brief still asked notes, closed items and the same question twice.
+Now there is no cap; a filter decides: a question only when two or more reasonable options have
+different outcomes and the spec, the code, `.agentflow/project.md` and earlier answers don't
+settle it. One sensible option -> decided ("Decisions I made", one line); answered, resolved or a
+note -> left out; the same question twice -> one; ordered by impact. Briefs are shorter with the
+same sections: one line per bullet, a section where nothing happened is one line, Proven / Not
+proven the 3 most important points, a question as one line of problem plus `A: ... (default) /
+B: ...`; the final brief is ~20 lines when nothing went wrong. At the final gate the numbers the
+human answers are the brief's (1..k); `agentflow answer` maps them to the gate items and fills in
+the decided and repeated ones. A check after the PR run sends a brief with duplicates, closed
+items or notes as questions, one-option questions or unplaced items back once (not blocking).
 
 **Readability at the structure level** (the human owns what classes are for and how they work
 together, not every line or test):
