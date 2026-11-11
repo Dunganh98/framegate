@@ -11,7 +11,7 @@ chat run protocol, `agentflow protocol`); the plugin only registers things. Inst
 ```
 .claude-plugin/marketplace.json     # marketplace "agentflow", one entry: source "./plugin"
 plugin/
-  .claude-plugin/plugin.json        # name agentflow, version 0.3.1
+  .claude-plugin/plugin.json        # name agentflow, version 0.4.0
   hooks/hooks.json                  # PreToolUse (Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell) + Stop
   scripts/agentflow-hook.js         # wrapper: node agentflow-hook.js <event> -> agentflow hook <event>
   skills/setup/SKILL.md             # /agentflow:setup: read the repo, draft agentflow.toml and
@@ -116,9 +116,10 @@ runs (see docs/claude-cli-notes.md).
 | Skill load | `` !`agentflow spec <f>` ``, `` !`agentflow spec-brief <f>` ``, `` !`agentflow protocol` `` are injected (pre-approved by `allowed-tools: Bash(agentflow *) PowerShell(agentflow *)`). A refusal (dirty tree, foreign branch, active run) exits 1 and aborts the invocation with the message shown |
 | Run | Bash tool `run_in_background: true`: `agentflow run <f>`. One completion notification when it exits (exit 10 shows as status `failed`; the protocol reads the state from `agentflow status <f> --brief`, not from the code) |
 | Live view | Monitor tool: `agentflow watch <f>`, `timeout_ms` 1800000. Each progress line = one event (lines within 200 ms batch). The watch exits when the run's lock is gone (`watch ended: <state>`); at the 30-min deadline the skill re-arms it, and `progress.cursor` makes it continue without repeats or gaps |
-| Gate | `agentflow gate-summary <f>` shown in a code block; the skill ends its turn (Claude Code's own "waiting for input"); agentflow shows a Windows toast. The reply is mapped to approve / reject / answers.md + answer / finish (table in `src/agentflow/templates/chat_protocol.md`), then the run starts again in the background |
+| Spec gate | the skill drafts the spec from the docs, the code map, the code and `.agentflow/project.md`, asks at most 5 questions per round (each with a default), writes `out/<f>/spec_brief.md` (task, plan, how it is proven, not proven, decisions made for the user, project details, questions) and shows it instead of the spec files |
+| Gate | `agentflow gate-summary <f>` (the gate brief: decision + default first, about one screen in plain words) shown unchanged; the skill ends its turn (Claude Code's own "waiting for input"); agentflow shows a Windows toast. The reply is mapped to approve / reject / answers.md + answer / finish (table in `src/agentflow/templates/chat_protocol.md`), then the run starts again in the background |
 | Resume | `/agentflow:resume [f]` injects `agentflow status [f] --brief` (always exit 0) and the protocol; a run started by another session has no task notification, so its end is the watch's last line |
-| Wrap-up | retro proposals, PR offer (`gh pr create --body-file out/<f>/final_summary.md`, only on yes, before the cleanup), `agentflow cleanup <f>`; later `--tags` |
+| Wrap-up | the retro's `## Brief` (numbered proposals with take / skip / fold) and its knowledge facts, answered by number; PR offer (`gh pr create --body-file out/<f>/final_summary.md`, only on yes, before the cleanup), `agentflow cleanup <f>`; later `--tags` |
 
 Permissions: an `allowed-tools` grant only lasts for the turn the skill was invoked in. Every
 later turn (gate replies, run restarts, the Monitor) needs `Bash(agentflow *)` /

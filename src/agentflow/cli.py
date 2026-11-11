@@ -31,8 +31,9 @@ commands:
                           the knowledge file ([project] knowledge), committed
   gates <feature> --scope step|final [--skip-mutation]
   spec-brief <feature>    print the conventions brief for the SPEC session
-  doctor [--full]         check the setup without agents: config, git, claude CLI, tools,
-                          gate commands, test selection by spec ID; --full: the whole suite
+  doctor [--full] [--brief]  check the setup without agents: config, git, claude CLI,
+                          tools, gate commands, test selection by spec ID; --full: the whole
+                          suite; --brief: only the verdict and what needs action
   cleanup <feature> [--tags] [--force]   delete out/<feature>/ and its run logs (DONE only);
                           --tags: also the feature's tags (spec-approved, tests-approved,
                           spec-update, tests-update, knowledge-update)
@@ -88,6 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--skip-mutation", action="store_true")
     p = sub.add_parser("doctor", help="check the project setup (no agents)")
     p.add_argument("--full", action="store_true", help="also run the whole test suite")
+    p.add_argument("--brief", action="store_true", help="only the verdict and what needs action")
     p = sub.add_parser("unlock", help="clear a stale phase lock left by a killed run")
     p.add_argument("--force", action="store_true", help="even if a run looks active")
     sub.add_parser("protocol", help="print the chat run protocol (used by the plugin skills)")
@@ -143,7 +145,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "doctor":
             from agentflow import doctor
 
-            return doctor.run(cfg, full=args.full)
+            return doctor.run(cfg, full=args.full, only_brief=args.brief)
         if args.command == "spec-brief":
             from agentflow.scaffold import spec_brief
 

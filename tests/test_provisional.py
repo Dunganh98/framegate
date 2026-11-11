@@ -73,8 +73,10 @@ def test_a_step_whose_tests_are_wrong_keeps_its_code(
     capsys.readouterr()
     assert r.af("gate-summary", "demo") == 0
     out = capsys.readouterr().out
-    assert "Provisional steps (one answer approves all test fixes):\n  1. Proposed test" in out
-    assert "Open questions: none" in out
+    assert "the provisional-steps item must be answered before the gate can be approved" in out
+    assert "\n  1. [provisional] Proposed test fixes (the code of these steps" in out
+    assert "\n  2. " not in out  # one item for all provisional steps, no open question
+    assert "Step 1 (add): kept as provisional (its tests are contested)" in out
     # the gate cannot be approved (or finished) past the open fix
     assert r.af("approve", "demo") == 1 and r.af("finish", "demo", "--no-retro") == 1
     (r.root / "out/demo/answers.md").write_text(

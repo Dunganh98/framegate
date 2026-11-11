@@ -1,14 +1,16 @@
 ---
 name: feature
-description: Drive one agentflow feature from this chat - spec dialogue, approval, the background run with a live view, the gates answered in plain words, cleanup. Run only when the user invokes it.
+description: Drive one agentflow feature from this chat - spec dialogue, a short spec brief to approve, the background run with a live view, the gate briefs answered in plain words, cleanup. Run only when the user invokes it.
 argument-hint: <feature-slug>
 disable-model-invocation: true
 allowed-tools: Bash(agentflow *) PowerShell(agentflow *) Monitor Read Write Edit Glob Grep
 ---
-You drive the agentflow workflow for feature `$ARGUMENTS` in this chat. The user only types
-requirements, answers and gate decisions; you run every `agentflow` command. The CLI is the
-engine: never edit `progress.json`, tags or anything under the out folder by hand (the one
-exception is `answers.md`, see the run protocol).
+You drive the agentflow workflow for feature `$ARGUMENTS` in this chat. The user is the
+manager: they give the requirements, answer a few questions and check outcomes; you run every
+`agentflow` command. The spec files are precise and written for the agents; the user reads
+short briefs in plain words instead (no spec IDs without their meaning). The CLI is the engine:
+never edit `progress.json`, tags or anything under the out folder by hand (the exceptions:
+`answers.md`, see the run protocol, and `spec_brief.md`, below).
 
 ## Setup (already done when this skill loaded)
 
@@ -24,51 +26,74 @@ the spec (that needs `agentflow approve-spec` again and restarts from the tests)
 ## Project conventions for the spec
 
 Printed by `agentflow spec-brief $ARGUMENTS`: the spec folder, templates, source and test paths,
-the language, and how interface stubs and tests are written here. It overrides any default you
-would otherwise assume.
+the language, how interface stubs and tests are written here, the code map and the project
+knowledge. It overrides any default you would otherwise assume.
 
 !`agentflow spec-brief $ARGUMENTS`
 
 ## Part 1: the spec dialogue
 
-1. Read the spec folder for `$ARGUMENTS` and the requirements the user gives.
-2. Before writing anything, ask clarifying questions, grouped by: requirements and acceptance
-   criteria; edge cases (empty, NaN, missing, out-of-range, units, timing, ordering); failure
-   behavior; non-goals; test data and fixtures; verification harness on real data; dependencies
-   and architecture constraints. Always also ask (each gap below cost a live run questions,
-   assumptions or a parked step):
+1. Read the requirements the user gives, then decide everything you can yourself first: read
+   the docs, the code map, the code the feature touches and the project knowledge above. Work
+   through this checklist and settle each point from those sources (each gap cost a live run
+   questions, assumptions or a parked step):
+   - requirements and acceptance criteria; edge cases (empty, NaN, missing, out-of-range,
+     units, timing, ordering); failure behavior; non-goals;
    - overlaps: which requirements can apply to the same input, and which one wins; which stored
      value is copied or derived from another, and can the source change afterwards;
-   - fixtures: for each case that needs particular data (a seed, a recording, a rare situation),
-     how a test sees from outside that the situation happened, and whether a check over picked
-     cases may pass with zero cases;
+   - fixtures: for each case that needs particular data (a seed, a recording, a rare
+     situation), how a test sees from outside that the situation happened, and whether a check
+     over picked cases may pass with zero cases;
    - input domain and copies: the valid range of each public method's inputs (NaN, infinity,
      null, undefined enum values) and what a copy / clone shares;
    - serialized data: which existing golden / hash / snapshot / save tests serialize a type
      this feature changes, and is the new member in or out of them;
    - existing data: every existing concept a requirement names in words ("the moment's goal
-     event", "his rating") resolved to one exact member and where it is set; read the code,
-     propose the member, and ask only when two members could be meant;
+     event", "his rating") resolved to one exact member and where it is set (read the code);
    - mirrored code (only when a requirement says "as X does"): the method and lines of X and
-     the choices to copy (cut-offs, raw vs clamped values, tie-breaks, order of checks); for a
-     variant (another choice, grade, side), which input fields change and how;
+     the choices to copy (cut-offs, raw vs clamped values, tie-breaks, order of checks);
    - new functions: which inputs each clamps itself, what every output holds on "no result",
-     and which error wins when two inputs are bad.
-   At most ~10 questions per round, numbered, each with a recommended default. Repeat until
-   nothing is open.
+     and which error wins when two inputs are bad;
+   - structure: which file each new concept goes in (one concept per file; the code map says
+     where things live), so no file grows past ~400 lines or mixes two concepts.
+2. Ask only what those sources cannot decide: what the user wants (behavior, priorities,
+   trade-offs), not what the code can tell. At most 5 questions per round, numbered, plain
+   words, each with your recommended default ("1. A free kick inside the box: allowed? Default:
+   no, the rules forbid it."). Every point you decided yourself becomes a "decision I made for
+   you" in the brief (step 6), not a question. Repeat until nothing is open; usually one round.
 3. Write requirements.md, design.md and plan.md following the templates exactly (the ID format,
    "## Step N: title" headings and "Covers:" lines described above). Every ID must be covered by
    exactly one plan step. Fill the "Overlaps and sources of truth", fixture, "Input domain and
-   copy semantics" and "Data flow" sections from the answers (if the project's templates lack
-   them, add them anyway), and "Existing data this spec reads" / "Mirrored code" likewise. A step that builds on an earlier step's code, or changes the same
-   method, gets a "Depends on: Step N" line.
+   copy semantics" and "Data flow" sections (if the project's templates lack them, add them
+   anyway), and "Existing data this spec reads" / "Mirrored code" likewise. A step that builds
+   on an earlier step's code, or changes the same method, gets a "Depends on: Step N" line.
 4. Create interface stubs in the source paths named above, in the stub style named above: full
-   typed signatures, doc comments that reference the IDs, bodies that only signal "not
-   implemented". Stubs must compile or import cleanly.
+   typed signatures, a one-line doc comment per public type and method saying what it is for
+   (in words) plus the IDs it serves, bodies that only signal "not implemented". One concept
+   per file. Stubs must compile or import cleanly.
 5. Do not write tests or implementation. The test tagging conventions are for reference only;
    the TESTS phase uses them.
-6. End with a short list of what the user should review most carefully, and ask: "Is the spec
-   OK? Then I start the run." Changes the user asks for: make them and ask again.
+6. Write the spec gate brief to `<out>/$ARGUMENTS/spec_brief.md` (the out folder above; the
+   final gate compares the run with it) and show it in the chat. About one screen, plain words,
+   no spec IDs, exactly these sections:
+
+       **Task** — how I understand it (2-4 lines)
+       **Plan** — the steps in plain words, one line each
+       **How it is proven** — what the tests and gates will check, in plain words
+       **Not proven** — what you must check by using it (play feel, balance, UI, speed ...)
+       **Decisions I made for you** — at most 5, each with what it rules out
+         ("Goals from rebounds count for the free kick: rules out crediting the rebounder.")
+       **Project details that matter** — existing code / data it relies on, invariants it
+         must keep (saves, hashes, public APIs)
+       **Questions** — at most 5 still open, each with a recommended default ("none")
+
+   "Decisions I made for you" is the part the user really checks: pick the ones that change
+   what they will see or that close off an option, not the mechanical ones.
+7. Ask: "Is the spec OK? Then I start the run." (default: yes, with the defaults of any open
+   questions). An "ok" while questions are open: write their defaults into the spec and
+   spec_brief.md first, say so in one line, then Part 2. Answers or changes: update the spec,
+   the stubs and spec_brief.md, show the changed brief sections only, ask again. The spec files themselves only on request ("show
+   me the plan", "more detail on step 2": show that part).
 
 ## Part 2: from "spec OK" to DONE
 

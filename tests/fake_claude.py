@@ -17,6 +17,9 @@ Scenario keys:
     marks it VALID
   review_invalid: true -> the reviewer also writes an invalid finding (negative ints rejected);
     TRIAGE deletes it and marks it INVALID
+  structure: true -> the first REVIEW run lists one structure finding in review.md
+  brief: true -> PR also writes out/demo/final_brief.md (plain-words sections, item 1 reworded)
+  code_map: true -> PR also writes docs/code-map.md
   language: "python" (default) or "dotnet" (C# files for the .NET fixture, see test_dotnet_e2e)
   retro_omit: item IDs (e.g. ["F1"]) the RETRO run leaves out of retro_proposals.md (every
     other ID from out/demo/retro_input.md is listed under "Not acted on")
@@ -404,6 +407,11 @@ def main() -> int:
         if scen.get("review_invalid"):
             write(*lang["review_invalid"])
             lines += f"{lang['invalid_name']} DEMO-R-001 low negatives accepted\n"
+        if scen.get("structure") and runs[phase] == 1:
+            lines += (
+                "\n## Structure findings\n- src/demo/__init__.py: add() and neg() are two "
+                "concepts -> one file each\n"
+            )
         write("out/demo/review.md", lines or "No findings.\n")
     elif phase == "TRIAGE":
         lines = ""
@@ -424,6 +432,16 @@ def main() -> int:
             )
     elif phase == "PR":
         write("out/demo/final_summary.md", "# Final summary\nSummary.\n")
+        if scen.get("brief"):
+            write(
+                "out/demo/final_brief.md",
+                "# Final brief\n\n## Plan followed?\n- Step 1 (add two numbers): done as planned\n"
+                "\n## Struggles\n- none\n\n## Proven\n- adding two ints gives their sum\n"
+                "\n## Not proven\n- nothing to check by hand\n\n## Code map\nadd() listed under "
+                "demo\n\n## Items\n1. Should neg(0) give 0 or -0?\n   Default: 0.\n",
+            )
+        if scen.get("code_map"):
+            write("docs/code-map.md", "# Code map\n\n## demo\n- add(): adds two ints\n")
     elif phase == "RETRO":
         inp = pathlib.Path("out/demo/retro_input.md")
         ids = re.findall(r"^### ([QFERVGDAP]\d+) ", inp.read_text(encoding="utf-8"), re.M)

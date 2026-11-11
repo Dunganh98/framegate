@@ -1,6 +1,6 @@
 # Agentic Development Workflow — Setup Guide
 
-Spec-driven, test-first workflow for Claude Code, with deterministic gates. You approve the spec and the test summary; everything between those gates runs autonomously, and every agent works inside a "frame" of scripts that return pass/fail.
+Spec-driven, test-first workflow for Claude Code, with deterministic gates. You approve the spec and the result, each from a short brief in plain words; everything between those gates runs autonomously, and every agent works inside a "frame" of scripts that return pass/fail.
 
 ---
 
@@ -24,8 +24,9 @@ Spec-driven, test-first workflow for Claude Code, with deterministic gates. You 
 2. **The verifier is independent of the implementer.** Tests are written from the spec and stubs only, approved by a human, then frozen. Implementers cannot change them.
 3. **Rules are checks, not prompts.** If a rule can be checked mechanically, it lives in `scripts/`, a hook, or CI, not in CLAUDE.md. CLAUDE.md is only for what can't be checked.
 4. **State lives in files, not conversations.** Each phase and step is a fresh `claude -p` process. Context never accumulates, so nothing depends on auto-compact.
-5. **Three human gates, forward only: SPEC -> TESTS -> FINAL.** Nothing stops in between. The test writer and the test reviewer write questions to `out/<feature>/questions.md` and continue; they are shown together at the tests gate. The implementer assumes from the spec and logs every assumption in `steps.md`; only when no reasonable assumption is possible it parks the step (`park.md`) and the run goes on. Parked items and assumptions are listed at the final gate. (Implemented in the agentflow package; the scripts below are the original single-repo version.)
+5. **Two human gates, forward only: SPEC -> FINAL** (the original design had a third, TESTS, between them; the agentflow package keeps it only with `[gates] tests = "human"` / `"auto"`). Nothing stops in between. The test writer and the test reviewer write questions to `out/<feature>/questions.md` and continue; the test reviewer checks the tests against the spec, and its questions and open objections come to the final gate. The implementer assumes from the spec and logs every assumption in `steps.md`; only when no reasonable assumption is possible it parks the step (`park.md`) and the run goes on. Parked items and assumptions are listed at the final gate. (Implemented in the agentflow package; the scripts below are the original single-repo version.)
 6. **Every human correction becomes data.** Gate rejections, escalations and gate failures are logged. A retro agent turns recurring problems into new checks.
+7. **The human is the manager, not the reader of specs.** They give clear input and check outcomes. The spec files stay precise and are written for the agents; wherever the human reads or decides, they get a short brief: the decision and its default first, about one screen, plain words, no spec ID without its meaning, the detail files only on request. The human owns the structure (what each class is for and how the classes work together), not every line or test. Details: 9.10.
 
 ---
 
@@ -35,12 +36,12 @@ Spec-driven, test-first workflow for Claude Code, with deterministic gates. You 
 
 | Phase | Who | Writes to | Ends with |
 |---|---|---|---|
-| SPEC | Interactive session (`/spec`) | `specs/<feature>/`, interface stubs in `src/` | **Gate 1: you approve** → tag `spec-approved/<feature>` |
-| TESTS | Headless test writer, then the headless **test reviewer** (TEST_REVIEW) | `tests/`, `out/` (reviewer: `out/` only) | Red-against-stubs + traceability + smell checks → reviewer objections go back to the writer (`test_review_rounds`, default 2) → **Gate 2: you read `tests_gate.md`** (ID → tests → what it checks, checks, verdict, all questions) → approve / reject / answer → tag `tests-approved/<feature>`. `[gates] tests = "auto"` skips the stop when all is clean |
+| SPEC | Interactive session (`/spec`; package: `/agentflow:feature`) | `specs/<feature>/`, interface stubs in `src/`, the spec brief `out/<feature>/spec_brief.md` | **Gate 1: you approve the spec brief** (task, plan, how it is proven, not proven, decisions made for you, project details, questions) → tag `spec-approved/<feature>` |
+| TESTS | Headless test writer, then the headless **test reviewer** (TEST_REVIEW) | `tests/`, `out/` (reviewer: `out/` only) | Red-against-stubs + traceability + smell checks → reviewer objections go back to the writer (`test_review_rounds`, default 2) → tag `tests-approved/<feature>`. Package default (`[gates] tests = "defer"`): no stop, the open points go to the final gate. With `"human"`: **Gate 2**, a brief of what the tests check in plain words and the questions with defaults (`tests_gate.md` on request) → approve / reject / answer; `"auto"` skips the stop when all is clean |
 | IMPLEMENT | Headless implementer, one fresh run per plan step | `src/`, `out/` | Step gates green → commit, next step. No stop: assumptions logged in `steps.md`; a step without a reasonable assumption or failing `max_attempts` times is parked |
-| REVIEW | Headless adversarial reviewer, then the test reviewer triages (TRIAGE) | `tests/review/`, `out/` | Failing tests for findings → triage against the spec (valid kept, invalid deleted with a reason) → implementer fixes (unfixable: parked) → final gates |
-| PR | Headless summary agent | `out/` | `out/<feature>/final_summary.md` → **Gate 3: you decide**: approve (→ RETRO), `finish --no-retro`, or answer the parked questions (→ redo only those, gate 3 again) |
-| RETRO | Headless | `out/` | `out/<feature>/retro_proposals.md` + metrics row |
+| REVIEW | Headless adversarial reviewer, then the test reviewer triages (TRIAGE) | `tests/review/`, `out/` | Failing tests for findings → triage against the spec (valid kept, invalid deleted with a reason) → implementer fixes (unfixable: parked) → structure fixes (the reviewer's structure findings, applied with every test green) → final gates + structure report |
+| PR | Headless summary agent | `out/`, the code map | `final_summary.md` (detail, PR description), `final_brief.md` (the gate brief), the code map update → **Final gate: you decide from the brief**: "ok" (approve → RETRO, or take every default of the numbered items), `finish --no-retro`, or answer items by number (→ redo only those, final gate again) |
+| RETRO | Headless | `out/` | `out/<feature>/retro_proposals.md` (starts with a numbered `## Brief`, each proposal with take / skip / fold) + metrics row |
 
 ### Enforcement layers
 
@@ -58,6 +59,7 @@ The hooks are convenience and early feedback. **The tag-based diff checks in CI 
 
 ```
 CLAUDE.md
+docs/code-map.md             # per module: purpose, key classes, how they work together (9.10)
 .claude/
   settings.json              # hook registration
   commands/spec.md           # /spec slash command (interactive spec phase)
@@ -244,6 +246,13 @@ You are in the SPEC phase for feature `$ARGUMENTS`. Templates are in specs/$ARGU
    `python scripts/orchestrate.py approve-spec $ARGUMENTS`.
 ```
 
+**agentflow package (`plugin/skills/feature/SKILL.md`):** the dialogue is manager-style (9.10).
+Claude first settles everything the docs, the code map, the code and `.agentflow/project.md`
+can decide (a checklist: overlaps, fixtures, input domain, serialized data, existing data,
+mirrored code, new functions, which file each concept goes in), then asks only what they
+cannot: at most 5 questions per round, each with a recommended default. Step 6 becomes the spec
+brief, shown instead of a list of files to review.
+
 ### Step 6 — Role prompts
 
 These are appended to the system prompt of each headless run. **Keep each under ~3 KB** (Windows command-line length limit ≈ 32k characters).
@@ -321,6 +330,12 @@ Write out/<feature>/pr.md with these sections:
 7. Where the human should look first: interfaces, data handling, anything high-risk, ranked
 8. Open questions
 ```
+
+**agentflow package:** the role files live in `src/agentflow/roles/`. Beyond this original set:
+the implementer and the adversarial reviewer carry the readability checklist (9.10; the
+reviewer's structure findings need no test), the PR role writes `final_summary.md`,
+`final_brief.md` and the code map update, the retro role starts its file with a numbered
+`## Brief`, and every question an agent writes has the options and a recommended default.
 
 `roles/retro.md`:
 
@@ -1274,7 +1289,9 @@ python scripts/orchestrate.py run health-index-v2
 #   -> implementation, review, triage, fixes and final gates run without a stop
 #   -> final gate: read out/<feature>/final_summary.md -> approve (retro) / finish --no-retro /
 #      answer the parked questions (redo only those)
-#   (agentflow package: agentflow run / approve / reject / answer / finish <feature>)
+#   (agentflow package: driven from the chat with /agentflow:feature; the chat shows a
+#    brief at each gate, `agentflow gate-summary`, and maps "ok" / answers by number to
+#    agentflow approve / answer / finish <feature>)
 
 # 3. Open the PR, review in this order:
 #    assumptions -> mutation survivors -> review findings -> "where to look first" -> code
@@ -1283,14 +1300,14 @@ python scripts/orchestrate.py run health-index-v2
 python scripts/orchestrate.py status health-index-v2
 ```
 
-**What you review at each gate:**
+**What you review at each gate** (agentflow package: from the brief; the files on request):
 
 | Gate | Check | Ignore |
 |---|---|---|
-| Spec | Edge-case table complete? Acceptance criteria testable? Non-goals stated? Verification harness defined? Plan steps small? | Wording |
-| Tests | Summary table: does each line test what the ID means? "Could not test" list. Red/traceability/smells all PASS? | Test code itself (spot-check 2–3) |
-| Review | Is each finding a real problem? Delete the rest. | — |
-| PR | Assumptions, survivors, high-risk areas, then code | Code that is fully covered and unremarkable |
+| Spec | The spec brief: is the task understood right? Is the plan sensible? Above all "Decisions I made for you": does each one rule out something you want? What is "Not proven" and must you check it by hand? | The spec files themselves (they are for the agents), wording |
+| Tests (only with `[gates] tests = "human"`) | "What the tests check" in plain words: does it match what you want? Questions and their defaults | Test code, counts |
+| Final | Plan followed (changed steps and why), the numbers, the struggles, "Not proven" (try it), the code map line, every numbered item and its default | Code that is fully covered and unremarkable |
+| PR | Assumptions, survivors, high-risk areas, the structure (file sizes, the code map), then code | Code that is fully covered and unremarkable |
 
 **Changing the spec mid-way:** answer ABORT at a question prompt, edit the spec in a normal session, run `approve-spec` again, then set `"phase": "TESTS"` in `out/<feature>/progress.json` and run again. Tests get re-approved against the new spec.
 
@@ -1300,7 +1317,7 @@ python scripts/orchestrate.py status health-index-v2
 
 After every feature:
 
-1. Read `out/<feature>/retro_proposals.md`.
+1. Read the `## Brief` of `out/<feature>/retro_proposals.md` (numbered proposals, problem -> fix, with a take / skip / fold recommendation) and pick by number; the detailed sections on request.
 2. Apply the proposals you accept **in a normal interactive session on a separate branch.** Changes to `scripts/`, `.claude/`, `roles/` and `CLAUDE.md` are protected during feature work, by design.
 3. Delete CLAUDE.md lines that are now enforced by a check. CLAUDE.md should shrink over time while `scripts/` grows.
 
@@ -1329,7 +1346,8 @@ Also log corrections you make *outside* the gates (e.g. fixing code after merge)
 ## Part 7 — Limits and troubleshooting
 
 **Limits**
-- **The frame guarantees conformance to the spec, not correctness.** A wrong spec gets implemented perfectly. Spec review remains your most important job.
+- **The frame guarantees conformance to the spec, not correctness.** A wrong spec gets implemented perfectly. Checking the spec brief, above all the decisions made for you, remains your most important job.
+- **The checks don't judge structure.** A feature can pass every gate with a 700-line file mixing two concepts. The structure report and the reviewer's structure findings (9.10) catch the size and the obvious mixes; the code map makes the rest visible to the human.
 - **Unit tests miss ML-specific errors** (leakage, normalization, windowing). Every ML feature needs a verification harness on real recorded data in its spec.
 - **Hooks are not airtight** (e.g. writes via Bash). The frame-diff check in CI is the guarantee.
 - **The Stop hook forces only one continuation.** The orchestrator gates catch the rest.
@@ -1499,7 +1517,7 @@ Making the gate commands configurable is also what would later allow non-Python 
 
 ## Part 9 — Next improvement steps (after the baseline runs well)
 
-**Status: planned.** The baseline (Parts 3–4) runs first on a few real features. Each item here is adopted only when its trigger is met. Do Part 9 before Part 8: extract the framework only after these have settled.
+**Status: planned** (except 9.10, implemented in the agentflow package). The baseline (Parts 3–4) runs first on a few real features. Each item here is adopted only when its trigger is met. Do Part 9 before Part 8: extract the framework only after these have settled.
 
 ### 9.0 Rules for every extension
 
@@ -1520,6 +1538,7 @@ Making the gate commands configurable is also what would later allow non-Python 
 | 6 | 9.6 Design-friction detection | pstack `/architect` (phase 5) | M | 9.1 | Stops blind retries; points to spec problems |
 | 7 | 9.7 Retro panel with backlog | pstack `/reflect` | S–M | 9.1, 9.2 | Fewer one-off rules, better proposals |
 | 8 | 9.8 Epics: split + parallel sub-features | ours (scheduling ideas from harnessOrch) | L | clean single features, 9.1 | One big task, one spec approval, one final summary |
+| — | 9.10 Manager-style briefs, structure, code map | ours (FCSim M5-freekick-review) | M | — | **Done 2026-11-11.** The human decides from one-screen briefs; files stay readable at the class level |
 
 ---
 
@@ -1909,5 +1928,92 @@ Not reused: multi-vendor routing (Codex, OpenCode), the Electron app, resumed lo
 | 9.6 | `scripts/check_friction.py` | `orchestrate.py` (escalate on friction) |
 | 9.7 | `roles/retro_{process,spec}.md`, `roles/retro_synth.md`, `metrics/retro_backlog.md` | `orchestrate.py` (RETRO panel) |
 | 9.8 | `specs/_template_epic/epic.md`, epic scheduler module, `plugin/skills/epic/` | `orchestrator.py` (run in a given worktree), `gates.py` (integration gate), hooks (write scope), `chat.py` (status/resume/cleanup for epics), retro role (split review) |
+| 9.10 (done) | `checks/structure.py`, `tests/test_structure.py`, the project's `docs/code-map.md` | `chat.py` (gate briefs), `orchestrator.py` (structure fixes, file-size items, code map commit, numbered items in `final_facts.md`), `gates.py` (structure report, check results), `report.py`, `doctor.py` (`--brief`, code map), `config.py` (`[docs] code_map`, `[gates] max_file_lines`), roles (implement, review, pr, retro, tests, test_review, spec_update), `chat_protocol.md`, all four skills |
 
 Each item is adopted on its own improvement branch, followed by the smoke test (Step 11) and one real feature before the next item starts.
+
+---
+
+### 9.10 Manager-style briefs, structure and the code map
+
+**Status: implemented in the agentflow package (2026-11-11, plugin 0.4.0).** No mode and no
+config switch: this is how every human-facing point works.
+
+**Origin:** ours. After three FCSim features the user wanted to act as the manager of a
+feature (clear input, outcomes checked) instead of reading spec files and full gate summaries.
+The third feature (M5-freekick-review) passed every gate and still grew
+`SetPieceShotModel.cs` to 694 lines, mixing the kick model with the review calculators: the
+checks judge behavior, nobody judged the structure.
+
+**Principle:** spec docs stay precise, for the agents. The human gets short briefs in plain
+words, about one screen each, with no spec IDs (each step explained in words). The detailed
+summaries stay as files; "more detail" in the chat shows the relevant part. Everywhere: the
+decision and its default first, details only on request.
+
+**The briefs:**
+
+| Point | Brief | Built by |
+|---|---|---|
+| Spec gate | **Task** (2-4 lines) / **Plan** (one line per step) / **How it is proven** / **Not proven** (what to check by using it: feel, balance, UI, speed) / **Decisions I made for you** (at most 5, each with what it rules out: the part the human really checks) / **Project details that matter** (existing code and data it relies on, invariants it must keep) / **Questions** (at most 5, each with a default) | the chat (feature skill), saved as `out/<f>/spec_brief.md` for the final gate |
+| Spec dialogue | draft everything from the docs, the code map, the code and `.agentflow/project.md` first; ask only what they cannot decide, at most 5 questions per round, with defaults | the chat |
+| Tests gate (`[gates] tests = "human"` / `"auto"` only) | what the tests check in plain words, objections left, one line of mechanical checks, questions with defaults; no counts-only summary | `gate-summary` from the test reviewer's `## What the tests check` (test_review.md; fallback: test_summary.md's column) |
+| Final gate | **Plan followed?** (one line per step: done as planned / changed, why) / **Outcomes** with numbers (gates, diff coverage, mutation, failed attempts, parks, cost, agent and check time, structure) / **Struggles** and how they were solved / **Proven** / **Not proven** / **Code map** (one line) / numbered **Items**: parked work, provisional steps and questions, each as the problem in plain words, the options with what each costs or breaks, a recommended default | `gate-summary`: the PR agent's `final_brief.md` for the words, the run records for the numbers; `final_facts.md` lists the numbered items so the brief rewords each under the same number |
+| Setup | what I found (language, tests, slow tests, protected things), the settings that differ from the defaults and why, the knowledge facts in short lines, the code map's modules, at most 5 questions with defaults; files on request | the setup skill |
+| `agentflow doctor` | one verdict line (ready / not ready), then only the FAILs with the fix and the WARNs that need a decision (findings in the existing code need none); `--brief` prints only that | `doctor.py` |
+| Smoke run offer | one line, cost and time | the setup skill |
+| Retro | `## Brief`: numbered proposals, problem -> fix, recommend take / skip / fold into N; the knowledge facts; the user answers with numbers | the retro role |
+| DONE wrap-up, status, resume, errors, interruptions | one or two lines: the state and the one decision needed, with a default | the run protocol and the skills |
+
+**Answering:** numbered answers work as before (`answers.md`, then `agentflow answer`). New:
+"ok" at a gate with numbered items takes every default (the chat writes `A: Default: ...` per
+item); "approve as is" approves and leaves the items open; without items "ok" approves.
+Every question an agent writes (test writer, test reviewer, park requests) has the options and
+a recommended default, so the brief always has one to offer.
+
+**Readability at the structure level** (the human owns what classes are for and how they work
+together, not every line or test):
+- *Checklist* (implementer writes to it, reviewer checks it): one concept per file; a file over
+  ~400 lines or mixing two concepts is a finding; names from the domain; every public type and
+  method has a one-line doc comment saying what it is for; no single-use interfaces or
+  speculative abstraction; no dead defensive branches; not fragmented (no one-method helper
+  classes, no needless splitting). The spec dialogue's stubs follow it from the start.
+- *Structure findings:* the reviewer writes them under `## Structure findings` in review.md
+  (`- <file>: <problem> -> <change>`), without a test. Before the final gates one implementer
+  item ("structure fixes", with attempts) restructures the code without changing behavior,
+  every test green; failing it parks the work like a review fix.
+- *Structure report* (end of the final gates, never blocking): the size of every source file
+  the feature changed (now and before the feature), the longest methods (Python: syntax tree;
+  other languages: a brace heuristic). In `final_gates.md`, the `final_gates` event and the
+  brief's outcomes.
+- *File-size items:* a changed file over `[gates] max_file_lines` (400; 0 = off) becomes a
+  numbered final-gate item. Default: split it now when this feature took it over the limit,
+  else leave it for a later cleanup. The answer ("split it", "leave it") goes to the structure
+  fixes run before the next final gates, even when the spec did not change; a file is asked
+  about once (`size_answered`).
+
+**Code map** (`[docs] code_map`, default `docs/code-map.md`): a living Markdown doc per project,
+under ~300 lines: per module its purpose, its key classes (one line each), how they work
+together (a short flow, mermaid optional), "where to look for X".
+- `/agentflow:setup` drafts it from the code; the user confirms.
+- The PR phase updates the sections a feature touched (the only file outside `out/` the PR
+  agent may write); agentflow commits it as `<f>: code map`.
+- A non-blocking check: a new public type in the feature's diff (Python `class`, C# `public
+  class|struct|interface|enum|record`, generic `export|pub|public` types) that the map does not
+  name is a WARN on the brief's code map line (`code_map` event). `agentflow doctor` WARNs when
+  the map is missing or over 300 lines. The reviewer reads it: code that contradicts its "how
+  they work together" is a structure finding.
+
+**Wiring (9.0 rule 2):**
+
+| Part | Phase | Reads | Writes | Checked by | Telemetry |
+|---|---|---|---|---|---|
+| Spec brief | SPEC (chat) | docs, code map, code, project.md | `out/<f>/spec_brief.md` | the human (gate 1) | — |
+| Structure findings | REVIEW | review.md | `prog.structure_findings` | the step gates of the structure fixes run, then the final gates | `structure_findings`, `structure_fixed`, `parked` |
+| Structure report | final gates | changed source files, the feature's base | `final_gates.md` | not blocking | `final_gates.structure`, `final_gates.results` |
+| File-size items | PR | the last structure report | `open_questions.md` (`[structure report]`) | the human (final gate) | `questions` (who: structure report) |
+| Code map | PR | the diff, the map | the map (committed) | the public-type check (WARN) | `code_map` |
+| Final brief | PR | `final_facts.md`, `spec_brief.md`, run files | `final_brief.md` | `gate-summary` (falls back to generated lines when it is missing) | — |
+
+**Not yet seen on a real feature:** how well the PR agent (Sonnet) writes the brief and the code
+map; the brace heuristic on FCSim's C#; whether "ok = take the defaults" reads naturally at the
+gate. FCSim needs a code map before its next feature.

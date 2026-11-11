@@ -67,6 +67,9 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 #                                  # tests; the test writer's files after its runs) before checking
 #                                  # (only with the adapter's own format check)
 # extra_timeout = 1800             # seconds per [gates.extra] check
+# max_file_lines = 400             # a changed source file longer than this is a numbered item
+#                                  # at the final gate (split now / later); 0 = off. The
+#                                  # final gates report all changed files' sizes (not blocking)
 
 # [gates.extra]                    # project checks run after the final gates and shown at the
 #                                  # final gate with their exit code and output; never blocking
@@ -78,6 +81,11 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 # format = ["ruff", "format", "--check", "{src}", "{tests}"]
 # typecheck = ["python", "-m", "mypy", "{src}"]
 # imports = ["lint-imports"]
+
+[docs]
+# code_map = "docs/code-map.md"    # living code map: per module its purpose, key classes, how
+#                                  # they work together, where to look for X (/agentflow:setup
+#                                  # drafts it; the PR phase updates what a feature touched)
 
 [protected]
 # extra = ["config/", "data/reference/"]   # added to the core + adapter protected paths

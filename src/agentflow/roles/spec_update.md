@@ -24,6 +24,10 @@ Rules:
   `<!-- answer ANS-2 -->` after a changed paragraph.
 - An answer that approves a diagnosis' proposed fix (the question shows it) settles what that
   proposal says about the spec; a proposal about tests or code is not yours.
+- An answer about code structure (a file to split, where a class belongs) is not a spec change
+  unless it settles a design decision the spec names; agentflow hands it to the implementer.
+- An answer that only says "default" / "take the default" means the default the question
+  proposed: write that.
 - Change only what the answers settle. Do not restyle or reorder the spec. If an answer settles
   nothing in the spec (e.g. it only concerns test style), change nothing.
 - Then write {out}/{feature}/spec_update.md: one line per change, `- <ID or section>: <what

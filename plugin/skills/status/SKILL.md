@@ -1,20 +1,21 @@
 ---
 name: status
-description: Show where the agentflow features of this repository stand (one line each, or the last progress of one feature) and offer the tag cleanup after a merged PR. Run only when the user invokes it.
+description: Say where the agentflow features of this repository stand (one or two lines each, with the one decision needed) and offer the tag cleanup after a merged PR. Run only when the user invokes it.
 argument-hint: "[feature-slug]"
 disable-model-invocation: true
 allowed-tools: Bash(agentflow status *) PowerShell(agentflow status *)
 ---
 !`agentflow status $ARGUMENTS --brief`
 
-Show the output above in a code block, unchanged, then at most two short lines:
+Turn the output above into one or two lines per feature, in words: where it stands and the one
+decision needed, with your default. No raw command lines; the output itself on request.
 
 - A feature waiting at a gate, running, interrupted or not running: "Continue it with
   `/agentflow:resume <f>`." One still in SPEC: "Continue the spec with
   `/agentflow:feature <f>`."
-- A feature shown as `DONE, run files cleaned up; tags left: ...`: if the user says its PR is
-  merged, offer
-  `agentflow cleanup <f> --tags` (deletes the local spec-approved/tests-approved/spec-update/tests-update
-  tags; the CI frame diff needs them until the merge) and run it only on their yes.
+- A feature shown as `DONE, run files cleaned up; tags left: ...`: "Is its PR merged? Then I
+  remove its tags (default: yes once merged)." On yes run `agentflow cleanup <f> --tags`
+  (deletes the local spec-approved / tests-approved / spec-update / tests-update tags; the CI
+  frame diff needs them until the merge).
 
 Do not start, approve or change anything else from here.

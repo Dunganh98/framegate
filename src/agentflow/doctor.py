@@ -5,6 +5,10 @@ workflow files (knowledge file, spec templates, .gitignore), the tools the gates
 configured lint / format / typecheck commands (on the whole code), the test selection by spec
 ID, the static test scans, and with --full the whole test suite (how long the final regression
 takes). Exit 0 when nothing FAILs (WARN is fine), else 1.
+
+Output ends with a brief: a one-line verdict (ready / not ready), then only the FAILs with their
+fix and the WARNs that need a decision (warnings about findings in the existing code need none).
+`--brief` prints only that (the chat shows it; the full list on request).
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from agentflow.config import Config, ConfigError
 from agentflow.state import GitError, git
 
 KNOWLEDGE_LINES_WARN = 150
+CODE_MAP_LINES_WARN = 300
 SPEC_ID_PROBE = "DOCTOR-R-000"  # an ID no test has: the selection must run and select nothing
 
 
@@ -28,6 +33,8 @@ class Item:
     name: str
     detail: str = ""
     seconds: float | None = None
+    #: a WARN that needs no decision (e.g. findings in the existing code): not in the brief
+    info: bool = False
 
 
 def _tail(text: str, n: int = 6) -> str:
@@ -61,11 +68,34 @@ def outdated_templates(cfg: Config) -> dict[str, list[str]]:
     return out
 
 
-def run(cfg: Config, echo: Callable[[str], None] = print, full: bool = False) -> int:
+def brief(items: list[Item]) -> list[str]:
+    """The verdict line, then the FAILs and the WARNs that need a decision, one line each."""
+    fails = [i for i in items if i.status == "FAIL"]
+    decide = [i for i in items if i.status == "WARN" and not i.info]
+    if fails:
+        verdict = f"Verdict: NOT READY ({len(fails)} failure(s) to fix)"
+    else:
+        verdict = "Verdict: ready" + (
+            f" ({len(decide)} warning(s) need a decision)" if decide else ""
+        )
+    out = [verdict]
+    for i in [*fails, *decide]:
+        detail = i.detail.strip().splitlines()
+        out.append(f"- {i.status} {i.name}" + (f": {' / '.join(detail[:2])}" if detail else ""))
+    if not fails:
+        out.append("Next: a feature, or a smoke run (see /agentflow:setup).")
+    return out
+
+
+def run(
+    cfg: Config, echo: Callable[[str], None] = print, full: bool = False, only_brief: bool = False
+) -> int:
     items: list[Item] = []
 
     def add(item: Item) -> None:
         items.append(item)
+        if only_brief:
+            return
         secs = f" ({item.seconds:.0f} s)" if item.seconds is not None else ""
         echo(f"[{item.status}] {item.name}{secs}")
         for line in item.detail.splitlines():
@@ -117,6 +147,21 @@ def run(cfg: Config, echo: Callable[[str], None] = print, full: bool = False) ->
         for n in ("requirements.md", "design.md", "plan.md")
         if not (cfg.root / cfg.paths.specs / "_template" / n).is_file()
     ]
+    cmap = cfg.root / cfg.code_map
+    if cmap.is_file():
+        n = len(cmap.read_text(encoding="utf-8").splitlines())
+        long = n > CODE_MAP_LINES_WARN
+        hint = f"{n} lines" + (f" (keep it under {CODE_MAP_LINES_WARN})" if long else "")
+        add(Item("WARN" if long else "OK", f"code map {cfg.code_map}", hint))
+    else:
+        add(
+            Item(
+                "WARN",
+                f"code map {cfg.code_map}",
+                "missing: /agentflow:setup drafts it from the code (or set [docs] code_map); "
+                "without it the final gate cannot show what changed in it",
+            )
+        )
     stale = outdated_templates(cfg)
     tpl_notes = [f"missing: {', '.join(missing)}"] if missing else []
     tpl_notes += [f"{name} lacks: {', '.join(secs)}" for name, secs in stale.items()]
@@ -173,6 +218,7 @@ def run(cfg: Config, echo: Callable[[str], None] = print, full: bool = False) ->
                     + "\nin a run only the changed files are checked; fix these or expect them "
                     "in features that touch those files",
                     secs,
+                    info=True,
                 )
             )
 
@@ -208,7 +254,7 @@ def run(cfg: Config, echo: Callable[[str], None] = print, full: bool = False) ->
         if notes:
             detail += ("; " if detail else "") + f"{notes} note(s) (heuristics, not blocking)"
         detail += "\nonly test files a feature changes are checked in a run" if real else ""
-        add(Item("WARN" if real else "OK", "test scan: smells", detail))
+        add(Item("WARN" if real else "OK", "test scan: smells", detail, info=True))
     except Exception as e:
         add(Item("FAIL", "test scan: smells", f"{type(e).__name__}: {e}"))
 
@@ -225,9 +271,9 @@ def run(cfg: Config, echo: Callable[[str], None] = print, full: bool = False) ->
         add(Item("SKIP", "whole test suite", "run `agentflow doctor --full` to time it"))
 
     fails = sum(1 for i in items if i.status == "FAIL")
-    warns = sum(1 for i in items if i.status == "WARN")
-    echo(
-        f"\n{'FAILED' if fails else 'OK'}: {fails} failure(s), {warns} warning(s)"
-        + ("" if fails else ". Next: a feature, or a smoke run (see /agentflow:setup).")
-    )
+    if not only_brief:
+        warns = sum(1 for i in items if i.status == "WARN")
+        echo(f"\n{'FAILED' if fails else 'OK'}: {fails} failure(s), {warns} warning(s)\n")
+    for line in brief(items):
+        echo(line)
     return 1 if fails else 0

@@ -9,9 +9,9 @@ from agentflow.config import load_config
 from conftest import DemoRepo, git
 
 
-def run(r: DemoRepo, full: bool = False) -> tuple[int, str]:
+def run(r: DemoRepo, full: bool = False, brief: bool = False) -> tuple[int, str]:
     lines: list[str] = []
-    code = doctor.run(load_config(r.root), echo=lines.append, full=full)
+    code = doctor.run(load_config(r.root), echo=lines.append, full=full, only_brief=brief)
     return code, "\n".join(lines)
 
 
@@ -30,9 +30,22 @@ def test_doctor_on_a_working_setup(demo_repo: DemoRepo) -> None:
         "[OK] test scan: spec-ID tags",
         "[WARN] whole test suite (the final gate's regression run)",
         "OK: 0 failure(s)",
+        "[WARN] code map docs/code-map.md",
     ):
         assert line in out, line
     assert "--req DOCTOR-R-000" in out
+    # the brief at the end: the verdict, then only what needs a decision
+    tail = out[out.index("Verdict:") :].splitlines()
+    assert tail[0].startswith("Verdict: ready ("), tail
+    assert tail[1].startswith("- WARN code map docs/code-map.md: missing: /agentflow:setup")
+    assert any(x.startswith("- WARN whole test suite") for x in tail)
+    assert not any("[OK]" in x or "- OK" in x for x in tail)
+    assert tail[-1] == "Next: a feature, or a smoke run (see /agentflow:setup)."
+    (r.root / "docs").mkdir()
+    (r.root / "docs/code-map.md").write_text("# Code map\n", encoding="utf-8")
+    code, out = run(r, brief=True)
+    assert code == 0 and out.startswith("Verdict: ready") and "[OK]" not in out
+    assert "code map" not in out
 
 
 def test_doctor_reports_what_is_broken(
@@ -52,6 +65,11 @@ def test_doctor_reports_what_is_broken(
     assert "[WARN] git: base branch 'nope' not found" in out
     assert "[WARN] knowledge file .agentflow/project.md" in out
     assert "[SKIP] whole test suite" in out and "FAILED: 2 failure(s)" in out
+    code, out = run(r, brief=True)
+    lines = out.splitlines()
+    assert lines[0] == "Verdict: NOT READY (2 failure(s) to fix)"
+    assert lines[1].startswith("- FAIL claude CLI") and lines[2].startswith("- FAIL gate command")
+    assert "- WARN git: base branch 'nope' not found: set [git] base to the branch" in out
 
 
 def test_doctor_warns_about_an_outdated_template_copy(demo_repo: DemoRepo) -> None:

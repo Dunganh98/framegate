@@ -239,17 +239,18 @@ def test_gate_summary_tests_gate_with_questions(
     capsys.readouterr()
     assert r.af("gate-summary", "demo") == 0
     out = capsys.readouterr().out
-    assert out.startswith("TESTS GATE: demo ($")
-    assert "State: 2 open question(s)." in out and "State: State:" not in out
-    assert "Checks: Red against stubs PASS, Traceability PASS, Test smells PASS" in out
-    assert "Spec IDs -> tests: 2/2 IDs have tests, 2 tests" in out
-    assert "DEMO-E-001 (1), DEMO-R-001 (1)" in out
-    assert "Questions (answer by number):\n  1. [test writer] [TESTS]" in out
-    assert "\n  2. [test reviewer] [TEST_REVIEW]" in out
-    assert "Spec changes from your answers: none" in out
-    assert "answers file: out/demo/answers.md" in out
-    assert out.rstrip().endswith("answers to the numbered questions")
-    assert len(out.splitlines()) < 25
+    lines = out.splitlines()
+    assert lines[0].startswith("TESTS GATE: demo ($")
+    # the decision and its default come first
+    assert lines[1].startswith('Decision: answer questions 1-2 ("ok" takes every default)')
+    # what the tests check, in plain words (test_summary.md's column, without the IDs)
+    assert "What the tests check:\n  - sum" in out
+    assert "Test reviewer: no objections." in out
+    assert "Mechanical checks: all pass; 2 test(s), every requirement has tests." in out
+    assert "\n  1. [test writer] [TESTS]" in out and "\n  2. [test reviewer] [TEST_REVIEW]" in out
+    assert "Spec changes" not in out  # none: not shown
+    assert lines[-1].startswith("On request: the full gate file (out/demo/tests_gate.md)")
+    assert len(lines) < 25
 
 
 def test_gate_summary_spec_diff_and_final_gate_parked(
@@ -268,23 +269,56 @@ def test_gate_summary_spec_diff_and_final_gate_parked(
     out = capsys.readouterr().out
     assert "Spec changes from your answers (specs/demo/requirements.md; +1 -1;" in out
     assert "(answer ANS-1)" in out
+    assert out.splitlines()[1].startswith('Decision: "ok" approves the tests (default)')
     assert r.af("approve", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE
     capsys.readouterr()
     assert r.af("gate-summary", "demo") == 0
     out = capsys.readouterr().out
-    assert out.startswith("FINAL GATE: demo ($")
+    lines = out.splitlines()
+    assert lines[0] == "FINAL GATE: demo"
+    assert lines[1].startswith('Decision: answer item 1 ("ok" takes every default below)')
+    # no brief from the summary agent: generated plan lines and struggles
+    assert "Plan followed?\n  - Step 1 (add): done\n  - Step 2 (neg): parked (see the items)" in out
     # the parked step's tests are expected red, not a failure
-    assert "Final gates: PASSED; skipped: " in out
-    assert "Plan steps: 1/2 green, 1 parked" in out
-    assert "Assumptions: 1\n  - [DEMO-E-001] bool counts as int" in out
-    assert "Parked (answer by number to redo them):\n  1. step 2 - neg: no reasonable" in out
-    assert "Cost per phase: SPEC_UPDATE $" not in out  # since the (re)approval only
-    assert out.rstrip().endswith("skip the retro (DONE now) | answers to the numbered items")
+    assert "Outcomes: final gates PASSED; skipped: " in out
+    assert "0 failed attempt(s), 1 parked; $" in out
+    assert "regression" not in out  # only coverage / mutation scores, and none ran
+    assert "structure (not blocking): __init__.py " in out
+    assert "  - step 2 - neg: parked (no reasonable assumption possible" in out
+    assert "Code map: - (WARN: no code map at docs/code-map.md)" in out
+    assert 'Items (answer by number; "ok" takes every default):\n  1. [parked] step 2' in out
+    assert "bool counts as int" not in out  # assumptions: on request
+    assert lines[-1].startswith("On request: the full summary (out/demo/final_summary.md)")
     assert r.af("finish", "demo", "--no-retro") == 0
     capsys.readouterr()
     assert r.af("gate-summary", "demo") == 1
     assert "demo is not at a gate: DONE" in capsys.readouterr().out
+
+
+def test_final_gate_brief_from_the_summary_agent(
+    demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The summary agent's final_brief.md fills the plain-words sections and rewords the
+    numbered items (numbers stay the gate's); the code map it writes is committed."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.two_steps()
+    r.scenario(park_steps=[2], brief=True, code_map=True)
+    to_tests_gate(r)
+    assert r.af("approve", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE
+    capsys.readouterr()
+    assert r.af("gate-summary", "demo") == 0
+    out = capsys.readouterr().out
+    assert "Plan followed?\n  - Step 1 (add two numbers): done as planned" in out
+    assert "Proven by the tests:\n  - adding two ints gives their sum" in out
+    assert "Not proven (check it by using it):\n  - nothing to check by hand" in out
+    assert "Code map: add() listed under demo" in out and "WARN" not in out
+    assert "  1. Should neg(0) give 0 or -0?\n     Default: 0." in out
+    assert "demo: code map" in git(r.root, "log", "--format=%s", "-3")
+    prog = r.progress()
+    assert prog["code_map"] == {"exists": True, "updated": True, "missing": []}
 
 
 def test_status_brief_and_overview(demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]) -> None:

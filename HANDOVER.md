@@ -5,7 +5,7 @@
 Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plugin.md;
 `claude -p` facts: docs/claude-cli-notes.md; language adapters (python, dotnet): docs/adapters.md.
 
-## State (2026-11-11, main; this work on feat/freekick-retro)
+## State (2026-11-11, main; this work on feat/manager-briefs)
 - **Gates:** SPEC -> FINAL (tests gate only with `[gates] tests = "human"|"auto"`), forward only.
   Between them fresh `claude -p` runs in a frame of checks (red stubs, traceability, smells,
   tag-based frame diff, lint/types, feature-scoped diff coverage + mutation, whole-suite
@@ -80,11 +80,38 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
   - Metrics: `questions` counts single questions + asking parks / provisional steps,
     `gate_failures` includes failed final-gate runs. FCSim's M5-freekick-review row
     (questions 1, gate_failures 0) should read 6 and 2; not rewritten.
+- **Manager-style briefs (2026-11-11, branch feat/manager-briefs; no mode, no switch):** the
+  human gives input and checks outcomes; specs stay precise for the agents. Wherever the human
+  reads or decides, the chat shows a short brief: decision + default first, ~one screen, plain
+  words, no spec ID without its meaning, detail files on request (docs/reference.md "Manager-style
+  briefs"). Spec gate: the chat drafts from docs / code map / code / project.md, asks at most 5
+  questions per round with defaults, writes `out/<f>/spec_brief.md` (Task, Plan, How it is
+  proven, Not proven, Decisions I made for you, Project details, Questions). Final gate:
+  `gate-summary` builds it from the PR agent's `final_brief.md` (plan followed?, struggles,
+  proven / not proven, code map, numbered items reworded with options + default) plus generated
+  outcomes (gates, coverage / mutation scores, attempts, parks, cost, agent + check time,
+  structure); `final_facts.md` carries the numbered items so the numbers match. Tests gate: the
+  test reviewer's `## What the tests check`. "ok" with numbered items = take every default;
+  "approve as is" approves. `doctor --brief` (verdict + FAILs + WARNs needing a decision), retro
+  `## Brief` (numbered, take / skip / fold), one-line states elsewhere.
+  - **Structure:** implementer and reviewer roles carry the readability checklist; the reviewer's
+    `## Structure findings` (no test) go to a `structure fixes` implementer run before the final
+    gates (parks like a review fix); the final gates end with a structure report (changed files'
+    sizes before/after, longest methods; not blocking); a file over `[gates] max_file_lines`
+    (400) becomes a final-gate item (default: split now if the feature took it over, else
+    later); its answer goes to the structure run; asked once (`size_answered`).
+  - **Code map:** `[docs] code_map` (docs/code-map.md); setup drafts it; the PR phase updates it
+    (PR may write that file; agentflow commits `<f>: code map`); new public types missing from
+    it are a WARN on the brief; doctor WARNs when missing.
+  - **Not yet seen on a real feature:** how well Sonnet (PR phase) writes the brief and the code
+    map, the brace heuristic for C# method lengths on FCSim, whether "ok = take the defaults"
+    reads naturally at the gate. FCSim has no code map yet: run the setup's code-map step (or
+    write it by hand) before the next feature.
 - **Adapters:** python (pytest, mutmut via WSL on Windows), dotnet (xUnit, Stryker opt-in level).
-- **Chat flow (plugin 0.3.1):** `/agentflow:setup` (new repo: scan, questions, toml +
+- **Chat flow (plugin 0.4.0):** `/agentflow:setup` (new repo: scan, questions, toml +
   project.md, `agentflow doctor`, optional smoke run); `/agentflow:feature <f>` (branch `feat/<f>` from `[git] base`,
-  spec dialogue, approve, background `agentflow run` + Monitor on `agentflow watch`, gate digests
-  via `agentflow gate-summary`, plain-word replies mapped to approve/reject/answer/finish,
+  spec dialogue + spec brief, approve, background `agentflow run` + Monitor on `agentflow watch`,
+  gate briefs via `agentflow gate-summary`, plain-word replies mapped to approve/reject/answer/finish,
   wrap-up: retro proposals, PR offer, `agentflow cleanup`), `/agentflow:resume [f]`,
   `/agentflow:status [f]`. Run protocol text: `src/agentflow/templates/chat_protocol.md`
   (`agentflow protocol`, injected; plugin files can't be read from injections).
@@ -118,6 +145,11 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
     harnessOrch (a friend's repo, no license file; the author agreed to share it on 2026-11-10;
     credit ported files). Starts after
     single features run clean.
+12. Manager-style gates by default, no mode or config switch (2026-11-11): the human is the
+    manager (clear input, outcomes checked), not the reader of specs; the old chat flow that
+    asked to review the spec files and showed full gate summaries is gone; the files stay for
+    the agents and for "more detail". The user owns the structure (what classes are for, how
+    they work together), not every line or test.
 
 ## FCSim integration
 - Worktree `D:\Me\Projects\FCSim-agentflow`, branch `feat/agentflow-setup` (agentflow.toml,
