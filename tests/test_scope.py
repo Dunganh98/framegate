@@ -180,7 +180,11 @@ def test_dotnet_stryker_uses_the_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     write(tagged, "src/App/App.csproj", "<Project />")
-    write(tagged, "tests/App.Tests/App.Tests.csproj", "Microsoft.NET.Test.Sdk App.csproj")
+    write(
+        tagged,
+        "tests/App.Tests/App.Tests.csproj",
+        r'Microsoft.NET.Test.Sdk <ProjectReference Include="..\..\src\App\App.csproj" />',
+    )
     write(
         tagged, "stryker-config.json", json.dumps({"stryker-config": {"test-case-filter": "X!=1"}})
     )

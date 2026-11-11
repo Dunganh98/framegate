@@ -764,6 +764,137 @@ def test_mutation_runs_stryker_per_project(
     assert seen[-1][seen[-1].index("--mutation-level") + 1] == "Basic"
 
 
+def _projects(root: pathlib.Path, tests_ref: Sequence[str]) -> None:
+    """Core, Lib (-> Core) and Runner (-> Core) under src, a test project referencing
+    `tests_ref` (project names under src)."""
+    write(root, "src/Core/Core.csproj", "<Project />")
+    write(root, "src/Core/Engine.cs", "class Engine { }\n")
+    for name in ("Lib", "Runner"):
+        write(
+            root,
+            f"src/{name}/{name}.csproj",
+            r'<Project><ItemGroup><ProjectReference Include="..\Core\Core.csproj" />'
+            "</ItemGroup></Project>",
+        )
+        write(root, f"src/{name}/{name}Code.cs", f"class {name}Code {{ }}\n")
+    refs = "".join(rf'<ProjectReference Include="..\..\src\{n}\{n}.csproj" />' for n in tests_ref)
+    # the name in a comment is not a reference
+    write(
+        root,
+        "tests/Demo.Tests/Demo.Tests.csproj",
+        f"<Project><!-- Runner.csproj: tested by hand --> Microsoft.NET.Test.Sdk {refs}</Project>",
+    )
+
+
+def _fake_stryker(
+    monkeypatch: pytest.MonkeyPatch, mutants: dict[str, list[str]], fail: Sequence[str] = ()
+) -> list[list[str]]:
+    """run_command faking Stryker: `mutants` = repo-relative file -> mutant statuses; a run
+    with --project in `fail` exits 1 without a report. Returns the commands seen."""
+    seen: list[list[str]] = []
+
+    def fake_run(
+        cmd: Sequence[str], cwd: pathlib.Path, env: dict | None = None, timeout: float | None = None
+    ) -> tuple[int, str]:
+        seen.append(list(cmd))
+        if cmd[cmd.index("--project") + 1] in fail:
+            return 1, "Failed to analyze project builds. Stryker cannot continue."
+        out_dir = pathlib.Path(cmd[cmd.index("-O") + 1])
+        (out_dir / "reports").mkdir(parents=True)
+        loc = {"start": {"line": 1, "column": 1}}
+        files = {
+            str((cwd / f).resolve()): {"mutants": [{"status": s, "location": loc} for s in sts]}
+            for f, sts in mutants.items()
+        }
+        (out_dir / "reports" / "mutation-report.json").write_text(
+            json.dumps({"files": files}), encoding="utf-8"
+        )
+        return 0, "done"
+
+    monkeypatch.setattr(dn, "run_command", fake_run)
+    return seen
+
+
+def _stryker_adapter(root: pathlib.Path, score: float = 60) -> DotnetAdapter:
+    a = adapter(root, gates={"mutation_score": score})
+    a.stryker_command = lambda: ["dotnet-stryker"]  # type: ignore[method-assign]
+    return a
+
+
+def test_mutation_leaves_out_a_project_no_test_project_references(
+    tagged: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _projects(tagged, ["Core"])
+    seen = _fake_stryker(monkeypatch, {"src/Core/Engine.cs": ["Killed", "Killed", "Survived"]})
+    changed = ["src/Core/Engine.cs", "src/Runner/RunnerCode.cs"]
+    res = _stryker_adapter(tagged).mutation_check("f", "tests-approved/f", changed)
+    assert [c[c.index("--project") + 1] for c in seen] == ["Core.csproj"]
+    first = res.output.splitlines()[0]
+    assert res.status == "PASS" and first == res.summary, res.output
+    assert first.startswith("Mutation score 66.7% (2/3 killed) on Core.csproj, threshold 60%")
+    assert first.endswith("Runner.csproj not mutated: no test project references it")
+    line = "not mutated (no test project references it): Runner.csproj: src/Runner/RunnerCode.cs"
+    assert line in res.output.splitlines() and "Core.csproj: 2 detected, 1 undetected" in res.output
+    survivors = (tagged / "out/f/mutation_survivors.md").read_text(encoding="utf-8")
+    assert "`src/Core/Engine.cs:1:1`" in survivors and line in survivors
+    # the score comes from Core's report alone
+    res = _stryker_adapter(tagged, score=80).mutation_check("f", "tests-approved/f", changed)
+    assert res.status == "FAIL" and "not mutated" in res.summary
+
+
+def test_mutation_skipped_when_no_changed_project_is_referenced(
+    tagged: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _projects(tagged, ["Core"])
+    seen = _fake_stryker(monkeypatch, {})
+    res = _stryker_adapter(tagged).mutation_check(
+        "f", "tests-approved/f", ["src/Runner/RunnerCode.cs"]
+    )
+    assert res.status == "SKIPPED" and not seen
+    lines = res.output.splitlines()
+    assert lines[0] == (
+        "not mutated (no test project references it): Runner.csproj: src/Runner/RunnerCode.cs"
+    )
+    assert lines[-1] == "SKIPPED: nothing to mutate, no test project references Runner.csproj"
+
+
+def test_mutation_follows_project_references_transitively(
+    tagged: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _projects(tagged, ["Lib"])  # Tests -> Lib -> Core
+    assert dn.referenced_projects(tagged / "tests/Demo.Tests/Demo.Tests.csproj") == {
+        (tagged / "src/Lib/Lib.csproj").resolve(),
+        (tagged / "src/Core/Core.csproj").resolve(),
+    }
+    seen = _fake_stryker(monkeypatch, {"src/Core/Engine.cs": ["Killed"]})
+    res = _stryker_adapter(tagged).mutation_check("f", "tests-approved/f", ["src/Core/Engine.cs"])
+    assert res.status == "PASS" and "not mutated" not in res.output, res.output
+    cmd = seen[0]
+    assert cmd[cmd.index("--project") + 1] == "Core.csproj"
+    assert cmd[cmd.index("-tp") + 1].endswith("Demo.Tests.csproj")
+
+
+def test_mutation_failure_keeps_the_finished_projects(
+    tagged: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _projects(tagged, ["Core", "Lib"])
+    seen = _fake_stryker(
+        monkeypatch, {"src/Lib/LibCode.cs": ["Killed", "Survived"]}, ["Core.csproj"]
+    )
+    changed = ["src/Core/Engine.cs", "src/Lib/LibCode.cs", "src/Runner/RunnerCode.cs"]
+    res = _stryker_adapter(tagged).mutation_check("f", "tests-approved/f", changed)
+    assert [c[c.index("--project") + 1] for c in seen] == ["Core.csproj", "Lib.csproj"]
+    assert res.status == "FAIL", res.output
+    assert res.output.startswith("Stryker failed for Core.csproj (exit 1):\nFailed to analyze")
+    assert "Finished: Lib.csproj: 1 detected, 1 undetected" in res.output
+    assert "not mutated (no test project references it): Runner.csproj" in res.output
+    assert res.summary == (
+        "Stryker failed for Core.csproj; finished: Lib.csproj: 1 detected, 1 undetected"
+    )
+    survivors = (tagged / "out/f/mutation_survivors.md").read_text(encoding="utf-8")
+    assert "`src/Lib/LibCode.cs:1:1`" in survivors
+
+
 def test_diff_hunks() -> None:
     diff = (
         "diff --git a/x.cs b/x.cs\n@@ -3 +3 @@\n-a\n+b\n@@ -10,0 +11,4 @@\n+c\n+d\n+e\n+f\n"
