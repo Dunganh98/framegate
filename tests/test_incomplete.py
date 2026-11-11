@@ -113,7 +113,11 @@ def test_dotnet_timeout_and_missing_coverage_file(
 
 def test_dotnet_mutation_incomplete(tagged: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     write(tagged, "src/App/App.csproj", "<Project />")
-    write(tagged, "tests/App.Tests/App.Tests.csproj", "Microsoft.NET.Test.Sdk App.csproj")
+    write(
+        tagged,
+        "tests/App.Tests/App.Tests.csproj",
+        r'Microsoft.NET.Test.Sdk <ProjectReference Include="..\..\src\App\App.csproj" />',
+    )
     result = {"code": TIMEOUT_CODE, "timeouts": []}
 
     def fake_run(

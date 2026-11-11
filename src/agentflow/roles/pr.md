@@ -30,7 +30,9 @@ Do not write a cost table: agentflow appends cost, time and turns per phase.
 
 Plain words. No spec IDs and no test names unless their meaning is next to them in words ("the
 'no shot without a free-kick' rule", not "FK-R-004"). No numbers agentflow already shows (gates,
-coverage, mutation, cost, time): it adds them. Exactly these sections, short bullets:
+coverage, mutation, cost, time): it adds them. When a gate failed, quote its reason as
+final_gates.md states it; never paraphrase or guess a cause (a project listed as "not mutated"
+is not a failure). Exactly these sections, short bullets:
 
     ## Plan followed?
     - Step 1 (<what it does, in words>): done as planned

@@ -62,6 +62,7 @@ STUB_EXCEPTION = "NotImplementedException"
 _DIAG = re.compile(r"^\s*(?P<file>[^\s(][^(]*?)\((?P<line>\d+),\d+\): (?P<kind>error|warning) ")
 _STRYKER_DETECTED = {"Killed", "Timeout"}
 _STRYKER_UNDETECTED = {"Survived", "NoCoverage"}
+_PROJECT_REF = re.compile(r"<ProjectReference\b[^>]*?\bInclude\s*=\s*([\"'])(.*?)\1", re.I | re.S)
 
 BRIEF = """\
 Language: C# / .NET; tests: xUnit via `dotnet test` ({configuration}).
@@ -366,6 +367,40 @@ def _rel_to(root: pathlib.Path, path: pathlib.Path) -> str:
         return path.resolve().relative_to(root.resolve()).as_posix()
     except (ValueError, OSError):
         return path.as_posix()
+
+
+def project_references(csproj: pathlib.Path) -> list[pathlib.Path]:
+    """The resolved paths of csproj's `<ProjectReference Include=...>` entries (relative to
+    its folder); [] when the file can't be read."""
+    try:
+        text = csproj.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return []
+    return [
+        (csproj.parent / inc.strip().replace("\\", "/")).resolve()
+        for _, inc in _PROJECT_REF.findall(text)
+        if inc.strip()
+    ]
+
+
+def _not_mutated_lines(untested: dict[pathlib.Path, list[str]]) -> list[str]:
+    return [
+        f"not mutated (no test project references it): {p.name}: {', '.join(fs)}"
+        for p, fs in untested.items()
+    ]
+
+
+def referenced_projects(csproj: pathlib.Path) -> set[pathlib.Path]:
+    """Every project csproj references, directly or through the referenced projects' own
+    `<ProjectReference>`s (resolved paths)."""
+    seen: set[pathlib.Path] = set()
+    stack = [csproj.resolve()]
+    while stack:
+        for ref in project_references(stack.pop()):
+            if ref not in seen:
+                seen.add(ref)
+                stack.append(ref)
+    return seen
 
 
 # ---------- adapter ----------
@@ -1021,15 +1056,29 @@ class DotnetAdapter(LanguageAdapter):
             proj = self.owning_project(f)
             if proj is not None:
                 groups.setdefault(proj, []).append(f)
+        # a project no test project references (directly or through its references) can't be
+        # mutated (Stryker: "does not appear to test any mutable project"): listed, not run
+        reach = {tp: referenced_projects(self.root / tp) for tp in test_projects}
+        refs = {p: [tp for tp in test_projects if p.resolve() in reach[tp]] for p in groups}
+        untested = {p: fs for p, fs in groups.items() if not refs[p]}
+        groups = {p: fs for p, fs in groups.items() if refs[p]}
         work = self.root / self.cfg.paths.out / feature / "stryker"
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir(parents=True, exist_ok=True)
+        if untested and not groups:
+            names = ", ".join(p.name for p in untested)
+            self._write_survivors(feature, [], untested, [])
+            return CheckResult(
+                "SKIPPED",
+                "\n".join(_not_mutated_lines(untested))
+                + f"\nSKIPPED: nothing to mutate, no test project references {names}",
+            )
         config_file = self._stryker_config(
             work, self.scope_filter(scope, self.settings.base_filter)
         )
         with self._mutation_tree(groups, base_ref) as (tree, note, line_maps):
             res = self._run_stryker(
-                feature, stryker, groups, test_projects, config_file, tree, line_maps
+                feature, stryker, groups, refs, untested, config_file, tree, line_maps
             )
         if note:
             res.output = f"{res.output}\n{note}"
@@ -1140,27 +1189,29 @@ class DotnetAdapter(LanguageAdapter):
         feature: str,
         stryker: list[str],
         groups: dict[pathlib.Path, list[str]],
-        test_projects: Sequence[str],
+        refs: dict[pathlib.Path, list[str]],
+        untested: dict[pathlib.Path, list[str]],
         config_file: pathlib.Path | None,
         tree: pathlib.Path,
         line_maps: dict[str, list[int]] | None = None,
     ) -> CheckResult:
+        """One Stryker run per group (project -> its changed files) with the test projects
+        that reference it (refs). A failed run does not stop the others; a cut-short run
+        (timeout, killed) does. The counts and survivors of every finished run are kept in the
+        result and in mutation_survivors.md; `untested` groups are listed as not mutated."""
         work = self.root / self.cfg.paths.out / feature / "stryker"
         detected = undetected = 0
         survivors: list[str] = []
-        logs = []
+        logs: list[str] = []
+        failures: list[str] = []  # Stryker's message per failed run
+        failed: list[str] = []  # the failed runs' project names
+        not_mutated = _not_mutated_lines(untested)
         for proj, files in groups.items():
-            refs = [
-                tp
-                for tp in test_projects
-                if proj.name.lower()
-                in (self.root / tp).read_text(encoding="utf-8-sig", errors="replace").lower()
-            ] or test_projects
             out_dir = work / proj.stem
             cmd = [*stryker]
             if config_file is not None:
                 cmd += ["-f", str(config_file)]
-            for tp in refs:
+            for tp in refs[proj]:
                 cmd += ["-tp", str(tree / tp)]
             cmd += ["--project", proj.name]
             for f in files:
@@ -1187,32 +1238,66 @@ class DotnetAdapter(LanguageAdapter):
             if not reason and code == 0 and not report.is_file():
                 reason = "no mutation report"
             if reason:
-                return incomplete_result(reason, out, f"mutation run ({proj.name})")
+                self._write_survivors(feature, survivors, untested, logs)
+                res = incomplete_result(reason, out, f"mutation run ({proj.name})")
+                extra = [*failures, *(["Finished: " + "; ".join(logs)] if logs else [])]
+                res.output = "\n".join([res.output, *extra, *not_mutated])
+                return res
             if code != 0 or not report.is_file():
                 tail = "\n".join(out.splitlines()[-25:])
-                return CheckResult("FAIL", f"Stryker failed for {proj.name} (exit {code}):\n{tail}")
+                failures.append(f"Stryker failed for {proj.name} (exit {code}):\n{tail}")
+                failed.append(proj.name)
+                continue
             d, u, s = stryker_results(
                 json.loads(report.read_text(encoding="utf-8-sig")), tree, files, line_maps
             )
             detected, undetected, survivors = detected + d, undetected + u, survivors + s
             logs.append(f"{proj.name}: {d} detected, {u} undetected")
-        surv_file = self.root / self.cfg.paths.out / feature / "mutation_survivors.md"
-        surv_file.write_text(
-            "# Mutation survivors (Stryker.NET)\n\n" + ("\n".join(survivors) or "None.") + "\n",
-            encoding="utf-8",
-        )
+        self._write_survivors(feature, survivors, untested, logs)
+        if failures:
+            done = "; ".join(logs) if logs else "no other project finished"
+            summary = f"Stryker failed for {', '.join(failed)}; finished: {done}"
+            return CheckResult(
+                "FAIL", "\n".join([*failures, f"Finished: {done}", *not_mutated]), summary=summary
+            )
         total = detected + undetected
         if total == 0:
-            return CheckResult("PASS", "No mutants generated for the changed files.")
+            return CheckResult(
+                "PASS", "\n".join(["No mutants generated for the changed files.", *not_mutated])
+            )
         score = 100.0 * detected / total
         summary = (
-            f"Mutation score {score:.1f}% ({detected}/{total} killed), "
-            f"threshold {self.cfg.mutation_score:g}%."
+            f"Mutation score {score:.1f}% ({detected}/{total} killed) on "
+            f"{', '.join(p.name for p in groups)}, threshold {self.cfg.mutation_score:g}%"
         )
-        msg = summary + " " + "; ".join(logs)
+        if untested:
+            summary += (
+                f" — {', '.join(p.name for p in untested)} not mutated: "
+                "no test project references it"
+            )
+        msg = "\n".join([summary, "; ".join(logs), *not_mutated])
         return CheckResult(
             "PASS" if score >= self.cfg.mutation_score else "FAIL", msg, summary=summary
         )
+
+    def _write_survivors(
+        self,
+        feature: str,
+        survivors: Sequence[str],
+        untested: dict[pathlib.Path, list[str]],
+        finished: Sequence[str],
+    ) -> None:
+        """mutation_survivors.md: the survivors of the finished runs (named in `finished`),
+        plus the projects that were not mutated because no test project references them."""
+        parts = ["# Mutation survivors (Stryker.NET)", ""]
+        if finished:
+            parts += ["Mutated: " + "; ".join(finished), ""]
+        parts.append("\n".join(survivors) or "None.")
+        if untested:
+            parts += ["", *(f"- {line}" for line in _not_mutated_lines(untested))]
+        surv_file = self.root / self.cfg.paths.out / feature / "mutation_survivors.md"
+        surv_file.parent.mkdir(parents=True, exist_ok=True)
+        surv_file.write_text("\n".join(parts) + "\n", encoding="utf-8")
 
     def _stryker_config(self, work: pathlib.Path, filt: str) -> pathlib.Path | None:
         """A config file carrying `filt` (the feature scope's tests, or [dotnet] base_filter)
