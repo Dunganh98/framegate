@@ -16,7 +16,10 @@ commands:
                           .gitignore lines
   spec <feature>          create/switch to the branch feat/<feature> from [git] base, copy
                           the spec templates, set the SPEC phase lock
-  approve-spec <feature>  commit + tag spec-approved/<feature>, reset progress
+  spec-check <feature>    mechanical checks of the spec tables (rules without a spec ID,
+                          copied code that is not in the named file); exit 1 on a problem
+  approve-spec <feature> [--force]  spec-check, then commit + tag spec-approved/<feature>,
+                          reset progress; --force: approve with spec-check problems
   run <feature>           advance to the next human gate (tests, final) or DONE; no other stops
   status [<feature>] [--brief]   progress and which gate is waiting; no feature: all
                           features; --brief: short state + last progress lines (for the chat)
@@ -64,8 +67,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["python", "dotnet", "generic"],
         help="default: detected (generic: any other language, configured in agentflow.toml)",
     )
-    for name in ("spec", "approve-spec", "run", "approve", "spec-brief", "watch", "gate-summary"):
+    for name in ("spec", "spec-check", "run", "approve", "spec-brief", "watch", "gate-summary"):
         sub.add_parser(name).add_argument("feature")
+    p = sub.add_parser("approve-spec")
+    p.add_argument("feature")
+    p.add_argument("--force", action="store_true", help="approve with spec-check problems")
     p = sub.add_parser("status")
     p.add_argument("feature", nargs="?")
     p.add_argument("--brief", action="store_true", help="short state for the chat")
@@ -151,6 +157,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             print(spec_brief(cfg, args.feature))
             return 0
+        if args.command == "spec-check":
+            from agentflow.checks import spec_lint
+
+            found = spec_lint.problems(cfg, args.feature)
+            for line in found:
+                print(f"- {line}")
+            print(f"Spec check: {len(found)} problem(s)" if found else "Spec check: OK")
+            return 1 if found else 0
         if args.command == "gates":
             from agentflow.adapters import get_adapter
             from agentflow.gates import run_gates
@@ -166,7 +180,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "spec":
             return orch.spec(f)
         if args.command == "approve-spec":
-            return orch.approve_spec(f)
+            return orch.approve_spec(f, force=args.force)
         if args.command == "run":
             return orch.run(f)
         if args.command in ("status", "watch", "gate-summary", "cleanup"):

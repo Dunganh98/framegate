@@ -787,18 +787,27 @@ def _projects(root: pathlib.Path, tests_ref: Sequence[str]) -> None:
 
 
 def _fake_stryker(
-    monkeypatch: pytest.MonkeyPatch, mutants: dict[str, list[str]], fail: Sequence[str] = ()
+    monkeypatch: pytest.MonkeyPatch,
+    mutants: dict[str, list[str]],
+    fail: Sequence[str] = (),
+    fail_once: Sequence[str] = (),
 ) -> list[list[str]]:
     """run_command faking Stryker: `mutants` = repo-relative file -> mutant statuses; a run
-    with --project in `fail` exits 1 without a report. Returns the commands seen."""
+    with --project in `fail` exits 1 without a report (`fail_once`: only its first run).
+    Returns the commands seen."""
     seen: list[list[str]] = []
+    once = list(fail_once)
 
     def fake_run(
         cmd: Sequence[str], cwd: pathlib.Path, env: dict | None = None, timeout: float | None = None
     ) -> tuple[int, str]:
         seen.append(list(cmd))
-        if cmd[cmd.index("--project") + 1] in fail:
+        proj = cmd[cmd.index("--project") + 1]
+        if proj in fail:
             return 1, "Failed to analyze project builds. Stryker cannot continue."
+        if proj in once:
+            once.remove(proj)
+            return 1, "simulated build failed. Use '--diag' option to have the build log."
         out_dir = pathlib.Path(cmd[cmd.index("-O") + 1])
         (out_dir / "reports").mkdir(parents=True)
         loc = {"start": {"line": 1, "column": 1}}
@@ -883,9 +892,14 @@ def test_mutation_failure_keeps_the_finished_projects(
     )
     changed = ["src/Core/Engine.cs", "src/Lib/LibCode.cs", "src/Runner/RunnerCode.cs"]
     res = _stryker_adapter(tagged).mutation_check("f", "tests-approved/f", changed)
-    assert [c[c.index("--project") + 1] for c in seen] == ["Core.csproj", "Lib.csproj"]
+    # a failed Stryker run is started once more before it counts
+    assert [c[c.index("--project") + 1] for c in seen] == ["Core.csproj"] * 2 + ["Lib.csproj"]
+    assert "--diag" not in seen[1]  # only when Stryker's output offers it
     assert res.status == "FAIL", res.output
-    assert res.output.startswith("Stryker failed for Core.csproj (exit 1):\nFailed to analyze")
+    assert res.output.startswith(
+        "Stryker failed twice for Core.csproj (exit 1; log: out/f/stryker/Core.log):\n"
+        "Failed to analyze"
+    )
     assert "Finished: Lib.csproj: 1 detected, 1 undetected" in res.output
     assert "not mutated (no test project references it): Runner.csproj" in res.output
     assert res.summary == (
@@ -893,6 +907,22 @@ def test_mutation_failure_keeps_the_finished_projects(
     )
     survivors = (tagged / "out/f/mutation_survivors.md").read_text(encoding="utf-8")
     assert "`src/Lib/LibCode.cs:1:1`" in survivors
+
+
+def test_mutation_second_try_after_a_stryker_failure(
+    tagged: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Seen live: Stryker's own build failed once and worked on the next run, nothing changed."""
+    _projects(tagged, ["Core"])
+    seen = _fake_stryker(
+        monkeypatch, {"src/Core/Engine.cs": ["Killed", "Killed"]}, fail_once=["Core.csproj"]
+    )
+    res = _stryker_adapter(tagged).mutation_check("f", "tests-approved/f", ["src/Core/Engine.cs"])
+    assert len(seen) == 2 and seen[1] == [*seen[0], "--diag"]
+    assert res.status == "PASS", res.output
+    assert "Core.csproj: 2 detected, 0 undetected (second try: Stryker failed" in res.output
+    first = (tagged / "out/f/stryker/Core.first.log").read_text(encoding="utf-8")
+    assert "simulated build failed" in first
 
 
 def test_diff_hunks() -> None:

@@ -20,7 +20,8 @@ You are the IMPLEMENTER for one or more plan steps (or for the review fixes).
   linter / type checker from the conventions brief at most once, at the end.
 - Nobody answers questions during the run. If a requirement is ambiguous, assume what fits the
   spec best (requirements, design, the frozen tests), implement that, and log it as an
-  assumption (below). Do not stop to ask.
+  assumption (below). Do not stop to ask. An assumption fills a gap; it never goes against
+  what design.md or plan.md say (if they say X, build X).
 - Park only when no reasonable assumption is possible: the spec and a test contradict each
   other, a test cannot pass without breaking the spec, or the step needs something the spec
   does not define at all. Then write {out}/{feature}/park.md and stop: the problem in plain

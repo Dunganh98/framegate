@@ -21,6 +21,7 @@ from dataclasses import dataclass
 
 from agentflow.adapters import get_adapter
 from agentflow.adapters.base import LanguageAdapter
+from agentflow.checks import spec_lint
 from agentflow.config import CONFIG_FILE, Config, ConfigError
 from agentflow.state import GitError, git
 
@@ -50,10 +51,22 @@ def _sections(text: str) -> list[str]:
     return [line[3:].strip() for line in text.splitlines() if line.startswith("## ")]
 
 
+def _columns(text: str) -> dict[str, list[str]]:
+    """`## ` section (lower case) -> the column titles of its tables, without the "(...)"
+    hint."""
+    out: dict[str, list[str]] = {}
+    for table in spec_lint.tables(text):
+        out.setdefault(table.section.lower(), []).extend(
+            t.split("(")[0].strip() for t in table.header if t.strip()
+        )
+    return out
+
+
 def outdated_templates(cfg: Config) -> dict[str, list[str]]:
     """Spec template copy in the project (`agentflow init` writes one, and `agentflow spec`
-    prefers it) -> the `## ` sections agentflow's packaged template has and the copy lacks.
-    Compared by heading, so a customized copy is fine as long as it keeps the sections."""
+    prefers it) -> the `## ` sections agentflow's packaged template has and the copy lacks, and
+    the table columns it lacks in a section both have. Compared by heading and column title,
+    so a customized copy is fine as long as it keeps them."""
     from agentflow.orchestrator import package_text
 
     out: dict[str, list[str]] = {}
@@ -61,12 +74,16 @@ def outdated_templates(cfg: Config) -> dict[str, list[str]]:
         local = cfg.root / cfg.paths.specs / "_template" / name
         if not local.is_file():
             continue  # the packaged template is used
-        have = {s.lower() for s in _sections(local.read_text(encoding="utf-8"))}
-        lacks = [
-            s
-            for s in _sections(package_text("templates", "specs", "_template", name))
-            if s.lower() not in have
-        ]
+        mine = local.read_text(encoding="utf-8")
+        packaged = package_text("templates", "specs", "_template", name)
+        have = {s.lower() for s in _sections(mine)}
+        lacks = [s for s in _sections(packaged) if s.lower() not in have]
+        my_columns = _columns(mine)
+        for section, titles in _columns(packaged).items():
+            if section not in have:
+                continue  # the whole section is reported above
+            there = {t.lower() for t in my_columns.get(section, [])}
+            lacks += [f'column "{t}"' for t in titles if t.lower() not in there]
         if lacks:
             out[name] = lacks
     return out

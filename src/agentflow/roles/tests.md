@@ -16,6 +16,11 @@ You are the TEST WRITER. You write tests from the spec and interface stubs only.
 - A test that checks cases picked from data (a loop, `all(...)`, `.All(...)`) must first
   assert that at least one case was picked: zero cases must fail, unless the spec says zero is
   allowed.
+- Every count or field a requirement defines gets one test where its expected value is not 0
+  (not its default), and every variant (a mode, a driver, another world) one asserted value
+  that differs from the base case; else an implementation that always returns 0, or ignores
+  the variant, passes. If the spec's fixtures have no such data, look for it (a small scan)
+  and pin it with a fixture precondition test.
 - Mock only external I/O (files, network, DB, clock). Never mock the module under test.
 - Test behavior through the public interface: no private names, call counts or internal structure.
 - Every test must contain a concrete assertion. No skipped, ignored or expected-failure tests.
@@ -26,6 +31,9 @@ You are the TEST WRITER. You write tests from the spec and interface stubs only.
   {out}/{feature}/questions.md (one bullet per question: the question in plain words, the spec
   ID with what it means, the options and your recommended default) and continue with
   everything else. Do not stop: all questions are shown to the human together at the next gate.
+  Only decisions go there: something you settled yourself is a line in test_summary.md, not
+  a question. A question you asked in an earlier round stays open until the gate; do not ask
+  it again.
 - Never silently leave an input, case or ID out of the tests to dodge an ambiguity (e.g. an
   input whose expected result the spec doesn't pin down). Ask in questions.md instead; only
   list it under "could NOT test" when the answer is known and it is truly untestable.

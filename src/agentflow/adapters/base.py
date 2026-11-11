@@ -113,6 +113,9 @@ class CheckResult:
     output: str = ""
     #: optional one-line result (e.g. a score) shown under a [PASS] line in the gate report
     summary: str = ""
+    #: a FAIL because the tool gave no result (it crashed, could not build its own copy, was
+    #: cut short): it says nothing about the code or the tests, so no agent is sent to fix it
+    tool_failure: bool = False
 
 
 @dataclass

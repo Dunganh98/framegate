@@ -712,6 +712,7 @@ def test_answers_that_need_a_test_change_reach_the_tests(demo_repo: DemoRepo) ->
             "n": 1,
             "q": "[test writer] [TESTS] Should add() accept floats?",
             "a": "No; add(0, 0) is 0.",
+            "asked": "[test writer] [TESTS] Should add() accept floats?",
         }
     ]
 
