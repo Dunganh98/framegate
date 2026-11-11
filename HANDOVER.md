@@ -5,7 +5,7 @@
 Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plugin.md;
 `claude -p` facts: docs/claude-cli-notes.md; language adapters (python, dotnet): docs/adapters.md.
 
-## State (2026-11-10, main)
+## State (2026-11-11, main; this work on feat/freekick-retro)
 - **Gates:** SPEC -> FINAL (tests gate only with `[gates] tests = "human"|"auto"`), forward only.
   Between them fresh `claude -p` runs in a frame of checks (red stubs, traceability, smells,
   tag-based frame diff, lint/types, feature-scoped diff coverage + mutation, whole-suite
@@ -50,8 +50,36 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
   if unknown) and repeats it, or stops like Ctrl+C (exit 130) when the reset is more than
   `[agents] limit_wait_max_hours` (6) away. Detection is tested only with the fake `claude`;
   **the first real limit confirms the message format**.
+- **Third FCSim feature (M5-freekick-review, 2026-11-11):** all final gates passed with no hand
+  fixes, $10.55, but two parks caused by wrong frozen tests cost two extra rounds (~1 h, ~$4.5).
+  The parks came one after the other: step 1's code was right, only its tests were wrong, yet
+  steps 2-3 waited, so their own wrong test (`KeyMomentRecord.Goal` read as "the moment's goal
+  event") showed only in round 2. Fixes (branch `feat/freekick-retro`):
+  - **Provisional steps:** a park request with `Park kind: tests-wrong` + `Contested tests:`
+    (or a diagnosis `Fix owner: tests` with that line) whose code passes every other step check
+    is committed as provisional; dependents build on it; contested tests are left out of the
+    step gates and the Stop hook (`out/contested_tests.txt`). The final gate lists all proposed
+    test fixes as one item (approve / finish refuse while open); after the answer TESTS_AMEND
+    applies them and the contested tests must pass, else the provisional commit is reverted and
+    the step redone. **Not yet seen on a real feature** (an implementer must use the new park
+    format; the role says how).
+  - **Final gates with parked / provisional work:** regression counts their tests as expected
+    red and fails only on other failures; coverage, diff coverage, mutation SKIPPED with the
+    reason. New adapter method `regression_run()` (per-test results).
+  - **Existing-member asserts** (python + dotnet, note only): members of pre-feature code
+    asserted by the feature's changed tests and by no fixture test, listed in test_checks.md for
+    the test reviewer. On FCSim's frozen M5 tests it lists `KeyMomentRecord.Goal` among 9 others
+    (most real but harmless; tune if it gets noisy).
+  - Templates: requirements "Existing data this spec reads", edge-case comment line (own
+    clamping, outputs on "no result", error precedence), design "Mirrored code"; the spec
+    dialogue asks for them. FCSim's `specs/_template/` copy is not updated.
+  - retro_input pairs reworded questions with answers (spec IDs + words), searches every answer
+    round incl. questions_archive.md, says "answer lookup failed" when a spec update followed.
+  - Metrics: `questions` counts single questions + asking parks / provisional steps,
+    `gate_failures` includes failed final-gate runs. FCSim's M5-freekick-review row
+    (questions 1, gate_failures 0) should read 6 and 2; not rewritten.
 - **Adapters:** python (pytest, mutmut via WSL on Windows), dotnet (xUnit, Stryker opt-in level).
-- **Chat flow (plugin 0.3.0):** `/agentflow:setup` (new repo: scan, questions, toml +
+- **Chat flow (plugin 0.3.1):** `/agentflow:setup` (new repo: scan, questions, toml +
   project.md, `agentflow doctor`, optional smoke run); `/agentflow:feature <f>` (branch `feat/<f>` from `[git] base`,
   spec dialogue, approve, background `agentflow run` + Monitor on `agentflow watch`, gate digests
   via `agentflow gate-summary`, plain-word replies mapped to approve/reject/answer/finish,

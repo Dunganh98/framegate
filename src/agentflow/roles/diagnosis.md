@@ -20,9 +20,13 @@ Write {out}/{feature}/diagnosis.md, short (at most ~15 lines), in exactly this f
     Proposed fix: <one concrete fix: which file, what change; for tests: which test, what to
       change (e.g. other seed, missing exclusion); for spec: which ID, what wording>
     Evidence: <the commands you ran / lines you read, 2-5 bullets>
+    Contested tests: <only for Fix owner tests: the wrong tests, Class.Method, comma-separated>
 
 Fix owner: `src` when the implementer can fix it within the spec and the frozen tests (your
 proposal goes to its next attempt); `tests` when a test or its data must change; `spec` when the
 spec must change first. For `tests` / `spec` the work is parked and the human approves your
 proposal at the final gate in one reply, so make the proposal complete enough to apply as written.
+For `tests`, name the wrong tests on the `Contested tests:` line: if the implementer's code passes
+every other test of the step, it is kept as provisional (later steps build on it) instead of
+being parked.
 One fix only: the most likely one. Do not stop to ask: nobody answers during the run.

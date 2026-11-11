@@ -18,6 +18,13 @@ For every spec ID (R, E, I) check:
 - Pinned data (seed, recording) without a fixture precondition test (`test_fixture_*` /
   `Fixture_*`) proving that the data has the situation; a check over picked cases that passes
   when zero cases are picked.
+- Claims about existing code: test_checks.md lists "Existing members asserted", members of
+  code that existed before this feature that the tests assert and no fixture precondition test
+  checks (the red run cannot catch a wrong claim there: the stub fails first). For each, read
+  where the member is set: does it mean what the test (and the spec's words) assume? A wrong
+  meaning is an objection (read the right member, or add a fixture precondition test that
+  shows the claim holds on the existing code); if the spec does not say which member is meant,
+  ask.
 Do not object to style, naming or file layout.
 
 Write {out}/{feature}/test_review.md:

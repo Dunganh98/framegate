@@ -191,7 +191,17 @@ def final_facts(
             and not e["passed"]
             and (e.get("step") == label or s.num in (e.get("steps") or []))
         )
-        if s.num in prog.get("completed_steps", []):
+        prov = next(
+            (
+                r
+                for r in prog.get("provisional") or []
+                if s.num in (r.get("steps") or [r.get("step")])
+            ),
+            None,
+        )
+        if prov is not None:
+            status = f"done, PROVISIONAL ({len(prov.get('contested') or [])} contested tests)"
+        elif s.num in prog.get("completed_steps", []):
             status = "done"
         elif s.num in parked_steps:
             status = f"PARKED ({parked_steps[s.num].get('reason')})"
@@ -244,6 +254,19 @@ def final_facts(
             out.append(f"  - later steps that depend on it (plan.md): {deps}")
     if not parked:
         out.append("None.")
+
+    prov = prog.get("provisional") or []
+    if prov:
+        out += ["", f"## Provisional steps (code kept, test fixes proposed): {len(prov)}", ""]
+        out.append(
+            "Only their frozen tests were found wrong; the code passes every other check and "
+            "later steps build on it. One answer approves all proposed test fixes; a rejected "
+            "fix reverts that step's code and redoes it against the tests as they are."
+        )
+        for r in prov:
+            out.append(f"- {r.get('label')}: contested {', '.join(r.get('contested') or [])}")
+            if r.get("question"):
+                out.append(f"  - proposed fix: {str(r['question']).strip()}")
 
     out += ["", "## Final gates (final_gates.md)", "", "~~~", final_gates.strip(), "~~~"]
     out += ["", "## Open questions", "", open_questions.strip() or "None."]

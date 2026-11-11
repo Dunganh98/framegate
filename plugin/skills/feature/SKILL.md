@@ -45,14 +45,22 @@ would otherwise assume.
    - input domain and copies: the valid range of each public method's inputs (NaN, infinity,
      null, undefined enum values) and what a copy / clone shares;
    - serialized data: which existing golden / hash / snapshot / save tests serialize a type
-     this feature changes, and is the new member in or out of them.
+     this feature changes, and is the new member in or out of them;
+   - existing data: every existing concept a requirement names in words ("the moment's goal
+     event", "his rating") resolved to one exact member and where it is set; read the code,
+     propose the member, and ask only when two members could be meant;
+   - mirrored code (only when a requirement says "as X does"): the method and lines of X and
+     the choices to copy (cut-offs, raw vs clamped values, tie-breaks, order of checks); for a
+     variant (another choice, grade, side), which input fields change and how;
+   - new functions: which inputs each clamps itself, what every output holds on "no result",
+     and which error wins when two inputs are bad.
    At most ~10 questions per round, numbered, each with a recommended default. Repeat until
    nothing is open.
 3. Write requirements.md, design.md and plan.md following the templates exactly (the ID format,
    "## Step N: title" headings and "Covers:" lines described above). Every ID must be covered by
    exactly one plan step. Fill the "Overlaps and sources of truth", fixture, "Input domain and
    copy semantics" and "Data flow" sections from the answers (if the project's templates lack
-   them, add them anyway). A step that builds on an earlier step's code, or changes the same
+   them, add them anyway), and "Existing data this spec reads" / "Mirrored code" likewise. A step that builds on an earlier step's code, or changes the same
    method, gets a "Depends on: Step N" line.
 4. Create interface stubs in the source paths named above, in the stub style named above: full
    typed signatures, doc comments that reference the IDs, bodies that only signal "not

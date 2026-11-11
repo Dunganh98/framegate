@@ -188,6 +188,12 @@ Between the gates nothing stops:
   `if` / `filter()`). These are NOTEs for the test reviewer, not failures (a heuristic: most
   hits in an existing suite are fine), and every smell counts only in the test files the
   feature changed.
+- `test_checks.md` also lists "Existing members asserted" (python, dotnet; a note, never
+  blocking): members that the feature's changed test files read inside an assertion, declared
+  only in code that existed before the feature (declaration line outside the diff against the
+  merge base with `[git] base`, which holds the spec dialogue's stubs) and asserted by no
+  fixture precondition test. The red run cannot check such a claim (the stub fails first); the
+  test reviewer reads where each member is set and objects or asks.
 - The implementer assumes from the spec and logs each assumption in its step note (written with
   the Write tool to `out/<f>/notes/<step>.md`; agentflow appends it to `steps.md`:
   `- ASSUMPTION [<spec ID>]: ...`). Only when no reasonable assumption is possible it writes
@@ -207,6 +213,22 @@ Between the gates nothing stops:
   parks at once with the proposal as its question; at the final gate one reply approves it,
   and the redo sends it to the phase that owns the file (spec updater, test writer,
   implementer).
+- Provisional steps: when only named frozen tests are wrong (park.md starts with `Park kind:
+  tests-wrong` and `Contested tests: A, B`, or a diagnosis says `Fix owner: tests` with a
+  `Contested tests:` line) and the step's code passes every other check of its step gate, the
+  code is committed as provisional (`<f>: <step> (PROVISIONAL: tests contested: ...)`,
+  `provisional` event, `progress.json` `provisional`) instead of being parked. Dependent steps
+  build on it; the contested tests are left out of the step gates and the Stop hook
+  (`out/contested_tests.txt`); later tasks name them. The final gate lists all proposed test
+  fixes as one numbered item (`approve` / `finish` refuse while it is open). After the answer,
+  the test writer applies the approved fixes (TESTS_AMEND); then the contested tests must pass.
+  If they still fail (the fix was not approved), the provisional commit is reverted (its diff
+  kept in `out/<f>/parked/`) and the step is redone against the tests
+  (`provisional_settled` event). Goal: every wrong test surfaces in the same round.
+- Final gates with parked steps or provisional steps: the whole-suite regression run counts
+  the parked steps' tests (by spec ID) and the contested tests as expected red ("expected red
+  (parked): N" in the report) and fails only on any other failure (listed as UNEXPECTED);
+  coverage, diff coverage and mutation are SKIPPED with the reason until the redo.
 - Review findings (failing reviewer tests) are triaged against the spec by the test reviewer:
   VALID stays and goes to the fix loop, INVALID is deleted with a one-line reason
   (`triage.md`, `triage` event). Fixes that fail `max_attempts` times are parked. The reviewer
@@ -321,7 +343,11 @@ JSON), turn-cap hits (`max_turns`, and `escalation` when the re-run hit it too) 
 interruptions. Before the RETRO agent runs, agentflow writes `out/<f>/retro_input.md`: counts,
 then every question (Q1..), failed attempt (F1..), escalation (E1..), human rejection (R1..),
 review finding with its triage verdict (V1..), final-gate failure (G1..), permission denial
-(D1..), assumption (A1..) and parked item (P1..).
+(D1..), assumption (A1..) and parked or provisional item (P1..). Each question is paired with
+its answer from any later answer round (the `answer` events, then every `### Answer ANS-n`
+round of `questions_archive.md`): by its first words, else by shared spec IDs and words (the
+gate often rewords a question). No match although answer rounds and a spec update followed:
+"answer lookup failed", not "not answered".
 The retro must mention every ID in `retro_proposals.md` (a proposal, or "Not acted on" with a
 one-line reason); if IDs are missing it is re-run once with them as feedback, then a warning is
 printed and logged (`retro_coverage` event).
@@ -332,15 +358,16 @@ printed and logged (`retro_coverage` event).
 |---|---|
 | `human_rejections` | `reject` at the tests gate |
 | `escalations` | agent runs that stopped at the turn cap twice |
-| `questions` | question rounds (`questions.md` files; one round can hold several questions) |
-| `gate_failures` | failed step-gate runs = failed implementation attempts (incl. review fixes; parking doesn't count). This is the "failed attempts" count; there is no separate column |
+| `questions` | single questions asked of the human: each question of the agents' `questions.md` files, plus each park and provisional step that asks one (rows before 2026-11-11 counted rounds and no parks) |
+| `gate_failures` | failed step-gate runs (failed implementation attempts, incl. review fixes; parking doesn't count) plus failed final-gate runs (rows before 2026-11-11: step gates only) |
 | `cost_usd` | sum of `total_cost_usd` of all agent runs |
 | `parked` | parked steps / review fixes (each park, incl. re-parks after a redo) |
 | `assumptions` | `- ASSUMPTION [...]` lines in `steps.md` |
 
 Hooks (called by the plugin): `agentflow hook pre-tool-use` (phase-based write protection, and
 the command form of Bash / PowerShell calls during a run) and `agentflow hook stop` (IMPLEMENT
-can't stop while the step's tests fail, unless it parked: an `out/*/park.md` exists). Both read
+can't stop while the step's tests fail, contested tests of provisional steps left out, unless
+it parked: an `out/*/park.md` exists). Both read
 the hook JSON on stdin, exit 0 silently without `agentflow.toml` or `.phase`, and block with exit
 2. Shell calls: only plain single commands are pre-approved, so a pipe (`dotnet test ... |
 Select-String`), a `;` / `&&` / `||` chain, several lines, or a `cd` / env-variable prefix would

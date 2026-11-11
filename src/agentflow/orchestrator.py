@@ -29,11 +29,11 @@ from typing import Any
 
 from agentflow import notify, procs
 from agentflow.adapters import get_adapter
-from agentflow.adapters.base import GATE_NAMES, LanguageAdapter
-from agentflow.checks import red_stubs, test_smells, traceability
+from agentflow.adapters.base import GATE_NAMES, CheckResult, LanguageAdapter
+from agentflow.checks import existing_members, red_stubs, test_smells, traceability
 from agentflow.checks.frame_diff import knowledge_tag, path_matches, tests_update_tag
 from agentflow.config import Config
-from agentflow.gates import gate_report
+from agentflow.gates import gate_report, split_failures
 from agentflow.hooks import AGENT_ENV
 from agentflow.report import (
     TestReview,
@@ -67,6 +67,7 @@ from agentflow.state import (
     read_events,
     read_phase,
     save_progress,
+    set_contested,
     set_phase,
     set_reqs,
     tag_exists,
@@ -122,6 +123,41 @@ KNOWLEDGE_ROLES = {
 }
 KNOWLEDGE_MAX_LINES = 300
 FIX_OWNER_RE = re.compile(r"^\W*Fix owner\W*:\W*(src|tests|spec)\b", re.I | re.M)
+#: a park request (or diagnosis) saying only the frozen tests are wrong, and which ones
+TESTS_WRONG_RE = re.compile(r"^\W*Park kind\W*:\W*tests[ -]wrong\b", re.I | re.M)
+CONTESTED_RE = re.compile(r"^\W*Contested tests\W*:\s*(.+)$", re.I | re.M)
+
+
+def contested_tests(text: str, tests_owner: bool = False) -> list[str]:
+    """The tests a park request (`Park kind: tests-wrong`) or a diagnosis with `Fix owner:
+    tests` contests (`Contested tests: A, B`); [] if it is not such a park or names none."""
+    if not (tests_owner or TESTS_WRONG_RE.search(text)):
+        return []
+    m = CONTESTED_RE.search(text)
+    if not m:
+        return []
+    names = [n.strip().strip("`*").strip() for n in re.split(r"[,;]", m.group(1))]
+    return [n for n in names if n and n.lower() != "none"]
+
+
+def provisional_item(prog: dict[str, Any]) -> str:
+    """The one numbered final-gate item for all provisional steps ("" if none): one answer
+    approves every proposed test fix."""
+    recs = prog.get("provisional") or []
+    if not recs:
+        return ""
+    parts = [
+        f"[{r['label']}] contested: {', '.join(r.get('contested') or [])}. "
+        + str(r.get("question") or "").strip()
+        for r in recs
+    ]
+    return (
+        "Proposed test fixes (the code of these steps is kept as provisional; approve all with "
+        "one answer, or say which fix is wrong: then its code is reverted and the step redone "
+        "against the tests as they are): " + " | ".join(parts)
+    )
+
+
 #: first lines of every task: most denied calls in live runs were chained `ls; cat; git log`
 #: calls just to look around
 LOOK_AROUND = (
@@ -156,7 +192,9 @@ TASKS = {
     "implementation exists and the tests are frozen for everyone but you. Change the tests only "
     "where an answer requires it: fixtures or seeds, expected values, tests for spec IDs that "
     "have none yet, a review test in {review_tests}/ that an answer names, a diagnosis' proposed "
-    "test fix that an answer approves (the question shows the proposal). Change nothing else; "
+    "test fix that an answer approves (the question shows the proposal), the proposed fixes of a "
+    "provisional step's contested tests when the answer approves them (all of them, unless it "
+    "names the ones that are wrong). Change nothing else; "
     "if no answer needs a test change, change nothing. Then append to {out}/{f}/test_summary.md "
     "a section '## Changes from {ref}' (what changed, or 'No test change: <why>'). A question the "
     "answers do not settle goes to {out}/{f}/questions.md.",
@@ -302,6 +340,31 @@ def turn_cap_note(cap: float, kind: str = "turns") -> str:
         "file changes are kept: check what is already done, then finish the rest with fewer, "
         "larger steps (batch reads and edits, no exploratory commands)."
     )
+
+
+def metric_counts(events: list[dict[str, Any]]) -> list[int | float]:
+    """The metrics row's human_rejections, escalations, questions, gate_failures, cost_usd and
+    parked columns from a feature's events. questions: every single question the agents asked
+    (a questions event holds a batch) plus every park or provisional step that asks the human;
+    gate_failures: failed step-gate attempts plus failed final-gate runs."""
+    asked = sum(
+        len(split_questions(str(e.get("questions", ""))))
+        for e in events
+        if e["kind"] == "questions"
+    )
+    asked += sum(
+        1
+        for e in events
+        if e["kind"] in ("parked", "provisional") and str(e.get("question") or "").strip()
+    )
+    return [
+        sum(1 for e in events if e["kind"] == "human_gate" and not e.get("approved")),
+        sum(1 for e in events if e["kind"] == "escalation"),
+        asked,
+        sum(1 for e in events if e["kind"] in ("gate", "final_gates") and not e.get("passed")),
+        round(sum((e.get("cost") or 0) for e in events if e["kind"] == "agent_run"), 2),
+        sum(1 for e in events if e["kind"] == "parked"),
+    ]
 
 
 def item_steps(item: dict[str, Any]) -> list[int]:
@@ -671,8 +734,14 @@ class Orchestrator:
                 f"Then:     agentflow run {f}"
             )
         if gate == "final":
+            prov = (
+                f"Provisional steps: answer their proposed test fixes in {out}/{f}/answers.md "
+                "first (one answer approves all); approve / finish refuse until then.\n"
+                if "provisional (code kept" in msg
+                else ""
+            )
             return (
-                f"=== FINAL GATE ({f}) ===\n{files}\n{msg}"
+                f"=== FINAL GATE ({f}) ===\n{files}\n{msg}{prov}"
                 f"Approve:  agentflow approve {f}   (then agentflow run {f}: retro -> DONE)\n"
                 f"No retro: agentflow finish {f} --no-retro   (DONE)\n"
                 f"Parked:   write {out}/{f}/answers.md, then agentflow answer {f} and "
@@ -869,10 +938,7 @@ class Orchestrator:
         """Run the implementer until the step gates pass (True). A park request or max_attempts
         failed attempts park the item (False); the run goes on either way."""
         label = item["label"]
-        if reqs:
-            set_reqs(self.cfg, reqs)
-        else:
-            clear_reqs(self.cfg)
+        self.set_check_scope(prog, reqs)
         self.take_park_request(feature)  # a stale request of an interrupted run
         if not prog.get("attempt"):  # a fresh item (not a resumed one)
             prog.update(fail_streak=0, last_failed=[], diagnosed=False)
@@ -900,6 +966,11 @@ class Orchestrator:
                 save_progress(self.cfg, feature, prog)
                 raise
             if rep is None:
+                contested = contested_tests(question)
+                if contested and self.keep_provisional(
+                    feature, prog, item, reqs, contested, question, attempt - 1
+                ):
+                    return True
                 self.park(
                     feature,
                     prog,
@@ -956,6 +1027,15 @@ class Orchestrator:
                 and not prog.get("diagnosed")
             ):
                 diagnosis = self.diagnose(feature, prog, label, reqs, rep)
+                contested = (
+                    contested_tests(diagnosis["text"], tests_owner=True)
+                    if diagnosis.get("owner") == "tests"
+                    else []
+                )
+                if contested and self.keep_provisional(
+                    feature, prog, item, reqs, contested, diagnosis["question"], attempt
+                ):
+                    return True
                 if diagnosis.get("owner") in ("tests", "spec"):
                     self.park(
                         feature,
@@ -1149,6 +1229,177 @@ class Orchestrator:
             "gate" + (f" (its code changes: {diff})." if diff else "."),
         )
 
+    # ---------- provisional steps: code kept while only their tests are contested ----------
+    def contested(self, prog: dict[str, Any]) -> list[str]:
+        """The contested tests of all provisional steps."""
+        return [t for r in prog.get("provisional") or [] for t in r.get("contested") or []]
+
+    def set_check_scope(self, prog: dict[str, Any], reqs: list[str] | None) -> None:
+        """What the step gates and the Stop hook check: the IDs (.reqs) minus the contested
+        tests of provisional steps."""
+        if reqs:
+            set_reqs(self.cfg, reqs)
+        else:
+            clear_reqs(self.cfg)
+        set_contested(self.cfg, self.contested(prog))
+
+    def keep_provisional(
+        self,
+        feature: str,
+        prog: dict[str, Any],
+        item: dict[str, Any],
+        reqs: list[str] | None,
+        contested: list[str],
+        question: str,
+        attempts: int,
+    ) -> bool:
+        """A step parked only because named frozen tests are wrong (they contradict the spec or
+        existing code): if its code passes every other check of the step gate, commit it as
+        provisional so the dependent steps build on it (seen live: a correct step 1 parked for
+        two wrong tests made steps 2-3 wait, and their own wrong test showed only a round
+        later). The contested tests stay out of the step checks; the final gate lists the
+        proposed test fixes. False (nothing kept): the code fails other checks too."""
+        if item.get("kind") != "step":
+            return False
+        label = item["label"]
+        set_contested(self.cfg, self.contested(prog) + contested)
+        rep = gate_report(self.adapter, feature, "step")
+        if not rep.ok:
+            set_contested(self.cfg, self.contested(prog))
+            self.progress(
+                feature,
+                f"[{label}] contests {len(contested)} test(s), but its code fails other checks "
+                f"too ({', '.join(rep.failed)}): parked as usual",
+            )
+            return False
+        names = ", ".join(contested)
+        commit(self.cfg, f"{feature}: {label} (PROVISIONAL: tests contested: {names})")
+        sha = git(self.cfg, "rev-parse", "HEAD").strip()
+        rec = dict(item, contested=contested, question=question, commit=sha, attempts=attempts)
+        prog["provisional"] = [*(prog.get("provisional") or []), rec]
+        prog.update(attempt=0, feedback="", fail_streak=0, last_failed=[], diagnosed=False)
+        save_progress(self.cfg, feature, prog)
+        log_event(
+            self.cfg,
+            feature,
+            "provisional",
+            label=label,
+            step=item.get("step"),
+            steps=item.get("steps"),
+            contested=contested,
+            question=question,
+            commit=sha,
+            attempts=attempts,
+        )
+        self.progress(
+            feature,
+            f"[{label}] PROVISIONAL: only its tests are contested ({names}); its code passes "
+            "every other check, is committed as provisional and later steps build on it. The "
+            "proposed test fixes are listed at the final gate.",
+        )
+        return True
+
+    def provisional_context(self, prog: dict[str, Any]) -> str:
+        """Task lines about provisional steps: their contested tests fail by design."""
+        recs = prog.get("provisional") or []
+        if not recs:
+            return ""
+        return (
+            "\n\nProvisional steps (code kept and committed; the human decides at the final gate "
+            "on the proposed fixes of their contested tests): "
+            + "; ".join(f"{r['label']} ({', '.join(r.get('contested') or [])})" for r in recs)
+            + ". The contested tests fail by design and are left out of your step gate: do not "
+            "change code to make them pass, and build on the provisional code as it is."
+        )
+
+    def settle_provisional(self, feature: str, prog: dict[str, Any], steps: list[PlanStep]) -> None:
+        """After the answer at the final gate (and the test writer's amendment): the contested
+        tests must pass now. A step whose contested tests pass is final. One whose tests still
+        fail had its fix rejected (or not applied): its provisional commit is reverted and the
+        step is redone against the tests as they are."""
+        recs = list(prog.get("provisional") or [])
+        if not recs:
+            return
+        set_contested(self.cfg, [])
+        junit = self.fdir(feature) / "provisional_tests.xml"
+        run = self.adapter.run_tests(req_ids=self.done_ids(prog, steps), junit=junit)
+        for rec in recs:
+            label = rec["label"]
+            names = list(rec.get("contested") or [])
+            _, still, _ = split_failures(run.cases or [], set(), names)
+            if not still:
+                unknown = run.status != "passed" and run.cases is None
+                log_event(self.cfg, feature, "provisional_settled", label=label, accepted=True)
+                self.progress(
+                    feature,
+                    f"[{label}] provisional code accepted: its contested tests pass after the "
+                    "answer"
+                    + (" (no per-test report: the review fixes check them)" if unknown else ""),
+                )
+                continue
+            diff = self.save_commit_diff(feature, label, str(rec.get("commit") or ""))
+            reverted = self.revert_commit(str(rec.get("commit") or ""))
+            nums = item_steps(rec)
+            prog["completed_steps"] = [n for n in prog["completed_steps"] if n not in nums]
+            redo = {k: v for k, v in rec.items() if k not in ("contested", "commit", "attempts")}
+            redo.update(
+                reason="contested tests still fail after the answer",
+                diff=diff,
+                provisional_reverted=reverted,
+                still_failing=still,
+            )
+            prog["redo"] = [*(prog.get("redo") or []), redo]
+            log_event(
+                self.cfg,
+                feature,
+                "provisional_settled",
+                label=label,
+                accepted=False,
+                still_failing=still,
+                reverted=reverted,
+                diff=diff,
+            )
+            self.progress(
+                feature,
+                f"[{label}] proposed test fix not applied ({len(still)} contested test(s) still "
+                "fail): provisional code "
+                + ("reverted" if reverted else "kept (the revert conflicts with later commits)")
+                + f", the step is redone against the tests (old code: {diff or '-'})",
+            )
+        prog["provisional"] = []
+        save_progress(self.cfg, feature, prog)
+
+    def save_commit_diff(self, feature: str, label: str, sha: str) -> str:
+        """A commit's source changes as parked/<label>.diff (the redo can reuse what fits)."""
+        if not sha:
+            return ""
+        try:
+            diff = git(self.cfg, "show", "--format=", sha, "--", self.cfg.paths.src)
+        except GitError:
+            return ""
+        if not diff.strip():
+            return ""
+        pdir = self.fdir(feature) / "parked"
+        pdir.mkdir(exist_ok=True)
+        path = pdir / (re.sub(r"[^A-Za-z0-9]+", "-", label).strip("-").lower() + ".diff")
+        path.write_text(diff, encoding="utf-8")
+        return self.rel(path)
+
+    def revert_commit(self, sha: str) -> bool:
+        """Revert a provisional commit; False (nothing changed) if it conflicts with later
+        commits or is unknown."""
+        if not sha:
+            return False
+        try:
+            git(self.cfg, "revert", "--no-edit", sha)
+            return True
+        except GitError:
+            try:
+                git(self.cfg, "revert", "--abort")
+            except GitError:
+                pass
+            return False
+
     # ---------- TESTS: writer <-> reviewer, then the tests gate ----------
     def changed_tests(self) -> list[str]:
         """Test files changed since the last commit (incl. untracked), posix, relative."""
@@ -1289,10 +1540,23 @@ class Orchestrator:
             res = mod.check(self.adapter, feature)
             status[name] = res.status
             sections.append(f"### {name}: {res.status}\n~~~\n{res.output}\n~~~")
+        # a note for the test reviewer, never blocking (not in `status`: that sends tests back)
+        try:
+            members = existing_members.check(self.adapter, feature)
+        except Exception as e:  # a scan problem must not stop the tests phase
+            members = CheckResult("SKIPPED", f"SKIPPED: scan failed ({type(e).__name__}: {e})")
+        listed = sum(1 for line in members.output.splitlines() if line.startswith("- "))
+        sections.append(
+            f"### Existing members asserted (note, not blocking): {listed}\n~~~\n"
+            f"{members.output}\n~~~"
+        )
         path = self.fdir(feature) / "test_checks.md"
         path.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
         self.progress(
-            feature, "[TESTS] checks: " + ", ".join(f"{n} {s}" for n, s in status.items())
+            feature,
+            "[TESTS] checks: "
+            + ", ".join(f"{n} {s}" for n, s in status.items())
+            + (f"; existing members asserted without a fixture test: {listed}" if listed else ""),
         )
         prog["test_checks"] = status
         save_progress(self.cfg, feature, prog)
@@ -1546,6 +1810,8 @@ class Orchestrator:
                 f"No '## Step N:' sections found in {self.cfg.paths.specs}/{feature}/plan.md"
             )
         redo_mode = bool(prog.get("redo_mode"))
+        if redo_mode:
+            self.settle_provisional(feature, prog, steps)
 
         def redo_for(nums: list[int]) -> list[dict[str, Any]]:
             return [
@@ -1600,9 +1866,22 @@ class Orchestrator:
                     check=check,
                     note=note,
                 )
-            task += self.parked_context(prog, steps)
+            task += self.parked_context(prog, steps) + self.provisional_context(prog)
             if redo:
                 task += REDO_NOTE.format(**self.placeholders(feature))
+            for r in redo:
+                if "still_failing" in r:
+                    task += (
+                        f"\n\nYour earlier code for '{r['label']}' was kept as provisional, but "
+                        "the human did not approve changing its contested tests: they stand and "
+                        f"must pass ({', '.join(r['still_failing'])}). The old code "
+                        + (
+                            "was reverted"
+                            if r.get("provisional_reverted")
+                            else "is still in place (the revert conflicted)"
+                        )
+                        + (f"; its diff: {r['diff']} (reuse what fits)." if r.get("diff") else ".")
+                    )
             item: dict[str, Any] = {"kind": "step", "step": nums[0], "label": label}
             if not one:
                 item["steps"] = nums
@@ -1643,6 +1922,13 @@ class Orchestrator:
                 task += (
                     f"\n\nParked plan steps (not implemented yet, redone after the human's answer)"
                     f" own these spec IDs: {', '.join(parked)}. Write no findings about them."
+                )
+            contested = self.contested(prog)
+            if contested:
+                task += (
+                    "\n\nContested tests (a provisional step's frozen tests that its implementer "
+                    "found wrong; their fix waits for the human's answer): "
+                    f"{', '.join(contested)}. Write no findings about them."
                 )
             self.agent("REVIEW", feature, prog, task)
             self.collect_questions(feature, "REVIEW", "adversarial reviewer")
@@ -1781,10 +2067,7 @@ class Orchestrator:
         save_progress(self.cfg, feature, prog)
         if amended and not tests and not redo:
             # only tests changed from answers: no fix run if they pass already
-            if reqs:
-                set_reqs(self.cfg, reqs)
-            else:
-                clear_reqs(self.cfg)
+            self.set_check_scope(prog, reqs)
             rep = gate_report(self.adapter, feature, "step")
             clear_reqs(self.cfg)
             if rep.ok:
@@ -1796,7 +2079,7 @@ class Orchestrator:
             check=self.adapter.test_command(reqs),
             note=self.note_path(feature, "review-fixes"),
         )
-        task += self.parked_context(prog, steps)
+        task += self.parked_context(prog, steps) + self.provisional_context(prog)
         if redo:
             task += REDO_NOTE.format(**self.placeholders(feature))
         item = {"kind": "finding", "step": None, "label": "review fixes", "tests": tests}
@@ -1877,6 +2160,11 @@ class Orchestrator:
             if parked
             else "nothing parked"
         )
+        prov = prog.get("provisional") or []
+        if prov:
+            state += f"; {len(prov)} provisional (code kept, test fixes proposed): " + ", ".join(
+                p["label"] for p in prov
+            )
         questions = self.open_questions(feature)
         if questions:
             state += f"; {len(questions)} open question(s)"
@@ -2112,8 +2400,13 @@ class Orchestrator:
         d = self.fdir(feature)
         review = d / "review.md"
         notes = review.read_text(encoding="utf-8") if review.is_file() else ""
+        archive = d / "questions_archive.md"
         ri = build_retro_input(
-            feature, read_events(self.cfg, feature), notes, self.assumptions(feature)
+            feature,
+            read_events(self.cfg, feature),
+            notes,
+            self.assumptions(feature),
+            archive.read_text(encoding="utf-8") if archive.is_file() else "",
         )
         (d / "retro_input.md").write_text(ri.text, encoding="utf-8")
         return ri.ids
@@ -2169,12 +2462,7 @@ class Orchestrator:
         row = [
             datetime.date.today().isoformat(),
             feature,
-            sum(1 for e in ev if e["kind"] == "human_gate" and not e.get("approved")),
-            sum(1 for e in ev if e["kind"] == "escalation"),
-            sum(1 for e in ev if e["kind"] == "questions"),
-            sum(1 for e in ev if e["kind"] == "gate" and not e.get("passed")),
-            round(sum((e.get("cost") or 0) for e in ev if e["kind"] == "agent_run"), 2),
-            sum(1 for e in ev if e["kind"] == "parked"),
+            *metric_counts(ev),
             len(self.assumptions(feature)),
         ]
         mfile = self.cfg.root / self.cfg.paths.metrics / "workflow_metrics.csv"
@@ -2499,6 +2787,8 @@ class Orchestrator:
             return EXIT_OK
         prog = self._require_gate(feature)
         gate = prog["waiting"]["gate"]
+        if gate == "final":
+            self.refuse_open_provisional(feature, prog)
         log_event(self.cfg, feature, "human_gate", gate=gate, approved=True, reason=None)
         if gate == "tests":
             self.pass_tests_gate(feature, prog)
@@ -2509,6 +2799,18 @@ class Orchestrator:
             self.echo("Final gate approved; the next run does the retro, then DONE.")
         self.echo(f"Next: agentflow run {feature}")
         return EXIT_OK
+
+    def refuse_open_provisional(self, feature: str, prog: dict[str, Any]) -> None:
+        """Approving the final gate would leave the contested tests red: the proposed test fixes
+        need an answer first (one answer approves them all)."""
+        prov = prog.get("provisional") or []
+        if prov:
+            raise WorkflowError(
+                f"{len(prov)} provisional step(s) wait for your answer to their proposed test "
+                f"fixes ({', '.join(p['label'] for p in prov)}). Answer that item in "
+                f"{self.cfg.paths.out}/{feature}/answers.md (e.g. 'Approved: apply all proposed "
+                f"test fixes as written.'), then agentflow answer {feature}."
+            )
 
     def reject(self, feature: str, reason: str) -> int:
         if not reason.strip():
@@ -2550,11 +2852,16 @@ class Orchestrator:
         # the numbered items as the gate showed them (final: parked first), so the retro can
         # pair every question with its own answer
         shown = split_questions(open_q)
+        prov_item = provisional_item(prog) if gate == "final" else ""
         if gate == "final":
-            shown = [
-                f"[{p['label']}] {p.get('question') or p.get('reason')}"
-                for p in prog.get("parked") or []
-            ] + shown
+            shown = (
+                [
+                    f"[{p['label']}] {p.get('question') or p.get('reason')}"
+                    for p in prog.get("parked") or []
+                ]
+                + ([prov_item] if prov_item else [])
+                + shown
+            )
         items = [
             dict(it, q=it["q"] or (shown[it["n"] - 1] if 0 < it["n"] <= len(shown) else ""))
             for it in parse_answer_items(text)
@@ -2585,7 +2892,7 @@ class Orchestrator:
             )
         else:
             parked = prog.get("parked") or []
-            if not parked:
+            if not parked and not prov_item:
                 if not open_q.strip():
                     raise WorkflowError(
                         f"Nothing is parked and no question is open. Approve (agentflow approve "
@@ -2628,7 +2935,8 @@ class Orchestrator:
                 self.echo(f"Next: agentflow run {feature}")
                 return EXIT_OK
             questions = "\n".join(
-                f"- [{p['label']}] {p.get('question') or p.get('reason')}" for p in parked
+                [f"- [{p['label']}] {p.get('question') or p.get('reason')}" for p in parked]
+                + ([f"- {prov_item}"] if prov_item else [])
             )
             self.archive_questions(feature, "final gate: parked", questions + "\n" + open_q, reply)
             log_event(
@@ -2640,8 +2948,12 @@ class Orchestrator:
                 **logged,
             )
             steps = [p for p in parked if p.get("kind") == "step"]
+            # provisional steps: IMPLEMENT settles them first (contested tests pass now, or the
+            # provisional code is reverted and the step redone)
             then = (
-                {"phase": "IMPLEMENT", "sub": None} if steps else {"phase": "REVIEW", "sub": "fix"}
+                {"phase": "IMPLEMENT", "sub": None}
+                if steps or prov_item
+                else {"phase": "REVIEW", "sub": "fix"}
             )
             prog.update(
                 waiting=None,
@@ -2660,10 +2972,18 @@ class Orchestrator:
                 },
             )
             save_progress(self.cfg, feature, prog)
+            redone = [p["label"] for p in parked]
             self.echo(
                 f"Answers recorded ({ref}); the next run writes them into the spec, the test "
-                "writer applies the ones that need a test change, then only the parked items "
-                f"are redone ({', '.join(p['label'] for p in parked)}), then the final gate again."
+                "writer applies the ones that need a test change"
+                + (
+                    " (the approved test fixes of the provisional steps), the contested tests "
+                    "must then pass (else that step's code is reverted and redone)"
+                    if prov_item
+                    else ""
+                )
+                + (f", then only the parked items are redone ({', '.join(redone)})" * bool(redone))
+                + ", then the final gate again."
             )
         self.echo(f"Next: agentflow run {feature}")
         return EXIT_OK
@@ -2715,6 +3035,7 @@ class Orchestrator:
     def finish(self, feature: str) -> int:
         """FINAL gate -> DONE without the retro (the metrics row is still written)."""
         prog = self._require_gate(feature, ("final",))
+        self.refuse_open_provisional(feature, prog)
         log_event(self.cfg, feature, "human_gate", gate="final", approved=True, reason=None)
         log_event(self.cfg, feature, "finished", retro=False)
         self.reapprove_spec(feature, prog, "final")

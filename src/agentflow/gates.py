@@ -5,6 +5,11 @@ scope final  everything, including coverage on the diff, traceability and mutati
              then the project's own [gates.extra] checks (reported, never blocking)
 
 Both scopes first format the changed source files ([gates] format_fix).
+
+Work that waits for the human's answer at the final gate has tests that fail by design: a parked
+step's tests (by spec ID) and a provisional step's contested tests (by name). The step gates
+leave the contested tests out; the final gate counts both as expected red, fails only on other
+failures, and skips coverage, diff coverage and mutation until the redo.
 """
 
 from __future__ import annotations
@@ -14,11 +19,22 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from agentflow.adapters.base import Check, CheckResult, LanguageAdapter, TestScope, run_command
+from agentflow.adapters.base import (
+    Check,
+    CheckResult,
+    LanguageAdapter,
+    TestCase,
+    TestRun,
+    TestScope,
+    incomplete_result,
+    run_command,
+)
 from agentflow.checks import frame_diff, mutation, test_smells, traceability
+from agentflow.config import Config
 from agentflow.failure_filter import filter_failure_output
-from agentflow.specs import feature_ids
-from agentflow.state import read_reqs
+from agentflow.report import short_name
+from agentflow.specs import feature_ids, plan_steps
+from agentflow.state import load_progress, read_contested, read_reqs
 
 #: most lines of a failing check's output in the gate report (and so in the fix prompt)
 OUTPUT_LINES = 40
@@ -64,28 +80,170 @@ def scope_lines(adapter: LanguageAdapter, feature: str, skip_mutation: bool) -> 
     return lines
 
 
-def checks(adapter: LanguageAdapter, feature: str, scope: str, skip_mutation: bool) -> list[Check]:
+@dataclass
+class ExpectedRed:
+    """Tests a gate expects to fail while work waits for the human's answer at the final gate:
+    the tests of parked plan steps (by spec ID) and the contested tests of provisional steps (by
+    name; their code is kept, the proposed test fixes are approved at the final gate)."""
+
+    parked_ids: list[str] = field(default_factory=list)
+    parked: list[str] = field(default_factory=list)
+    contested: list[str] = field(default_factory=list)
+    provisional: list[str] = field(default_factory=list)
+
+    def __bool__(self) -> bool:
+        return bool(self.parked_ids or self.contested)
+
+    def reason(self) -> str:
+        parts = []
+        if self.parked:
+            parts.append("parked steps: " + ", ".join(self.parked))
+        if self.provisional:
+            parts.append("provisional steps, tests contested: " + ", ".join(self.provisional))
+        return "; ".join(parts)
+
+
+def expected_red(cfg: Config, feature: str) -> ExpectedRed:
+    """From the feature's progress.json: what the final gate expects red (empty: nothing)."""
+    if not feature or not (cfg.feature_out(feature) / "progress.json").is_file():
+        return ExpectedRed()
+    prog = load_progress(cfg, feature)
+    parked = [r for r in prog.get("parked") or [] if r.get("kind") == "step"]
+    nums = {n for r in parked for n in (r.get("steps") or [r.get("step")])}
+    ids = [i for s in plan_steps(cfg, feature) if s.num in nums for i in s.reqs]
+    prov = prog.get("provisional") or []
+    return ExpectedRed(
+        ids,
+        [str(r.get("label")) for r in parked],
+        [str(t) for r in prov for t in r.get("contested") or []],
+        [str(r.get("label")) for r in prov],
+    )
+
+
+def split_failures(
+    cases: list[TestCase], names: set[str], contested: list[str]
+) -> tuple[list[str], list[str], list[str]]:
+    """The failed / errored cases as (in `names`, contested, other). Contested tests match by
+    method name (the implementer names them as it sees them, e.g. `Class.Method`)."""
+    keys = {short_name(n) for n in contested}
+    named: list[str] = []
+    cont: list[str] = []
+    other: list[str] = []
+    for c in cases:
+        if c.outcome not in ("failed", "error"):
+            continue
+        if c.name in names:
+            named.append(c.name)
+        elif short_name(c.name) in keys:
+            cont.append(c.name)
+        else:
+            other.append(c.name)
+    return named, cont, other
+
+
+def _listed(names: list[str], limit: int = 30) -> str:
+    more = f"\n  ... {len(names) - limit} more" if len(names) > limit else ""
+    return "\n".join(f"  {n}" for n in names[:limit]) + more
+
+
+def tests_expecting(run: TestRun, exp: ExpectedRed, parked_names: set[str]) -> CheckResult:
+    """A test run judged with the expected red tests left out: FAIL only on other failures."""
+    if run.incomplete:
+        return incomplete_result(run.incomplete, run.output)
+    if run.status == "passed":
+        return CheckResult("PASS", run.output)
+    if run.status != "failed" or run.cases is None:
+        return CheckResult(
+            "FAIL",
+            run.output + "\n(no per-test results: the expected red tests cannot be told apart "
+            "from other failures)",
+        )
+    parked, contested, other = split_failures(run.cases, parked_names, exp.contested)
+    parts = []
+    if exp.parked_ids:
+        parts.append(f"expected red (parked): {len(parked)}")
+    if exp.contested:
+        parts.append(f"contested (provisional, left out): {len(contested)}")
+    if other:
+        return CheckResult(
+            "FAIL",
+            run.output + "\n\nUNEXPECTED failures (neither a parked step's test nor a contested "
+            f"test): {len(other)}\n{_listed(other)}",
+            "; ".join(parts),
+        )
+    return CheckResult("PASS", run.output, "; ".join([*parts, "no other failure"]))
+
+
+def parked_test_names(adapter: LanguageAdapter, exp: ExpectedRed) -> tuple[set[str], str]:
+    """Names of the tests tagged with the parked steps' spec IDs (one run of just those), and a
+    problem note ("" if fine)."""
+    if not exp.parked_ids:
+        return set(), ""
+    junit = adapter.cfg.out_dir / "parked_tests.xml"
+    run = adapter.run_tests(req_ids=exp.parked_ids, junit=junit)
+    if run.cases is None:
+        return set(), f"the parked steps' tests produced no per-test report ({run.status})"
+    return {c.name for c in run.cases}, ""
+
+
+def regression_expecting(adapter: LanguageAdapter, exp: ExpectedRed) -> CheckResult:
+    """The whole suite with parked steps / contested tests: their failures are expected
+    (counted, not failing); any other failure fails the check."""
+    names, problem = parked_test_names(adapter, exp)
+    res = tests_expecting(adapter.regression_run(), exp, names)
+    if problem and res.status == "FAIL":
+        res.output += f"\n({problem})"
+    return res
+
+
+def _skipped(reason: str) -> Callable[[], CheckResult]:
+    return lambda: CheckResult("SKIPPED", reason)
+
+
+def checks(
+    adapter: LanguageAdapter,
+    feature: str,
+    scope: str,
+    skip_mutation: bool,
+    exp: ExpectedRed | None = None,
+) -> list[Check]:
     tag = frame_diff.approved_tag(feature)
     c = list(adapter.lint_checks(tag))
     c.append(Check("frame diff", lambda: frame_diff.check(adapter, feature)))
     if scope == "step":
         reqs = read_reqs(adapter.cfg)
+        contested = read_contested(adapter.cfg)
 
         def step_tests() -> CheckResult:
-            run = adapter.run_tests(req_ids=reqs)
-            return CheckResult("PASS" if run.status == "passed" else "FAIL", run.output)
+            if not contested:
+                run = adapter.run_tests(req_ids=reqs)
+                return CheckResult("PASS" if run.status == "passed" else "FAIL", run.output)
+            run = adapter.run_tests(req_ids=reqs, junit=adapter.cfg.out_dir / "step_tests.xml")
+            return tests_expecting(run, ExpectedRed(contested=contested), set())
 
         c.append(Check("tests (current + earlier steps)", step_tests))
     else:
         cov, mut = final_scopes(adapter, feature)
-        if cov is not None:
-            c.append(adapter.regression_check())
-        c += adapter.coverage_checks(tag, cov)
+        waiting = exp or ExpectedRed()
+        reason = f"SKIPPED ({waiting.reason()}): runs again after the redo"
+        if waiting:
+            c.append(
+                Check(
+                    "regression: whole suite, no coverage",
+                    lambda: regression_expecting(adapter, waiting),
+                )
+            )
+            c += [Check(k.name, _skipped(reason)) for k in adapter.coverage_checks(tag, cov)]
+        else:
+            if cov is not None:
+                c.append(adapter.regression_check())
+            c += adapter.coverage_checks(tag, cov)
         c.append(Check("traceability", lambda: traceability.check(adapter, feature)))
         c.append(Check("test smells", lambda: test_smells.check(adapter, feature)))
         if not skip_mutation:
             name = "mutation score" + (" (feature tests)" if mut is not None else "")
-            c.append(Check(name, lambda: mutation.check(adapter, feature, mut)))
+            run = _skipped(reason) if waiting else (lambda: mutation.check(adapter, feature, mut))
+            c.append(Check(name, run))
     return c
 
 
@@ -149,9 +307,17 @@ def gate_report(
     outputs: dict[str, str] = {}
     full_outputs: dict[str, str] = {}
     durations: dict[str, float] = {}
+    exp = expected_red(adapter.cfg, feature) if scope == "final" else ExpectedRed()
     if scope == "final":
         for line in scope_lines(adapter, feature, skip_mutation):
             emit(line)
+        if exp:
+            emit(f"Waiting for the human's answer ({exp.reason()}):")
+            if exp.parked_ids:
+                emit(f"- expected red: the tests of {', '.join(exp.parked_ids)}")
+            if exp.contested:
+                emit(f"- contested tests, left out: {', '.join(exp.contested)}")
+            emit("- coverage, diff coverage and mutation: skipped until the redo")
         emit("")
     try:
         note = adapter.format_fix(frame_diff.approved_tag(feature))
@@ -159,7 +325,7 @@ def gate_report(
         note = f"skipped ({type(e).__name__}: {e})"
     if note:
         emit(f"Format fix: {note}")
-    for check in checks(adapter, feature, scope, skip_mutation):
+    for check in checks(adapter, feature, scope, skip_mutation, exp):
         t0 = time.monotonic()
         try:
             res = check.run()

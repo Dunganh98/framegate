@@ -302,17 +302,17 @@ class PythonAdapter(LanguageAdapter):
         args = ["--req", ",".join(scope.req_ids)] if scope.req_ids else []
         return args + (["--req-paths", ",".join(scope.paths)] if scope.paths else [])
 
-    def regression_check(self) -> Check:
-        def run() -> CheckResult:
-            timeout = self.cfg.regression_timeout
-            cmd = [self.python, "-m", "pytest", "-q", "-p", "no:cacheprovider"]
-            code, out = run_command(cmd, self.root, timeout=timeout)
-            reason = incomplete_reason(code, out, timeout) or PYTEST_INCOMPLETE.get(code, "")
-            if reason:
-                return incomplete_result(reason, out)
-            return CheckResult("PASS" if code == 0 else "FAIL", out)
-
-        return Check("regression: whole suite, no coverage", run)
+    def regression_run(self) -> TestRun:
+        timeout = self.cfg.regression_timeout
+        junit = self.root / self.cfg.paths.out / "regression.xml"
+        junit.parent.mkdir(parents=True, exist_ok=True)
+        junit.unlink(missing_ok=True)
+        cmd = [self.python, "-m", "pytest", "-q", "-p", "no:cacheprovider", f"--junitxml={junit}"]
+        code, out = run_command(cmd, self.root, timeout=timeout)
+        reason = incomplete_reason(code, out, timeout) or PYTEST_INCOMPLETE.get(code, "")
+        cases = parse_junit(junit) if junit.is_file() else None
+        status = "error" if reason else PYTEST_STATUS.get(code, "error")
+        return TestRun(status, code, out, cases, incomplete=reason)
 
     def coverage_checks(self, base_ref: str, scope: TestScope | None = None) -> list[Check]:
         out_dir = self.root / self.cfg.paths.out

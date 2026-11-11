@@ -30,6 +30,11 @@ Scenario keys:
   usage_limit: {phase: n} -> the first n runs of that phase are refused by the usage limit (no
     files; a rejected rate_limit_event resetting in usage_limit_reset_s seconds, default 120);
     they do not count as runs for the other keys
+  contest_steps: plan step numbers whose first IMPLEMENT run finds the extra test
+    test_add_refuses_bool_contested wrong: TESTS adds that test (bools must be rejected), the run
+    writes the loose add() (bools pass) and a `Park kind: tests-wrong` park.md naming it
+  contest_accept: true -> TESTS_AMEND deletes the contested test (the human approved the fix);
+    false -> no test change (the fix was not approved), so the redo writes the strict add()
   spec_update: what SPEC_UPDATE does with specs/demo/requirements.md: "edit" (default: marks the
     DEMO-E-001 row with the answer reference), "new_id" (edit + a new row DEMO-E-002, added to
     plan.md Covers; TESTS then writes a test for it), "renumber" (DEMO-E-001 -> DEMO-E-009),
@@ -103,6 +108,14 @@ def test_add_rejects_bool() -> None:
         add(True, 1)
 """
 
+
+TESTS_CONTESTED = """
+
+@pytest.mark.req("DEMO-E-001")
+def test_add_refuses_bool_contested() -> None:
+    with pytest.raises(TypeError, match="ints only"):
+        add(True, 1)
+"""
 
 NEG_HEAD = '\n\ndef neg(a: int) -> int:\n    """Negate an integer. Serves DEMO-R-002."""\n'
 NEG_STUB = NEG_HEAD + "    raise NotImplementedError\n"
@@ -318,6 +331,9 @@ def main() -> int:
             text = text.replace("from demo import add", "from demo import add, neg") + TESTS_STEP2
         if req.is_file() and "DEMO-E-002" in req.read_text(encoding="utf-8"):
             text += TESTS_E2
+        amend = "answered questions at the final gate" in prompt
+        if scen.get("contest_steps") and not (amend and scen.get("contest_accept")):
+            text += TESTS_CONTESTED
         write(rel, text)
         write("out/demo/test_summary.md", "| DEMO-R-001 | test_add_returns_sum | sum | example |\n")
     elif phase == "TEST_REVIEW":
@@ -341,9 +357,23 @@ def main() -> int:
         neg = (NEG_DONE if "# neg-done" in cur or step == 2 else NEG_STUB) if two else ""
         # strict once the code is, or once a failing review test (gate feedback) asks for it
         strict = "type(a) is not int" in cur or lang["valid_name"] in prompt
+        # a provisional step whose test fix the human did not approve: the tests stand
+        strict = strict or "did not approve changing its contested tests" in prompt
         fails = state.get("implement_failed", 0)
         park = [n for n in nums if n in scen.get("park_steps", []) and n not in parked]
-        if park:
+        contested = state.setdefault("contested", [])
+        contest = [n for n in nums if n in scen.get("contest_steps", []) and n not in contested]
+        if contest:
+            contested.append(contest[0])
+            write(lang["impl"], lang["loose"] + neg)
+            write(
+                "out/demo/park.md",
+                "Park kind: tests-wrong\n"
+                "Contested tests: test_demo.test_add_refuses_bool_contested\n\n"
+                "1. `test_add_refuses_bool_contested` (DEMO-E-001): bool is an int in Python, the "
+                "spec says ints only. Fix: delete the test.\n",
+            )
+        elif park:
             step = park[0]
             parked.append(step)
             write(lang["impl"], (lang["strict"] if strict else lang["loose"]) + NEG_PARTIAL)

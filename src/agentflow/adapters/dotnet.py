@@ -854,16 +854,10 @@ class DotnetAdapter(LanguageAdapter):
             parts.append(class_filter(classes))
         return combine_filters("|".join(parts), base)
 
-    def regression_check(self) -> Check:
-        def run() -> CheckResult:
-            res = self._dotnet_test(
-                self.settings.final_filter, "regression", timeout=self.cfg.regression_timeout
-            )
-            if res.incomplete:
-                return incomplete_result(res.incomplete, res.output)
-            return CheckResult("PASS" if res.status == "passed" else "FAIL", res.output)
-
-        return Check("regression: whole suite, no coverage", run)
+    def regression_run(self) -> TestRun:
+        return self._dotnet_test(
+            self.settings.final_filter, "regression", timeout=self.cfg.regression_timeout
+        )
 
     def coverage_checks(self, base_ref: str, scope: TestScope | None = None) -> list[Check]:
         cov_dir = self.root / self.cfg.paths.out / "coverage"
