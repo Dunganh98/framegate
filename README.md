@@ -23,7 +23,9 @@ claude plugin install agentflow@agentflow
    questions, check `specs/<name>/`, then say **"spec OK"**.
 3. **Wait:** the agents run in the background; the chat shows progress and cost. If a step
    fails the same way twice, a diagnosis agent finds the cause: a code fix is retried at
-   once, a test or spec fix waits for you at the final gate.
+   once, a test or spec fix waits for you at the final gate. If only a step's tests are
+   wrong, its code is kept as provisional and later steps build on it; you approve the
+   proposed test fixes at the final gate in one reply.
 4. **Final gate:** read the summary, then reply **"ok"**, **"no retro"**, or answer the
    numbered questions (only the affected work is redone).
 5. **Done:** keep the retro facts you like, create the PR if you want.

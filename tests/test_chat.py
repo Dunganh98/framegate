@@ -148,8 +148,9 @@ def test_progress_lines_through_a_feature(
         "[step 1 - add] green (attempt 2), committed",
         "[step 2 - neg] PARKED: no reasonable assumption possible",
         "IMPLEMENT done",
-        "[REVIEW] final gates: FAILED (",
-        "FINAL GATE: waiting for you. Final gates FAILED; 1 parked: step 2 - neg.",
+        # the parked step's tests are expected red; coverage and mutation wait for the redo
+        "[REVIEW] final gates: PASSED; skipped: ",
+        "FINAL GATE: waiting for you. Final gates PASSED; 1 parked: step 2 - neg.",
     ):
         assert part in text, part
     assert 10 <= len(log_lines(r)) <= 30  # the live view stays short
@@ -273,7 +274,8 @@ def test_gate_summary_spec_diff_and_final_gate_parked(
     assert r.af("gate-summary", "demo") == 0
     out = capsys.readouterr().out
     assert out.startswith("FINAL GATE: demo ($")
-    assert "Final gates: FAILED (" in out  # the parked step's tests are red
+    # the parked step's tests are expected red, not a failure
+    assert "Final gates: PASSED; skipped: " in out
     assert "Plan steps: 1/2 green, 1 parked" in out
     assert "Assumptions: 1\n  - [DEMO-E-001] bool counts as int" in out
     assert "Parked (answer by number to redo them):\n  1. step 2 - neg: no reasonable" in out

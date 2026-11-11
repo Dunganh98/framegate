@@ -110,13 +110,71 @@ def match_answer(question: str, items: list[dict[str, Any]]) -> str | None:
         ni = _norm(str(it.get("q") or ""))
         if ni and (ni == nq or within(nq, ni) or within(ni, nq)):
             return str(it.get("a") or "").strip() or "(empty answer)"
-    return None
+    return _closest_answer(question, items)
 
 
-def _answer_for_questions(events: list[dict[str, Any]], i: int, question: str = "") -> str:
+#: a spec ID, reduced to its kind and number (`FKR-R-010` and a short `R-010` are the same)
+_SPEC_ID = re.compile(r"\b(?:[A-Z][A-Z0-9]*-)?([REI]-\d{3})\b")
+
+
+def _closest_answer(question: str, items: list[dict[str, Any]]) -> str | None:
+    """The gate (or the chat) often rephrases a question in the answer's `Q:` line (seen live:
+    all four test-writer questions came back reworded, so none matched on the first words).
+    Fallback: the item that shares the question's spec IDs and most of its words; None when no
+    item is close enough or two are equally close."""
+    ids = set(_SPEC_ID.findall(question))
+    words = {w for w in _norm(question).split() if len(w) >= 3}
+    scored: list[tuple[float, str]] = []
+    for it in items:
+        q = str(it.get("q") or "")
+        iw = {w for w in _norm(q).split() if len(w) >= 3}
+        if not iw or not words:
+            continue
+        iids = set(_SPEC_ID.findall(q))
+        if ids and iids and not ids & iids:
+            continue  # about other spec IDs
+        id_score = len(ids & iids) / len(ids | iids) if ids and iids else 0.0
+        overlap = len(words & iw) / min(len(words), len(iw))
+        if (id_score and overlap >= 0.3) or overlap >= 0.6:
+            scored.append((id_score + overlap, str(it.get("a") or "").strip() or "(empty answer)"))
+    scored.sort(key=lambda s: -s[0])
+    if not scored or (len(scored) > 1 and scored[1][0] == scored[0][0]):
+        return None
+    return scored[0][1]
+
+
+def archive_rounds(archive: str) -> list[list[dict[str, Any]]]:
+    """questions_archive.md -> the numbered answer items of every answer round
+    (`### Answer ANS-n` blocks), oldest first. An item without its own `Q:` line gets the
+    question shown at that number in the same section."""
+    rounds: list[list[dict[str, Any]]] = []
+    for section in re.split(r"^---\s*$", archive, flags=re.M):
+        head, sep, answer = section.partition("\n### Answer ")
+        if not sep:
+            continue
+        answer = answer.split("\n", 1)[1] if "\n" in answer else ""
+        shown = split_questions(re.sub(r"^\s*<!--.*?-->\s*$", "", head, flags=re.M))
+        rounds.append(
+            [
+                dict(it, q=it["q"] or (shown[it["n"] - 1] if 0 < it["n"] <= len(shown) else ""))
+                for it in parse_answer_items(answer)
+            ]
+        )
+    return rounds
+
+
+def _answer_for_questions(
+    events: list[dict[str, Any]],
+    i: int,
+    question: str = "",
+    archive: list[list[dict[str, Any]]] | None = None,
+) -> str:
     """The human's reply to `question` of the questions event at index i: the matching numbered
-    item of the next answer at a gate (or an old-style questions answer), or an approval that
-    left them open."""
+    item of any later answer round (the events' rounds first, then the rounds of
+    questions_archive.md), an old-style questions answer, or an approval that left it open.
+    Not found although answer rounds and a spec update followed: "answer lookup failed" (the
+    retro must not read that as a question nobody answered)."""
+    rounds = 0
     for a in events[i + 1 :]:
         kind = a.get("kind")
         if kind == "answer" and (a.get("gate") in ("tests", "final") or a.get("waiting")):
@@ -127,14 +185,28 @@ def _answer_for_questions(events: list[dict[str, Any]], i: int, question: str = 
             found = match_answer(question, items) if question else None
             if found is not None:
                 return found
-            if items and question:
-                return "(not answered: no numbered answer is about this question)"
-            return text or "(see answers.md)"
+            if not (items and question):
+                return text or "(see answers.md)"
+            rounds += 1
+            continue
+        if rounds:
+            continue
         if kind == "human_gate" and a.get("approved"):
             return f"(not answered: the {a.get('gate')} gate was approved with it open)"
         if kind == "tests_gate_auto" and a.get("passed"):
             return "(not answered)"
-    return "(not answered yet)"
+    for items in archive or []:
+        found = match_answer(question, items) if question else None
+        if found is not None:
+            return found
+    if not rounds:
+        return "(not answered yet)"
+    if any(a.get("kind") == "spec_update" for a in events[i + 1 :]):
+        return (
+            f"(answer lookup failed: {rounds} answer round(s) and a spec update followed, but no "
+            "numbered answer matched this question; see questions_archive.md)"
+        )
+    return "(not answered: no numbered answer is about this question)"
 
 
 def build(
@@ -142,10 +214,13 @@ def build(
     events: list[dict[str, Any]],
     review_notes: str = "",
     assumptions: list[Any] | None = None,
+    archive: str = "",
 ) -> RetroInput:
-    """Render retro_input.md from the feature's events (in order) and the implementer's
-    assumptions (report.Assumption: where, spec_id, text)."""
+    """Render retro_input.md from the feature's events (in order), the implementer's
+    assumptions (report.Assumption: where, spec_id, text) and questions_archive.md (every
+    answer round, for the question -> answer lookup)."""
     sections: dict[str, list[str]] = {k: [] for k in ID_PREFIXES}
+    answer_rounds = archive_rounds(archive)
     ids: list[str] = []
 
     def item(prefix: str, title: str, body: list[str]) -> None:
@@ -160,7 +235,7 @@ def build(
             rounds += 1
             who = f" ({e['who']})" if e.get("who") else ""
             for q in split_questions(str(e.get("questions", ""))):
-                reply = _answer_for_questions(events, i, q)
+                reply = _answer_for_questions(events, i, q, answer_rounds)
                 item(
                     "Q",
                     (_where(e) or "unknown phase") + who,
@@ -281,6 +356,32 @@ def build(
             )
             body.append(f"Resolution: {res}")
             item("P", f"{e.get('label')} parked ({e.get('attempts')} failed attempts)", body)
+        elif kind == "provisional":
+            settled = next(
+                (
+                    a
+                    for a in events[i + 1 :]
+                    if a.get("kind") == "provisional_settled" and a.get("label") == e.get("label")
+                ),
+                None,
+            )
+            res = (
+                "open (no answer yet)"
+                if settled is None
+                else "test fixes approved: the contested tests pass, the code stayed"
+                if settled.get("accepted")
+                else "test fix not applied: the code was "
+                + ("reverted" if settled.get("reverted") else "kept (revert conflicted)")
+                + " and the step redone"
+            )
+            body = [
+                f"Kind: provisional step (code kept; contested tests: "
+                f"{', '.join(e.get('contested') or [])})",
+                "Question:",
+                _block(str(e.get("question") or ""), 800),
+                f"Resolution: {res}",
+            ]
+            item("P", f"{e.get('label')} provisional (tests contested)", body)
         elif kind == "permission_denials":
             for d in e.get("denials") or []:
                 item(

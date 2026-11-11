@@ -182,6 +182,19 @@ def test_stop_blocks_while_selected_tests_fail(green_red: pathlib.Path) -> None:
     assert require_green.evaluate(stop_json(green_red))[0] == 2
 
 
+def test_stop_leaves_out_the_contested_tests(green_red: pathlib.Path) -> None:
+    """A provisional step's contested tests fail by design (their fix waits for the human): the
+    hook judges only the other tests."""
+    set_phase(green_red, "IMPLEMENT")
+    contested = green_red / "out" / "contested_tests.txt"
+    contested.parent.mkdir(parents=True)
+    contested.write_text("test_x.test_red\n", encoding="utf-8")
+    assert require_green.evaluate(stop_json(green_red)) == (0, "")
+    contested.write_text("test_x.test_other\n", encoding="utf-8")
+    code, msg = require_green.evaluate(stop_json(green_red))
+    assert code == 2 and "test_red" in msg
+
+
 def test_stop_allowed_when_parked(green_red: pathlib.Path) -> None:
     """An implementer that parks (park.md: no reasonable assumption) may stop with red tests."""
     set_phase(green_red, "IMPLEMENT")

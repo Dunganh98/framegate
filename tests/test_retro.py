@@ -8,6 +8,7 @@ import pathlib
 from agentflow.gates import GateReport, gate_report
 from agentflow.retro import (
     add_knowledge,
+    archive_rounds,
     build,
     knowledge_items,
     match_answer,
@@ -214,3 +215,83 @@ def test_parse_result_stream_counts_api_turns() -> None:
     assert one["api_turns"] is None and one["num_turns"] == 46
     bad = parse_result("", "Error: boom")
     assert bad["is_error"] and bad["result"] == "Error: boom"
+
+
+def test_rephrased_answers_match_on_spec_ids_and_words() -> None:
+    """Seen live (M5-freekick-review): the final gate's `Q:` lines reworded all four test-writer
+    questions, so none matched on the first words and the retro said "not answered"."""
+    asked = (
+        "- FKR-R-010: `OtherChance` = goal chance of the other strike type at his own timing. "
+        "The test assumes the curl factor (SdY x 1.15) with the same wall, keeper and Timing "
+        "(design.md: `FreeKickSituationFor(h, aimY, ErrorScale(Timing), !curl)`). Confirm.\n"
+        "- FKR-R-008 / FKR-R-012: the tests pass the review's `AimZ` to the span functions. "
+        "Confirm that the span functions clamp their own aimZ the same way.\n"
+        "- FKR-E-009 (penalty): an empty dived span needs a synthetic keeper with "
+        "`KeeperGk = -0.2`; confirm that a synthetic out-of-range `KeeperGk` is acceptable.\n"
+    )
+    answers = (
+        "1. Q: step 1 - calculators: two frozen tests contradict FKR-R-005.\n   A: Fix the tests.\n"
+        "2. Q: [test writer] FKR-R-010: `OtherChance` SdY via the curl factor with the same wall, "
+        "keeper and Timing (`FreeKickSituationFor(h, aimY, ErrorScale(Timing), !curl)`). "
+        "Confirm.\n   A: Confirmed.\n"
+        "3. Q: [test writer] FKR-R-008 / FKR-R-012: confirm that the span functions clamp their "
+        "own aimZ with `ClampAimZ`.\n   A: Yes, they clamp.\n"
+        "4. Q: [test writer] FKR-E-009 (penalty): a synthetic keeper with `KeeperGk = -0.2` for "
+        "an empty dived span. Acceptable?\n   A: Yes, fine.\n"
+    )
+    items = parse_answer_items(answers)
+    events = [
+        {"kind": "questions", "phase": "TESTS", "who": "test writer", "questions": asked},
+        {"kind": "answer", "gate": "final", "answer": answers, "items": items},
+    ]
+    text = build("f", events).text
+    for reply in ("Confirmed.", "Yes, they clamp.", "Yes, fine."):
+        assert f"Answer:\n~~~\n{reply}\n~~~" in text
+    assert "not answered" not in text and "Fix the tests" not in text
+    # two items equally close: no guess
+    twins = [
+        {"n": 1, "q": "FKR-R-010 curl factor?", "a": "x"},
+        {"n": 2, "q": "FKR-R-010 curl factor?", "a": "y"},
+    ]
+    assert match_answer("FKR-R-010: the curl factor, confirm?", twins) is None
+
+
+def test_answers_looked_up_in_every_round_and_the_archive() -> None:
+    """A question answered in a later round (or only findable through questions_archive.md, where
+    plain numbered answers get the question shown at that number) is still paired; with answer
+    rounds and a spec update but no match, the retro says the lookup failed, not that nobody
+    answered."""
+    events = [
+        {"kind": "questions", "phase": "TESTS", "questions": "- Do seeds 3 and 7 hold a duel?\n"},
+        {"kind": "answer", "gate": "final", "answer": "1. Q: step 1 - x\n   A: Redo it.\n"},
+        {"kind": "spec_update", "gate": "final", "ref": "ANS-1"},
+        {
+            "kind": "answer",
+            "gate": "final",
+            "answer": "1. Q: Do seeds 3 and 7 hold a duel?\n   A: Yes.\n",
+        },
+    ]
+    assert "Answer:\n~~~\nYes.\n~~~" in build("f", events).text
+    archive = (
+        "<!-- final gate: parked -->\n- [step 1 - x] Which rule wins?\n- Do seeds 3 and 7 hold a "
+        "duel?\n\n### Answer ANS-1 (answers.md)\n# Answers (final gate)\n\n1. The first rule.\n"
+        "2. Seeds 3 and 7 do.\n\n---\n<!-- final gate: parked -->\n- [step 2] y\n\n"
+        "### Answer ANS-2 (answers.md)\n1. Q: step 2\n   A: z\n"
+    )
+    rounds = archive_rounds(archive)
+    assert [[(i["q"], i["a"]) for i in r] for r in rounds] == [
+        [
+            ("[step 1 - x] Which rule wins?", "The first rule."),
+            ("Do seeds 3 and 7 hold a duel?", "Seeds 3 and 7 do."),
+        ],
+        [("step 2", "z")],
+    ]
+    plain = [
+        events[0],
+        {"kind": "answer", "gate": "final", "answer": "1. The first rule.\n2. Seeds 3 and 7 do.\n"},
+        {"kind": "spec_update", "gate": "final", "ref": "ANS-1"},
+    ]
+    assert "Answer:\n~~~\nSeeds 3 and 7 do.\n~~~" in build("f", plain, archive=archive).text
+    failed = build("f", plain).text
+    assert "(answer lookup failed: 1 answer round(s) and a spec update followed" in failed
+    assert "(not answered" not in failed

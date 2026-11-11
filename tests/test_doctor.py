@@ -52,3 +52,20 @@ def test_doctor_reports_what_is_broken(
     assert "[WARN] git: base branch 'nope' not found" in out
     assert "[WARN] knowledge file .agentflow/project.md" in out
     assert "[SKIP] whole test suite" in out and "FAILED: 2 failure(s)" in out
+
+
+def test_doctor_warns_about_an_outdated_template_copy(demo_repo: DemoRepo) -> None:
+    """The project's specs/_template/ copy (written by init) wins over agentflow's templates,
+    so sections added by later retros never reach the project's specs unless it is updated."""
+    r = demo_repo
+    tpl = r.root / "specs" / "_template" / "requirements.md"
+    text = tpl.read_text(encoding="utf-8")
+    tpl.write_text(
+        text.replace("## Existing data this spec reads", "## Something else"), encoding="utf-8"
+    )
+    stale = doctor.outdated_templates(load_config(r.root))
+    assert stale == {"requirements.md": ["Existing data this spec reads"]}
+    _, out = run(r)
+    assert "[WARN] spec templates in specs/_template/" in out
+    assert "requirements.md lacks: Existing data this spec reads" in out
+    assert "delete the copy to use agentflow's" in out

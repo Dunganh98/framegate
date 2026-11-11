@@ -250,14 +250,8 @@ class GenericAdapter(LanguageAdapter):
         # [generic] format_fix command, so a configured format check does not turn it off
         return self.cfg.format_fix and bool(self.opts.get("format_fix"))
 
-    def regression_check(self) -> Check:
-        def run() -> CheckResult:
-            res = self.run_tests()
-            if res.incomplete:
-                return incomplete_result(res.incomplete, res.output)
-            return CheckResult("PASS" if res.status == "passed" else "FAIL", res.output)
-
-        return Check("regression: whole suite, no coverage", run)
+    def regression_run(self) -> TestRun:
+        return self.run_tests()
 
     def coverage_checks(self, base_ref: str, scope: TestScope | None = None) -> list[Check]:
         feature = scope is not None and not scope.whole_suite

@@ -71,6 +71,10 @@ fail for no reason. Reading files and git log/diff/status are fine.
    - A parked item with a diagnosis (root cause + proposed fix): "ok" / "approve <n>" for it is
      the answer `Approved: apply the proposed fix as written.`; the next run sends it to the
      phase that owns the file (spec, tests, code). Approving the gate itself is a separate reply.
+   - The "Provisional steps" item (code kept, test fixes proposed): "ok" / "yes" / "approve" for
+     it, or for the whole gate while it is listed, is the answer `Approved: apply all proposed
+     test fixes as written.` (`agentflow approve` refuses while it is open). A "no" to one fix
+     is an answer too, in the user's words: that step's code is reverted and redone.
 4. `answers.md` format (overwrite the file; keep the user's wording, do not improve it):
 
    ```

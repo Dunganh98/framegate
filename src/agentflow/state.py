@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import pathlib
 import subprocess
 from typing import Any
 
@@ -66,9 +67,34 @@ def clear_reqs(cfg: Config) -> None:
     cfg.reqs_path.unlink(missing_ok=True)
 
 
+def contested_path(cfg: Config) -> pathlib.Path:
+    """Tests of provisional steps whose fix waits for the human (one name per line). Under
+    {out}/ (ignored by git), so `git add -A` never commits it."""
+    return cfg.out_dir / "contested_tests.txt"
+
+
+def set_contested(cfg: Config, names: list[str]) -> None:
+    """The tests the step gates and the Stop hook leave out (a provisional step's contested
+    tests); [] removes the file."""
+    p = contested_path(cfg)
+    if not names:
+        p.unlink(missing_ok=True)
+        return
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("".join(f"{n}\n" for n in dict.fromkeys(names)), encoding="utf-8")
+
+
+def read_contested(cfg: Config) -> list[str]:
+    p = contested_path(cfg)
+    if not p.is_file():
+        return []
+    return [x.strip() for x in p.read_text(encoding="utf-8").splitlines() if x.strip()]
+
+
 def clear_phase(cfg: Config) -> None:
     cfg.phase_path.unlink(missing_ok=True)
     clear_reqs(cfg)
+    set_contested(cfg, [])
 
 
 # ---------- events ----------

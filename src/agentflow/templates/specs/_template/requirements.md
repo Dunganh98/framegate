@@ -16,7 +16,9 @@ Feature code: XXX   <!-- 2–10 uppercase chars, prefix for all IDs, e.g. HI2 --
 | XXX-R-001 | | |
 
 ## Edge cases
-<!-- empty / NaN / missing / out-of-range / unit mismatch / duplicates / ordering / timing / very large input -->
+<!-- empty / NaN / missing / out-of-range / unit mismatch / duplicates / ordering / timing / very large input
+     Every new function: does it clamp / validate its own inputs (or rely on the caller); the value of
+     EVERY output (return and out-params) on "no result"; which error wins when two inputs are bad. -->
 | ID | Situation | Expected behavior (exact: value, exception type + message pattern) |
 |---|---|---|
 | XXX-E-001 | | |
@@ -33,6 +35,15 @@ Feature code: XXX   <!-- 2–10 uppercase chars, prefix for all IDs, e.g. HI2 --
 | IDs / value | Shared situation | Rule that wins / source and moment of equality |
 |---|---|---|
 | XXX-R-001 vs XXX-E-001 | | |
+
+## Existing data this spec reads
+<!-- Every existing field / flag / event a requirement names in words ("his goal", "the moment's
+     goal event"): the exact member and where it is set. Tests read these members, not look-alikes
+     (seen live: "the moment's goal event" was read as a flag with another meaning). "None" only if
+     the requirements name no existing data. -->
+| Words in the spec | Exact member / event | Set where (file: method) |
+|---|---|---|
+| | | |
 
 ## Test data and fixtures
 <which recorded/synthetic data the tests use, where it lives, how it is generated>

@@ -157,7 +157,9 @@ def test_full_flow_human_mode(demo_repo: DemoRepo, capsys: pytest.CaptureFixture
     assert "--req DEMO-R-001,DEMO-E-001" in fix["prompt"]
     assert [e["kind"] for e in r.events()].count("findings_fixed") == 1
     final = read(r, "out/demo/final_gates.md")
-    assert "FAILED" in final and "test_neg_negates" in final  # step 2 is parked
+    # step 2 is parked: its test is expected red, coverage and mutation wait for the redo
+    assert "ALL GATES PASSED" in final and "expected red (parked): 1" in final
+    assert "SKIPPED (parked steps: step 2 - neg)" in final
     assert "Time per check (s):" in final and "| frame diff |" in final
     facts = read(r, "out/demo/final_facts.md")
     assert "| step 2 - neg | PARKED (no reasonable assumption possible (question)) | 0 |" in facts
@@ -192,12 +194,13 @@ def test_full_flow_human_mode(demo_repo: DemoRepo, capsys: pytest.CaptureFixture
         "Triage (test reviewer): VALID",
         "Resolution: fixed by the implementer",
         "Triage (test reviewer): DISMISSED",
-        "### G1 — final gates failed",
+        "final gate failures 0",
     ):
         assert line in ri, line
     metrics = read(r, "metrics/workflow_metrics.csv").splitlines()
     assert metrics[0].endswith(",parked,assumptions")
-    assert metrics[1].split(",")[2:6] == ["1", "0", "1", "0"] and metrics[1].endswith(",1,1")
+    # questions: the test writer's one + the parked step's; no failed gate run
+    assert metrics[1].split(",")[2:6] == ["1", "0", "2", "0"] and metrics[1].endswith(",1,1")
     assert not (r.root / ".phase").exists() and not (r.root / ".reqs").exists()
     log = git(r.root, "log", "--format=%s")
     for msg in (

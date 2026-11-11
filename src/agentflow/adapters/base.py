@@ -451,9 +451,22 @@ class LanguageAdapter(abc.ABC):
         return "\n".join(kept_lines), kept, ignored
 
     @abc.abstractmethod
+    def regression_run(self) -> TestRun:
+        """The whole suite (the adapter's final selection) once, without coverage
+        instrumentation (cfg.regression_timeout), with per-test results (TestRun.cases) where the
+        framework reports them: the final gate tells a parked step's expected red tests from
+        real regressions by name."""
+
     def regression_check(self) -> Check:
-        """Final scope with a feature-scoped coverage run: the whole suite (the adapter's final
-        selection) once, without coverage instrumentation (cfg.regression_timeout)."""
+        """Final scope with a feature-scoped coverage run: regression_run as a check."""
+
+        def run() -> CheckResult:
+            res = self.regression_run()
+            if res.incomplete:
+                return incomplete_result(res.incomplete, res.output)
+            return CheckResult("PASS" if res.status == "passed" else "FAIL", res.output)
+
+        return Check("regression: whole suite, no coverage", run)
 
     @abc.abstractmethod
     def coverage_checks(self, base_ref: str, scope: TestScope | None = None) -> list[Check]:

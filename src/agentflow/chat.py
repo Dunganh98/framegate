@@ -16,6 +16,7 @@ from agentflow.orchestrator import (
     PROGRESS_LOG,
     Orchestrator,
     WorkflowError,
+    provisional_item,
 )
 from agentflow.report import since_spec_approval
 from agentflow.specs import feature_ids, plan_steps
@@ -284,7 +285,15 @@ def gate_summary(orch: Orchestrator, feature: str) -> int:
             for p in prog.get("parked") or []
         ]
         lines += _numbered("Parked (answer by number to redo them)", parked)
-        lines += _numbered("Open questions", _questions(orch, feature), start=len(parked) + 1)
+        prov = provisional_item(prog)
+        if prov:
+            lines += _numbered(
+                "Provisional steps (one answer approves all test fixes)",
+                [_clip(prov, 1500)],
+                start=len(parked) + 1,
+            )
+        start = len(parked) + (2 if prov else 1)
+        lines += _numbered("Open questions", _questions(orch, feature), start=start)
         lines += _spec_diff_lines(orch, feature)
         lines += [
             f"Cost per phase: {per_phase or '-'}",
@@ -362,7 +371,12 @@ def _final_gate(
             if extra
             else []
         ),
-        f"Plan steps: {done}/{len(steps)} green, {len(prog.get('parked') or [])} parked",
+        f"Plan steps: {done}/{len(steps)} green, {len(prog.get('parked') or [])} parked"
+        + (
+            f", {len(prog['provisional'])} of them provisional (tests contested)"
+            if prog.get("provisional")
+            else ""
+        ),
         "Failed attempts: "
         + (
             f"{sum(failed.values())} (" + ", ".join(f"{k}: {v}" for k, v in failed.items()) + ")"

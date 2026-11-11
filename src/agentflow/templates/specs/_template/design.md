@@ -12,6 +12,16 @@
 |---|---|---|---|---|
 | | | | | |
 
+## Mirrored code
+<!-- Only when a requirement says "as <X> does / computes". One row per such requirement: the
+     method and lines of X, and every choice X makes that the new code (and the tests' data) must
+     copy: cut-offs (e.g. t < 0.6), raw vs clamped values, tie-breaks, order of checks. For a
+     variant (another strike type, per grade, "had he chosen X"): which input fields change and
+     how; every other field is copied unchanged. -->
+| Requirement | Mirrors (file: method, lines) | Choices to copy / fields that change |
+|---|---|---|
+| | | |
+
 ## Data flow
 <!-- Existing golden / hash / snapshot / fingerprint / save-file tests that serialize a type this
      feature changes: list them, and say for each new member whether it is in or out (and how the
