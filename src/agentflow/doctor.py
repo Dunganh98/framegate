@@ -35,6 +35,32 @@ def _tail(text: str, n: int = 6) -> str:
     return "\n".join(lines[-n:])
 
 
+def _sections(text: str) -> list[str]:
+    return [line[3:].strip() for line in text.splitlines() if line.startswith("## ")]
+
+
+def outdated_templates(cfg: Config) -> dict[str, list[str]]:
+    """Spec template copy in the project (`agentflow init` writes one, and `agentflow spec`
+    prefers it) -> the `## ` sections agentflow's packaged template has and the copy lacks.
+    Compared by heading, so a customized copy is fine as long as it keeps the sections."""
+    from agentflow.orchestrator import package_text
+
+    out: dict[str, list[str]] = {}
+    for name in ("requirements.md", "design.md", "plan.md"):
+        local = cfg.root / cfg.paths.specs / "_template" / name
+        if not local.is_file():
+            continue  # the packaged template is used
+        have = {s.lower() for s in _sections(local.read_text(encoding="utf-8"))}
+        lacks = [
+            s
+            for s in _sections(package_text("templates", "specs", "_template", name))
+            if s.lower() not in have
+        ]
+        if lacks:
+            out[name] = lacks
+    return out
+
+
 def run(cfg: Config, echo: Callable[[str], None] = print, full: bool = False) -> int:
     items: list[Item] = []
 
@@ -91,11 +117,19 @@ def run(cfg: Config, echo: Callable[[str], None] = print, full: bool = False) ->
         for n in ("requirements.md", "design.md", "plan.md")
         if not (cfg.root / cfg.paths.specs / "_template" / n).is_file()
     ]
+    stale = outdated_templates(cfg)
+    tpl_notes = [f"missing: {', '.join(missing)}"] if missing else []
+    tpl_notes += [f"{name} lacks: {', '.join(secs)}" for name, secs in stale.items()]
+    if stale:
+        tpl_notes.append(
+            "the project's copy wins over agentflow's templates: add these sections, or delete "
+            "the copy to use agentflow's (they grow with each retro)"
+        )
     add(
         Item(
-            "WARN" if missing else "OK",
+            "WARN" if missing or stale else "OK",
             f"spec templates in {cfg.paths.specs}/_template/",
-            f"missing: {', '.join(missing)}" if missing else "",
+            "\n".join(tpl_notes),
         )
     )
     want = [cfg.paths.out + "/", cfg.paths.phase_file, cfg.paths.reqs_file]

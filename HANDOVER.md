@@ -72,7 +72,9 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
     (most real but harmless; tune if it gets noisy).
   - Templates: requirements "Existing data this spec reads", edge-case comment line (own
     clamping, outputs on "no result", error precedence), design "Mirrored code"; the spec
-    dialogue asks for them. FCSim's `specs/_template/` copy is not updated.
+    dialogue asks for them. A project's own `specs/_template/` (written by init) wins over
+    these, so `agentflow doctor` now WARNs about packaged `## ` sections the copy lacks. FCSim's
+    copy lacks "Existing data this spec reads" and "Mirrored code": add them or delete the copy.
   - retro_input pairs reworded questions with answers (spec IDs + words), searches every answer
     round incl. questions_archive.md, says "answer lookup failed" when a spec update followed.
   - Metrics: `questions` counts single questions + asking parks / provisional steps,
