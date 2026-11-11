@@ -150,8 +150,31 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
   - Deferred: session resume for mechanical retries (the last two features had 0 failed step
     gates), retro backlog with applied-tracking (design doc 9.7), the orchestrator split
     (before epics), `git add -A` limited to the phase's paths.
+- **From the M5-moment-scan retro (branch feat/retro-moment-scan, 2026-11-12, plugin 0.4.3;
+  the first run with the repair: the test writer took the mutation score from 77.5% to 89.5%
+  without the human; risk rated elevated):**
+  - Tool failures (retro #9): a mutation FAIL without a score is a tool failure: no repair
+    run, the final gate asks "run the checks again?" (always shown). Stryker gets a second
+    try. Before this, the repair would have sent a Stryker build failure to the test writer.
+  - Questions (#10): a repeated question is dropped at collection; `answer` items keep the
+    question as asked, so the retro finds answers to reworded questions. The retro's own
+    diagnosis (label collision) was wrong: the chat rewords questions, the lookup ignored the
+    item number.
+  - Spec check (#3, #4): `agentflow spec-check`, run by `approve-spec` (`checks/spec_lint.py`).
+  - Templates (#1, #2, #5, #6): columns "Measured with", "Decided by", "Assigned as"; design.md
+    "Error handling" as a table with a Spec ID column, new "Command-line surface"; one literal
+    example per text output. Test writer: every count gets a non-zero case; implementer: an
+    assumption never goes against design.md. `agentflow doctor` now also names missing columns
+    of a project's template copy (FCSim has a copy: update or delete it).
+  - Not done: #8 (mutation pre-check after IMPLEMENT: 11-16 min on every feature to save ~34
+    min when the score falls short; one clear case in five features; no parallel runner);
+    #7 (FCSim: tests reference FCSim.Runner).
+  - Open: the coverage run of the feature's tests took 624-732 s in the final gate, the same
+    tests 70-80 s in the step gates (coverlet over the whole assembly). Accepted retro
+    proposals: copied to `docs/findings/<date>-<feature>-retro.md` with a status line before
+    the cleanup (by hand so far; cleanup deletes retro_proposals.md).
 - **Adapters:** python (pytest, mutmut via WSL on Windows), dotnet (xUnit, Stryker opt-in level).
-- **Chat flow (plugin 0.4.2):** `/agentflow:setup` (new repo: scan, questions, toml +
+- **Chat flow (plugin 0.4.3):** `/agentflow:setup` (new repo: scan, questions, toml +
   project.md, `agentflow doctor`, optional smoke run); `/agentflow:feature <f>` (branch `feat/<f>` from `[git] base`,
   spec dialogue + spec brief, approve, background `agentflow run` + Monitor on `agentflow watch`,
   gate briefs via `agentflow gate-summary`, plain-word replies mapped to approve/reject/answer/finish,

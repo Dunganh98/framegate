@@ -106,15 +106,43 @@ def match_answer(question: str, items: list[dict[str, Any]]) -> str | None:
         words = short.split()[:12]
         return len(words) >= 4 and f" {' '.join(words[:-1])} " in f" {long} "
 
-    for it in items:
-        ni = _norm(str(it.get("q") or ""))
-        if ni and (ni == nq or within(nq, ni) or within(ni, nq)):
-            return str(it.get("a") or "").strip() or "(empty answer)"
+    # `asked` (the question as the gate item had it) first: `q` is often the chat's rewording
+    for key in ("asked", "q"):
+        for it in items:
+            ni = _norm(str(it.get(key) or ""))
+            if ni and (ni == nq or within(nq, ni) or within(ni, nq)):
+                return str(it.get("a") or "").strip() or "(empty answer)"
     return _closest_answer(question, items)
 
 
 #: a spec ID, reduced to its kind and number (`FKR-R-010` and a short `R-010` are the same)
 _SPEC_ID = re.compile(r"\b(?:[A-Z][A-Z0-9]*-)?([REI]-\d{3})\b")
+
+
+#: an agent's own label in front of a question: `Q1:`, `Q1 (repeat):`
+_Q_LABEL = re.compile(r"^\s*Q\d+\s*(?:\(repeat\))?\s*[:.]\s*", re.I)
+
+
+def _question_words(text: str) -> set[str]:
+    text = _Q_LABEL.sub("", re.sub(r"^\s*(\[[^\]]*\]\s*)+", "", text))
+    return {w for w in _norm(text).split() if len(w) >= 3}
+
+
+def same_question(new: str, old: str) -> bool:
+    """Is `new` the question `old` again (the same asker; seen live: the test writer repeated
+    a question in the next test round, and the human answered it twice)? The same words after
+    the agent's label, or: they share a spec ID (or name none) and at least 80% of the shorter
+    one's words are in the other. Strict on purpose: a dropped real question costs more than a
+    repeated one."""
+    a, b = _question_words(new), _question_words(old)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    ia, ib = set(_SPEC_ID.findall(new)), set(_SPEC_ID.findall(old))
+    if (ia or ib) and not ia & ib:
+        return False
+    return min(len(a), len(b)) >= 4 and len(a & b) / min(len(a), len(b)) >= 0.8
 
 
 def _closest_answer(question: str, items: list[dict[str, Any]]) -> str | None:

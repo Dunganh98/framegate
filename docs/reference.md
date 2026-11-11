@@ -17,7 +17,8 @@ a terminal.
 | `agentflow init` | write the starter files (config, spec templates, project facts, .gitignore lines) | once per repo |
 | `agentflow doctor [--full] [--brief]` | check the setup without agents; ends with a verdict and only what needs action (`--brief`: only that); `--full` also runs the whole test suite | after setup or config changes |
 | `agentflow spec <f>` | create the branch `feat/<f>` and open the spec phase | start of a feature |
-| `agentflow approve-spec <f>` | freeze the spec ("spec OK"); restarts the feature if the spec changed later | gate 1 |
+| `agentflow spec-check <f>` | mechanical checks of the spec tables (below); exit 1 on a problem | internal |
+| `agentflow approve-spec <f> [--force]` | spec-check, then freeze the spec ("spec OK"); restarts the feature if the spec changed later | gate 1 |
 | `agentflow run <f>` | run the agents until the next human gate or DONE | after every decision |
 | `agentflow watch <f>` | follow the progress lines of a run | while it runs |
 | `agentflow status [f] [--brief]` | state of one or all features | any time |
@@ -195,7 +196,8 @@ agentflow init [--language python|dotnet|generic]  # agentflow.toml, specs/_temp
 agentflow doctor [--full] [--brief]         # check the setup without agents; ends with a
                                             # verdict + what needs action (--brief: only that)
 agentflow spec <f>                          # branch feat/<f> from [git] base + SPEC phase
-agentflow approve-spec <f>                  # tag spec-approved/<f>
+agentflow spec-check <f>                    # rules without a spec ID, copied code not in the file
+agentflow approve-spec <f> [--force]        # spec-check, then tag spec-approved/<f>
 agentflow run <f>                           # runs to the next gate (tests, final) or DONE;
                                             # progress lines on stdout + out/<f>/progress.log
 agentflow watch <f>                         # live view: new progress lines until the run ends
@@ -249,7 +251,11 @@ resumes after an interruption. The spec itself must change: edit it, `agentflow 
 Between the gates nothing stops:
 - Questions of the test writer and the test reviewer (`questions.md`) are collected in
   `open_questions.md` and shown together at the next gate (by default the final gate, with the
-  test reviewer's objections still open and failed test checks). Answers there go into the spec
+  test reviewer's objections still open and failed test checks). A question the same agent
+  asked before is dropped (the same words after its own label `Q1:` / `Q1 (repeat):`, or a
+  shared spec ID and 80% of the shorter one's words; `questions` event: `repeats`). The
+  `answer` event keeps for every item the question as it was asked (`asked`), so the retro
+  finds the answer although the chat rewords the question. Answers there go into the spec
   and, where they need it, into the tests (below); if the spec changes, the reviewer checks the
   code against it again, then the final gate comes again.
 - Pinned test data (a seed, a recording) gets a fixture precondition test (`test_fixture_*` /
@@ -410,6 +416,25 @@ repair that changes nothing ends it. No repair while parked or provisional work 
 failures are expected). Events: `final_repair` (owner, failed, changed). The mutation check is
 not started when the typecheck, the regression or the coverage run failed before it (SKIPPED
 with that reason): it needs a green build and green tests.
+
+Tool failures: a mutation check that fails without a score (the tool crashed, could not build
+its own copy, was cut short) is a tool failure, not a statement about the tests. The gate
+report says so under the check (`TOOL FAILURE: ...`), the `final_gates` event lists it in
+`tool_failures`, and no repair run is started for it. The final gate asks instead (an item the
+brief always shows): run the final checks again (any answer does; the default), or approve as
+is. The .NET adapter starts a failed Stryker run a second time first (with `--diag` when
+Stryker's output offers it; the first output is kept in `out/<f>/stryker/<project>.first.log`).
+
+Spec check (`agentflow spec-check <f>`, also the first step of `approve-spec`, which refuses
+while it finds something; `--force` approves anyway and logs `spec_check` with `forced`). It
+reads two columns of the spec templates' tables; a spec without them is not checked:
+- `Spec ID` (design.md, "Error handling" and "Command-line surface"): every filled row names
+  a spec ID of requirements.md. A rule that is only written in design.md gets no test.
+- `Assigned as (code, copied)` (requirements.md, "Existing data this spec reads"): every
+  backticked piece of code in the cell is in the file the "Set where" cell names (a path, or
+  a file name looked up in the source folders; spacing is ignored). `n/a: <why>` skips a row.
+`agentflow doctor` warns when a project's copy of the templates (`specs/_template/`) lacks a
+section or a table column of agentflow's templates.
 
 Risk rating (`src/agentflow/risk.py`, `[risk]`): at every final gate the engine rates the
 feature `low` or `elevated` from its own records, never from an agent's opinion. Low needs all

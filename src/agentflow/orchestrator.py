@@ -31,7 +31,7 @@ from agentflow import brief as briefs
 from agentflow import notify, procs, risk
 from agentflow.adapters import get_adapter
 from agentflow.adapters.base import GATE_NAMES, CheckResult, LanguageAdapter
-from agentflow.checks import existing_members, red_stubs, test_smells, traceability
+from agentflow.checks import existing_members, red_stubs, spec_lint, test_smells, traceability
 from agentflow.checks import structure as structure_check
 from agentflow.checks.frame_diff import knowledge_tag, path_matches, tests_update_tag
 from agentflow.config import Config
@@ -54,6 +54,7 @@ from agentflow.retro import (
     knowledge_items,
     missing_ids,
     parse_answer_items,
+    same_question,
     split_questions,
 )
 from agentflow.retro import build as build_retro_input
@@ -88,6 +89,8 @@ PROGRESS_WIDTH = 160
 
 #: who asks the generated file-size questions at the final gate (open_questions.md tag)
 STRUCTURE_WHO = "structure report"
+#: who asks whether to run the final gates again after a tool failure (always asked)
+GATES_WHO = "final gates"
 PHASES = ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "REVIEW", "PR", "FINAL", "RETRO", "DONE"]
 METRICS_HEADER = (
     "date,feature,human_rejections,escalations,questions,gate_failures,cost_usd,parked,assumptions"
@@ -865,13 +868,29 @@ class Orchestrator:
             return 0
         text = qfile.read_text(encoding="utf-8").strip()
         qfile.unlink()
-        items = split_questions(text)
+        tag = f"[{who}] "
+        mine = [o.removeprefix(tag) for o in self.open_questions(feature) if o.startswith(tag)]
+        items: list[str] = []
+        repeats = 0
+        for q in split_questions(text):
+            while q.startswith(tag):  # an agent that tags its own bullets
+                q = q.removeprefix(tag)
+            # asked again in a later round (seen live: the human answered one question twice)
+            if any(same_question(q, o) for o in [*mine, *items]):
+                repeats += 1
+            else:
+                items.append(q)
+        if repeats:
+            self.progress(feature, f"[{phase}] {repeats} repeated question(s) dropped.")
         if not items:
             return 0
         with open(d / "open_questions.md", "a", encoding="utf-8") as fh:
             for q in items:
-                fh.write(f"- [{who}] " + q.replace("\n", "\n  ") + "\n")
-        log_event(self.cfg, feature, "questions", phase=phase, who=who, questions=text)
+                fh.write(f"- {tag}" + q.replace("\n", "\n  ") + "\n")
+        kept = "\n".join("- " + q.replace("\n", "\n  ") for q in items)
+        log_event(
+            self.cfg, feature, "questions", phase=phase, who=who, questions=kept, repeats=repeats
+        )
         self.progress(feature, f"[{phase}] {len(items)} question(s) collected for the next gate.")
         return len(items)
 
@@ -2184,11 +2203,13 @@ class Orchestrator:
             extra=rep.extra,
             results=rep.results,
             structure=rep.structure,
+            tool_failures=rep.tool_failures,
         )
+        names = [n + (" [tool failure]" if n in rep.tool_failures else "") for n in rep.failed]
         self.progress(
             feature,
             f"[REVIEW] final gates: {'PASSED' if rep.ok else 'FAILED'}"
-            + (f" ({', '.join(rep.failed)})" if rep.failed else "")
+            + (f" ({', '.join(names)})" if names else "")
             + (f"; skipped: {', '.join(rep.skipped)}" if rep.skipped else "")
             + (
                 "; project checks (not blocking): "
@@ -2210,8 +2231,11 @@ class Orchestrator:
         if not self.cfg.final_repair or expected_red(self.cfg, feature):
             return False
         done = list(prog.get("final_repair") or [])
-        src = [n for n in rep.failed if n.startswith(FINAL_SRC_CHECKS)]
-        weak = [n for n in rep.failed if n.startswith(FINAL_TESTS_CHECKS)]
+        # a tool that gave no result says nothing about the tests: no agent run, the human is
+        # asked whether to run the gates again (tool_failure_questions)
+        real = [n for n in rep.failed if n not in rep.tool_failures]
+        src = [n for n in real if n.startswith(FINAL_SRC_CHECKS)]
+        weak = [n for n in real if n.startswith(FINAL_TESTS_CHECKS)]
         if src and "src" not in done:
             owner, failed = "src", src
         elif weak and not src and "tests" not in done:
@@ -2366,6 +2390,30 @@ class Orchestrator:
         text = "\n".join(lines)
         log_event(self.cfg, feature, "questions", phase="PR", who=STRUCTURE_WHO, questions=text)
 
+    def tool_failure_questions(self, feature: str) -> None:
+        """A question at the final gate (always asked) for every final check whose tool gave
+        no result in the last run: run the final gates again (any answer does), or approve
+        without that check."""
+        last = [e for e in read_events(self.cfg, feature) if e.get("kind") == "final_gates"]
+        names = (last[-1].get("tool_failures") if last else None) or []
+        asked = "\n".join(self.open_questions(feature))
+        out = self.cfg.paths.out
+        lines = [
+            f"{name}: the tool gave no result, so this check says nothing about the code or "
+            f"the tests (its output: {out}/{feature}/final_gates.md). Run the final checks "
+            "again? Options: yes, run them again; no, finish without this check (approve as "
+            "is). Default: yes, run them again."
+            for name in names
+            if f"] {name}: the tool gave no result" not in asked
+        ]
+        if not lines:
+            return
+        with open(self.fdir(feature) / "open_questions.md", "a", encoding="utf-8") as fh:
+            for q in lines:
+                fh.write(f"- [{GATES_WHO}] {q}\n")
+        text = "\n".join(lines)
+        log_event(self.cfg, feature, "questions", phase="PR", who=GATES_WHO, questions=text)
+
     def commit_code_map(self, feature: str) -> bool:
         """Commit the summary agent's code map update (its only file outside the out folder)."""
         path = self.cfg.code_map
@@ -2388,6 +2436,7 @@ class Orchestrator:
     def phase_pr(self, feature: str, prog: dict[str, Any]) -> None:
         d = self.fdir(feature)
         self.file_size_questions(feature, prog)
+        self.tool_failure_questions(feature)
         self.write_final_facts(feature, prog)
         (d / "final_summary.md").unlink(missing_ok=True)
         (d / "final_brief.md").unlink(missing_ok=True)
@@ -2446,11 +2495,17 @@ class Orchestrator:
         prov = [f"[provisional] {provisional_item(prog)}"] if prog.get("provisional") else []
         return [*parked, *prov, *self.open_questions(feature)]
 
-    def must_ask(self, prog: dict[str, Any]) -> set[int]:
+    def must_ask(self, feature: str, prog: dict[str, Any]) -> set[int]:
         """Final-gate items the brief always asks: parked work and the provisional steps (the
-        first items of final_items); they block the run until answered."""
+        first items of final_items; they block the run until answered), and a failed check
+        whose tool gave no result (only the human can say: again, or finish without it)."""
         n = len(prog.get("parked") or []) + (1 if prog.get("provisional") else 0)
-        return set(range(1, n + 1))
+        tool = {
+            i
+            for i, item in enumerate(self.final_items(feature, prog), 1)
+            if item.startswith(f"[{GATES_WHO}] ")
+        }
+        return set(range(1, n + 1)) | tool
 
     def final_brief_sections(self, feature: str) -> dict[str, list[str]]:
         p = self.fdir(feature) / "final_brief.md"
@@ -2462,7 +2517,7 @@ class Orchestrator:
         return briefs.plan(
             self.final_brief_sections(feature),
             self.final_items(feature, prog),
-            self.must_ask(prog),
+            self.must_ask(feature, prog),
         )
 
     def check_final_brief(self, feature: str, prog: dict[str, Any]) -> None:
@@ -2472,7 +2527,7 @@ class Orchestrator:
             return  # the gate brief falls back to generated lines
         n_items = len(self.final_items(feature, prog))
         problems = briefs.check_brief(
-            self.final_brief_sections(feature), n_items, self.must_ask(prog)
+            self.final_brief_sections(feature), n_items, self.must_ask(feature, prog)
         )
         log_event(self.cfg, feature, "brief_check", problems=problems, rewrite=bool(problems))
         if not problems:
@@ -2491,7 +2546,9 @@ class Orchestrator:
         self.agent("PR", feature, prog, task)
         self.collect_questions(feature, "PR", "summary agent")
         n_items = len(self.final_items(feature, prog))
-        left = briefs.check_brief(self.final_brief_sections(feature), n_items, self.must_ask(prog))
+        left = briefs.check_brief(
+            self.final_brief_sections(feature), n_items, self.must_ask(feature, prog)
+        )
         log_event(self.cfg, feature, "brief_check", problems=left, rewrite=False)
         if left:
             self.progress(feature, f"[PR] final brief: {len(left)} problem(s) left (not blocking)")
@@ -3011,11 +3068,21 @@ class Orchestrator:
         )
         return EXIT_OK
 
-    def approve_spec(self, feature: str) -> int:
+    def approve_spec(self, feature: str, force: bool = False) -> int:
         if not self.cfg.spec_dir(feature).is_dir():
             raise WorkflowError(
                 f"No spec folder {self.cfg.paths.specs}/{feature}/ (run: agentflow spec {feature})"
             )
+        found = spec_lint.problems(self.cfg, feature)
+        if found:
+            log_event(self.cfg, feature, "spec_check", problems=found, forced=force)
+            listed = "\n".join(f"- {x}" for x in found)
+            if not force:
+                raise WorkflowError(
+                    f"Spec check: {len(found)} problem(s); fix the spec, then approve again "
+                    f"(or: agentflow approve-spec {feature} --force)\n{listed}"
+                )
+            self.echo(f"Spec check: {len(found)} problem(s), approved anyway (--force)\n{listed}")
         clear_phase(self.cfg)
         commit(self.cfg, f"{feature}: spec approved")
         git(self.cfg, "tag", "-f", f"spec-approved/{feature}")
@@ -3305,9 +3372,12 @@ class Orchestrator:
                 + ([prov_item] if prov_item else [])
                 + shown
             )
+        # `asked`: the question as the agent wrote it (the chat rewords it in plain words in
+        # `Q:`, so the retro could not find the answers of reworded questions)
         items = [
-            dict(it, q=it["q"] or (shown[it["n"] - 1] if 0 < it["n"] <= len(shown) else ""))
+            dict(it, q=it["q"] or asked, asked=asked)
             for it in parse_answer_items(text)
+            for asked in [shown[it["n"] - 1] if 0 < it["n"] <= len(shown) else ""]
         ]
         logged: dict[str, Any] = {"ref": ref, "answer": text[:20000], "items": items}
         if given != text:

@@ -44,12 +44,21 @@ knowledge. It overrides any default you would otherwise assume.
    - fixtures: for each case that needs particular data (a seed, a recording, a rare
      situation), how a test sees from outside that the situation happened, and whether a check
      over picked cases may pass with zero cases;
+   - numbers: every number in an acceptance criterion measured with this spec's own definition
+     (run the project's scan / measure command if the project knowledge names one), never
+     copied from another test; for every count the feature outputs, data where it is not 0;
    - input domain and copies: the valid range of each public method's inputs (NaN, infinity,
      null, undefined enum values) and what a copy / clone shares;
    - serialized data: which existing golden / hash / snapshot / save tests serialize a type
      this feature changes, and is the new member in or out of them;
    - existing data: every existing concept a requirement names in words ("the moment's goal
-     event", "his rating") resolved to one exact member and where it is set (read the code);
+     event", "his rating") resolved to one exact member and where it is set (read the code),
+     with the line that assigns it copied into the spec (an id or an index? raw or clamped?);
+   - rejected input: which existing method decides each rejected case and when it is checked;
+     for a parser the accepted forms (sign, largest value, overflow); for a command, each
+     option's default, what happens without a value, and the message + exit code of a bad one;
+   - error rules and text output: every rule in design.md's "Error handling" has a spec ID
+     with an acceptance criterion; every text output has one literal example line;
    - mirrored code (only when a requirement says "as X does"): the method and lines of X and
      the choices to copy (cut-offs, raw vs clamped values, tie-breaks, order of checks);
    - new functions: which inputs each clamps itself, what every output holds on "no result",
@@ -82,6 +91,9 @@ knowledge. It overrides any default you would otherwise assume.
    per file. Stubs must compile or import cleanly.
 5. Do not write tests or implementation. The test tagging conventions are for reference only;
    the TESTS phase uses them.
+   Then run `agentflow spec-check $ARGUMENTS` and fix what it lists (a rule without a spec
+   ID, copied code that is not in the named file: read the code again and correct the spec's
+   wording too). `agentflow approve-spec` runs the same check and refuses while it fails.
 6. Write the spec gate brief to `<out>/$ARGUMENTS/spec_brief.md` (the out folder above; the
    final gate compares the run with it) and show it in the chat. About one screen, plain words,
    no spec IDs, one line per bullet, no sentence that repeats a heading or another section, a

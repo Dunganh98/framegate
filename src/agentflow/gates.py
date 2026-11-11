@@ -250,6 +250,11 @@ def checks(
     return c
 
 
+#: under a failed check whose tool gave no result
+TOOL_FAILURE_NOTE = (
+    "TOOL FAILURE: the tool gave no result; this says nothing about the code or the tests"
+)
+
 #: final checks whose failure means the build or the tests are red (by the start of their name)
 RED_CHECKS = ("typecheck", "regression", "coverage run", "full test suite")
 
@@ -280,6 +285,8 @@ class GateReport:
     results: dict[str, str] = field(default_factory=dict)
     #: final scope: the structure report (file sizes, longest methods; structure.Structure)
     structure: dict[str, object] = field(default_factory=dict)
+    #: failed checks whose tool gave no result (CheckResult.tool_failure): no agent can fix them
+    tool_failures: list[str] = field(default_factory=list)
 
     def excerpt(self, lines_per_check: int = 12, limit: int = 2000) -> str:
         """A trimmed excerpt of the failing checks' output (for events and the retro)."""
@@ -325,6 +332,7 @@ def gate_report(
     full_outputs: dict[str, str] = {}
     durations: dict[str, float] = {}
     results: dict[str, str] = {}
+    tool_failures: list[str] = []
     exp = expected_red(adapter.cfg, feature) if scope == "final" else ExpectedRed()
     if scope == "final":
         for line in scope_lines(adapter, feature, skip_mutation):
@@ -364,6 +372,12 @@ def gate_report(
         out = res.output.strip()
         if res.status == "FAIL":
             failed.append(check.name)
+            if res.tool_failure:
+                tool_failures.append(check.name)
+                results[check.name] = "FAIL: tool failure" + (
+                    f": {res.summary}" if res.summary else ""
+                )
+                emit(f"  {TOOL_FAILURE_NOTE}")
             if res.summary:
                 emit(f"  {res.summary}")
             full_outputs[check.name] = out
@@ -407,6 +421,7 @@ def gate_report(
         extra,
         results,
         shape,
+        tool_failures,
     )
 
 

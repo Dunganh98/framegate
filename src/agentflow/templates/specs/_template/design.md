@@ -28,7 +28,19 @@
      test leaves it out). -->
 
 ## Error handling
-<which exceptions, where raised, what callers do>
+<!-- One row per rule: which exception / result, where it is raised, what callers do. Every row
+     names the spec ID whose acceptance criterion tests it: a rule written only here gets no
+     test (seen live: "the first failing job is the one reported" had no ID; the implementer
+     assumed the opposite). `agentflow spec-check` fails on a row without an ID. -->
+| Situation | Exception / result, where raised, what callers do | Spec ID |
+|---|---|---|
+| | | |
+
+## Command-line surface
+<!-- Only for a feature with a command or script (else "None"): one row per option. -->
+| Option | Default | Given without a value | Bad value: message + exit code | Spec ID |
+|---|---|---|---|---|
+| | | | | |
 
 ## Dependencies
 <approved new dependencies, or "none">

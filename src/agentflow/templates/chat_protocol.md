@@ -17,7 +17,9 @@ of it.
 
 ## A. Start (after "spec OK") and continue (after every gate decision)
 
-1. Only the first time: `agentflow approve-spec <f>`.
+1. Only the first time: `agentflow approve-spec <f>`. If it lists spec-check problems, fix
+   the spec (they are mechanical: add the missing spec ID, copy the code line as it is) and
+   approve again; `--force` only when the user says so.
 2. Start the run in the background: Bash tool, `run_in_background: true`, command
    `agentflow run <f>` (PowerShell tool the same if Bash is not available). Note its task id.
 3. Start the live view: Monitor tool, command `agentflow watch <f>`, description

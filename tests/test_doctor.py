@@ -87,6 +87,14 @@ def test_doctor_warns_about_an_outdated_template_copy(demo_repo: DemoRepo) -> No
     assert "[WARN] spec templates in specs/_template/" in out
     assert "requirements.md lacks: Existing data this spec reads" in out
     assert "delete the copy to use agentflow's" in out
+    # a column a later retro added to a table (the sections are all there)
+    tpl.write_text(
+        text.replace(" Measured with |", "").replace("|---|---|---|---|---|", "|---|---|---|---|"),
+        encoding="utf-8",
+    )
+    assert doctor.outdated_templates(load_config(r.root)) == {
+        "requirements.md": ['column "Measured with"']
+    }
 
 
 def test_doctor_checks_the_chat_side(demo_repo: DemoRepo) -> None:

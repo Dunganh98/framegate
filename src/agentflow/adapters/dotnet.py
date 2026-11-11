@@ -1205,6 +1205,7 @@ class DotnetAdapter(LanguageAdapter):
         logs: list[str] = []
         failures: list[str] = []  # Stryker's message per failed run
         failed: list[str] = []  # the failed runs' project names
+        retried: list[str] = []  # runs started a second time after Stryker failed
         not_mutated = _not_mutated_lines(untested)
         for proj, files in groups.items():
             out_dir = work / proj.stem
@@ -1232,6 +1233,13 @@ class DotnetAdapter(LanguageAdapter):
             ]
             timeout = self.settings.mutation_timeout or self.cfg.mutation_timeout
             code, out = run_command(cmd, tree, env=self.env(), timeout=timeout)
+            if code != 0 and not incomplete_reason(code, out, timeout):
+                # Stryker itself failed (seen live: "simulated build failed" once, fine on the
+                # next run with nothing changed): one more try, with its build log if offered
+                (work / f"{proj.stem}.first.log").write_text(out, encoding="utf-8")
+                again = [*cmd, "--diag"] if "--diag" in out else cmd
+                code, out = run_command(again, tree, env=self.env(), timeout=timeout)
+                retried.append(proj.name)
             (work / f"{proj.stem}.log").write_text(out, encoding="utf-8")
             report = out_dir / "reports" / "mutation-report.json"
             reason = incomplete_reason(code, out, timeout)
@@ -1245,14 +1253,18 @@ class DotnetAdapter(LanguageAdapter):
                 return res
             if code != 0 or not report.is_file():
                 tail = "\n".join(out.splitlines()[-25:])
-                failures.append(f"Stryker failed for {proj.name} (exit {code}):\n{tail}")
+                log = f"{self.cfg.paths.out}/{feature}/stryker/{proj.stem}.log"
+                failures.append(
+                    f"Stryker failed twice for {proj.name} (exit {code}; log: {log}):\n{tail}"
+                )
                 failed.append(proj.name)
                 continue
             d, u, s = stryker_results(
                 json.loads(report.read_text(encoding="utf-8-sig")), tree, files, line_maps
             )
             detected, undetected, survivors = detected + d, undetected + u, survivors + s
-            logs.append(f"{proj.name}: {d} detected, {u} undetected")
+            second = " (second try: Stryker failed on the first)" if proj.name in retried else ""
+            logs.append(f"{proj.name}: {d} detected, {u} undetected{second}")
         self._write_survivors(feature, survivors, untested, logs)
         if failures:
             done = "; ".join(logs) if logs else "no other project finished"
