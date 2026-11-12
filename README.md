@@ -34,7 +34,13 @@ claude plugin install agentflow@agentflow
    questions), then reply **"ok"** (takes every default of the numbered questions, or approves
    when there are none), **"no retro"**, or answer questions by number (only the affected work
    is redone).
-5. **Done:** pick the retro proposals and facts by number, create the PR if you want.
+5. **Done:** pick the retro proposals and facts by number (the proposals go to the retro
+   backlog, `agentflow backlog`, so none is lost and repeats are counted), create the PR if
+   you want.
+
+A bug or a refactor runs the same way with another first proof: `/agentflow:bugfix <name>`
+(the tests must fail on today's code, for the reported reason, before anything is fixed) and
+`/agentflow:refactor <name>` (the tests must pass on today's code and after every step).
 
 Chat closed? `/agentflow:resume <name>`. Overview: `/agentflow:status`.
 
@@ -46,6 +52,8 @@ In the chat:
 |---|---|
 | `/agentflow:setup` | set up agentflow in this repo |
 | `/agentflow:feature <name>` | build a feature, start to finish |
+| `/agentflow:bugfix <name>` | fix a bug: first a test that fails because of it |
+| `/agentflow:refactor <name>` | restructure code: first tests that pin what it does today |
 | `/agentflow:resume [name]` | reconnect the chat to a feature |
 | `/agentflow:status [name]` | show where features stand |
 
@@ -59,6 +67,8 @@ In a terminal (the chat runs these for you):
 | `agentflow approve <name>` | accept the waiting gate |
 | `agentflow answer <name>` | apply your answers from `out/<name>/answers.md` |
 | `agentflow cleanup <name>` | delete the run files after DONE |
+| `agentflow stats [name]` | what the features cost: money, agent and check time, final-gate runs |
+| `agentflow backlog` | the retro proposals you accepted and what became of them |
 
 All commands and options: `agentflow --help` and [docs/reference.md](docs/reference.md).
 

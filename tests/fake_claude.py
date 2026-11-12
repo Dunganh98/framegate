@@ -25,6 +25,13 @@ Scenario keys:
     number and with one option (for the brief check), later runs as true
   code_map: true -> PR also writes docs/code-map.md
   language: "python" (default) or "dotnet" (C# files for the .NET fixture, see test_dotnet_e2e)
+  mode: "bugfix" -> TESTS also writes a must-not-change test (DEMO-I-001) and IMPLEMENT's
+    step note names the cause (ROOT CAUSE / RULED OUT); "refactor" -> IMPLEMENT keeps the
+    behavior and adds a comment (a source change)
+  bug_not_shown: true -> the first TESTS run of a bug fix writes a reproduction test that
+    passes on today's code
+  refactor_idle: n -> the first n IMPLEMENT runs of a refactor change no source file
+  retro_brief: the numbered lines of the RETRO run's `## Brief` (its proposals)
   retro_omit: item IDs (e.g. ["F1"]) the RETRO run leaves out of retro_proposals.md (every
     other ID from out/demo/retro_input.md is listed under "Not acted on")
   retro_omit_runs: how many RETRO runs omit them (default 1: the re-run fixes it)
@@ -76,6 +83,13 @@ def test_add_returns_sum() -> None:
 def test_add_rejects_non_int() -> None:
     with pytest.raises(TypeError, match="ints only"):
         add("1", 2)
+"""
+
+TESTS_KEEP = """
+
+@pytest.mark.req("DEMO-I-001")
+def test_add_zero_stays() -> None:
+    assert add(0, 0) == 0
 """
 
 TESTS_E2 = """
@@ -361,6 +375,10 @@ def main() -> int:
         # the final-gate repair: tests for what the gates found uncovered
         if "found the tests too weak" in prompt and scen.get("uncovered") is True:
             text += TESTS_COVER
+        if scen.get("mode") == "bugfix":
+            text += TESTS_KEEP
+            if scen.get("bug_not_shown") and runs[phase] == 1:  # passes with the bug in place
+                text = text.replace("assert add(2, 3) == 5", "assert add(0, 0) == 0")
         write(rel, text)
         write("out/demo/test_summary.md", "| DEMO-R-001 | test_add_returns_sum | sum | example |\n")
     elif phase == "TEST_REVIEW":
@@ -393,7 +411,10 @@ def main() -> int:
         park = [n for n in nums if n in scen.get("park_steps", []) and n not in parked]
         contested = state.setdefault("contested", [])
         contest = [n for n in nums if n in scen.get("contest_steps", []) and n not in contested]
-        if contest:
+        if scen.get("mode") == "refactor":
+            idle = runs[phase] <= scen.get("refactor_idle", 0)
+            write(lang["impl"], LOOSE + ("" if idle else "\n\n# refactored: same behavior\n"))
+        elif contest:
             contested.append(contest[0])
             write(lang["impl"], lang["loose"] + neg)
             write(
@@ -420,6 +441,11 @@ def main() -> int:
             if scen.get("assume") and not state.get("assumed"):
                 state["assumed"] = True
                 note = "- ASSUMPTION [DEMO-E-001]: bool counts as int (spec silent).\n"
+            if scen.get("mode") == "bugfix":
+                note += (
+                    "- ROOT CAUSE: add() subtracted its arguments (src/demo/__init__.py: add)\n"
+                    "- RULED OUT: swapped arguments: add(3, 2) was wrong too\n"
+                )
             # the step note goes where the task says (agentflow appends it to steps.md)
             m = re.search(r"Step note: write it with the Write tool to (\S+\.md)", prompt)
             target = pathlib.Path(m.group(1) if m else "out/demo/steps.md")
@@ -493,9 +519,15 @@ def main() -> int:
         know = "".join(
             f"- K{i} [{s}]: {t}\n" for i, (s, t) in enumerate(scen.get("knowledge", []), 1)
         )
+        brief = "".join(f"{line}\n" for line in scen.get("retro_brief", []))
         write(
             "out/demo/retro_proposals.md",
-            "# Retro\n\nNot acted on:\n" + body + "\n## Project knowledge\n" + (know or "None.\n"),
+            "# Retro\n\n"
+            + (f"## Brief\n\n{brief}\n" if brief else "")
+            + "Not acted on:\n"
+            + body
+            + "\n## Project knowledge\n"
+            + (know or "None.\n"),
         )
     state_path.write_text(json.dumps(state), encoding="utf-8")
     result = {

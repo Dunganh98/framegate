@@ -1077,3 +1077,67 @@ def test_detect_init_and_ci(
     assert 'review_tests = "tests/App.Tests/Review"' in out
     write(tmp_path, "global.json", "{}")
     assert "global-json-file: global.json" in adapter(tmp_path).ci_setup()
+
+
+# ---------- coverage of the changed files only ----------
+def test_unchanged_globs() -> None:
+    files = [
+        "src/Core/A.cs",
+        "src/Core/Match/Engine.cs",
+        "src/Core/Match/Scan.cs",
+        "src/Core/Eco/Bank.cs",
+        "src/Core/Eco/Deep/Tax.cs",
+        "src/Runner/Program.cs",
+        "src/Runner/Cmd.cs",
+    ]
+    # a folder without a change: left out as a whole; a file beside a changed one: by name
+    assert dn.unchanged_globs(files, ["src/Core/Match/Scan.cs", "src/Runner/Cmd.cs"]) == [
+        "**/src/Core/A.cs",
+        "**/src/Core/Eco/*.cs",
+        "**/src/Core/Eco/**/*.cs",
+        "**/src/Core/Match/Engine.cs",
+        "**/src/Runner/Program.cs",
+    ]
+    # `**/src/Runner/...` would also match the changed file below Eco: those globs are left out
+    deep = "src/Core/Eco/src/Runner/Cmd.cs"
+    globs = dn.unchanged_globs([*files, deep], [deep])
+    assert "**/src/Runner/Cmd.cs" not in globs and "**/src/Runner/*.cs" not in globs
+    assert "**/src/Runner/Program.cs" in globs and "**/src/Core/Match/**/*.cs" in globs
+    assert dn.unchanged_globs(files, files) == []
+
+
+def test_coverage_run_records_only_the_changed_files(
+    tagged: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Seen live: the feature's tests took 70-80 s plain and 624-732 s under coverage, because
+    every line of the simulation was recorded although diff coverage reads the changed files."""
+    write(tagged, "src/App/Calc.cs", "class Calc { int X; }\n")
+    write(tagged, "src/App/obj/Gen.cs", "class Gen { }\n")  # build output: not listed
+    fake = FakeDotnet(TRX)
+    a = adapter(tagged)
+    monkeypatch.setattr(a, "_exec", fake)
+    monkeypatch.setattr(a, "references", lambda name: True)
+    globs, note = a.coverage_exclude("tests-approved/f")
+    assert globs == ["**/src/App/Same.cs"]
+    assert "Coverage recorded for the 1 changed source file(s) only" in note
+    res = a.coverage_checks("tests-approved/f")[0].run()
+    assert note.strip() in res.output
+    args = fake.calls[-1]
+    assert args[-2:] == [
+        "--",
+        "DataCollectionRunSettings.DataCollectors.DataCollector.Configuration."
+        "ExcludeByFile=**/src/App/Same.cs",
+    ]
+    assert args[args.index("--collect") + 1] == "XPlat Code Coverage"
+
+    # switched off, nothing changed, or too many globs for a command line: everything
+    assert adapter(tagged, {"coverage_files": "all"}).coverage_exclude("tests-approved/f") == (
+        [],
+        "",
+    )
+    monkeypatch.setattr(dn, "EXCLUDE_ARG_LIMIT", 5)
+    assert a.coverage_exclude("tests-approved/f") == ([], "")
+    git(tagged, "checkout", "-q", "--", "src/App/Calc.cs")
+    assert a.coverage_exclude("tests-approved/f") == ([], "")
+    with pytest.raises(ConfigError, match="coverage_files must be one of changed, all"):
+        adapter(tagged, {"coverage_files": "some"})

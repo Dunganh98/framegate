@@ -20,6 +20,18 @@ Every item ID must appear in {out}/{feature}/retro_proposals.md: in a proposal's
 the closing "Not acted on" list as `- <ID>: <one-line reason>` (e.g. "one-off: typo in the
 stub", "covered by proposal 2"). The orchestrator checks this mechanically.
 
+The backlog: retro_input.md ends with `## Backlog` when earlier retros of this project made
+proposals (B1, B2, ...; status open / applied / dropped / skipped). Before you write a fix,
+check whether a backlog row already describes the problem. If one does, do not invent a
+second fix: your brief line for it ends with `repeats B<n>` inside the recommendation
+(`(recommend: take; repeats B3)`), and its section says what this run adds. Recommend by the
+row's status:
+- open (accepted, not applied yet): `take`, and say that it cost this run again;
+- skipped or dropped: seen again, so it is not a one-off: `take`;
+- applied: the fix did not hold; say what is still missing.
+A problem seen for the first time that looks like a one-off (one item, small cost): recommend
+`skip`; the backlog counts it if it comes back.
+
 How to treat the items:
 - A question (Q) means the spec had a gap: a fresh agent could not proceed from the spec alone.
   Questions are not failures. Propose a spec-template change (`specs/_template/`) or a new

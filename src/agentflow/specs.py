@@ -8,6 +8,9 @@ from dataclasses import dataclass, field
 
 from agentflow.config import Config
 
+#: what a task is; decides the first proof of its tests (checks/baseline.py)
+MODES = ("feature", "bugfix", "refactor")
+MODE_RE = re.compile(r"^Mode:\s*([\w-]+)", re.M | re.I)
 STEP_RE = re.compile(r"^##\s+Step\s+(\d+):\s*(.+)$", re.M)
 COVERS_RE = re.compile(r"^Covers:\s*(.+)$", re.M)
 #: optional "Depends on: Step 1, 2" line: a later step that needs a parked step is noted
@@ -27,13 +30,32 @@ def _ids_in(folder: pathlib.Path, id_re: re.Pattern[str]) -> set[str]:
     if not folder.is_dir():
         return ids
     for p in folder.rglob("*.md"):
-        if "_template" not in p.parts:
+        if not any(part.startswith("_template") for part in p.parts):
             ids |= set(id_re.findall(p.read_text(encoding="utf-8")))
     return ids
 
 
 def feature_ids(cfg: Config, feature: str) -> set[str]:
     return _ids_in(cfg.spec_dir(feature), re.compile(cfg.id_pattern))
+
+
+def spec_mode_line(cfg: Config, feature: str) -> str:
+    """The value of the `Mode:` line of requirements.md, lower case ("" = no such line)."""
+    path = cfg.spec_dir(feature) / "requirements.md"
+    m = MODE_RE.search(path.read_text(encoding="utf-8")) if path.is_file() else None
+    return m.group(1).lower() if m else ""
+
+
+def feature_mode(cfg: Config, feature: str) -> str:
+    """feature | bugfix | refactor: the `Mode:` line of requirements.md (written by
+    `agentflow spec --mode`); no line, or an unknown word: feature."""
+    mode = spec_mode_line(cfg, feature)
+    return mode if mode in MODES else "feature"
+
+
+def template_dir(mode: str) -> str:
+    """The spec template folder of a mode, under [paths] specs or in the package."""
+    return "_template" if mode == "feature" else f"_template_{mode}"
 
 
 def all_spec_ids(cfg: Config) -> set[str]:

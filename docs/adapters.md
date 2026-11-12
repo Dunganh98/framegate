@@ -196,6 +196,7 @@ warnings for code an earlier step already built.
 | `test_timeout` | `3600` | Seconds per `dotnet test` |
 | `mutation_timeout` | `[gates] mutation_timeout` (3600) | Seconds per Stryker run |
 | `mutation_level` | `""` (Stryker's default, Standard) | Stryker `--mutation-level`: `Basic` / `Standard` / `Advanced` / `Complete`. `Basic` is faster on a big project but creates fewer mutants in the changed files too (a weaker gate); see the Stryker timing below |
+| `coverage_files` | `"changed"` | `"changed"` or `"all"`. With `"changed"` the coverage run records only the source files changed since the tests were approved (coverlet `ExcludeByFile` globs for the others, passed as a run setting). Diff coverage reads nothing else. Measured on a simulation project: 54 s instead of 624-732 s, the same result (98%, 222/225 lines). Everything is recorded when nothing changed, the diff cannot be read, or the glob list is too long for a command line. |
 
 ### Notes for a first project (checked against FCSim, read-only)
 

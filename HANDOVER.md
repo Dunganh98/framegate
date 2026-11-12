@@ -169,12 +169,27 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
   - Not done: #8 (mutation pre-check after IMPLEMENT: 11-16 min on every feature to save ~34
     min when the score falls short; one clear case in five features; no parallel runner);
     #7 (FCSim: tests reference FCSim.Runner).
-  - Open: the coverage run of the feature's tests took 624-732 s in the final gate, the same
-    tests 70-80 s in the step gates (coverlet over the whole assembly). Accepted retro
-    proposals: copied to `docs/findings/<date>-<feature>-retro.md` with a status line before
-    the cleanup (by hand so far; cleanup deletes retro_proposals.md).
+  - Was open, done since (next entry): the slow coverage run; a home for accepted retro
+    proposals.
+- **Stats, retro backlog, modes, coverage of changed files (branch feat/stats-backlog-modes,
+  2026-11-12, plugin 0.5.0):**
+  - `agentflow stats [f]` (`src/agentflow/stats.py`): cost, agent / check / waiting time,
+    final-gate runs per feature, from events.jsonl (design doc 9.1, the report part).
+  - Retro backlog (`src/agentflow/backlog.py`, design doc 9.7 without the reviewer panel):
+    `agentflow keep` after the retro, `metrics/retro_backlog.md` + `metrics/retro/<f>.md`,
+    the retro sees the rows and names repeats, `agentflow backlog done|drop|reopen`.
+  - Modes (design doc 9.5): `agentflow spec --mode bugfix|refactor`, skills
+    `/agentflow:bugfix` and `/agentflow:refactor`, templates `_template_bugfix` /
+    `_template_refactor`, first proof by mode (`checks/baseline.py`), mode notes on the
+    tasks (`MODE_NOTES`), root-cause lines in final_facts.md, refactor: one step per run,
+    all tests per step, an idle step fails, no test repair at the final gate.
+    **Not yet run with real agents.** Not built: a scope-coverage check before a refactor
+    moves code; `hypothesis` rows as a mechanical requirement (the cause lines are reported,
+    not enforced).
+  - `[dotnet] coverage_files = "changed"` (default): measured on FCSim M5-moment-scan: 54 s
+    instead of 624-732 s, the same diff coverage (98%, 222/225).
 - **Adapters:** python (pytest, mutmut via WSL on Windows), dotnet (xUnit, Stryker opt-in level).
-- **Chat flow (plugin 0.4.3):** `/agentflow:setup` (new repo: scan, questions, toml +
+- **Chat flow (plugin 0.5.0):** `/agentflow:setup` (new repo: scan, questions, toml +
   project.md, `agentflow doctor`, optional smoke run); `/agentflow:feature <f>` (branch `feat/<f>` from `[git] base`,
   spec dialogue + spec brief, approve, background `agentflow run` + Monitor on `agentflow watch`,
   gate briefs via `agentflow gate-summary`, plain-word replies mapped to approve/reject/answer/finish,

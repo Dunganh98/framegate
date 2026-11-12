@@ -1,0 +1,123 @@
+"""The first proof of the tests, before any implementation. What it is depends on the mode:
+
+- feature: every test FAILS against the stubs (checks/red_stubs.py).
+- bugfix: the reproduction tests (R and E IDs) FAIL on today's code, each listed with why it
+  fails so the test reviewer can tell "fails for the reported reason" from "fails for another
+  one"; the must-not-change tests (I IDs) PASS on today's code.
+- refactor: every characterization test PASSES on today's code.
+
+Fixture precondition tests (`test_fixture_*` / `Fixture_*`) must pass in every mode.
+"""
+
+from __future__ import annotations
+
+import re
+
+from agentflow.adapters.base import CheckResult, LanguageAdapter, TestCase
+from agentflow.checks import red_stubs
+from agentflow.specs import feature_ids, feature_mode
+
+#: the check's name in test_checks.md and progress.json, per mode
+NAMES = {
+    "feature": "Red against stubs",
+    "bugfix": "Bug reproduced on today's code",
+    "refactor": "Green on today's code",
+}
+_KIND = re.compile(r"-([A-Z])-\d+$")
+
+
+def name(mode: str) -> str:
+    return NAMES.get(mode, NAMES["feature"])
+
+
+def _first_line(case: TestCase) -> str:
+    return (case.message.strip().splitlines() or ["no message"])[0][:200]
+
+
+def _run(
+    adapter: LanguageAdapter, feature: str, ids: list[str], report: str
+) -> tuple[list[TestCase] | None, str]:
+    run = adapter.run_tests(req_ids=ids, junit=adapter.cfg.feature_out(feature) / report)
+    return run.cases, "\n".join(run.output.splitlines()[-20:])
+
+
+def _must_pass(cases: list[TestCase], why: str) -> list[str]:
+    lines = [
+        f"FAILS TODAY ({why}): {c.name} — {_first_line(c)}" for c in cases if c.outcome == "failed"
+    ]
+    lines += [
+        f"ERROR (import/fixture/collection problem): {c.name}"
+        for c in cases
+        if c.outcome == "error"
+    ]
+    lines += [f"SKIPPED: {c.name}" for c in cases if c.outcome == "skipped"]
+    return lines
+
+
+def bugfix(adapter: LanguageAdapter, feature: str, ids: list[str]) -> CheckResult:
+    red_ids = [i for i in ids if (m := _KIND.search(i)) and m.group(1) != "I"]
+    keep_ids = [i for i in ids if i not in red_ids]
+    if not red_ids:
+        return CheckResult(
+            "FAIL", "The bug report has no reproduction ID (an R row): nothing shows the bug."
+        )
+    cases, tail = _run(adapter, feature, red_ids, "red_stubs.xml")
+    if cases is None:
+        return CheckResult("FAIL", f"Test run produced no report (collection crashed?)\n{tail}")
+    fixtures = [c for c in cases if red_stubs.is_fixture_check(c.name)]
+    repro = [c for c in cases if not red_stubs.is_fixture_check(c.name)]
+    lines = [f"{len(repro)} reproduction test(s) for {', '.join(red_ids)}."]
+    problems = [
+        f"PASSES TODAY (does not show the bug): {c.name}" for c in repro if c.outcome == "passed"
+    ]
+    problems += [
+        f"ERROR (the test does not reach its assertion): {c.name} — {_first_line(c)}"
+        for c in repro
+        if c.outcome == "error"
+    ]
+    problems += [f"SKIPPED: {c.name}" for c in repro if c.outcome == "skipped"]
+    problems += _must_pass(fixtures, "a fixture precondition must pass; pick other data")
+    shown = [f"fails today: {c.name} — {_first_line(c)}" for c in repro if c.outcome == "failed"]
+    if not repro:
+        problems.append("No reproduction test ran.")
+    kept: list[TestCase] = []
+    if keep_ids:
+        kept_cases, keep_tail = _run(adapter, feature, keep_ids, "keep_tests.xml")
+        if kept_cases is None:
+            problems.append(f"The must-not-change tests produced no report\n{keep_tail}")
+        else:
+            kept = kept_cases
+            problems += _must_pass(kept, "a must-not-change test has to pass before the fix")
+        lines.append(f"{len(kept)} must-not-change test(s) for {', '.join(keep_ids)}.")
+    if shown:
+        lines += [
+            "Why each reproduction test fails (the test reviewer checks: is it the "
+            "reported reason?):",
+            *shown,
+        ]
+    return CheckResult("FAIL" if problems else "PASS", "\n".join([*lines, *problems]))
+
+
+def refactor(adapter: LanguageAdapter, feature: str, ids: list[str]) -> CheckResult:
+    cases, tail = _run(adapter, feature, ids, "red_stubs.xml")
+    if cases is None:
+        return CheckResult("FAIL", f"Test run produced no report (collection crashed?)\n{tail}")
+    problems = _must_pass(cases, "a characterization test must describe what the code does now")
+    if not cases:
+        problems.append("No characterization test ran.")
+    head = (
+        f"{len(cases)} characterization test(s) for feature {feature}; all must pass on "
+        "today's code."
+    )
+    return CheckResult("FAIL" if problems else "PASS", "\n".join([head, *problems]))
+
+
+def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
+    cfg = adapter.cfg
+    mode = feature_mode(cfg, feature)
+    if mode == "feature":
+        return red_stubs.check(adapter, feature)
+    ids = sorted(feature_ids(cfg, feature))
+    if not ids:
+        return CheckResult("FAIL", f"No spec IDs found in {cfg.paths.specs}/{feature}/")
+    return bugfix(adapter, feature, ids) if mode == "bugfix" else refactor(adapter, feature, ids)
