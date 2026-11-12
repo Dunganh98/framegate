@@ -12,11 +12,13 @@ a terminal.
 |---|---|---|
 | `/agentflow:setup` | set up agentflow in this repo (draft config, project facts and code map; a short brief that asks only the real decisions; doctor) | once per repo |
 | `/agentflow:feature <f>` | start or continue feature `<f>`: spec dialogue, run, gates, wrap-up | each feature |
+| `/agentflow:bugfix <f>` | a bug fix: bug report dialogue, tests that fail on today's code, the fix, gates | each bug |
+| `/agentflow:refactor <f>` | a refactor: scope dialogue, tests that pin today's behavior, small steps, gates | each refactor |
 | `/agentflow:resume [f]` | reattach the chat to a running or waiting feature | after a restart |
 | `/agentflow:status [f]` | where features stand; tag cleanup after the PR is merged | any time |
 | `agentflow init` | write the starter files (config, spec templates, project facts, .gitignore lines) | once per repo |
 | `agentflow doctor [--full] [--brief]` | check the setup without agents; ends with a verdict and only what needs action (`--brief`: only that); `--full` also runs the whole test suite | after setup or config changes |
-| `agentflow spec <f>` | create the branch `feat/<f>` and open the spec phase | start of a feature |
+| `agentflow spec <f> [--mode feature\|bugfix\|refactor]` | create the branch `feat/<f>` and open the spec phase with the mode's templates | start of a feature |
 | `agentflow spec-check <f>` | mechanical checks of the spec tables (below); exit 1 on a problem | internal |
 | `agentflow approve-spec <f> [--force]` | spec-check, then freeze the spec ("spec OK"); restarts the feature if the spec changed later | gate 1 |
 | `agentflow run <f>` | run the agents until the next human gate or DONE | after every decision |
@@ -28,6 +30,9 @@ a terminal.
 | `agentflow reject <f> --reason "..."` | send the tests back to the test writer (only with `[gates] tests = "human"`) | tests gate |
 | `agentflow finish <f> --no-retro` | accept the final gate and skip the retro | final gate |
 | `agentflow learn <f> K1 [K3 ...\|all]` | keep the project facts the retro proposed (into `.agentflow/project.md`) | after the retro |
+| `agentflow keep <f> 1 3 [...\|take\|all\|none]` | record which retro proposals you accept in the retro backlog | after the retro |
+| `agentflow backlog [show B3 \| done\|drop\|reopen B3 ...] [--all] [--scope ...]` | the open proposals; one in full; mark it applied / dropped / open again | any time |
+| `agentflow stats [f] [--json]` | cost, agent and check time, final-gate runs per feature; with `<f>`: per phase and per final run | any time |
 | `agentflow cleanup <f> [--tags]` | delete the run files; `--tags` also the feature's git tags (after the merge) | after DONE |
 | `agentflow gates <f> --scope step\|final` | run the checks by hand (also used in CI) | debugging, CI |
 | `agentflow spec-brief <f>` | the project's spec conventions (the feature skill reads it) | internal |
@@ -42,18 +47,19 @@ Exit codes: 0 done, 1 error, 10 waiting at a gate, 130 interrupted (run again to
 Two human gates, forward only: **SPEC -> FINAL** (the test reviewer checks the tests against the
 spec; its open points and all questions come to the final gate; `[gates] tests = "human"` adds
 a stop at the tests gate). Everything between them runs as
-fresh headless `claude -p` runs inside a frame of deterministic checks (red-against-stubs,
+fresh headless `claude -p` runs inside a frame of deterministic checks (red-against-stubs; for
+a bug fix or a refactor the first proof differs, see "Modes" below;
 traceability, test smells, frozen tests via a tag-based frame diff, lint/types, diff coverage,
 mutation score) and never stops to ask.
 
 | Phase | Agent(s) | Ends with |
 |---|---|---|
-| SPEC | spec dialogue in the chat (`/agentflow:feature <f>`) | **gate 1**: the spec brief (`out/<f>/spec_brief.md`), then `agentflow approve-spec` -> tag `spec-approved/<f>` |
+| SPEC | spec dialogue in the chat (`/agentflow:feature <f>`; a bug: `/agentflow:bugfix <f>`; a refactor: `/agentflow:refactor <f>`) | **gate 1**: the spec brief (`out/<f>/spec_brief.md`), then `agentflow approve-spec` -> tag `spec-approved/<f>` |
 | TESTS | test writer -> mechanical checks -> **test reviewer** (`roles/test_review.md`); objections go back to the writer, at most `[agents] test_review_rounds` (2) times | **gate 2**: `out/<f>/tests_gate.md` (ID -> tests -> what it checks, check results, reviewer verdict + remaining objections, all open questions batched) -> approve (tag `tests-approved/<f>`) / reject / answer (answers go into the spec first: SPEC_UPDATE). `[gates] tests = "auto"` passes it without a stop when everything is clean |
 | IMPLEMENT | implementer, one fresh run per plan step | step gates green -> commit. Ambiguity: assume from the spec, log it in `steps.md`. No reasonable assumption, or `max_attempts` failed attempts: the step is **parked** (its code set aside as `out/<f>/parked/*.diff`), the run goes on |
 | REVIEW | adversarial reviewer (bugs as failing tests, structure findings without tests) -> **triage** by the test reviewer -> fixes -> structure fixes | valid findings fixed (or parked), invalid ones removed with a reason, the code restructured with every test green; final gates + structure report |
 | PR | summary agent (`roles/pr.md`): `final_summary.md` (detail), `final_brief.md` (the gate brief), the code map update (committed) | **gate 3**: the final brief -> approve (retro) / `finish --no-retro` / answer the numbered items (into the spec, then redo only those) |
-| RETRO | retro agent | `retro_proposals.md` + metrics row -> DONE |
+| RETRO | retro agent (reads the retro backlog; a problem seen again is counted there) | `retro_proposals.md` + metrics row -> DONE; then `agentflow keep` records your pick in the backlog |
 
 ## Parts
 
@@ -79,6 +85,9 @@ under `permissions.allow` in `.claude/settings.local.json` (or answer the first 
 "always allow").
 
 Then you only type requirements, answers and gate decisions:
+
+A bug fix starts with `/agentflow:bugfix <name>` and a refactor with `/agentflow:refactor
+<name>` instead of step 1: the same flow with another first proof ("Modes" below).
 
 1. `/agentflow:feature <name>`: creates the branch `feat/<name>` from `[git] base` (`main`) in
    this checkout (refused with uncommitted changes to tracked files; an existing branch is used
@@ -119,7 +128,7 @@ is no mode or switch for this.
 | Final gate (`agentflow gate-summary`, from `final_brief.md` + run records; ~20 lines when nothing went wrong) | Plan followed? (one line when all steps went as planned, else one per changed / parked step) / Outcomes with numbers (gates, diff coverage, mutation, failed attempts, parks, cost, agent and check time, structure) / Struggles (one line when none) / Proven and Not proven (the 3 most important points each, the rest on request) / Code map (one line; a WARN when new public types are missing) / Questions numbered 1..k by impact (the problem in one line, then `A: ... (default) / B: ...`) / Decisions I made / how many gate items were left out |
 | Setup | what I found, the settings that differ from the defaults (with why), the knowledge facts in short lines, the code map's modules, the real decisions as questions with defaults |
 | `agentflow doctor --brief` | one verdict line (ready / not ready), then only the FAILs with the fix and the WARNs that need a decision |
-| Retro (`## Brief` in retro_proposals.md) | numbered proposals, problem -> fix, recommend take / skip / fold into N; the knowledge facts; answered with numbers |
+| Retro (`## Brief` in retro_proposals.md) | numbered proposals, problem -> fix, recommend take / skip / fold into N (and `repeats B3` for a problem the backlog already holds); the knowledge facts; answered with numbers (`agentflow keep`, `agentflow learn`) |
 | Smoke run offer, DONE wrap-up, status, resume, errors, interruptions | one or two lines: the state and the one decision needed, with a default |
 
 At a gate with numbered questions, "ok" takes every default (the chat writes them to
@@ -173,6 +182,58 @@ The human owns what the classes are for and how they work together, not every li
   as `<f>: code map`); a new public type in the feature's diff that the map does not name is a
   WARN on the final brief's code map line. `agentflow doctor` WARNs when it is missing.
 
+## Modes: feature, bug fix, refactor
+
+What a task is decides the first proof of its tests. The mode is the `Mode:` line of the
+spec's requirements.md, written by `agentflow spec <f> --mode bugfix|refactor` (the chat:
+`/agentflow:bugfix <f>`, `/agentflow:refactor <f>`); no line means feature. Everything after
+the tests (steps, step gates, review, final gates, the two human gates) is the same flow.
+
+| | feature | bug fix | refactor |
+|---|---|---|---|
+| Spec (requirements.md) | requirements, edge cases, stubs | bug report: reproduction rows (R), must-not-change rows (I), suspected causes | scope, behavior to preserve (R, I), structure targets |
+| First proof (`test_checks.md`) | every test FAILS against the stubs | reproduction tests FAIL on today's code (each listed with why, for the test reviewer); must-not-change tests PASS | every test PASSES on today's code |
+| Steps | per plan step, batched | usually one; the step note names `ROOT CAUSE` and `RULED OUT` lines (shown in final_facts.md and the brief) | one move per run; every step is checked with ALL the tests; a step that changes no source file fails |
+| Review | against the spec | also: the same bug through another input or caller | a finding is a difference from the code before (`git show tests-approved/<f>:<path>`) |
+| Final-gate repair | code, then tests | code, then tests | code only: tests written after the refactor would pin the changed code, so weak tests go to the human |
+
+Templates: `specs/_template_bugfix/`, `specs/_template_refactor/` (agentflow's own unless the
+project has a copy). The events `spec_started` / `spec_approved` carry `mode`; `agentflow
+stats` shows it. An unknown `Mode:` word is refused by `approve-spec`.
+
+Not done yet for refactors: a check, before any code moves, that the characterization tests
+cover the code in scope. Today that shows only at the final gate (diff coverage and mutation
+score of the moved lines).
+
+## The retro backlog
+
+`agentflow keep <f> <numbers | take | all | none>` records the human's pick of a retro's
+proposals in `metrics/retro_backlog.md` (tracked, committed): one row per proposal with a
+status (`open` = accepted, not applied yet; `applied`; `dropped`; `skipped` = not accepted),
+its scope (framework / project), the features whose retro raised it, and a pointer into
+`metrics/retro/<f>.md`, a copy of that retro's full text (`agentflow cleanup` deletes the run
+folder). A proposal the retro folded into another gets no row.
+
+The next retro gets the rows at the end of retro_input.md (`## Backlog`). A problem a row
+already describes is not proposed again: the retro's brief line names the row (`repeats B3`),
+and agentflow adds the feature to that row's "Seen" when the retro ends. Picking such a
+proposal reopens a skipped, dropped or applied row. A first-time problem that looks like a
+one-off is recommended `skip`; it becomes a `skipped` row and is counted if it comes back.
+
+`agentflow backlog` lists the open rows (most often seen first; `--all`, `--scope
+framework|project`), `backlog show B3` prints one with the retro's section, `backlog done |
+drop | reopen B3 [--note "PR #12"]` changes its status. Framework-scope rows are applied in the
+agentflow repository; mark them `done` here with a note.
+
+## Stats
+
+`agentflow stats` reads `out/events.jsonl` (no agents): one line per feature with its cost,
+the time agents and gate checks ran, the time a gate waited for you, the final-gate runs,
+failed step gates, questions, assumptions and risk level, then the averages of the finished
+features. `agentflow stats <f>` adds the agent runs per phase (runs, cost, time, output tokens),
+every final-gate run with its failed checks and three slowest checks, and the repair runs.
+`--json` prints the numbers.
+
 ## Project knowledge
 
 `.agentflow/project.md` (`[project] knowledge`; `agentflow init` creates it) holds what no
@@ -195,7 +256,9 @@ agentflow init [--language python|dotnet|generic]  # agentflow.toml, specs/_temp
                                             # .agentflow/project.md, .gitignore lines
 agentflow doctor [--full] [--brief]         # check the setup without agents; ends with a
                                             # verdict + what needs action (--brief: only that)
-agentflow spec <f>                          # branch feat/<f> from [git] base + SPEC phase
+agentflow spec <f> [--mode feature|bugfix|refactor]
+                                            # branch feat/<f> from [git] base + SPEC phase,
+                                            # with the mode's spec templates
 agentflow spec-check <f>                    # rules without a spec ID, copied code not in the file
 agentflow approve-spec <f> [--force]        # spec-check, then tag spec-approved/<f>
 agentflow run <f>                           # runs to the next gate (tests, final) or DONE;
@@ -213,6 +276,14 @@ agentflow answer <f>                        # after writing out/<f>/answers.md: 
 agentflow finish <f> --no-retro             # final gate -> DONE without the retro
 agentflow learn <f> K1 [K3 ...|all]         # add accepted retro knowledge to the
                                             # project knowledge file (committed)
+agentflow keep <f> 1 3 [...|take|all|none]  # the retro proposals you accept -> the retro
+                                            # backlog (metrics/retro_backlog.md, committed)
+agentflow backlog [--all] [--scope framework|project]
+                                            # the open proposals (--all: every row)
+agentflow backlog show B3                   # one row with the retro's full section
+agentflow backlog done|drop|reopen B3 [B5 ...] [--note TEXT]
+agentflow stats [<f>] [--json]              # cost, agent / check / waiting time, final-gate
+                                            # runs per feature; <f>: per phase, per final run
 agentflow cleanup <f> [--tags] [--force]    # DONE: delete out/<f>/ + its run logs; --tags: also
                                             # spec-approved/tests-approved/spec-update/
                                             # tests-update tags
@@ -484,6 +555,9 @@ its answer from any later answer round (the `answer` events, then every `### Ans
 round of `questions_archive.md`): by its first words, else by shared spec IDs and words (the
 gate often rewords a question). No match although answer rounds and a spec update followed:
 "answer lookup failed", not "not answered".
+retro_input.md ends with the retro backlog (`## Backlog`: the proposals of earlier retros
+with their status), so the retro names a problem it sees again instead of proposing it anew
+("The retro backlog" above).
 The retro must mention every ID in `retro_proposals.md` (a proposal, or "Not acted on" with a
 one-line reason); if IDs are missing it is re-run once with them as feedback, then a warning is
 printed and logged (`retro_coverage` event).

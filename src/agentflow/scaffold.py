@@ -10,6 +10,26 @@ from agentflow.adapters import detect_language, get_adapter
 from agentflow.adapters.base import LanguageAdapter
 from agentflow.config import CONFIG_FILE, Config, ConfigError, parse_config
 from agentflow.orchestrator import package_text
+from agentflow.specs import feature_mode, template_dir
+
+#: spec-brief lines per mode (the feature line names the stubs; these replace it)
+MODE_BRIEF = {
+    "bugfix": [
+        "- Mode: bug fix. requirements.md is a bug report: reproduction rows (R IDs: the test "
+        "FAILS on today's code and passes once fixed) and must-not-change rows (I IDs: the "
+        "test passes today and after). No interface stubs: the code exists. Do not fix "
+        "anything during the spec phase.",
+        "- Measure 'Observed now' by running today's code; never write it from memory.",
+    ],
+    "refactor": [
+        "- Mode: refactor. requirements.md lists the code in scope and the behavior to "
+        "preserve (R and I IDs: characterization tests that PASS on today's code, before and "
+        "after every step). No interface stubs, no behavior change. Golden values are "
+        "measured from today's code.",
+        "- plan.md: small steps (one move, split or rename each); step 1 covers every ID; "
+        "every step is checked with all the characterization tests.",
+    ],
+}
 
 SPEC_TEMPLATES = ("requirements.md", "design.md", "plan.md")
 
@@ -116,6 +136,7 @@ def init(
 def spec_brief(cfg: Config, feature: str) -> str:
     adapter = get_adapter(cfg)
     p = cfg.paths
+    mode = feature_mode(cfg, feature)
     folder = cfg.spec_dir(feature)
     state = "exists" if folder.is_dir() else f"missing — run: agentflow spec {feature}"
     kpath = cfg.root / cfg.knowledge
@@ -132,13 +153,20 @@ def spec_brief(cfg: Config, feature: str) -> str:
     return "\n".join(
         [
             f"agentflow spec brief: feature '{feature}', language {cfg.language}",
-            f"- Spec folder: {p.specs}/{feature}/ ({state}); templates in {p.specs}/_template/.",
+            f"- Spec folder: {p.specs}/{feature}/ ({state}); templates in "
+            f"{p.specs}/{template_dir(mode)}/ (agentflow's own if the project has none).",
             "- IDs: <CODE>-R-001 (requirement), <CODE>-E-001 (edge case), <CODE>-I-001 "
             f"(invariant); regex {cfg.id_pattern}",
             '- plan.md is parsed: "## Step N: <title>" headings, each with one '
             '"Covers: ID, ID" line. Every ID is covered by exactly one step.',
-            f"- Interface stubs go in {'/, '.join(cfg.src_roots)}/. Do not write tests or "
-            "implementation.",
+            *(
+                MODE_BRIEF[mode]
+                if mode in MODE_BRIEF
+                else [
+                    f"- Interface stubs go in {'/, '.join(cfg.src_roots)}/. Do not write tests "
+                    "or implementation."
+                ]
+            ),
             f"- Run files (gate briefs, answers.md, the spec gate brief spec_brief.md): "
             f"{p.out}/{feature}/",
             f"- Code map (per module: purpose, key classes, how they work together): "

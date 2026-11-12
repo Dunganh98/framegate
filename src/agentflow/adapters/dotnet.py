@@ -109,7 +109,16 @@ CONFIG_TEMPLATE = """\
 # mutation_timeout = 3600          # default: [gates] mutation_timeout
 # mutation_level = ""              # Stryker -l: Basic | Standard | Advanced | Complete ("" =
 #                                  # Stryker's default, Standard); Basic is faster, fewer mutants
+# coverage_files = "changed"       # the coverage run records only the source files changed
+#                                  # since the tests were approved (all that diff coverage
+#                                  # reads; much faster on heavy tests) | "all"
 """
+
+COVERAGE_FILES = ("changed", "all")
+#: the run-settings path of coverlet's collector options (dotnet test ... -- <path>X=Y)
+COVERLET_SETTING = "DataCollectionRunSettings.DataCollectors.DataCollector.Configuration."
+#: longest ExcludeByFile value passed on the dotnet test command line (Windows: 32k in all)
+EXCLUDE_ARG_LIMIT = 20000
 
 
 @dataclass
@@ -128,6 +137,8 @@ class DotnetSettings:
     mutation_timeout: int | None = None
     #: Stryker --mutation-level ("" = Stryker's default, Standard)
     mutation_level: str = ""
+    #: which source files the coverage run records: "changed" | "all"
+    coverage_files: str = "changed"
 
     @classmethod
     def from_options(cls, options: dict[str, Any]) -> DotnetSettings:
@@ -141,11 +152,46 @@ class DotnetSettings:
             raise ConfigError(
                 f"[dotnet] mutation_level must be one of {', '.join(MUTATION_LEVELS)} (or empty)"
             )
+        if s.coverage_files not in COVERAGE_FILES:
+            raise ConfigError(f"[dotnet] coverage_files must be one of {', '.join(COVERAGE_FILES)}")
         s.test_projects = [p.replace("\\", "/") for p in s.test_projects]
         return s
 
 
 # ---------- pure helpers (unit-tested) ----------
+def unchanged_globs(files: Sequence[str], changed: Sequence[str]) -> list[str]:
+    """Globs (coverlet `ExcludeByFile`) for every file of `files` that is not in `changed`
+    (repo-relative posix paths): two per folder without a changed file (its own files, and
+    the ones below), one `**/<file>` for an unchanged file beside a changed one. A glob starts
+    with `**/`, so it also matches a deeper path with the same ending: a glob that would match
+    a changed file that way is left out (some unchanged files are recorded too; a changed file
+    is never left out)."""
+    keep = set(changed)
+
+    def clean(folder: str) -> bool:
+        return not any(c.startswith(folder + "/") for c in keep)
+
+    def collides(tail: str, folder: bool) -> bool:
+        if folder:
+            return any(f"/{tail}/" in f"/{c}" for c in keep)
+        return any(f"/{c}".endswith(f"/{tail}") for c in keep)
+
+    globs: list[str] = []
+    covered: list[str] = []  # folders left out as a whole
+    for f in sorted(set(files)):
+        if f in keep or any(f.startswith(d + "/") for d in covered):
+            continue
+        parts = f.split("/")[:-1]
+        folders = ["/".join(parts[:i]) for i in range(1, len(parts) + 1)]
+        top = next((d for d in folders if clean(d)), None)  # the highest one without a change
+        if top and not collides(top, folder=True):
+            globs += [f"**/{top}/*.cs", f"**/{top}/**/*.cs"]
+            covered.append(top)
+        elif not collides(f, folder=False):
+            globs.append(f"**/{f}")
+    return globs
+
+
 def combine_filters(*parts: str) -> str:
     """AND the non-empty VSTest filter expressions, each in parentheses when there are several."""
     parts = tuple(p.strip() for p in parts if p and p.strip())
@@ -578,7 +624,10 @@ class DotnetAdapter(LanguageAdapter):
         junit: pathlib.Path | None = None,
         coverage: pathlib.Path | None = None,
         timeout: int | None = None,
+        cover_exclude: Sequence[str] = (),
     ) -> TestRun:
+        """cover_exclude: source-file globs the coverage run does not record (coverlet's
+        ExcludeByFile), passed as a run setting so a project's own .runsettings still holds."""
         targets = self.test_targets()
         outputs = []
         if junit is not None:
@@ -608,6 +657,8 @@ class DotnetAdapter(LanguageAdapter):
                 args += ["--filter", filt]
             if coverage is not None:
                 args += ["--collect", "XPlat Code Coverage"]
+                if cover_exclude:
+                    args += ["--", COVERLET_SETTING + "ExcludeByFile=" + ",".join(cover_exclude)]
             code, out = self._exec(args, limit)
             codes.append(code)
             outputs.append(out)
@@ -894,6 +945,40 @@ class DotnetAdapter(LanguageAdapter):
             self.settings.final_filter, "regression", timeout=self.cfg.regression_timeout
         )
 
+    def coverage_exclude(self, base_ref: str) -> tuple[list[str], str]:
+        """(ExcludeByFile globs, a note for the check's output): with [dotnet] coverage_files =
+        "changed", the coverage run records only the source files changed since base_ref.
+        Diff coverage reads nothing else, and recording every line of a simulation's hot loops
+        made the feature's tests ~9 times slower than without coverage (seen live: 70-80 s
+        plain, 624-732 s under coverage). No globs when nothing changed, the diff cannot be
+        read, or the list is too long for a command line: then everything is recorded."""
+        if self.settings.coverage_files != "changed":
+            return [], ""
+        from agentflow.checks.frame_diff import changed_src_files
+        from agentflow.state import GitError
+
+        try:
+            changed = [f for f in changed_src_files(self, base_ref) if f.endswith(".cs")]
+        except GitError:
+            return [], ""
+        if not changed:
+            return [], ""
+        files = [
+            p.relative_to(self.root).as_posix()
+            for root in self.cfg.src_roots
+            for p in sorted((self.root / root).rglob("*.cs"))
+            if not SKIP_DIRS & set(p.relative_to(self.root).parts[:-1])
+        ]
+        globs = unchanged_globs(files, changed)
+        if not globs or sum(len(g) + 1 for g in globs) > EXCLUDE_ARG_LIMIT:
+            return [], ""
+        note = (
+            f"\nCoverage recorded for the {len(changed)} changed source file(s) only "
+            f'([dotnet] coverage_files = "changed"; {len(files) - len(changed)} unchanged '
+            "file(s) left out)."
+        )
+        return globs, note
+
     def coverage_checks(self, base_ref: str, scope: TestScope | None = None) -> list[Check]:
         cov_dir = self.root / self.cfg.paths.out / "coverage"
 
@@ -904,12 +989,15 @@ class DotnetAdapter(LanguageAdapter):
         def full_suite() -> CheckResult:
             shutil.rmtree(cov_dir, ignore_errors=True)
             collect = self.references("coverlet.collector")
+            exclude, scope_note = self.coverage_exclude(base_ref) if collect else ([], "")
             run = self._dotnet_test(
                 self.scope_filter(scope, self.settings.final_filter),
                 "coverage" if feature else "final",
                 coverage=cov_dir if collect else None,
                 timeout=self.cfg.coverage_timeout,
+                cover_exclude=exclude,
             )
+            run.output += scope_note
             if collect:
                 state["incomplete"] = run.incomplete
             if run.incomplete:

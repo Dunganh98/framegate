@@ -27,8 +27,10 @@ Reattach to the agentflow feature `$ARGUMENTS` (none given: pick from the list b
    - `DONE`: protocol D.
    - `interrupted` or `not running` (spec approved): "Continue the run?" (default yes), then
      protocol A.2.
-   - `SPEC (not approved yet)`: the spec dialogue continues with `/agentflow:feature <f>`;
-     tell the user to type that (it reloads the spec conventions).
+   - `SPEC (not approved yet)`: the spec dialogue continues with `/agentflow:feature <f>`
+     (a bug fix: `/agentflow:bugfix <f>`; a refactor: `/agentflow:refactor <f>`; the `Mode:`
+     line of its requirements.md says which); tell the user to type that (it reloads the
+     spec conventions).
 
 ## Run protocol
 

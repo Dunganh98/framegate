@@ -115,9 +115,12 @@ fail for no reason. Reading files and git log/diff/status are fine.
    numbered list: problem -> fix, with the retro's recommendation take / skip / fold into N),
    then its `## Project knowledge` facts (K1, ...) as short lines. Ask in one line: "Which
    proposals and facts to keep? (default: the ones marked take, and all facts)". On the reply
-   run `agentflow learn <f> K1 K3` (or `all`) for the facts; nothing is added without the
-   user's pick. Applying proposals is separate work, only if the user asks; the full file on
-   request.
+   run `agentflow keep <f> 1 3 5` for the proposals (the numbers the user keeps; `take` =
+   the ones marked take, `all`, `none`) and `agentflow learn <f> K1 K3` (or `all`) for the
+   facts; nothing is added without the user's pick. `keep` writes the pick to the retro
+   backlog (tracked: it survives the cleanup; proposals not kept are counted if they come
+   back) and prints the kept ones; say in one line where they are (`agentflow backlog`).
+   Applying proposals is separate work, only if the user asks; the full file on request.
 2. Then ask in one message, each with its default:
    1. "Create the PR with the final summary as its description? (pushes feat/<f>)", default no;
    2. "Clean up the run files now (specs and metrics stay)?", default yes.

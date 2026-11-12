@@ -12,7 +12,8 @@ decision needed, with your default. No raw command lines; the output itself on r
 
 - A feature waiting at a gate, running, interrupted or not running: "Continue it with
   `/agentflow:resume <f>`." One still in SPEC: "Continue the spec with
-  `/agentflow:feature <f>`."
+  `/agentflow:feature <f>`" (a bug fix: `/agentflow:bugfix <f>`; a refactor:
+  `/agentflow:refactor <f>`; the `Mode:` line of its requirements.md says which).
 - A feature shown as `DONE, run files cleaned up; tags left: ...`: "Is its PR merged? Then I
   remove its tags (default: yes once merged)." On yes run `agentflow cleanup <f> --tags`
   (deletes the local spec-approved / tests-approved / spec-update / tests-update tags; the CI

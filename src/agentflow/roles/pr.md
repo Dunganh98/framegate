@@ -63,6 +63,11 @@ a section where nothing happened is one line. Exactly these sections:
     ## Left out
     - [<gate item>] same as [<gate item>] | answered: <where> | resolved: <how> | note: <what>
 
+A bug fix or a refactor (final_facts.md starts with `## Mode: ...`): the brief's outcome
+says, for a bug fix, the cause in plain words and what was ruled out (from the facts; if the
+implementer named no cause, say so); for a refactor, what moved where, each structure target
+(met or not) and that the behavior is unchanged as far as the tests show.
+
 Every gate item in final_facts.md (and every question you add to questions.md: numbered after
 them) goes into exactly one of Questions / Decisions I made / Left out, named by its number in
 brackets. A gate item is a question only when it is a real decision: two or more reasonable

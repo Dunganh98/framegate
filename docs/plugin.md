@@ -1,7 +1,8 @@
 # agentflow Claude Code plugin
 
-The plugin is the Claude Code side of agentflow: four skills that drive the workflow from the chat
-(`/agentflow:setup`, `/agentflow:feature`, `/agentflow:resume`, `/agentflow:status`) and two hooks, all calling the
+The plugin is the Claude Code side of agentflow: six skills that drive the workflow from the chat
+(`/agentflow:setup`, `/agentflow:feature`, `/agentflow:bugfix`, `/agentflow:refactor`,
+`/agentflow:resume`, `/agentflow:status`) and two hooks, all calling the
 `agentflow` CLI (the Python package in `src/`). All logic lives in the package (including the
 chat run protocol, `agentflow protocol`); the plugin only registers things. Installed
 **user-wide**, it stays inert in repos without `agentflow.toml`.
@@ -11,7 +12,7 @@ chat run protocol, `agentflow protocol`); the plugin only registers things. Inst
 ```
 .claude-plugin/marketplace.json     # marketplace "agentflow", one entry: source "./plugin"
 plugin/
-  .claude-plugin/plugin.json        # name agentflow, version 0.4.3
+  .claude-plugin/plugin.json        # name agentflow, version 0.5.0
   hooks/hooks.json                  # PreToolUse (Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell) + Stop
   scripts/agentflow-hook.js         # wrapper: node agentflow-hook.js <event> -> agentflow hook <event>
   skills/setup/SKILL.md             # /agentflow:setup: read the repo, draft agentflow.toml and
@@ -19,6 +20,10 @@ plugin/
                                     # doctor, optional smoke run
   skills/feature/SKILL.md           # /agentflow:feature <f>: branch + spec dialogue, then the run
                                     # protocol (injected: agentflow protocol)
+  skills/bugfix/SKILL.md            # /agentflow:bugfix <f>: bug report dialogue (spec --mode
+                                    # bugfix), then the run protocol
+  skills/refactor/SKILL.md          # /agentflow:refactor <f>: scope dialogue (spec --mode
+                                    # refactor), then the run protocol
   skills/resume/SKILL.md            # /agentflow:resume [f]: reattach after a session restart
   skills/status/SKILL.md            # /agentflow:status [f]: where features stand, tag cleanup
   tests/agentflow-hook.test.js      # node --test "plugin/tests/*.test.js"

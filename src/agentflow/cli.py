@@ -14,8 +14,10 @@ COMMANDS_HELP = """\
 commands:
   init                    scaffold agentflow.toml, spec templates, .agentflow/project.md,
                           .gitignore lines
-  spec <feature>          create/switch to the branch feat/<feature> from [git] base, copy
-                          the spec templates, set the SPEC phase lock
+  spec <feature> [--mode feature|bugfix|refactor]   create/switch to the branch
+                          feat/<feature> from [git] base, copy the mode's spec templates,
+                          set the SPEC phase lock. bugfix: the tests must fail on today's
+                          code first; refactor: they must pass on it, before and after
   spec-check <feature>    mechanical checks of the spec tables (rules without a spec ID,
                           copied code that is not in the named file); exit 1 on a problem
   approve-spec <feature> [--force]  spec-check, then commit + tag spec-approved/<feature>,
@@ -32,8 +34,15 @@ commands:
   finish <feature> --no-retro      final gate -> DONE without the retro
   learn <feature> K1 [K3 ...|all]  add the retro's project-knowledge proposals you accept to
                           the knowledge file ([project] knowledge), committed
+  keep <feature> 1 3 [...|take|all|none]  record which retro proposals you accept in the
+                          retro backlog (metrics/retro_backlog.md), committed
+  backlog [list] [--all] [--scope framework|project]   the open proposals (--all: every one)
+  backlog show B3         one proposal with the retro's full text
+  backlog done|drop|reopen B3 [B5 ...] [--note TEXT]   mark it applied / dropped / open again
   gates <feature> --scope step|final [--skip-mutation]
   spec-brief <feature>    print the conventions brief for the SPEC session
+  stats [<feature>] [--json]  what the features cost, from the events: cost, agent / check
+                          time, final-gate runs; with a feature: per phase and per final run
   doctor [--full] [--brief]  check the setup without agents: config, git, claude CLI,
                           tools, gate commands, test selection by spec ID; --full: the whole
                           suite; --brief: only the verdict and what needs action
@@ -67,8 +76,15 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["python", "dotnet", "generic"],
         help="default: detected (generic: any other language, configured in agentflow.toml)",
     )
-    for name in ("spec", "spec-check", "run", "approve", "spec-brief", "watch", "gate-summary"):
+    for name in ("spec-check", "run", "approve", "spec-brief", "watch", "gate-summary"):
         sub.add_parser(name).add_argument("feature")
+    p = sub.add_parser("spec")
+    p.add_argument("feature")
+    p.add_argument(
+        "--mode",
+        choices=["feature", "bugfix", "refactor"],
+        help="what the task is (default: feature, or what the existing spec says)",
+    )
     p = sub.add_parser("approve-spec")
     p.add_argument("feature")
     p.add_argument("--force", action="store_true", help="approve with spec-check problems")
@@ -89,10 +105,24 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("learn", help="add accepted retro knowledge proposals (K1 ...)")
     p.add_argument("feature")
     p.add_argument("items", nargs="+", help="K numbers (K1 K3 or 1,3) or all")
+    p = sub.add_parser("keep", help="record the retro proposals you accept in the backlog")
+    p.add_argument("feature")
+    p.add_argument("items", nargs="+", help="proposal numbers (1 3 or 1,3), take, all or none")
+    p = sub.add_parser("backlog", help="the retro backlog: list, show, done, drop, reopen")
+    p.add_argument(
+        "action", nargs="?", default="list", choices=["list", "show", "done", "drop", "reopen"]
+    )
+    p.add_argument("ids", nargs="*", help="backlog IDs (B3 B5)")
+    p.add_argument("--note", default="", help="e.g. where it was applied (PR, commit)")
+    p.add_argument("--all", action="store_true", help="also applied, dropped and skipped ones")
+    p.add_argument("--scope", choices=["framework", "project"], default="")
     p = sub.add_parser("gates")
     p.add_argument("feature")
     p.add_argument("--scope", choices=["step", "final"], default="final")
     p.add_argument("--skip-mutation", action="store_true")
+    p = sub.add_parser("stats", help="cost and time per feature, from the events")
+    p.add_argument("feature", nargs="?")
+    p.add_argument("--json", action="store_true", help="the numbers as JSON")
     p = sub.add_parser("doctor", help="check the project setup (no agents)")
     p.add_argument("--full", action="store_true", help="also run the whole test suite")
     p.add_argument("--brief", action="store_true", help="only the verdict and what needs action")
@@ -157,6 +187,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             print(spec_brief(cfg, args.feature))
             return 0
+        if args.command == "stats":
+            from agentflow import stats
+
+            return stats.run(cfg, args.feature, as_json=args.json)
         if args.command == "spec-check":
             from agentflow.checks import spec_lint
 
@@ -176,9 +210,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         orch = Orchestrator(cfg)
         if args.command == "unlock":
             return orch.unlock(force=args.force)
+        if args.command == "backlog":
+            return orch.backlog_cmd(args.action, args.ids, args.note, args.all, args.scope)
         f = args.feature
         if args.command == "spec":
-            return orch.spec(f)
+            return orch.spec(f, args.mode)
         if args.command == "approve-spec":
             return orch.approve_spec(f, force=args.force)
         if args.command == "run":
@@ -205,6 +241,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return orch.finish(f)
         if args.command == "learn":
             return orch.learn(f, args.items)
+        if args.command == "keep":
+            return orch.keep(f, args.items)
     except (ConfigError, WorkflowError, GitError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

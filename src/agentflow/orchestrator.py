@@ -27,11 +27,11 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from agentflow import backlog, notify, procs, risk
 from agentflow import brief as briefs
-from agentflow import notify, procs, risk
 from agentflow.adapters import get_adapter
 from agentflow.adapters.base import GATE_NAMES, CheckResult, LanguageAdapter
-from agentflow.checks import existing_members, red_stubs, spec_lint, test_smells, traceability
+from agentflow.checks import baseline, existing_members, spec_lint, test_smells, traceability
 from agentflow.checks import structure as structure_check
 from agentflow.checks.frame_diff import knowledge_tag, path_matches, tests_update_tag
 from agentflow.config import Config
@@ -41,6 +41,7 @@ from agentflow.report import (
     TestReview,
     final_facts,
     parse_assumptions,
+    parse_causes,
     parse_test_review,
     parse_triage,
     phase_table,
@@ -58,7 +59,15 @@ from agentflow.retro import (
     split_questions,
 )
 from agentflow.retro import build as build_retro_input
-from agentflow.specs import PlanStep, feature_ids, plan_steps
+from agentflow.specs import (
+    MODES,
+    PlanStep,
+    feature_ids,
+    feature_mode,
+    plan_steps,
+    spec_mode_line,
+    template_dir,
+)
 from agentflow.state import (
     GitError,
     clear_phase,
@@ -95,6 +104,43 @@ PHASES = ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "REVIEW", "PR", "FINAL", "RETRO",
 METRICS_HEADER = (
     "date,feature,human_rejections,escalations,questions,gate_failures,cost_usd,parked,assumptions"
 )
+#: appended to a task of a bug fix / a refactor (mode -> task kind -> text)
+MODE_NOTES: dict[str, dict[str, str]] = {
+    "bugfix": {
+        "TEST_REVIEW": "This is a bug fix: the tests ran against today's code (test_checks.md, "
+        "'Bug reproduced on today's code', lists why each reproduction test fails). Check for "
+        "every reproduction test that this failure is the bug the report describes (its "
+        "'Observed now' value), not another failure: a test that fails for another reason, or "
+        "would also fail after a correct fix, is an objection.",
+        "IMPLEMENT": "This is a bug fix: find the cause before you change code. Your step note "
+        "has one line `- ROOT CAUSE: <what, where (file: method)>` and one line `- RULED OUT: "
+        "<suspected cause>: <evidence>` for every other suspected cause of the bug report. "
+        "Make the smallest fix; no cleanup or refactor beside it.",
+        "REVIEW": "This is a bug fix: check that the cause is fixed, not only the reported "
+        "input: the same bug through another input or another caller, and the neighbouring "
+        "cases that were right before.",
+    },
+    "refactor": {
+        "TEST_REVIEW": "This is a refactor: every test must pass on today's code "
+        "(test_checks.md, 'Green on today's code'). Check that the tests pin the behavior of "
+        "the code in the spec's Scope table (branches, errors, edge inputs, order, stored "
+        "formats) through the interface callers use, and that expected values were measured "
+        "from today's code, not guessed. Behavior in scope that no test pins is an objection.",
+        "IMPLEMENT": "This is a refactor: move, split and rename as the step says; the behavior "
+        "must not change. All characterization tests pass before and after (your check "
+        "command runs all of them). A test that fails means your change altered behavior: "
+        "undo that part; never adapt code to make a changed result pass. Public signatures "
+        "stay as design.md says. A step that changes no source file fails.",
+        "REVIEW": "This is a refactor: the behavior must be the same as before. A finding is a "
+        "difference: an input for which the code now returns, raises or stores something else "
+        "than the code before (read it with `git show tests-approved/{f}:<path>`). Write it as "
+        "a failing test and say in review.md what the old code did. Also check the spec's "
+        "structure targets.",
+    },
+}
+MODE_NOTES["bugfix"]["IMPLEMENT_STEPS"] = MODE_NOTES["bugfix"]["IMPLEMENT"]
+MODE_NOTES["refactor"]["IMPLEMENT_STEPS"] = MODE_NOTES["refactor"]["IMPLEMENT"]
+
 BRIEF_PHASES = {
     "TESTS",
     "TESTS_AMEND",
@@ -197,7 +243,31 @@ REDO_NOTE = (
     "An answer that approves a diagnosis' proposed fix means: apply that proposal as written."
 )
 
+#: the failed "check" of a refactor step that left the source as it was
+IDLE_STEP = "refactor step changed nothing"
+
 TASKS = {
+    # a bug fix / a refactor: the code exists, so the first proof is not "red against stubs"
+    "TESTS:bugfix": "Bug fix '{f}': the code exists, there are no stubs. Write tests from the bug "
+    "report in {specs}/{f}/ against today's code. For every reproduction row (R and E IDs): a "
+    "test that FAILS now because of the bug and asserts the expected (right) result, so it "
+    "passes once the bug is fixed. For every must-not-change row (I IDs): a test that PASSES "
+    "now. Where your role says the tests must fail against the stubs, this rule replaces it. "
+    "Run the tests: a reproduction test must fail at its assertion, with the wrong result the "
+    "report names, not with an error and not for another reason. Do not fix the bug. Write the "
+    "summary table to {out}/{f}/test_summary.md, with one line per reproduction test saying "
+    "how it fails today. A question the report does not settle goes to {out}/{f}/questions.md; "
+    "then continue with the rest (do not stop).",
+    "TESTS:refactor": "Refactor '{f}': the code exists, there are no stubs, and its behavior must "
+    "not change. Write characterization tests from {specs}/{f}/ against today's code: for "
+    "every behavior and invariant row, tests that PASS now. Where your role says the tests "
+    "must fail against the stubs, this rule replaces it: every test passes now. Test through "
+    "the interface callers use, so the tests survive the moves and renames design.md lists. "
+    "Expected values are what today's code returns (run it; say in the test how each value "
+    "was measured). Cover the code in the spec's Scope table, its branches, errors and edge "
+    "inputs: after the refactor these tests are the only proof that nothing changed. Write the "
+    "summary table to {out}/{f}/test_summary.md. A question the spec does not settle goes to "
+    "{out}/{f}/questions.md; then continue with the rest (do not stop).",
     "TESTS": "Feature '{f}': write the tests from {specs}/{f}/ and the interface stubs in {src}/. "
     "Write the summary table to {out}/{f}/test_summary.md. A question the spec does not settle "
     "goes to {out}/{f}/questions.md; then continue with the rest (do not stop).",
@@ -530,7 +600,12 @@ class Orchestrator:
         return "\n".join(lines)
 
     def task_text(self, kind: str, feature: str, **extra: str) -> str:
-        task = TASKS[kind].format(**self.placeholders(feature), **extra)
+        mode = feature_mode(self.cfg, feature)
+        values = {**self.placeholders(feature), **extra}
+        task = TASKS.get(f"{kind}:{mode}", TASKS[kind]).format(**values)
+        note = MODE_NOTES.get(mode, {}).get(kind)
+        if note:
+            task += "\n\n" + note.format(**values)
         task += "\n\n" + LOOK_AROUND + "\n\n" + self.orientation(feature)
         if kind in BRIEF_PHASES:
             task += "\n\n## Conventions\n" + self.adapter.conventions_brief().strip()
@@ -1051,6 +1126,14 @@ class Orchestrator:
                 self.report_new_assumptions(feature, prog)
                 t0 = time.time()
                 rep = None if question else gate_report(self.adapter, feature, "step")
+                if rep is not None and rep.ok and self.idle_refactor_step(feature, item):
+                    # green tests prove nothing here: they were green before the step
+                    text = (
+                        "The step changed no source file. A refactor step must make the move, "
+                        "split or rename the plan describes; the tests then show the behavior "
+                        "is still the same."
+                    )
+                    rep = GateReport(False, text, [IDLE_STEP], outputs={IDLE_STEP: text})
             except KeyboardInterrupt:
                 prog["attempt"] = attempt - 1  # an interruption is not an attempt
                 save_progress(self.cfg, feature, prog)
@@ -1639,8 +1722,9 @@ class Orchestrator:
     def run_test_checks(self, feature: str, prog: dict[str, Any]) -> None:
         sections = []
         status: dict[str, str] = {}
+        mode = feature_mode(self.cfg, feature)
         for name, mod in [
-            ("Red against stubs", red_stubs),
+            (baseline.name(mode), baseline),
             ("Traceability", traceability),
             ("Test smells", test_smells),
         ]:
@@ -1649,7 +1733,13 @@ class Orchestrator:
             sections.append(f"### {name}: {res.status}\n~~~\n{res.output}\n~~~")
         # a note for the test reviewer, never blocking (not in `status`: that sends tests back)
         try:
-            members = existing_members.check(self.adapter, feature)
+            members = (
+                existing_members.check(self.adapter, feature)
+                if mode == "feature"
+                # a bug fix / a refactor asserts existing members on purpose, and the run
+                # against today's code already checks those claims
+                else CheckResult("SKIPPED", "Not listed: the tests ran against today's code.")
+            )
         except Exception as e:  # a scan problem must not stop the tests phase
             members = CheckResult("SKIPPED", f"SKIPPED: scan failed ({type(e).__name__}: {e})")
         listed = sum(1 for line in members.output.splitlines() if line.startswith("- "))
@@ -1849,11 +1939,19 @@ class Orchestrator:
     def done_ids(self, prog: dict[str, Any], steps: list[PlanStep]) -> list[str]:
         return [i for s in steps if s.num in prog["completed_steps"] for i in s.reqs]
 
-    def step_batches(self, steps: list[PlanStep]) -> list[list[PlanStep]]:
+    def idle_refactor_step(self, feature: str, item: dict[str, Any]) -> bool:
+        """A plan step of a refactor whose implementer run left the source folders as they
+        were (in a feature a step is proven by its tests turning green; here they were green
+        all along)."""
+        if item.get("kind") != "step" or feature_mode(self.cfg, feature) != "refactor":
+            return False
+        return not git(self.cfg, "status", "--porcelain", "--", *self.cfg.src_roots).strip()
+
+    def step_batches(self, steps: list[PlanStep], single: bool = False) -> list[list[PlanStep]]:
         """Consecutive steps share one implementer run while their spec IDs add up to at most
         [agents] step_batch_ids (0 = one run per step): a small plan costs one run instead of
         one per step (each run re-reads the spec and the code)."""
-        cap = self.cfg.step_batch_ids
+        cap = 0 if single else self.cfg.step_batch_ids
         batches: list[list[PlanStep]] = []
         for step in steps:
             last = batches[-1] if batches else None
@@ -1933,7 +2031,9 @@ class Orchestrator:
             if s.num not in prog["completed_steps"]
             and (redo_for([s.num]) if redo_mode else s.num not in self.parked_steps(prog))
         ]
-        for batch in self.step_batches(pending):
+        # a refactor: one move per run, each checked on its own
+        single = feature_mode(self.cfg, feature) == "refactor"
+        for batch in self.step_batches(pending, single):
             batch = self.block_dependents(feature, prog, batch)
             if not batch:
                 continue
@@ -1951,6 +2051,10 @@ class Orchestrator:
                 f"[{label}] {'redo' if redo else 'start'} ({len(steps)} steps; {', '.join(reqs)})",
             )
             covered = self.done_ids(prog, steps) + reqs
+            if feature_mode(self.cfg, feature) == "refactor":
+                # every step keeps every pinned behavior: all the characterization tests
+                covered = sorted(feature_ids(self.cfg, feature))
+                reqs = covered
             check = self.adapter.test_command(covered)
             note = self.note_path(feature, "step-" + "-".join(map(str, nums)))
             if one:
@@ -2239,6 +2343,16 @@ class Orchestrator:
         if src and "src" not in done:
             owner, failed = "src", src
         elif weak and not src and "tests" not in done:
+            if feature_mode(self.cfg, feature) == "refactor":
+                # new tests would pin what the code does AFTER the refactor: no proof that
+                # nothing changed. The human decides (more characterization tests need the
+                # old code: a new refactor task, or approve as is).
+                self.progress(
+                    feature,
+                    f"[final gates] {', '.join(weak)} failed; no test repair in a refactor "
+                    "(tests written now would pin the changed code).",
+                )
+                return False
             owner, failed = "tests", weak
         else:
             return False
@@ -2471,6 +2585,7 @@ class Orchestrator:
         d = self.fdir(feature)
         gates = d / "final_gates.md"
         oq = d / "open_questions.md"
+        steps = d / "steps.md"
         facts = final_facts(
             feature,
             plan_steps(self.cfg, feature),
@@ -2481,6 +2596,8 @@ class Orchestrator:
             oq.read_text(encoding="utf-8") if oq.is_file() else "",
             self.final_items(feature, prog),
             self.code_map_note(feature),
+            feature_mode(self.cfg, feature),
+            parse_causes(steps.read_text(encoding="utf-8") if steps.is_file() else ""),
         )
         (d / "final_facts.md").write_text(facts, encoding="utf-8")
 
@@ -2896,7 +3013,10 @@ class Orchestrator:
             self.assumptions(feature),
             archive.read_text(encoding="utf-8") if archive.is_file() else "",
         )
-        (d / "retro_input.md").write_text(ri.text, encoding="utf-8")
+        # what earlier retros proposed: the retro names a problem it sees again
+        earlier = backlog.retro_section(self.cfg)
+        text = ri.text.rstrip("\n") + ("\n\n" + earlier if earlier else "\n")
+        (d / "retro_input.md").write_text(text, encoding="utf-8")
         return ri.ids
 
     def retro_missing(self, feature: str, ids: list[str]) -> list[str]:
@@ -2935,13 +3055,23 @@ class Orchestrator:
                 f"WARNING: retro_proposals.md still doesn't address {', '.join(missing)} "
                 f"(see {self.cfg.paths.out}/{feature}/retro_input.md).",
             )
+        prop = self.fdir(feature) / "retro_proposals.md"
+        again = backlog.note_repeats(
+            self.cfg, feature, prop.read_text(encoding="utf-8") if prop.is_file() else ""
+        )
+        if again:
+            self.progress(
+                feature, f"[RETRO] seen again, counted in the backlog: {', '.join(again)}."
+            )
+            commit(self.cfg, f"{feature}: retro backlog, seen again: {', '.join(again)}")
         if not prog.get("metrics_written"):  # finish --no-retro wrote it already
             self.write_metrics(feature)
             prog["metrics_written"] = True
         self.progress(
             feature,
             f"\nRetro proposals: {self.cfg.paths.out}/{feature}/retro_proposals.md — "
-            "apply the ones you accept in a normal session.",
+            f"keep the ones you accept (agentflow keep {feature} ...); apply them in a normal "
+            "session.",
         )
         self.advance(feature, prog, "DONE")
 
@@ -3031,7 +3161,7 @@ class Orchestrator:
         except GitError:
             return False
 
-    def spec(self, feature: str) -> int:
+    def spec(self, feature: str, mode: str | None = None) -> int:
         lock = procs.read_lock(self.cfg.out_dir)
         if procs.lock_alive(lock):
             raise WorkflowError(
@@ -3049,19 +3179,26 @@ class Orchestrator:
             return EXIT_OK
         target = self.cfg.spec_dir(feature)
         if not target.exists():
-            local = self.cfg.root / self.cfg.paths.specs / "_template"
+            folder = template_dir(mode or "feature")
+            local = self.cfg.root / self.cfg.paths.specs / folder
             target.mkdir(parents=True)
             for name in ("requirements.md", "design.md", "plan.md"):
                 src = local / name
                 text = (
                     src.read_text(encoding="utf-8")
                     if src.is_file()
-                    else package_text("templates", "specs", "_template", name)
+                    else package_text("templates", "specs", folder, name)
                 )
                 (target / name).write_text(text, encoding="utf-8")
+        has = feature_mode(self.cfg, feature)
+        if mode and mode != has:
+            raise WorkflowError(
+                f"{self.cfg.paths.specs}/{feature}/ is a {has} spec (its requirements.md says "
+                f"so), not {mode}. Use the {has} flow, or delete the folder to start over."
+            )
         set_phase(self.cfg, "SPEC")
-        log_event(self.cfg, feature, "spec_started")
-        self.echo(f"SPEC phase set for {feature}.")
+        log_event(self.cfg, feature, "spec_started", mode=has)
+        self.echo(f"SPEC phase set for {feature}" + (f" ({has})." if has != "feature" else "."))
         self.echo(
             f"Spec dialogue: /agentflow:feature {feature} in Claude Code (it runs this command "
             f"too); manual end of the phase: agentflow approve-spec {feature}"
@@ -3072,6 +3209,12 @@ class Orchestrator:
         if not self.cfg.spec_dir(feature).is_dir():
             raise WorkflowError(
                 f"No spec folder {self.cfg.paths.specs}/{feature}/ (run: agentflow spec {feature})"
+            )
+        word = spec_mode_line(self.cfg, feature)
+        if word and word not in MODES:
+            raise WorkflowError(
+                f"{self.cfg.paths.specs}/{feature}/requirements.md says 'Mode: {word}'; "
+                f"known modes: {', '.join(MODES)}."
             )
         found = spec_lint.problems(self.cfg, feature)
         if found:
@@ -3088,7 +3231,7 @@ class Orchestrator:
         git(self.cfg, "tag", "-f", f"spec-approved/{feature}")
         self.drop_spec_update_tag(feature)
         save_progress(self.cfg, feature, fresh_progress())
-        log_event(self.cfg, feature, "spec_approved")
+        log_event(self.cfg, feature, "spec_approved", mode=feature_mode(self.cfg, feature))
         self.echo(f"Tagged spec-approved/{feature}. Next: agentflow run {feature}")
         return EXIT_OK
 
@@ -3521,6 +3664,66 @@ class Orchestrator:
                 + ", then the final gate again."
             )
         self.echo(f"Next: agentflow run {feature}")
+        return EXIT_OK
+
+    def keep(self, feature: str, picks: list[str]) -> int:
+        """The human's pick of the retro's proposals -> the retro backlog (tracked, committed):
+        picked ones open, the others skipped; the retro's text is kept beside it."""
+        try:
+            kept = backlog.keep(self.cfg, feature, picks)
+        except backlog.BacklogError as e:
+            raise WorkflowError(str(e)) from e
+        self.commit_backlog(
+            f"{feature}: retro backlog ({', '.join(i.id for i in kept.opened) or 'none kept'})"
+        )
+        log_event(
+            self.cfg,
+            feature,
+            "retro_kept",
+            kept=[i.id for i in kept.opened],
+            skipped=[i.id for i in kept.skipped],
+            folded=kept.folded,
+        )
+        rel = self.rel(backlog.path(self.cfg))
+        for i in kept.opened:
+            self.echo(f"Kept: {i.line()}")
+        if kept.skipped:
+            ids = ", ".join(i.id for i in kept.skipped)
+            self.echo(f"Not kept (counted if they come back): {ids}")
+        self.echo(f"Backlog: {rel} (agentflow backlog; applied one: agentflow backlog done B<n>)")
+        return EXIT_OK
+
+    def commit_backlog(self, message: str) -> None:
+        """Commit the backlog file and the kept retro texts, nothing else."""
+        paths = [self.rel(backlog.path(self.cfg))]
+        retros = backlog.retro_copy(self.cfg, "x").parent
+        if retros.is_dir():
+            paths.append(self.rel(retros))
+        git(self.cfg, "add", "--", *paths)
+        if git(self.cfg, "diff", "--cached", "--name-only", "--", *paths).strip():
+            git(self.cfg, "commit", "-q", "-m", message, "--", *paths)
+
+    def backlog_cmd(self, action: str, ids: list[str], note: str, every: bool, scope: str) -> int:
+        """`agentflow backlog [list | show | done | drop | reopen]`."""
+        try:
+            if action == "list":
+                lines = backlog.listing(self.cfg, every, scope or None)
+                rel = self.rel(backlog.path(self.cfg))
+                what = "proposal(s)" if every else "open proposal(s)"
+                self.echo(f"{len(lines)} {what} in {rel}" + (":" if lines else "."))
+                for line in lines:
+                    self.echo(f"- {line}")
+            elif action == "show":
+                for item_id in ids or [""]:
+                    self.echo(backlog.show(self.cfg, item_id))
+            else:
+                status = {"done": "applied", "drop": "dropped", "reopen": "open"}[action]
+                changed = backlog.set_status(self.cfg, ids, status, note)
+                names = ", ".join(i.id for i in changed)
+                self.commit_backlog(f"retro backlog: {names} {status}")
+                self.echo(f"{names}: {status}" + (f" ({note})" if note else ""))
+        except backlog.BacklogError as e:
+            raise WorkflowError(str(e)) from e
         return EXIT_OK
 
     def learn(self, feature: str, picks: list[str]) -> int:

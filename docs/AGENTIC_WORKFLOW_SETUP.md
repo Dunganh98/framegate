@@ -1535,9 +1535,9 @@ Making the gate commands configurable is also what would later allow non-Python 
 | 2 | 9.2 Structured decision log | pstack `show-me-your-work` | S | — | Assumptions become reviewable data |
 | 3 | 9.3 Verification harness | pstack `create-verification-skill` | M–L | Recorded data | Proof on the real system, not only tests |
 | 4 | 9.4 Review panel with triage | pstack `/interrogate` | M | — | Better findings, visible dismissals |
-| 5 | 9.5 Orchestrator modes | pstack playbooks | M | 9.2 | Bug fixes and refactors with the right first proof |
+| 5 | 9.5 Orchestrator modes | pstack playbooks | M | 9.2 | **Done 2026-11-12** (see docs/reference.md, "Modes"). Bug fixes and refactors with the right first proof |
 | 6 | 9.6 Design-friction detection | pstack `/architect` (phase 5) | M | 9.1 | Stops blind retries; points to spec problems |
-| 7 | 9.7 Retro panel with backlog | pstack `/reflect` | S–M | 9.1, 9.2 | Fewer one-off rules, better proposals |
+| 7 | 9.7 Retro panel with backlog | pstack `/reflect` | S–M | 9.1, 9.2 | **Backlog done 2026-11-12** (`agentflow keep` / `backlog`); the two-reviewer panel is not built. Fewer one-off rules, better proposals |
 | 8 | 9.8 Epics: split + parallel sub-features | ours (scheduling ideas from harnessOrch) | L | clean single features, 9.1 | One big task, one spec approval, one final summary |
 | — | 9.10 Manager-style briefs, structure, code map | ours (FCSim M5-freekick-review) | M | — | **Done 2026-11-11.** The human decides from one-screen briefs; files stay readable at the class level |
 
@@ -1784,6 +1784,13 @@ Each assertion maps to a small Python check function in `scripts/verify/assertio
 
 ### 9.5 Orchestrator modes: feature, bugfix, refactor
 
+**Status: done 2026-11-12** in the agentflow package (docs/reference.md, "Modes"). Differences
+from the plan below: the mode is a `Mode:` line in the spec's requirements.md (set by
+`agentflow spec --mode`), not a `run --mode` flag; one test-writer role with a mode section
+instead of separate role files; the baseline check is `checks/baseline.py`; the bug fix's
+cause lines (`ROOT CAUSE`, `RULED OUT`) are reported in the final facts, not enforced. Not
+built: a scope-coverage check before a refactor moves code.
+
 **Origin:** pstack's playbooks. Each task type has a different "first proof": reproduce before fixing a bug, record behavior before refactoring.
 
 **Trigger:** the first bug fix or refactor you want to run through the workflow.
@@ -1832,6 +1839,13 @@ A perf mode (baseline trace, then compare) is deferred until there is profiling 
 ---
 
 ### 9.7 Retro panel with backlog
+
+**Status: the backlog is done 2026-11-12** (docs/reference.md, "The retro backlog"):
+`metrics/retro_backlog.md` with a status per proposal, the retro's text kept beside it, the
+retro names repeats (`repeats B3`) and they are counted, `agentflow keep` / `agentflow
+backlog`. Differences from the plan below: the human's pick decides open / skipped (the
+retro recommends `skip` for a first-time one-off); one retro run, no two-lens panel and no
+synthesizer (points 1-3 are not built).
 
 **Origin:** pstack's `/reflect`: several reviewers, a synthesizer, proposals sorted into accepted/rejected/backlog, and nothing applied without approval.
 

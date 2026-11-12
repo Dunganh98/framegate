@@ -126,6 +126,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "test_timeout": (int,),
         "mutation_timeout": (int,),
         "mutation_level": (str,),
+        "coverage_files": (str,),
     },
 }
 #: sections owned by a language adapter (stored raw in Config.language_options)
