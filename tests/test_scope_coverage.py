@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pathlib
 
-from agentflow.adapters.base import CheckResult
-from agentflow.checks import scope_coverage
 from conftest import init_git
+from framegate.adapters.base import CheckResult
+from framegate.checks import scope_coverage
 from test_checks import adapter_for, write
 
 SPEC = """\

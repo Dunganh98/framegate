@@ -10,11 +10,11 @@ from collections.abc import Sequence
 
 import pytest
 
-from agentflow.adapters.base import TestCase, TestRun, parse_junit, run_command
-from agentflow.adapters.python import PythonAdapter
-from agentflow.checks import red_stubs
-from agentflow.checks.frame_diff import path_matches
-from agentflow.config import ConfigError, parse_config
+from framegate.adapters.base import TestCase, TestRun, parse_junit, run_command
+from framegate.adapters.python import PythonAdapter
+from framegate.checks import red_stubs
+from framegate.checks.frame_diff import path_matches
+from framegate.config import ConfigError, parse_config
 
 
 def test_run_command_timeout_and_missing_tool(tmp_path: pathlib.Path) -> None:
@@ -109,7 +109,7 @@ def test_language_section_and_bools(tmp_path: pathlib.Path) -> None:
 
 
 def test_with_powershell_adds_twins_after_each_bash_rule() -> None:
-    from agentflow.adapters.base import with_powershell
+    from framegate.adapters.base import with_powershell
 
     rules = ["Read", "Bash(dotnet test *)", "Write", "Bash(git diff *)", "PowerShell(git diff *)"]
     assert with_powershell(rules) == [

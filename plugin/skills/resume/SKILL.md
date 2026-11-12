@@ -1,15 +1,15 @@
 ---
 name: resume
-description: Reattach this chat to an agentflow feature after a session restart - says in one line where it stands, then continues with the live view, the waiting gate or the wrap-up. Run only when the user invokes it.
+description: Reattach this chat to a framegate feature after a session restart - says in one line where it stands, then continues with the live view, the waiting gate or the wrap-up. Run only when the user invokes it.
 argument-hint: "[feature-slug]"
 disable-model-invocation: true
-allowed-tools: Bash(agentflow *) PowerShell(agentflow *) Monitor Read Write Edit Glob Grep
+allowed-tools: Bash(framegate *) PowerShell(framegate *) Monitor Read Write Edit Glob Grep
 ---
-Reattach to the agentflow feature `$ARGUMENTS` (none given: pick from the list below).
+Reattach to the framegate feature `$ARGUMENTS` (none given: pick from the list below).
 
 ## Where things stand
 
-!`agentflow status $ARGUMENTS --brief`
+!`framegate status $ARGUMENTS --brief`
 
 ## What to do
 
@@ -27,11 +27,11 @@ Reattach to the agentflow feature `$ARGUMENTS` (none given: pick from the list b
    - `DONE`: protocol D.
    - `interrupted` or `not running` (spec approved): "Continue the run?" (default yes), then
      protocol A.2.
-   - `SPEC (not approved yet)`: the spec dialogue continues with `/agentflow:feature <f>`
-     (a bug fix: `/agentflow:bugfix <f>`; a refactor: `/agentflow:refactor <f>`; the `Mode:`
+   - `SPEC (not approved yet)`: the spec dialogue continues with `/framegate:feature <f>`
+     (a bug fix: `/framegate:bugfix <f>`; a refactor: `/framegate:refactor <f>`; the `Mode:`
      line of its requirements.md says which); tell the user to type that (it reloads the
      spec conventions).
 
 ## Run protocol
 
-!`agentflow protocol`
+!`framegate protocol`

@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import pathlib
 
-from agentflow.adapters import get_adapter
-from agentflow.checks import existing_members
-from agentflow.config import parse_config
 from conftest import git, init_git
+from framegate.adapters import get_adapter
+from framegate.checks import existing_members
+from framegate.config import parse_config
 
 
 def write(root: pathlib.Path, rel: str, text: str) -> None:

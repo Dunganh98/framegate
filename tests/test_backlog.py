@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import pytest
 
-from agentflow import backlog
-from agentflow.config import load_config
-from agentflow.orchestrator import EXIT_GATE
 from conftest import DemoRepo, git
+from framegate import backlog
+from framegate.config import load_config
+from framegate.orchestrator import EXIT_GATE
 
 FAST = "[gates.commands]\nlint = []\nformat = []\ntypecheck = []\n"
 

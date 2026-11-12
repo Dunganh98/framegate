@@ -6,11 +6,11 @@ from __future__ import annotations
 
 import pytest
 
-from agentflow.adapters import get_adapter
-from agentflow.config import load_config
-from agentflow.gates import gate_report
-from agentflow.orchestrator import EXIT_GATE, contested_tests
 from conftest import DemoRepo, git
+from framegate.adapters import get_adapter
+from framegate.config import load_config
+from framegate.gates import gate_report
+from framegate.orchestrator import EXIT_GATE, contested_tests
 from test_e2e import FAST, finish_with_retro, gate, phases, read
 
 CONTESTED = "test_demo.test_add_refuses_bool_contested"

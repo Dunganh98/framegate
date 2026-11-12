@@ -8,7 +8,7 @@ What the orchestrator relies on, and how it was verified. No real `claude -p` ag
 | `-p` / `--print` reads the prompt from stdin | Yes. With empty stdin: `Error: Input must be provided either through stdin or as a prompt argument when using --print` | `claude -p --output-format json < /dev/null` |
 | `--append-system-prompt-file <path>` | **Exists** (not listed in `--help`, but named in the `--bare` help text as `--append-system-prompt[-file]`). A missing file gives `Error: Append system prompt file not found: <path>`; an unknown flag gives `error: unknown option` | `claude -p --append-system-prompt-file ./nonexistent.md < /dev/null` vs. `claude -p --bogus-flag` |
 | `--append-system-prompt <text>` | Listed. Not used: the role text goes through the file variant (no multi-line text and no 32k command-line limit on Windows) | `--help` |
-| `--allowedTools` rule syntax | `--allowedTools, --allowed-tools <tools...>`: "Comma or space-separated list of tool names to allow (e.g. "Bash(git *) Edit")". agentflow passes **one** comma-joined argument and uses the space form `Bash(<prefix> *)` (the guide's `Bash(cmd:*)` is the older prefix syntax) | `--help` |
+| `--allowedTools` rule syntax | `--allowedTools, --allowed-tools <tools...>`: "Comma or space-separated list of tool names to allow (e.g. "Bash(git *) Edit")". framegate passes **one** comma-joined argument and uses the space form `Bash(<prefix> *)` (the guide's `Bash(cmd:*)` is the older prefix syntax) | `--help` |
 | `--permission-mode` | Choices: `acceptEdits`, `auto`, `bypassPermissions`, `manual`, `dontAsk`, `plan`. Default used: `acceptEdits` (`[agents] permission_mode`) | `--help` |
 | `--permission-prompts` | New: `host` (default) or `none` (anything that would prompt is denied). Not passed | `--help` |
 | `--max-turns <turns>` | **Hidden** (not in `--help`) but accepted: `--max-turns notanumber` -> `error: option '--max-turns <turns>' argument 'notanumber' is invalid. must be a number`; `--max-turns 3` reaches the stdin check. What it counts: see "Turns" below | `claude -p --max-turns ... < /dev/null` |
@@ -28,7 +28,7 @@ What the orchestrator relies on, and how it was verified. No real `claude -p` ag
          [--max-budget-usd <cap of the phase>]   (task on stdin)
 ```
 
-`<claude>` = `[agents] claude` (default `claude`) or env `AGENTFLOW_CLAUDE`; a `.py` path is run
+`<claude>` = `[agents] claude` (default `claude`) or env `FRAMEGATE_CLAUDE`; a `.py` path is run
 with the current interpreter (used by the tests' fake claude). Each run's task prompt and raw
 output are saved to `out/runs/<stamp>-<feature>-<phase>.prompt.md` / `.json` (the result object
 + `api_turns`) / `.stream.jsonl` (the whole message stream, for debugging). The process starts
@@ -47,7 +47,7 @@ inflate it. Evidence: the live FCSim RETRO (`--max-turns 30`) reported `num_turn
 `success`; its transcript has 23 distinct assistant message ids (23 round trips <= 30) and 45 tool
 results (+ 1 prompt = 46). Probe (claude 2.1.321, haiku, 8 sequential `echo` calls,
 `--max-turns 3`): stopped with `error_max_turns` after 3 round trips, `num_turns` 4. So the cap
-worked; only the reading of `num_turns` as turns was wrong. agentflow now reads the message stream
+worked; only the reading of `num_turns` as turns was wrong. framegate now reads the message stream
 (`--output-format stream-json --verbose`) and logs `turns` = distinct assistant message ids (what
 the cap counts) next to `messages` = `num_turns`; the phase table shows `turns`.
 
@@ -59,7 +59,7 @@ the cap counts) next to `messages` = `num_turns`; the phase table shows `turns`.
 | `--max-turns` hit | `is_error: true`, `subtype: "error_max_turns"`, `terminal_reason: "max_turns"`, no `result` field |
 | Multi-line task via stdin through the npm `.cmd` shim | Arrives intact (agent echoed three lines verbatim) |
 | Plugin hooks in `claude -p` (local-scope install) | PreToolUse blocks (`PreToolUse:Write hook error: ... [IMPLEMENT] Blocked write to tests/...`); Stop blocks on red tests (`Stop hook feedback: ... Tests are still failing`), then the agent continues |
-| Shell tool on Windows | Agents use the **PowerShell** tool as often as Bash. `Bash(...)` rules don't cover it; `PowerShell(<prefix> *)` rules do (agentflow now emits both). `cd ... &&`, `;` chains and PATH prefixes are denied |
+| Shell tool on Windows | Agents use the **PowerShell** tool as often as Bash. `Bash(...)` rules don't cover it; `PowerShell(<prefix> *)` rules do (framegate now emits both). `cd ... &&`, `;` chains and PATH prefixes are denied |
 | Project CLAUDE.md | Loaded in every headless run; FCSim's "read HANDOVER.md first" was not followed (0 reads in 9 runs) |
 
 Still open: whether `Bash(python -m pytest *)` matches the bare command without arguments.

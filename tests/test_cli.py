@@ -7,9 +7,9 @@ import pathlib
 
 import pytest
 
-from agentflow import cli
-from agentflow.orchestrator import EXIT_GATE
 from conftest import DemoRepo, git, marker
+from framegate import cli
+from framegate.orchestrator import EXIT_GATE
 
 
 def set_waiting(r: DemoRepo, phase: str, waiting: dict | None, **extra: object) -> None:
@@ -38,7 +38,7 @@ def test_init_scaffolds_and_never_overwrites(
     (tmp_path / "specs" / "_template" / "plan.md").write_text("MINE", encoding="utf-8")
     assert cli.main(["init"]) == 0
     out = capsys.readouterr().out
-    assert 'language = "python"' in (tmp_path / "agentflow.toml").read_text(encoding="utf-8")
+    assert 'language = "python"' in (tmp_path / "framegate.toml").read_text(encoding="utf-8")
     assert (tmp_path / "specs/_template/requirements.md").is_file()
     assert (tmp_path / "specs/_template/plan.md").read_text(encoding="utf-8") == "MINE"
     assert "skipped  specs/_template/plan.md (exists, not overwritten)" in out
@@ -46,14 +46,14 @@ def test_init_scaffolds_and_never_overwrites(
         "build/\nout/\n.phase\n.reqs\nmutants/\n"
     )
     assert "--- Add to CLAUDE.md" in out and "# Workflow" in out
-    assert 'agentflow gates "$FEATURE" --scope final' in out and "setup-python" in out
+    assert 'framegate gates "$FEATURE" --scope final' in out and "setup-python" in out
     assert not (tmp_path / "CLAUDE.md").exists() and not (tmp_path / ".github").exists()
 
-    (tmp_path / "agentflow.toml").write_text("# mine\n", encoding="utf-8")
+    (tmp_path / "framegate.toml").write_text("# mine\n", encoding="utf-8")
     assert cli.main(["init"]) == 0
     out = capsys.readouterr().out
-    assert (tmp_path / "agentflow.toml").read_text(encoding="utf-8") == "# mine\n"
-    assert "skipped  agentflow.toml" in out and ".gitignore: already complete" in out
+    assert (tmp_path / "framegate.toml").read_text(encoding="utf-8") == "# mine\n"
+    assert "skipped  framegate.toml" in out and ".gitignore: already complete" in out
 
 
 def test_init_language(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -62,7 +62,7 @@ def test_init_language(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) 
     assert (
         cli.main(["init", "--language", "dotnet"]) == 0
     )  # adapter not installed yet: still scaffolds
-    assert 'language = "dotnet"' in (tmp_path / "agentflow.toml").read_text(encoding="utf-8")
+    assert 'language = "dotnet"' in (tmp_path / "framegate.toml").read_text(encoding="utf-8")
 
 
 # ---------- spec-brief ----------
@@ -73,9 +73,9 @@ def test_spec_brief(demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]) -> 
     assert "feature 'demo', language python" in out
     assert "specs/demo/ (exists)" in out
     assert '@pytest.mark.req("XXX-R-001"' in out and "raise NotImplementedError" in out
-    assert "## Step N: <title>" in out and "agentflow approve-spec demo" in out
+    assert "## Step N: <title>" in out and "framegate approve-spec demo" in out
     assert demo_repo.af("spec-brief", "newfeat") == 0
-    assert "missing — run: agentflow spec newfeat" in capsys.readouterr().out
+    assert "missing — run: framegate spec newfeat" in capsys.readouterr().out
 
 
 def test_commands_outside_project(
@@ -83,14 +83,14 @@ def test_commands_outside_project(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     assert cli.main(["spec-brief", "x"]) == 1
-    assert "no agentflow.toml found" in capsys.readouterr().err
+    assert "no framegate.toml found" in capsys.readouterr().err
     assert cli.main(["run", "x"]) == 1
 
 
 def test_bad_config_is_a_clear_error(
     demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    (demo_repo.root / "agentflow.toml").write_text(
+    (demo_repo.root / "framegate.toml").write_text(
         "[agents]\nmax_turns = 'many'\n", encoding="utf-8"
     )
     assert demo_repo.af("status", "demo") == 1
@@ -162,7 +162,7 @@ def test_final_gate_commands(demo_repo: DemoRepo, capsys: pytest.CaptureFixture[
 
 
 def test_old_pause_kinds_are_dropped(demo_repo: DemoRepo) -> None:
-    """A progress.json of an older agentflow waiting for questions/escalation: no stop now."""
+    """A progress.json of an older framegate waiting for questions/escalation: no stop now."""
     r = demo_repo
     set_waiting(r, "IMPLEMENT", {"kind": "escalation", "step": "s", "files": []})
     assert r.af("status", "demo") == 0

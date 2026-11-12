@@ -1,13 +1,13 @@
 ---
 name: bugfix
-description: Drive one agentflow bug fix from this chat - bug report dialogue, a short brief to approve, then the background run - tests that fail on today's code first, the fix, review, the gate briefs answered in plain words, cleanup. Run only when the user invokes it.
+description: Drive one framegate bug fix from this chat - bug report dialogue, a short brief to approve, then the background run - tests that fail on today's code first, the fix, review, the gate briefs answered in plain words, cleanup. Run only when the user invokes it.
 argument-hint: <bugfix-slug>
 disable-model-invocation: true
-allowed-tools: Bash(agentflow *) PowerShell(agentflow *) Monitor Read Write Edit Glob Grep
+allowed-tools: Bash(framegate *) PowerShell(framegate *) Monitor Read Write Edit Glob Grep
 ---
-You drive the agentflow workflow for the bug fix `$ARGUMENTS` in this chat. The user is the
+You drive the framegate workflow for the bug fix `$ARGUMENTS` in this chat. The user is the
 manager: they describe the bug, answer a few questions and check outcomes; you run every
-`agentflow` command. The spec files are precise and written for the agents; the user reads
+`framegate` command. The spec files are precise and written for the agents; the user reads
 short briefs in plain words instead (no spec IDs without their meaning). The CLI is the engine:
 never edit `progress.json`, tags or anything under the out folder by hand (the exceptions:
 `answers.md`, see the run protocol, and `spec_brief.md`, below).
@@ -17,23 +17,23 @@ the reason the user reports, before anything is fixed. So the report must be exa
 
 ## Setup (already done when this skill loaded)
 
-`agentflow spec $ARGUMENTS --mode bugfix` created or switched to the branch and set the SPEC
+`framegate spec $ARGUMENTS --mode bugfix` created or switched to the branch and set the SPEC
 phase:
 
-!`agentflow spec $ARGUMENTS --mode bugfix`
+!`framegate spec $ARGUMENTS --mode bugfix`
 
 If the output above says the spec is **already approved**, do not start the dialogue: run
-`agentflow status $ARGUMENTS --brief`, tell the user in one line where it stands and ask:
+`framegate status $ARGUMENTS --brief`, tell the user in one line where it stands and ask:
 continue it (default; then the run protocol below, by state as in its section B), or change the
-report (that needs `agentflow approve-spec` again and restarts from the tests). If it says the
+report (that needs `framegate approve-spec` again and restarts from the tests). If it says the
 folder is a spec of another kind, tell the user and stop.
 
 ## Project conventions for the spec
 
-Printed by `agentflow spec-brief $ARGUMENTS`: the spec folder, templates, source and test paths,
+Printed by `framegate spec-brief $ARGUMENTS`: the spec folder, templates, source and test paths,
 the language, how tests are written here, the code map and the project knowledge.
 
-!`agentflow spec-brief $ARGUMENTS`
+!`framegate spec-brief $ARGUMENTS`
 
 ## Part 1: the bug report dialogue
 
@@ -57,7 +57,7 @@ the language, how tests are written here, the code map and the project knowledge
    exactly: reproduction rows are R IDs (each gets a test that fails today and passes once
    fixed), must-not-change rows are I IDs (each gets a test that passes today and after).
    Usually one plan step that covers every ID. Do not write tests and do not fix anything.
-   Then run `agentflow spec-check $ARGUMENTS` and fix what it lists.
+   Then run `framegate spec-check $ARGUMENTS` and fix what it lists.
 4. Write the spec gate brief to `<out>/$ARGUMENTS/spec_brief.md` (the out folder above) and
    show it in the chat. About one screen, plain words, no spec IDs, one line per bullet;
    exactly these sections:
@@ -82,4 +82,4 @@ then on, for the rest of this conversation: approve the spec, run in the backgro
 live view, answer the gates, clean up at the end. `<f>` there is `$ARGUMENTS`. At the final
 gate the brief names the cause the implementer found and what it ruled out.
 
-!`agentflow protocol`
+!`framegate protocol`

@@ -9,9 +9,9 @@ from collections.abc import Sequence
 
 import pytest
 
-from agentflow.adapters import dotnet as dn
-from agentflow.adapters.base import TIMEOUT_CODE, incomplete_reason, incomplete_result
-from agentflow.config import ConfigError, parse_config
+from framegate.adapters import dotnet as dn
+from framegate.adapters.base import TIMEOUT_CODE, incomplete_reason, incomplete_result
+from framegate.config import ConfigError, parse_config
 from test_checks import adapter_for, framed, write  # noqa: F401  (fixture)
 from test_dotnet import TRX, FakeDotnet, adapter, faked, tagged  # noqa: F401  (fixture)
 
@@ -161,7 +161,7 @@ def test_python_mutation_incomplete(
     framed: pathlib.Path,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from agentflow.adapters import python as py
+    from framegate.adapters import python as py
 
     a = adapter_for(framed, {"gates": {"mutation_runner": "native", "mutation_timeout": 10}})
     result_file = framed / "out" / ".mutmut" / "result.json"

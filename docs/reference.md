@@ -1,4 +1,4 @@
-# agentflow reference
+# framegate reference
 
 Everything in detail: the phases, the chat flow, project knowledge, the CLI, gates, retro,
 hooks and the language adapters. The short version is the [README](../README.md).
@@ -10,36 +10,36 @@ a terminal.
 
 | Command | What it means | When |
 |---|---|---|
-| `/agentflow:setup` | set up agentflow in this repo (draft config, project facts and code map; a short brief that asks only the real decisions; doctor) | once per repo |
-| `/agentflow:feature <f>` | start or continue feature `<f>`: spec dialogue, run, gates, wrap-up | each feature |
-| `/agentflow:bugfix <f>` | a bug fix: bug report dialogue, tests that fail on today's code, the fix, gates | each bug |
-| `/agentflow:refactor <f>` | a refactor: scope dialogue, tests that pin today's behavior, small steps, gates | each refactor |
-| `/agentflow:resume [f]` | reattach the chat to a running or waiting feature | after a restart |
-| `/agentflow:status [f]` | where features stand; tag cleanup after the PR is merged | any time |
-| `agentflow init` | write the starter files (config, spec templates, project facts, .gitignore lines) | once per repo |
-| `agentflow install-tools [--dry-run]` | install what the workflow needs into the project's environment (python: the agentflow pytest plugin, pytest, pytest-cov, hypothesis, diff-cover, and with an agentflow.toml the lint / format / type tools its gate commands name); reports versions it changed; works before `init` | first step of `/agentflow:setup`, after config changes |
-| `agentflow doctor [--full] [--brief]` | check the setup without agents; ends with a verdict and only what needs action (`--brief`: only that); `--full` also runs the whole test suite | after setup or config changes |
-| `agentflow spec <f> [--mode feature\|bugfix\|refactor]` | create the branch `feat/<f>` and open the spec phase with the mode's templates | start of a feature |
-| `agentflow spec-check <f>` | mechanical checks of the spec tables (below); exit 1 on a problem | internal |
-| `agentflow approve-spec <f> [--force]` | spec-check, then freeze the spec ("spec OK"); restarts the feature if the spec changed later | gate 1 |
-| `agentflow run <f>` | run the agents until the next human gate or DONE | after every decision |
-| `agentflow watch <f>` | follow the progress lines of a run | while it runs |
-| `agentflow status [f] [--brief]` | state of one or all features | any time |
-| `agentflow gate-summary <f>` | the brief of the waiting gate (decision and default first, plain words) | at a gate |
-| `agentflow approve <f>` | accept the gate: final gate -> retro, then DONE (tests gate -> implement) | at a gate |
-| `agentflow answer <f>` | apply your answers in `out/<f>/answers.md` (spec, tests, redo of parked work) | at a gate |
-| `agentflow reject <f> --reason "..."` | send the tests back to the test writer (only with `[gates] tests = "human"`) | tests gate |
-| `agentflow finish <f> --no-retro` | accept the final gate and skip the retro | final gate |
-| `agentflow learn <f> K1 [K3 ...\|all]` | keep the project facts the retro proposed (into `.agentflow/project.md`) | after the retro |
-| `agentflow keep <f> 1 3 [...\|take\|all\|none]` | record which retro proposals you accept in the retro backlog | after the retro |
-| `agentflow backlog [show B3 \| done\|drop\|reopen B3 ...] [--all] [--scope ...]` | the open proposals; one in full; mark it applied / dropped / open again | any time |
-| `agentflow stats [f] [--json]` | cost, agent and check time, final-gate runs per feature; with `<f>`: per phase and per final run | any time |
-| `agentflow cleanup <f> [--tags]` | delete the run files; `--tags` also the feature's git tags (after the merge) | after DONE |
-| `agentflow gates <f> --scope step\|final` | run the checks by hand (also used in CI) | debugging, CI |
-| `agentflow spec-brief <f>` | the project's spec conventions (the feature skill reads it) | internal |
-| `agentflow protocol` | the chat run protocol (the skills read it) | internal |
-| `agentflow unlock [--force]` | clear a lock left by a killed run | after a crash |
-| `agentflow hook ...` | the Claude Code hooks (called by the plugin) | internal |
+| `/framegate:setup` | set up framegate in this repo (draft config, project facts and code map; a short brief that asks only the real decisions; doctor) | once per repo |
+| `/framegate:feature <f>` | start or continue feature `<f>`: spec dialogue, run, gates, wrap-up | each feature |
+| `/framegate:bugfix <f>` | a bug fix: bug report dialogue, tests that fail on today's code, the fix, gates | each bug |
+| `/framegate:refactor <f>` | a refactor: scope dialogue, tests that pin today's behavior, small steps, gates | each refactor |
+| `/framegate:resume [f]` | reattach the chat to a running or waiting feature | after a restart |
+| `/framegate:status [f]` | where features stand; tag cleanup after the PR is merged | any time |
+| `framegate init` | write the starter files (config, spec templates, project facts, .gitignore lines) | once per repo |
+| `framegate install-tools [--dry-run]` | install what the workflow needs into the project's environment (python: the framegate pytest plugin, pytest, pytest-cov, hypothesis, diff-cover, and with a framegate.toml the lint / format / type tools its gate commands name); reports versions it changed; works before `init` | first step of `/framegate:setup`, after config changes |
+| `framegate doctor [--full] [--brief]` | check the setup without agents; ends with a verdict and only what needs action (`--brief`: only that); `--full` also runs the whole test suite | after setup or config changes |
+| `framegate spec <f> [--mode feature\|bugfix\|refactor]` | create the branch `feat/<f>` and open the spec phase with the mode's templates | start of a feature |
+| `framegate spec-check <f>` | mechanical checks of the spec tables (below); exit 1 on a problem | internal |
+| `framegate approve-spec <f> [--force]` | spec-check, then freeze the spec ("spec OK"); restarts the feature if the spec changed later | gate 1 |
+| `framegate run <f>` | run the agents until the next human gate or DONE | after every decision |
+| `framegate watch <f>` | follow the progress lines of a run | while it runs |
+| `framegate status [f] [--brief]` | state of one or all features | any time |
+| `framegate gate-summary <f>` | the brief of the waiting gate (decision and default first, plain words) | at a gate |
+| `framegate approve <f>` | accept the gate: final gate -> retro, then DONE (tests gate -> implement) | at a gate |
+| `framegate answer <f>` | apply your answers in `out/<f>/answers.md` (spec, tests, redo of parked work) | at a gate |
+| `framegate reject <f> --reason "..."` | send the tests back to the test writer (only with `[gates] tests = "human"`) | tests gate |
+| `framegate finish <f> --no-retro` | accept the final gate and skip the retro | final gate |
+| `framegate learn <f> K1 [K3 ...\|all]` | keep the project facts the retro proposed (into `.framegate/project.md`) | after the retro |
+| `framegate keep <f> 1 3 [...\|take\|all\|none]` | record which retro proposals you accept in the retro backlog | after the retro |
+| `framegate backlog [show B3 \| done\|drop\|reopen B3 ...] [--all] [--scope ...]` | the open proposals; one in full; mark it applied / dropped / open again | any time |
+| `framegate stats [f] [--json]` | cost, agent and check time, final-gate runs per feature; with `<f>`: per phase and per final run | any time |
+| `framegate cleanup <f> [--tags]` | delete the run files; `--tags` also the feature's git tags (after the merge) | after DONE |
+| `framegate gates <f> --scope step\|final` | run the checks by hand (also used in CI) | debugging, CI |
+| `framegate spec-brief <f>` | the project's spec conventions (the feature skill reads it) | internal |
+| `framegate protocol` | the chat run protocol (the skills read it) | internal |
+| `framegate unlock [--force]` | clear a lock left by a killed run | after a crash |
+| `framegate hook ...` | the Claude Code hooks (called by the plugin) | internal |
 
 Exit codes: 0 done, 1 error, 10 waiting at a gate, 130 interrupted (run again to resume).
 
@@ -55,64 +55,64 @@ mutation score) and never stops to ask.
 
 | Phase | Agent(s) | Ends with |
 |---|---|---|
-| SPEC | spec dialogue in the chat (`/agentflow:feature <f>`; a bug: `/agentflow:bugfix <f>`; a refactor: `/agentflow:refactor <f>`) | **gate 1**: the spec brief (`out/<f>/spec_brief.md`), then `agentflow approve-spec` -> tag `spec-approved/<f>` |
+| SPEC | spec dialogue in the chat (`/framegate:feature <f>`; a bug: `/framegate:bugfix <f>`; a refactor: `/framegate:refactor <f>`) | **gate 1**: the spec brief (`out/<f>/spec_brief.md`), then `framegate approve-spec` -> tag `spec-approved/<f>` |
 | TESTS | test writer -> mechanical checks -> **test reviewer** (`roles/test_review.md`); objections go back to the writer, at most `[agents] test_review_rounds` (2) times | **gate 2**: `out/<f>/tests_gate.md` (ID -> tests -> what it checks, check results, reviewer verdict + remaining objections, all open questions batched) -> approve (tag `tests-approved/<f>`) / reject / answer (answers go into the spec first: SPEC_UPDATE). `[gates] tests = "auto"` passes it without a stop when everything is clean |
 | IMPLEMENT | implementer, one fresh run per plan step | step gates green -> commit. Ambiguity: assume from the spec, log it in `steps.md`. No reasonable assumption, or `max_attempts` failed attempts: the step is **parked** (its code set aside as `out/<f>/parked/*.diff`), the run goes on |
 | REVIEW | adversarial reviewer (bugs as failing tests, structure findings without tests) -> **triage** by the test reviewer -> fixes -> structure fixes | valid findings fixed (or parked), invalid ones removed with a reason, the code restructured with every test green; final gates + structure report |
 | PR | summary agent (`roles/pr.md`): `final_summary.md` (detail), `final_brief.md` (the gate brief), the code map update (committed) | **gate 3**: the final brief -> approve (retro) / `finish --no-retro` / answer the numbered items (into the spec, then redo only those) |
-| RETRO | retro agent (reads the retro backlog; a problem seen again is counted there) | `retro_proposals.md` + metrics row -> DONE; then `agentflow keep` records your pick in the backlog |
+| RETRO | retro agent (reads the retro backlog; a problem seen again is counted there) | `retro_proposals.md` + metrics row -> DONE; then `framegate keep` records your pick in the backlog |
 
 ## Parts
 
 | Part | Where | Docs |
 |---|---|---|
-| Python package + CLI `agentflow` | `src/agentflow/` | this file, docs/adapters.md, docs/claude-cli-notes.md |
-| Claude Code plugin (`/agentflow:setup`, `:feature`, `:resume`, `:status`, hooks) | `plugin/` | docs/plugin.md |
+| Python package + CLI `framegate` | `src/framegate/` | this file, docs/adapters.md, docs/claude-cli-notes.md |
+| Claude Code plugin (`/framegate:setup`, `:feature`, `:resume`, `:status`, hooks) | `plugin/` | docs/plugin.md |
 
 ## Daily use: from the Claude Code chat
 
-Once per repository: `/agentflow:setup` in the chat (it reads the repo, drafts agentflow.toml,
-`.agentflow/project.md` and the code map, shows a short brief that asks only the real decisions, runs
-`agentflow init` and `agentflow doctor --brief`, and offers a small smoke feature in one line), or by hand `agentflow init [--language
-python|dotnet|generic]` (agentflow.toml, spec templates, `.agentflow/project.md`, .gitignore
-lines; commit them) and `agentflow doctor` (checks config, git, that agentflow.toml is on the base
+Once per repository: `/framegate:setup` in the chat (it reads the repo, drafts framegate.toml,
+`.framegate/project.md` and the code map, shows a short brief that asks only the real decisions, runs
+`framegate init` and `framegate doctor --brief`, and offers a small smoke feature in one line), or by hand `framegate init [--language
+python|dotnet|generic]` (framegate.toml, spec templates, `.framegate/project.md`, .gitignore
+lines; commit them) and `framegate doctor` (checks config, git, that framegate.toml is on the base
 branch, the claude CLI, the chat's allow rules, the tools, the gate commands and the test selection by spec ID, without agents; `--full` also times the
 whole suite). Any language without a built-in adapter uses the generic adapter: test, coverage,
-mutation and format commands with placeholders in `[generic]` (docs/adapters.md), no agentflow
+mutation and format commands with placeholders in `[generic]` (docs/adapters.md), no framegate
 code. Also the plugin installed (docs/plugin.md), and an allow rule so the
 skills can run the CLI without a prompt after the first turn (an `allowed-tools` grant of a skill
-only lasts for the turn it was invoked in): `"Bash(agentflow *)"` and `"PowerShell(agentflow *)"`
+only lasts for the turn it was invoked in): `"Bash(framegate *)"` and `"PowerShell(framegate *)"`
 under `permissions.allow` in `.claude/settings.local.json` (or answer the first prompt with
 "always allow").
 
 Then you only type requirements, answers and gate decisions:
 
-A bug fix starts with `/agentflow:bugfix <name>` and a refactor with `/agentflow:refactor
+A bug fix starts with `/framegate:bugfix <name>` and a refactor with `/framegate:refactor
 <name>` instead of step 1: the same flow with another first proof ("Modes" below).
 
-1. `/agentflow:feature <name>`: creates the branch `feat/<name>` from `[git] base` (`main`) in
+1. `/framegate:feature <name>`: creates the branch `feat/<name>` from `[git] base` (`main`) in
    this checkout (refused with uncommitted changes to tracked files; an existing branch is used
    only if it is this feature's), sets the SPEC phase and starts the spec dialogue. Claude
-   decides what the docs, the code map, the code and `.agentflow/project.md` settle, asks only
+   decides what the docs, the code map, the code and `.framegate/project.md` settle, asks only
    only the real decisions (see "Which questions are asked" below), writes
    requirements/design/plan and the interface stubs, and shows the **spec brief** instead of the
    spec files (see "Manager-style briefs" below).
-2. "Spec OK": the skill approves the spec, starts `agentflow run` in the background and shows the
+2. "Spec OK": the skill approves the spec, starts `framegate run` in the background and shows the
    live view: one line per phase start/end, check result, failed attempt, assumption, park and
    gate, each with the cost so far (~10-30 lines per feature). The chat stays usable.
 3. At the final gate (and the tests gate, if `[gates] tests = "human"`) the chat shows the
-   gate brief (`agentflow gate-summary`), Windows shows a toast, and Claude Code waits for you.
+   gate brief (`framegate gate-summary`), Windows shows a toast, and Claude Code waits for you.
    Reply in plain words: "ok" (with numbered items: take every default; without: approve, retro,
    then DONE), answers by number, "approve as is", "no retro", "reject: <why>" (tests gate
    only). The skill runs the matching command and continues the run in the background.
 4. DONE: the skill shows the retro's numbered proposals (problem -> fix, with a recommendation)
    and its knowledge facts, you answer with numbers; it offers the final summary as the PR
    description (`gh pr create`, only on your yes; nothing is pushed without it) and cleans up the
-   run files (`agentflow cleanup`; `specs/<name>/` and the metrics row stay). After the PR is
-   merged, `/agentflow:status <name>` offers removing the feature's tags.
+   run files (`framegate cleanup`; `specs/<name>/` and the metrics row stay). After the PR is
+   merged, `/framegate:status <name>` offers removing the feature's tags.
 
-After a session restart: `/agentflow:resume [name]` reattaches (live view, the waiting gate or the
-wrap-up). `/agentflow:status` lists the features and where they stand.
+After a session restart: `/framegate:resume [name]` reattaches (live view, the waiting gate or the
+wrap-up). `/framegate:status` lists the features and where they stand.
 
 ## Manager-style briefs
 
@@ -126,10 +126,10 @@ is no mode or switch for this.
 |---|---|
 | Spec gate (`out/<f>/spec_brief.md`, written by the chat) | Task (2-4 lines) / Plan (one line per step) / How it is proven (the 3 most important checks) / Not proven (the 3 most important things to check by using it) / Decisions I made for you (one line each, with what it rules out) / Project details that matter / Questions (the real decisions, by impact) |
 | Tests gate (`[gates] tests = "human"`/`"auto"`) | what the tests check in plain words (the test reviewer's `## What the tests check` in test_review.md), objections left, one line of mechanical checks, questions with defaults |
-| Final gate (`agentflow gate-summary`, from `final_brief.md` + run records; ~20 lines when nothing went wrong) | Plan followed? (one line when all steps went as planned, else one per changed / parked step) / Outcomes with numbers (gates, diff coverage, mutation, failed attempts, parks, cost, agent and check time, structure) / Struggles (one line when none) / Proven and Not proven (the 3 most important points each, the rest on request) / Code map (one line; a WARN when new public types are missing) / Questions numbered 1..k by impact (the problem in one line, then `A: ... (default) / B: ...`) / Decisions I made / how many gate items were left out |
+| Final gate (`framegate gate-summary`, from `final_brief.md` + run records; ~20 lines when nothing went wrong) | Plan followed? (one line when all steps went as planned, else one per changed / parked step) / Outcomes with numbers (gates, diff coverage, mutation, failed attempts, parks, cost, agent and check time, structure) / Struggles (one line when none) / Proven and Not proven (the 3 most important points each, the rest on request) / Code map (one line; a WARN when new public types are missing) / Questions numbered 1..k by impact (the problem in one line, then `A: ... (default) / B: ...`) / Decisions I made / how many gate items were left out |
 | Setup | what I found, the settings that differ from the defaults (with why), the knowledge facts in short lines, the code map's modules, the real decisions as questions with defaults |
-| `agentflow doctor --brief` | one verdict line (ready / not ready), then only the FAILs with the fix and the WARNs that need a decision |
-| Retro (`## Brief` in retro_proposals.md) | numbered proposals, problem -> fix, recommend take / skip / fold into N (and `repeats B3` for a problem the backlog already holds); the knowledge facts; answered with numbers (`agentflow keep`, `agentflow learn`) |
+| `framegate doctor --brief` | one verdict line (ready / not ready), then only the FAILs with the fix and the WARNs that need a decision |
+| Retro (`## Brief` in retro_proposals.md) | numbered proposals, problem -> fix, recommend take / skip / fold into N (and `repeats B3` for a problem the backlog already holds); the knowledge facts; answered with numbers (`framegate keep`, `framegate learn`) |
 | Smoke run offer, DONE wrap-up, status, resume, errors, interruptions | one or two lines: the state and the one decision needed, with a default |
 
 At a gate with numbered questions, "ok" takes every default (the chat writes them to
@@ -141,7 +141,7 @@ or another section.
 
 No count cap anywhere (spec dialogue, spec / final gate briefs, setup). A point is a question
 only when it is a real decision: two or more reasonable options with different outcomes, and the
-spec, the code, `.agentflow/project.md` and earlier answers don't settle it. Otherwise it is not
+spec, the code, `.framegate/project.md` and earlier answers don't settle it. Otherwise it is not
 a question: only one sensible option -> decided, one line under "Decisions I made"; already
 answered, already resolved (e.g. by a scan) or a note -> left out; the same question from two
 agents -> one item. Questions are ordered by impact (what changes most if answered differently
@@ -151,10 +151,10 @@ At the final gate the PR agent sorts every numbered gate item (parked work, the 
 steps, the open questions) into `## Questions`, `## Decisions I made` or `## Left out` of
 final_brief.md, naming it `[N]`. Parked work and the provisional steps are always asked (they
 block the run); an item the brief places nowhere is asked as it is. The human sees the questions
-numbered 1..k; `agentflow answer` maps answers.md back to the gate items and rewrites it
+numbered 1..k; `framegate answer` maps answers.md back to the gate items and rewrites it
 (`# Answers (final gate, numbered by gate item)`): a decided item gets `Default: <decision>`, a
 repeated one the answer of the item it repeats, any other left-out item "No answer needed"; the
-chat's own file is kept in the `answer` event (`as_given`). After the PR agent's run agentflow
+chat's own file is kept in the `answer` event (`as_given`). After the PR agent's run framegate
 checks the brief (not blocking): questions without `[N]` or with one option, duplicates, closed
 items or notes asked as questions, parked work left out, gate items placed nowhere -> the PR
 agent rewrites final_brief.md once (event `brief_check`).
@@ -178,16 +178,16 @@ The human owns what the classes are for and how they work together, not every li
   model with the review calculators.
 - The code map (`[docs] code_map`, default `docs/code-map.md`): a living Markdown doc, per
   module its purpose, its key classes (one line each), how they work together (short flow,
-  mermaid optional), "where to look for X"; under ~300 lines. `/agentflow:setup` drafts it
-  from the code; the PR phase updates the sections the feature touched (agentflow commits it
+  mermaid optional), "where to look for X"; under ~300 lines. `/framegate:setup` drafts it
+  from the code; the PR phase updates the sections the feature touched (framegate commits it
   as `<f>: code map`); a new public type in the feature's diff that the map does not name is a
-  WARN on the final brief's code map line. `agentflow doctor` WARNs when it is missing.
+  WARN on the final brief's code map line. `framegate doctor` WARNs when it is missing.
 
 ## Modes: feature, bug fix, refactor
 
 What a task is decides the first proof of its tests. The mode is the `Mode:` line of the
-spec's requirements.md, written by `agentflow spec <f> --mode bugfix|refactor` (the chat:
-`/agentflow:bugfix <f>`, `/agentflow:refactor <f>`); no line means feature. Everything after
+spec's requirements.md, written by `framegate spec <f> --mode bugfix|refactor` (the chat:
+`/framegate:bugfix <f>`, `/framegate:refactor <f>`); no line means feature. Everything after
 the tests (steps, step gates, review, final gates, the two human gates) is the same flow.
 
 | | feature | bug fix | refactor |
@@ -201,8 +201,8 @@ the tests (steps, step gates, review, final gates, the two human gates) is the s
 | Risk rating | every changed line counts | every changed line counts | moved lines are not counted (`moved_lines` in the `risk` event) |
 | Final-gate repair | code, then tests | code, then tests | code only: tests written after the refactor would pin the changed code, so weak tests go to the human |
 
-Templates: `specs/_template_bugfix/`, `specs/_template_refactor/` (agentflow's own unless the
-project has a copy). The events `spec_started` / `spec_approved` carry `mode`; `agentflow
+Templates: `specs/_template_bugfix/`, `specs/_template_refactor/` (framegate's own unless the
+project has a copy). The events `spec_started` / `spec_approved` carry `mode`; `framegate
 stats` shows it. An unknown `Mode:` word is refused by `approve-spec`.
 
 Existing tests first (refactor). The first live refactor (FCSim, M5-setpiece-model-split)
@@ -221,7 +221,7 @@ mutation run against 8, because they include match tests.
 `[gates] mutation_scope = "suite"` is no way around this on a large suite: on FCSim (2,040
 tests) Stryker's coverage capture did not end within the hour.
 
-Scope coverage (refactor, `src/agentflow/checks/scope_coverage.py`). Before any code moves,
+Scope coverage (refactor, `src/framegate/checks/scope_coverage.py`). Before any code moves,
 the tests checks run the tagged tests once more with coverage of the files in scope: the
 paths in backticks in the first column of the spec's `## Scope` table that are source files
 today. test_checks.md gets `### Scope coverage (note, not blocking)`: per file the share of
@@ -235,45 +235,45 @@ does not measure it). On FCSim the run took 37 s for one file in scope.
 
 ## The retro backlog
 
-`agentflow keep <f> <numbers | take | all | none>` records the human's pick of a retro's
+`framegate keep <f> <numbers | take | all | none>` records the human's pick of a retro's
 proposals in `metrics/retro_backlog.md` (tracked, committed): one row per proposal with a
 status (`open` = accepted, not applied yet; `applied`; `dropped`; `skipped` = not accepted),
 its scope (framework / project), the features whose retro raised it, and a pointer into
-`metrics/retro/<f>.md`, a copy of that retro's full text (`agentflow cleanup` deletes the run
+`metrics/retro/<f>.md`, a copy of that retro's full text (`framegate cleanup` deletes the run
 folder). A proposal the retro folded into another gets no row.
 
 The next retro gets the rows at the end of retro_input.md (`## Backlog`). A problem a row
 already describes is not proposed again: the retro's brief line names the row (`repeats B3`),
-and agentflow adds the feature to that row's "Seen" when the retro ends. Picking such a
+and framegate adds the feature to that row's "Seen" when the retro ends. Picking such a
 proposal reopens a skipped, dropped or applied row. A first-time problem that looks like a
 one-off is recommended `skip`; it becomes a `skipped` row and is counted if it comes back.
 
-`agentflow backlog` lists the open rows (most often seen first; `--all`, `--scope
+`framegate backlog` lists the open rows (most often seen first; `--all`, `--scope
 framework|project`), `backlog show B3` prints one with the retro's section, `backlog done |
 drop | reopen B3 [--note "PR #12"]` changes its status. Framework-scope rows are applied in the
-agentflow repository; mark them `done` here with a note.
+framegate repository; mark them `done` here with a note.
 
 ## Stats
 
-`agentflow stats` reads `out/events.jsonl` (no agents): one line per feature with its cost,
+`framegate stats` reads `out/events.jsonl` (no agents): one line per feature with its cost,
 the time agents and gate checks ran, the time a gate waited for you, the final-gate runs,
-the spec time (from `agentflow spec` to the approval: the dialogue in the chat; the chat's
+the spec time (from `framegate spec` to the approval: the dialogue in the chat; the chat's
 own cost and the talk before the command are not in the log), failed step gates,
 questions, assumptions and risk level, then the averages of the finished
-features. `agentflow stats <f>` adds the agent runs per phase (runs, cost, time, output tokens),
+features. `framegate stats <f>` adds the agent runs per phase (runs, cost, time, output tokens),
 every final-gate run with its failed checks and three slowest checks, and the repair runs.
 `--json` prints the numbers.
 
 ## Project knowledge
 
-`.agentflow/project.md` (`[project] knowledge`; `agentflow init` creates it) holds what no
+`.framegate/project.md` (`[project] knowledge`; `framegate init` creates it) holds what no
 single spec repeats: architecture rules, what must never change (hashes, save formats,
 public APIs), test-harness facts (slow tests, how fixtures and seeds are made, scan
-commands), tools, off-limits. The spec dialogue gets it through `agentflow spec-brief`;
+commands), tools, off-limits. The spec dialogue gets it through `framegate spec-brief`;
 the test writer, test reviewer, implementer, reviewer, spec updater, diagnosis and retro
 get it in their instructions (up to 300 lines; keep it short). Agents cannot edit it. The
 retro ends with a "Project knowledge" section (`- K1 [<section>]: <fact>`); at DONE the
-chat shows them and `agentflow learn <f> K1 K3` (or `all`) appends the ones you pick under
+chat shows them and `framegate learn <f> K1 K3` (or `all`) appends the ones you pick under
 their section, commits and tags `knowledge-update/<f>` (the frame diff allows that
 change). The engine stays generic; each project's knowledge grows with its runs.
 
@@ -282,73 +282,73 @@ change). The engine stays generic; each project's knowledge grows with its runs.
 The skills only call these commands; everything works the same from a terminal.
 
 ```
-agentflow init [--language python|dotnet|generic]  # agentflow.toml, specs/_template/,
-                                            # .agentflow/project.md, .gitignore lines
-agentflow doctor [--full] [--brief]         # check the setup without agents; ends with a
+framegate init [--language python|dotnet|generic]  # framegate.toml, specs/_template/,
+                                            # .framegate/project.md, .gitignore lines
+framegate doctor [--full] [--brief]         # check the setup without agents; ends with a
                                             # verdict + what needs action (--brief: only that)
-agentflow spec <f> [--mode feature|bugfix|refactor]
+framegate spec <f> [--mode feature|bugfix|refactor]
                                             # branch feat/<f> from [git] base + SPEC phase,
                                             # with the mode's spec templates
-agentflow spec-check <f>                    # rules without a spec ID, copied code not in the file
-agentflow approve-spec <f> [--force]        # spec-check, then tag spec-approved/<f>
-agentflow run <f>                           # runs to the next gate (tests, final) or DONE;
+framegate spec-check <f>                    # rules without a spec ID, copied code not in the file
+framegate approve-spec <f> [--force]        # spec-check, then tag spec-approved/<f>
+framegate run <f>                           # runs to the next gate (tests, final) or DONE;
                                             # progress lines on stdout + out/<f>/progress.log
-agentflow watch <f>                         # live view: new progress lines until the run ends
-agentflow status [<f>] [--brief]            # all features / one; --brief = short, for the chat
-agentflow gate-summary <f>                  # chat digest of the waiting gate
-agentflow approve <f>                       # tests gate -> implement; final gate -> retro
-agentflow reject <f> --reason "..."         # tests gate: writer + test reviewer re-run with it
-agentflow answer <f>                        # after writing out/<f>/answers.md: the next run
+framegate watch <f>                         # live view: new progress lines until the run ends
+framegate status [<f>] [--brief]            # all features / one; --brief = short, for the chat
+framegate gate-summary <f>                  # chat digest of the waiting gate
+framegate approve <f>                       # tests gate -> implement; final gate -> retro
+framegate reject <f> --reason "..."         # tests gate: writer + test reviewer re-run with it
+framegate answer <f>                        # after writing out/<f>/answers.md: the next run
                                             # writes them into the spec (SPEC_UPDATE), then
                                             # tests gate -> writer + reviewer re-run; final
                                             # gate -> the test writer applies answers that need
                                             # a test change, then only the parked items redo
-agentflow finish <f> --no-retro             # final gate -> DONE without the retro
-agentflow learn <f> K1 [K3 ...|all]         # add accepted retro knowledge to the
+framegate finish <f> --no-retro             # final gate -> DONE without the retro
+framegate learn <f> K1 [K3 ...|all]         # add accepted retro knowledge to the
                                             # project knowledge file (committed)
-agentflow keep <f> 1 3 [...|take|all|none]  # the retro proposals you accept -> the retro
+framegate keep <f> 1 3 [...|take|all|none]  # the retro proposals you accept -> the retro
                                             # backlog (metrics/retro_backlog.md, committed)
-agentflow backlog [--all] [--scope framework|project]
+framegate backlog [--all] [--scope framework|project]
                                             # the open proposals (--all: every row)
-agentflow backlog show B3                   # one row with the retro's full section
-agentflow backlog done|drop|reopen B3 [B5 ...] [--note TEXT]
-agentflow stats [<f>] [--json]              # cost, agent / check / waiting time, final-gate
+framegate backlog show B3                   # one row with the retro's full section
+framegate backlog done|drop|reopen B3 [B5 ...] [--note TEXT]
+framegate stats [<f>] [--json]              # cost, agent / check / waiting time, final-gate
                                             # runs per feature; <f>: per phase, per final run
-agentflow cleanup <f> [--tags] [--force]    # DONE: delete out/<f>/ + its run logs; --tags: also
+framegate cleanup <f> [--tags] [--force]    # DONE: delete out/<f>/ + its run logs; --tags: also
                                             # spec-approved/tests-approved/spec-update/
                                             # tests-update tags
-agentflow gates <f> --scope step|final      # the frame checks (also used in CI)
-agentflow spec-brief <f>                    # conventions for the spec dialogue (skill injects it)
-agentflow protocol                          # the chat run protocol (skills inject it)
-agentflow unlock [--force]                  # clear a stale .phase/.reqs left by a killed run
+framegate gates <f> --scope step|final      # the frame checks (also used in CI)
+framegate spec-brief <f>                    # conventions for the spec dialogue (skill injects it)
+framegate protocol                          # the chat run protocol (skills inject it)
+framegate unlock [--force]                  # clear a stale .phase/.reqs left by a killed run
 ```
 
 Branch per feature (`[git]`): `spec` creates `<branch_prefix><f>` (`feat/`) from `base` (`main`)
-and marks it (`git config branch.<b>.agentflowFeature`); it switches to an existing branch only
+and marks it (`git config branch.<b>.framegateFeature`); it switches to an existing branch only
 if it carries that mark or the feature's spec folder, refuses with uncommitted changes to tracked
 files (untracked files are fine) and while a run is active, and only notes an already approved
 spec (no SPEC phase). `[git] branch = false` stays on the current branch. A checkout whose
-agentflow.toml is not on `main` yet sets `base` to the branch that has it.
+framegate.toml is not on `main` yet sets `base` to the branch that has it.
 
 Progress lines (`HH:MM:SS <what> [$cost since the spec approval]`, max 160 chars) go to stdout
 and `out/<f>/progress.log`; `watch` prints the new ones (it remembers its position in
 `progress.cursor`, so a re-armed watch neither repeats nor skips) and exits once no run of the
 feature holds `out/.run.lock` (or none appears within 30 s). Notifications (`[notify] toast =
-true`, Windows only; env `AGENTFLOW_TOAST=0` turns them off): a toast at each gate, at DONE and
+true`, Windows only; env `FRAMEGATE_TOAST=0` turns them off): a toast at each gate, at DONE and
 on an error, through PowerShell 5.1's WinRT ToastNotificationManager (no modules); fire and
 forget, silent if it fails. `cleanup` keeps `specs/<f>/`, the metrics row and the shared
 `out/events.jsonl`, refuses while the feature's run is active or before DONE (`--force`), and
 prints the `git push origin --delete` line for tags that were pushed (`[git] markers = "tags"`).
 
-**Markers, commits, known failures.** `spec-approved/<f>`, `tests-approved/<f>`, `spec-update/<f>`, `tests-update/<f>` and `knowledge-update/<f>` are private refs (`refs/<name>`) by default: `git diff tests-approved/<f>` resolves them like a tag, but no `git push`, `--tags` or `--all` publishes them to a shared remote. `[git] markers = "tags"` stores git tags instead (needed for a CI job that runs `agentflow gates`); tags left by an older agentflow are still read and replaced on the next write. A workflow commit stages only the workflow's paths (`[paths] src`, `tests`, `specs`, `metrics`, the knowledge file, the code map), never the whole working tree: your notes and unrelated edits stay out. `[gates] regression_baseline = true`: `approve-spec` runs the whole suite once and records the tests that already fail (`out/<f>/regression_baseline.json`, kept on a second approval); the final regression check then fails only on other failures (with the default `coverage_scope = "feature"`).
+**Markers, commits, known failures.** `spec-approved/<f>`, `tests-approved/<f>`, `spec-update/<f>`, `tests-update/<f>` and `knowledge-update/<f>` are private refs (`refs/<name>`) by default: `git diff tests-approved/<f>` resolves them like a tag, but no `git push`, `--tags` or `--all` publishes them to a shared remote. `[git] markers = "tags"` stores git tags instead (needed for a CI job that runs `framegate gates`); tags left by an older framegate are still read and replaced on the next write. A workflow commit stages only the workflow's paths (`[paths] src`, `tests`, `specs`, `metrics`, the knowledge file, the code map), never the whole working tree: your notes and unrelated edits stay out. `[gates] regression_baseline = true`: `approve-spec` runs the whole suite once and records the tests that already fail (`out/<f>/regression_baseline.json`, kept on a second approval); the final regression check then fails only on other failures (with the default `coverage_scope = "feature"`).
 
 `run` never waits on the keyboard. It advances TESTS -> IMPLEMENT (per plan step) -> REVIEW ->
 PR -> FINAL -> RETRO -> DONE and stops only at the final gate (and the tests gate with
 `[gates] tests = "human"`, or `"auto"` when it isn't clean), writing
 `out/<f>/progress.json` (`waiting: {kind: gate, gate: tests|final}`) and printing what to read.
 Exit codes: 0 done/ok, 1 error, 10 human gate (tests or final; the output and `status` name it),
-130 interrupted. Run `agentflow run <f>` again after `approve` / `reject` / `answer`; it also
-resumes after an interruption. The spec itself must change: edit it, `agentflow approve-spec <f>`
+130 interrupted. Run `framegate run <f>` again after `approve` / `reject` / `answer`; it also
+resumes after an interruption. The spec itself must change: edit it, `framegate approve-spec <f>`
 (resets the progress to TESTS), `run`.
 
 Between the gates nothing stops:
@@ -377,7 +377,7 @@ Between the gates nothing stops:
   fixture precondition test. The red run cannot check such a claim (the stub fails first); the
   test reviewer reads where each member is set and objects or asks.
 - The implementer assumes from the spec and logs each assumption in its step note (written with
-  the Write tool to `out/<f>/notes/<step>.md`; agentflow appends it to `steps.md`:
+  the Write tool to `out/<f>/notes/<step>.md`; framegate appends it to `steps.md`:
   `- ASSUMPTION [<spec ID>]: ...`). Only when no reasonable assumption is possible it writes
   `park.md` and stops (the Stop hook lets it); a step that fails `max_attempts` times is parked
   too (reason, failing checks, attempts). The parked step's uncommitted source changes are saved
@@ -423,14 +423,14 @@ Between the gates nothing stops:
 - The final summary (`final_summary.md`, the detail and the PR description) and the final brief
   (`final_brief.md`, what `gate-summary` shows) are written from `final_facts.md` (generated
   from the run records, with the final gate's numbered items, so the brief rewords each one in
-  plain words under the same number) and `spec_brief.md`; agentflow appends the cost / time /
+  plain words under the same number) and `spec_brief.md`; framegate appends the cost / time /
   turns table per phase to the summary and adds the numbers to the brief itself.
 
-Answers go into the spec (the spec stays the source of truth): `agentflow answer` gives the answers
+Answers go into the spec (the spec stays the source of truth): `framegate answer` gives the answers
 a reference `ANS-<n>` (in `questions_archive.md` and the `answer` event), and the next `run` starts
 with one SPEC_UPDATE agent run (`roles/spec_update.md`) that writes them into
 `specs/<f>/requirements.md` / `design.md` (and a new ID into the `Covers:` line of `plan.md`),
-each change marked `(answer ANS-<n>)`. agentflow then undoes edits to any other file under the
+each change marked `(answer ANS-<n>)`. framegate then undoes edits to any other file under the
 specs folder, reverts the whole update if an ID defined in requirements.md disappeared (IDs are
 never renumbered; a new case gets a new ID, so traceability asks for its tests), and commits it
 (`<f>: spec updated from answers ANS-<n>`, `spec_update` event: files, new IDs, lost IDs, undone
@@ -438,7 +438,7 @@ paths). The diff since `spec-approved/<f>` is shown in `tests_gate.md` (section 
 your answers") or appended to `final_summary.md`; approving that gate (or `finish --no-retro`)
 moves the tag `spec-approved/<f>` to it (`spec_reapproved` event). `[gates] tests = "auto"` never
 passes a gate with such a diff. At the final gate the update comes after the tests were approved:
-agentflow tags it `spec-update/<f>`, and the frame diff allows exactly the spec files that commit
+framegate tags it `spec-update/<f>`, and the frame diff allows exactly the spec files that commit
 changed, as long as their content equals the tagged one (any further spec edit fails the frame
 again). Then the test writer runs once more (`TESTS_AMEND` task): it applies the answers that
 need a test change (fixtures, seeds, expected values, tests for new IDs, a review test an answer
@@ -451,18 +451,18 @@ SPEC_UPDATE write only `specs/` and `out/`.
 
 Stopping a run: Ctrl+C, Ctrl+Break or SIGTERM kill the running agent's whole process tree (each
 agent runs in its own process group; on Windows also in a kill-on-close job object, so even a
-`taskkill /F` of agentflow leaves no orphan `claude`), clear `.phase`/`.reqs`, record an
+`taskkill /F` of framegate leaves no orphan `claude`), clear `.phase`/`.reqs`, record an
 `interrupted` event (+ `progress.json` `interrupted`; the attempt is not counted) and exit 130.
 `out/.run.lock` (pid, feature, start) marks a running orchestrator: a second `run` is refused,
-a lock whose pid is gone is taken over (and the interruption recorded). `agentflow status` warns
-about a phase lock without a running orchestrator (`SPEC` excepted: `agentflow spec` sets it for
-the interactive session); `agentflow unlock` clears it.
+a lock whose pid is gone is taken over (and the interruption recorded). `framegate status` warns
+about a phase lock without a running orchestrator (`SPEC` excepted: `framegate spec` sets it for
+the interactive session); `framegate unlock` clears it.
 
 Turn and cost caps per agent run: `--max-turns` = `[phases.<P>] max_turns`, else
 `[agents] max_turns`, else TESTS 50, TEST_REVIEW 30, IMPLEMENT 80, REVIEW 40, TRIAGE 30, PR 30,
 RETRO 30. A turn is one model round trip (one assistant message, however many parallel tool calls
 it makes); the CLI's `num_turns` counts messages (prompt + every tool result) and runs about 2x
-higher, so agentflow logs both (`turns` = round trips from the message stream, `messages` =
+higher, so framegate logs both (`turns` = round trips from the message stream, `messages` =
 `num_turns`; docs/claude-cli-notes.md). `--max-budget-usd` = `[phases.<P>] max_budget_usd`, else
 `[agents] max_budget_usd`, else TESTS 2.0, TEST_REVIEW 1.5, IMPLEMENT 1.5, REVIEW 1.5, TRIAGE 1.5,
 PR 1.5, RETRO 3.0 USD (~3x the live FCSim cost per run; `0` = no cap). A run that stops at
@@ -473,11 +473,11 @@ once with a note; if that run stops at a cap too, it is logged (`escalation` eve
 
 Usage limit: a run that the Claude subscription's usage limit refuses (a rejected
 `rate_limit_event` in the stream, or an error result such as "You've hit your limit · resets
-4pm") is not a failed attempt. agentflow logs a `usage_limit` event, waits until the reset plus
+4pm") is not a failed attempt. framegate logs a `usage_limit` event, waits until the reset plus
 one minute (15 minutes when claude names no time; progress line and toast), then runs the same
 task again. A reset further away than `[agents] limit_wait_max_hours` (default 6; `0` = never
 wait), e.g. a weekly limit, or a limit still there after 4 waits, stops the run like Ctrl+C
-(exit 130, `interrupted` with the reset time); `agentflow run <f>` after the reset goes on.
+(exit 130, `interrupted` with the reset time); `framegate run <f>` after the reset goes on.
 
 Check output in the gate report and the fix prompt: a failing check's output of more than 40
 lines is filtered to the lines that look like failures (failure words, pytest `E` lines, file
@@ -528,7 +528,7 @@ brief always shows): run the final checks again (any answer does; the default), 
 is. The .NET adapter starts a failed Stryker run a second time first (with `--diag` when
 Stryker's output offers it; the first output is kept in `out/<f>/stryker/<project>.first.log`).
 
-Spec check (`agentflow spec-check <f>`, also the first step of `approve-spec`, which refuses
+Spec check (`framegate spec-check <f>`, also the first step of `approve-spec`, which refuses
 while it finds something; `--force` approves anyway and logs `spec_check` with `forced`). It
 reads two columns of the spec templates' tables; a spec without them is not checked:
 - `Spec ID` (design.md, "Error handling" and "Command-line surface"): every filled row names
@@ -536,10 +536,10 @@ reads two columns of the spec templates' tables; a spec without them is not chec
 - `Assigned as (code, copied)` (requirements.md, "Existing data this spec reads"): every
   backticked piece of code in the cell is in the file the "Set where" cell names (a path, or
   a file name looked up in the source folders; spacing is ignored). `n/a: <why>` skips a row.
-`agentflow doctor` warns when a project's copy of the templates (`specs/_template/`) lacks a
-section or a table column of agentflow's templates.
+`framegate doctor` warns when a project's copy of the templates (`specs/_template/`) lacks a
+section or a table column of framegate's templates.
 
-Risk rating (`src/agentflow/risk.py`, `[risk]`): at every final gate the engine rates the
+Risk rating (`src/framegate/risk.py`, `[risk]`): at every final gate the engine rates the
 feature `low` or `elevated` from its own records, never from an agent's opinion. Low needs all
 of: final gates passed with diff coverage and mutation measured (a project without them is
 never low risk); nothing parked, provisional or open; no answer round, no park and no cap hit
@@ -581,7 +581,7 @@ reason, question, failing checks, attempts, diff), redo results, review findings
 final gates (`failed`, `skipped`, seconds per check), permission denials (`permission_denials`:
 phase, step, tool + command/path of every call the permission check denied, from the `claude -p`
 JSON), turn-cap hits (`max_turns`, and `escalation` when the re-run hit it too) and
-interruptions. Before the RETRO agent runs, agentflow writes `out/<f>/retro_input.md`: counts,
+interruptions. Before the RETRO agent runs, framegate writes `out/<f>/retro_input.md`: counts,
 then every question (Q1..), failed attempt (F1..), escalation (E1..), human rejection (R1..),
 review finding with its triage verdict (V1..), structure finding of the reviewer with what
 its fix cost (S1..; implementer runs, gate runs, seconds), final-gate failure (G1..), permission denial
@@ -614,11 +614,11 @@ a line of `events.jsonl` cut short by a killed run is skipped when reading.
 | `parked` | parked steps / review fixes (each park, incl. re-parks after a redo) |
 | `assumptions` | `- ASSUMPTION [...]` lines in `steps.md` |
 
-Hooks (called by the plugin): `agentflow hook pre-tool-use` (phase-based write protection, and
-the command form of Bash / PowerShell calls during a run) and `agentflow hook stop` (IMPLEMENT
+Hooks (called by the plugin): `framegate hook pre-tool-use` (phase-based write protection, and
+the command form of Bash / PowerShell calls during a run) and `framegate hook stop` (IMPLEMENT
 can't stop while the step's tests fail, contested tests of provisional steps left out, unless
 it parked: an `out/*/park.md` exists). Both read
-the hook JSON on stdin, exit 0 silently without `agentflow.toml` or `.phase`, and block with exit
+the hook JSON on stdin, exit 0 silently without `framegate.toml` or `.phase`, and block with exit
 2. Shell calls: only plain single commands are pre-approved, so a pipe (`dotnet test ... |
 Select-String`), a `;` / `&&` / `||` chain, several lines, or a `cd` / env-variable prefix would
 be denied by the permission check without a reason. During a run (any phase but SPEC) the hook
@@ -626,13 +626,13 @@ blocks them first and tells the agent why and what to do instead: one command pe
 command's own options (`--filter`, `--logger "console;verbosity=minimal"`, `-k`, `-q`) or the
 result file it writes to see less output. The task text says the same (`COMMAND_FORM`).
 
-Configuration: `agentflow.toml` (all keys optional; see the commented template written by
-`init`). `[agents] claude` or env `AGENTFLOW_CLAUDE` selects the claude executable;
+Configuration: `framegate.toml` (all keys optional; see the commented template written by
+`init`). `[agents] claude` or env `FRAMEGATE_CLAUDE` selects the claude executable;
 `[agents] test_review_rounds` (2) bounds the writer <-> reviewer loop; `[gates] tests = "human"`
 (default) or `"auto"` (no stop when all checks pass, the reviewer has no objections and no
 question is open; otherwise it stops as in human mode).
 
-Python projects: add agentflow (pinned) to the dev dependencies; its pytest plugin provides the
+Python projects: add framegate (pinned) to the dev dependencies; its pytest plugin provides the
 `req` marker and `--req ID,ID` selection. mutmut needs fork, so on Windows the mutation gate runs
 through WSL (`[gates] mutation_runner = "auto"`, default; `[env] wsl_distro` picks the
 distribution) in a WSL-side venv with the project's dependencies. Install once inside WSL:
@@ -640,7 +640,7 @@ distribution) in a WSL-side venv with the project's dependencies. Install once i
 WSL the gate is SKIPPED with the reason. Details: docs/adapters.md.
 
 .NET projects (xUnit, `language = "dotnet"`, detected from a root `*.sln`/`*.slnx`/`*.csproj`):
-install agentflow with the `dotnet` extra (`pip install "agentflow[dotnet]"`, brings diff-cover)
+install framegate with the `dotnet` extra (`pip install "framegate[dotnet]"`, brings diff-cover)
 and Stryker.NET (`dotnet tool install -g dotnet-stryker`). Tag tests with
 `[Trait("Req", "XXX-R-001")]`; selection uses `dotnet test --filter "(Req=A|Req=B)&(<base_filter>)"`.
 Put `[paths] review_tests` inside a test project folder and set the `[dotnet]` keys

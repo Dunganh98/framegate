@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agentflow.orchestrator import package_text
+from framegate.orchestrator import package_text
 
 
 def test_test_writer_must_ask_instead_of_dropping_cases() -> None:

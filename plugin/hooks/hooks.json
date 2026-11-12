@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "node",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/agentflow-hook.js", "pre-tool-use"],
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/framegate-hook.js", "pre-tool-use"],
             "timeout": 30
           }
         ]
@@ -19,7 +19,7 @@
           {
             "type": "command",
             "command": "node",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/agentflow-hook.js", "stop"],
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/framegate-hook.js", "stop"],
             "timeout": 600
           }
         ]

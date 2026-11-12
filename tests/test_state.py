@@ -7,16 +7,16 @@ import json
 
 import pytest
 
-from agentflow.config import load_config
-from agentflow.orchestrator import token_usage
-from agentflow.state import (
+from conftest import DemoRepo
+from framegate.config import load_config
+from framegate.orchestrator import token_usage
+from framegate.state import (
     StateError,
     load_progress,
     log_event,
     read_events,
     save_progress,
 )
-from conftest import DemoRepo
 
 
 def test_progress_is_replaced_not_rewritten(demo_repo: DemoRepo) -> None:
@@ -33,7 +33,7 @@ def test_progress_is_replaced_not_rewritten(demo_repo: DemoRepo) -> None:
 
 def test_a_cut_short_event_line_is_skipped(demo_repo: DemoRepo) -> None:
     cfg = load_config(demo_repo.root)
-    before = len(read_events(cfg, "demo"))  # `agentflow spec` logged its own
+    before = len(read_events(cfg, "demo"))  # `framegate spec` logged its own
     log_event(cfg, "demo", "gate", passed=True)
     with open(cfg.out_dir / "events.jsonl", "a", encoding="utf-8") as fh:
         fh.write('{"ts": "2026-11-11T10:00:00", "feature": "demo", "kind": "ga')  # killed here

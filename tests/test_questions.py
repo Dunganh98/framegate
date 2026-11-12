@@ -3,11 +3,11 @@ question as it was asked (the chat rewords it). Both from the M5-moment-scan ret
 
 from __future__ import annotations
 
-from agentflow.adapters import get_adapter
-from agentflow.config import load_config
-from agentflow.orchestrator import EXIT_GATE, Orchestrator
-from agentflow.retro import match_answer, same_question
 from conftest import DemoRepo
+from framegate.adapters import get_adapter
+from framegate.config import load_config
+from framegate.orchestrator import EXIT_GATE, Orchestrator
+from framegate.retro import match_answer, same_question
 
 FAST = "[gates.commands]\nlint = []\nformat = []\ntypecheck = []\n"
 

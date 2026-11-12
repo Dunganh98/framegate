@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import pytest
 
-from agentflow.adapters import get_adapter
-from agentflow.checks import frame_diff
-from agentflow.config import ConfigError, load_config, parse_config
-from agentflow.orchestrator import Orchestrator
 from conftest import DemoRepo, git
+from framegate.adapters import get_adapter
+from framegate.checks import frame_diff
+from framegate.config import ConfigError, load_config, parse_config
+from framegate.orchestrator import Orchestrator
 
 
 def test_one_folder_or_a_list(demo_repo: DemoRepo) -> None:

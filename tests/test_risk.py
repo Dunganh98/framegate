@@ -7,11 +7,11 @@ from typing import Any
 
 import pytest
 
-from agentflow import chat, risk
-from agentflow.adapters import get_adapter
-from agentflow.config import ConfigError, load_config, parse_config
-from agentflow.orchestrator import EXIT_GATE, Orchestrator
 from conftest import DemoRepo, git
+from framegate import chat, risk
+from framegate.adapters import get_adapter
+from framegate.config import ConfigError, load_config, parse_config
+from framegate.orchestrator import EXIT_GATE, Orchestrator
 
 FAST = "[gates.commands]\nlint = []\nformat = []\ntypecheck = []\n"
 CLEAN_GATES = {

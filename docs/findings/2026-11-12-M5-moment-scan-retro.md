@@ -1,6 +1,6 @@
 # Retro proposals from FCSim M5-moment-scan
 
-_Copied 2026-11-12 from FCSim out/agentflow/M5-moment-scan/retro_proposals.md. Verdicts (user): take 1, 2, 3, 4, 5, 7, 8, 9, 10; 6 folded into 5. Status: 1-6, 9 and 10 applied on `feat/retro-moment-scan` (2026-11-12), some in another form than proposed below: 2 as a template comment plus a test-writer rule (no new table); 3 with a check (`agentflow spec-check` looks for the copied code in the named file); 4 as a table with a "Spec ID" column plus that check (no lint over prose); 9 also keeps a tool failure away from the final-gate repair; 10 by the gate item's number and by dropping repeats at collection (no global IDs: the cause was the chat rewording the questions, not label collisions). Open: 8 (on hold: 11-16 min on every feature to save ~34 min in the one of five features that fell short; no parallel runner) and 7 (FCSim project work)._
+_Copied 2026-11-12 from FCSim out/agentflow/M5-moment-scan/retro_proposals.md. Verdicts (user): take 1, 2, 3, 4, 5, 7, 8, 9, 10; 6 folded into 5. Status: 1-6, 9 and 10 applied on `feat/retro-moment-scan` (2026-11-12), some in another form than proposed below: 2 as a template comment plus a test-writer rule (no new table); 3 with a check (`framegate spec-check` looks for the copied code in the named file); 4 as a table with a "Spec ID" column plus that check (no lint over prose); 9 also keeps a tool failure away from the final-gate repair; 10 by the gate item's number and by dropping repeats at collection (no global IDs: the cause was the chat rewording the questions, not label collisions). Open: 8 (on hold: 11-16 min on every feature to save ~34 min in the one of five features that fell short; no parallel runner) and 7 (FCSim project work)._
 
 
 Counts: questions 5 (3 rounds); failed attempts 0; escalations 0; human rejections 0; review findings 1; final gate failures 2; permission denials 0; assumptions 11; parked items 0
@@ -33,7 +33,7 @@ Counts: questions 5 (3 rounds); failed attempts 0; escalations 0; human rejectio
 +| ID | Data (seed / file / generator) | Observable that proves the situation | Measured with | Zero cases allowed |
 ```
 
-Spec-dialogue question (`/agentflow:feature`): "For each number in an acceptance criterion: which command measured it, with which definition?"
+Spec-dialogue question (`/framegate:feature`): "For each number in an acceptance criterion: which command measured it, with which definition?"
 
 **Scope:** framework (template column + dialogue question); project (K1: the scan command).
 
@@ -82,7 +82,7 @@ Plus K2 below.
 **Fix (check, preferred).** A spec lint at the spec gate: in design.md `## Error handling` (and `## Input domain`), every sentence with a behaviour verb must name a spec ID.
 
 ```python
-# agentflow/checks/spec_lint.py (sketch)
+# framegate/checks/spec_lint.py (sketch)
 BEHAVIOUR = re.compile(r"\b(propagat|throw|rais|return|exit code|reject|rethrow)", re.I)
 ID = re.compile(r"\b[A-Z]{2,5}-[REI]-\d{3}\b")
 for sentence in sentences(section(design_md, "Error handling")):
@@ -205,4 +205,4 @@ if cfg.gates.mutation.enabled:
 - K4 [Test harness]: "set piece" in ActionReviewMatchTests also counts `SetPieceDefend`. "Set-piece takes" (MomentScan) are SetPieceTake + FreeKickShot + PenaltyKick only. Don't copy counts between the two.
 - K5 [Tools]: the mutation gate mutates only FCSim.Core (no test project references FCSim.Runner). Keep runner commands thin glue and put parsing/formatting in Core (as `MomentScanText`), until proposal 7 lands.
 
-CLAUDE.md lines now enforced by a check: none. In .agentflow/project.md, the line "No general key-moment seed-scan command exists yet (retro M5-action-reviews #4)" is obsolete once K1 is accepted; delete it.
+CLAUDE.md lines now enforced by a check: none. In .framegate/project.md, the line "No general key-moment seed-scan command exists yet (retro M5-action-reviews #4)" is obsolete once K1 is accepted; delete it.

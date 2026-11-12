@@ -23,7 +23,7 @@ _Seen 2026-11-11 in FCSim, feature `M5-moment-scan` (final gate, run 1). Status:
 - FCSim `out/agentflow/M5-moment-scan/stryker/FCSim.Runner.log` (exit 1, lines quoted above),
   `.../stryker/FCSim.Core.log` (`The final mutation score is 77.50 %`, 11 min),
   `.../final_gates.md` (`[FAIL] mutation score (feature tests)`).
-- Code: `src/agentflow/adapters/dotnet.py` `mutation_check` (grouping, ~L1016), `_run_stryker` (`refs` fallback and
+- Code: `src/framegate/adapters/dotnet.py` `mutation_check` (grouping, ~L1016), `_run_stryker` (`refs` fallback and
   early `return CheckResult("FAIL", ...)`, ~L1150–1190).
 
 ## Why it matters
@@ -56,9 +56,9 @@ See the section below; it is self-contained.
 
 ---
 
-Fix in agentflow (repo D:\Me\Projects\agentflow, Python, pytest). Work on a new branch `fix/stryker-untested-project` from `main`; do not push.
+Fix in framegate (repo D:\Me\Projects\agentflow, Python, pytest). Work on a new branch `fix/stryker-untested-project` from `main`; do not push.
 
-Problem: the .NET mutation gate FAILs when a feature changes a project that no test project references. Details and evidence: docs/findings/2026-11-11-stryker-untested-project.md (read it first). Code: src/agentflow/adapters/dotnet.py — `mutation_check` groups changed .cs files by `owning_project`; `_run_stryker` picks test projects per group with a text match on the test csproj (`proj.name.lower() in ...`) and falls back to all test projects when none match, then returns FAIL on the first Stryker failure, dropping the groups that already ran.
+Problem: the .NET mutation gate FAILs when a feature changes a project that no test project references. Details and evidence: docs/findings/2026-11-11-stryker-untested-project.md (read it first). Code: src/framegate/adapters/dotnet.py — `mutation_check` groups changed .cs files by `owning_project`; `_run_stryker` picks test projects per group with a text match on the test csproj (`proj.name.lower() in ...`) and falls back to all test projects when none match, then returns FAIL on the first Stryker failure, dropping the groups that already ran.
 
 Change:
 1. Decide per group whether any test project references it: the test csproj's `<ProjectReference>` paths, followed transitively through the referenced csproj files (resolve relative paths against each csproj's folder; compare resolved paths, not names). Replace the name-text match and the `or test_projects` fallback with this.

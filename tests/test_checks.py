@@ -6,14 +6,14 @@ import pathlib
 
 import pytest
 
-from agentflow.adapters import get_adapter
-from agentflow.adapters.base import CheckResult
-from agentflow.adapters.python import PythonAdapter
-from agentflow.checks import frame_diff, red_stubs, traceability
-from agentflow.checks import test_smells as smells_check
-from agentflow.config import parse_config
-from agentflow.gates import run_gates
 from conftest import git, init_git
+from framegate.adapters import get_adapter
+from framegate.adapters.base import CheckResult
+from framegate.adapters.python import PythonAdapter
+from framegate.checks import frame_diff, red_stubs, traceability
+from framegate.checks import test_smells as smells_check
+from framegate.config import parse_config
+from framegate.gates import run_gates
 
 
 def write(root: pathlib.Path, rel: str, text: str) -> None:
@@ -64,7 +64,7 @@ def test_frame_missing_tag(framed: pathlib.Path) -> None:
         "tests/test_new.py",
         "specs/f/requirements.md",
         "pyproject.toml",
-        "agentflow.toml",
+        "framegate.toml",
         "CLAUDE.md",
         ".claude/settings.json",
         ".github/workflows/x.yml",
@@ -466,7 +466,7 @@ Coverage: 60%
 
 
 def test_diff_coverage_summary() -> None:
-    from agentflow.adapters.base import diff_coverage_summary
+    from framegate.adapters.base import diff_coverage_summary
 
     assert diff_coverage_summary(DIFF_COVER_OUT, 90) == (
         "Diff coverage 60% (3/5 changed lines covered), threshold 90%."
@@ -480,8 +480,8 @@ def test_diff_coverage_summary() -> None:
 def test_gate_report_shows_summary_under_fail_and_pass(
     framed: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from agentflow import gates
-    from agentflow.adapters.base import Check
+    from framegate import gates
+    from framegate.adapters.base import Check
 
     a = adapter_for(framed)
     fake = [
@@ -521,7 +521,7 @@ def test_refactor_counts_tagged_existing_tests_and_ignores_their_old_smells(
     """A refactor tags the existing tests that already pin a row instead of writing them again
     (live, FCSim: 835 lines of new tests beside 789 lines of existing ones). The check says
     which tests existed; a smell in an old test of a touched file is not the refactor's."""
-    from agentflow.checks import baseline
+    from framegate.checks import baseline
 
     init_git(tmp_path)
     write(tmp_path, "tests/test_old.py", OLD_TESTS)

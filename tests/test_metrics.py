@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agentflow.orchestrator import metric_counts
+from framegate.orchestrator import metric_counts
 
 
 def test_metric_counts_questions_parks_and_final_gate_failures() -> None:

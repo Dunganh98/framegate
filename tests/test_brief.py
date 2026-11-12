@@ -4,8 +4,8 @@ sends a brief back to the PR agent once."""
 
 from __future__ import annotations
 
-from agentflow import brief
-from agentflow.retro import parse_answer_items
+from framegate import brief
+from framegate.retro import parse_answer_items
 
 ITEMS = [
     "[parked] step 2 - neg: the sign of zero",

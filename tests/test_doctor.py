@@ -1,12 +1,12 @@
-"""`agentflow doctor`: checks the setup without agents."""
+"""`framegate doctor`: checks the setup without agents."""
 
 from __future__ import annotations
 
 import pytest
 
-from agentflow import doctor
-from agentflow.config import load_config
 from conftest import DemoRepo, git
+from framegate import doctor
+from framegate.config import load_config
 
 
 def run(r: DemoRepo, full: bool = False, brief: bool = False) -> tuple[int, str]:
@@ -23,7 +23,7 @@ def test_doctor_on_a_working_setup(demo_repo: DemoRepo) -> None:
     for line in (
         "[OK] config: language python (PythonAdapter)",
         "[OK] claude CLI",
-        "[OK] knowledge file .agentflow/project.md",
+        "[OK] knowledge file .framegate/project.md",
         "[OK] spec templates in specs/_template/",
         "[OK] .gitignore",
         "[OK] test selection by spec ID",
@@ -37,10 +37,10 @@ def test_doctor_on_a_working_setup(demo_repo: DemoRepo) -> None:
     # the brief at the end: the verdict, then only what needs a decision
     tail = out[out.index("Verdict:") :].splitlines()
     assert tail[0].startswith("Verdict: ready ("), tail
-    assert tail[1].startswith("- WARN code map docs/code-map.md: missing: /agentflow:setup")
+    assert tail[1].startswith("- WARN code map docs/code-map.md: missing: /framegate:setup")
     assert any(x.startswith("- WARN whole test suite") for x in tail)
     assert not any("[OK]" in x or "- OK" in x for x in tail)
-    assert tail[-1] == "Next: a feature, or a smoke run (see /agentflow:setup)."
+    assert tail[-1] == "Next: a feature, or a smoke run (see /framegate:setup)."
     (r.root / "docs").mkdir()
     (r.root / "docs/code-map.md").write_text("# Code map\n", encoding="utf-8")
     code, out = run(r, brief=True)
@@ -56,14 +56,14 @@ def test_doctor_reports_what_is_broken(
         "[gates.commands]\nlint = ['no-such-linter-xyz', '{src}']\nformat = []\ntypecheck = []\n"
     )
     r.set_toml("git", "base", '"nope"')
-    (r.root / ".agentflow/project.md").unlink()
+    (r.root / ".framegate/project.md").unlink()
     git(r.root, "commit", "-qam", "no knowledge")
-    monkeypatch.setenv("AGENTFLOW_CLAUDE", "no-such-claude-xyz")
+    monkeypatch.setenv("FRAMEGATE_CLAUDE", "no-such-claude-xyz")
     code, out = run(r)
     assert code == 1
     assert "[FAIL] claude CLI" in out and "[FAIL] gate command: lint" in out
     assert "[WARN] git: base branch 'nope' not found" in out
-    assert "[WARN] knowledge file .agentflow/project.md" in out
+    assert "[WARN] knowledge file .framegate/project.md" in out
     assert "[SKIP] whole test suite" in out and "FAILED: 2 failure(s)" in out
     code, out = run(r, brief=True)
     lines = out.splitlines()
@@ -73,7 +73,7 @@ def test_doctor_reports_what_is_broken(
 
 
 def test_doctor_warns_about_an_outdated_template_copy(demo_repo: DemoRepo) -> None:
-    """The project's specs/_template/ copy (written by init) wins over agentflow's templates,
+    """The project's specs/_template/ copy (written by init) wins over framegate's templates,
     so sections added by later retros never reach the project's specs unless it is updated."""
     r = demo_repo
     tpl = r.root / "specs" / "_template" / "requirements.md"
@@ -86,7 +86,7 @@ def test_doctor_warns_about_an_outdated_template_copy(demo_repo: DemoRepo) -> No
     _, out = run(r)
     assert "[WARN] spec templates in specs/_template/" in out
     assert "requirements.md lacks: Existing data this spec reads" in out
-    assert "delete the copy to use agentflow's" in out
+    assert "delete the copy to use framegate's" in out
     # a column a later retro added to a table (the sections are all there)
     tpl.write_text(
         text.replace(" Measured with |", "").replace("|---|---|---|---|---|", "|---|---|---|---|"),
@@ -98,22 +98,22 @@ def test_doctor_warns_about_an_outdated_template_copy(demo_repo: DemoRepo) -> No
 
 
 def test_doctor_checks_the_chat_side(demo_repo: DemoRepo) -> None:
-    """The allow rules the chat skills need, and agentflow.toml on the base branch."""
+    """The allow rules the chat skills need, and framegate.toml on the base branch."""
     r = demo_repo
     r.add_toml("[gates.commands]\nlint = []\nformat = []\ntypecheck = []\n")
     code, out = run(r)
-    assert "[OK] chat: agentflow commands allowed" in out
-    assert "is not on 'main'" not in out  # the fixture committed agentflow.toml on main
+    assert "[OK] chat: framegate commands allowed" in out
+    assert "is not on 'main'" not in out  # the fixture committed framegate.toml on main
 
     settings = r.root / ".claude" / "settings.local.json"
-    settings.write_text('{"permissions": {"allow": ["Bash(agentflow:*)"]}}', encoding="utf-8")
+    settings.write_text('{"permissions": {"allow": ["Bash(framegate:*)"]}}', encoding="utf-8")
     code, out = run(r)
     assert code == 0
-    assert "[WARN] chat: agentflow commands allowed" in out
-    assert 'add "PowerShell(agentflow *)" to permissions.allow' in out  # Bash: older spelling
+    assert "[WARN] chat: framegate commands allowed" in out
+    assert 'add "PowerShell(framegate *)" to permissions.allow' in out  # Bash: older spelling
     settings.unlink()
     _, out = run(r, brief=True)
-    assert '- WARN chat: agentflow commands allowed: add "Bash(agentflow *)", ' in out
+    assert '- WARN chat: framegate commands allowed: add "Bash(framegate *)", ' in out
 
     # a base branch without the config: feature branches from it would start without it
     git(r.root, "checkout", "-q", "--orphan", "empty")
@@ -122,4 +122,4 @@ def test_doctor_checks_the_chat_side(demo_repo: DemoRepo) -> None:
     git(r.root, "checkout", "-q", "-f", "feat/demo")
     r.set_toml("git", "base", '"empty"')
     _, out = run(r)
-    assert "[WARN] git: agentflow.toml is not on 'empty'" in out
+    assert "[WARN] git: framegate.toml is not on 'empty'" in out

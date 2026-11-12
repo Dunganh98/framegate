@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agentflow.failure_filter import MAX_LINE, filter_failure_output
+from framegate.failure_filter import MAX_LINE, filter_failure_output
 
 
 def noise(n: int, prefix: str = "collecting module") -> list[str]:

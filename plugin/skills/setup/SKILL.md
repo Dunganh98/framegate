@@ -1,36 +1,36 @@
 ---
 name: setup
-description: Set up agentflow in this repository - read the repo, draft agentflow.toml, the project knowledge file and the code map, show a short brief that asks only the real decisions, check the setup with agentflow doctor, offer a smoke run. Run only when the user invokes it.
+description: Set up framegate in this repository - read the repo, draft framegate.toml, the project knowledge file and the code map, show a short brief that asks only the real decisions, check the setup with framegate doctor, offer a smoke run. Run only when the user invokes it.
 disable-model-invocation: true
-allowed-tools: Bash(agentflow *) PowerShell(agentflow *) Bash(uv tool install *) PowerShell(uv tool install *) Read Write Edit Glob Grep
+allowed-tools: Bash(framegate *) PowerShell(framegate *) Bash(uv tool install *) PowerShell(uv tool install *) Read Write Edit Glob Grep
 ---
-You set up agentflow for this repository. The user is the manager: they answer a few questions
-and approve; you read the repo, draft the files, run the `agentflow` commands. Every message:
+You set up framegate for this repository. The user is the manager: they answer a few questions
+and approve; you read the repo, draft the files, run the `framegate` commands. Every message:
 the decision and its default first, details only on request, plain words. You never change the
 project's source or tests (one exception, step 3: a tagging helper the user approved).
 
 ## 0. Install the tools first
 
-The `agentflow` command itself: run `agentflow --version`. If the command is not found, tell
-the user in one line ("Installing the agentflow CLI 0.5.3 for your user") and run
+The `framegate` command itself: run `framegate --version`. If the command is not found, tell
+the user in one line ("Installing the framegate CLI 0.6.0 for your user") and run
 
-    uv tool install "git+https://github.com/Dunganh98/agentflow@v0.5.3"
+    uv tool install "git+https://github.com/Dunganh98/framegate@v0.6.0"
 
-then `agentflow --version` again. If `uv` is missing or the install fails (no access to the
+then `framegate --version` again. If `uv` is missing or the install fails (no access to the
 repository, no git), show the error and the two ways out, then stop: install uv
 (https://docs.astral.sh/uv/) and run the setup again, or clone the repository and run
-`uv tool install --editable <clone>`. An installed CLI of another version than 0.5.3 (this
+`uv tool install --editable <clone>`. An installed CLI of another version than 0.6.0 (this
 plugin's): say so in one line and go on; the same command with `--force` updates it, only on
 the user's yes.
 
-Then run `agentflow install-tools --dry-run`: it names the project's
-interpreter and what the workflow needs there and is missing (for Python: the agentflow pytest
+Then run `framegate install-tools --dry-run`: it names the project's
+interpreter and what the workflow needs there and is missing (for Python: the framegate pytest
 plugin, pytest, pytest-cov, hypothesis, diff-cover). Nothing missing: go on without a word. Else
-tell the user in one line what goes into which interpreter ("Installing agentflow, diff-cover,
-hypothesis into .venv") and run `agentflow install-tools`. Report its result in one line; if it
+tell the user in one line what goes into which interpreter ("Installing framegate, diff-cover,
+hypothesis into .venv") and run `framegate install-tools`. Report its result in one line; if it
 prints `CHANGED versions`, show that line as it is (a pinned package moved: the user decides
 whether to keep it). If the install fails, show the error and stop: the setup cannot be
-checked without the tools. A language agentflow installs nothing for says so; go on.
+checked without the tools. A language framegate installs nothing for says so; go on.
 
 ## 1. Read the repo (no edits yet)
 
@@ -47,13 +47,13 @@ Find out, from files only (Read / Glob / Grep):
 - `CLAUDE.md`, `README`, docs: architecture rules, conventions, things that must not change;
 - tests that pin outputs (golden files, hashes, fingerprints, snapshots, save formats) and how
   test data is made (seeds, factories, recordings, scan or generator commands);
-- whether `agentflow.toml`, `.agentflow/project.md` and the code map (`[docs] code_map`,
+- whether `framegate.toml`, `.framegate/project.md` and the code map (`[docs] code_map`,
   default `docs/code-map.md`) exist already (then you update them).
 
 ## 2. Pick the adapter
 
 `python` (pytest) and `dotnet` (xUnit) have built-in adapters. Any other language or test
-framework: `generic`, configured entirely in agentflow.toml `[generic]` (`agentflow init
+framework: `generic`, configured entirely in framegate.toml `[generic]` (`framegate init
 --language generic` writes a commented example): the test commands with placeholders (`{junit}`
 report path, `{ids}` / `{ids_regex}` spec-ID selection, `{paths}`), a `tag_pattern` regex that
 finds a test's spec IDs, the `stub_marker` a not-implemented stub prints, optional coverage
@@ -63,8 +63,8 @@ example a `req("X-R-001")` tag that the test runner can filter on) and it become
 
 ## 3. Draft, then one short brief
 
-Draft (in your head, no files yet): the agentflow.toml settings, the knowledge file
-`.agentflow/project.md` (sections Architecture rules / Never changes / Test harness / Tools /
+Draft (in your head, no files yet): the framegate.toml settings, the knowledge file
+`.framegate/project.md` (sections Architecture rules / Never changes / Test harness / Tools /
 Off-limits, one short verifiable line per fact) and the code map.
 
 Show the user a brief of about one screen, no toml and no file dumps:
@@ -80,7 +80,7 @@ Show the user a brief of about one screen, no toml and no file dumps:
 
 One line per bullet; a section with nothing in it is one line. A point is a question only when
 it is a real decision: two or more reasonable options with different outcomes, and the repo,
-`.agentflow/project.md` and earlier answers don't settle it. Otherwise: one sensible option ->
+`.framegate/project.md` and earlier answers don't settle it. Otherwise: one sensible option ->
 decide it (a line under "Settings I chose" or "What agents will know"); already settled or a
 note -> leave it out; the same question twice -> one. No limit on the number. Ask only what
 the code cannot tell; typical ones: which tests are slow or need special setup
@@ -92,10 +92,10 @@ the knowledge file or the code map in full only on request.
 
 ## 4. Write
 
-After the answers ("ok" = every default): if there is no agentflow.toml yet, run `agentflow
-init` (or `agentflow init --language generic`); it creates agentflow.toml, `specs/_template/`,
-`.agentflow/project.md` and `.gitignore` lines, and never overwrites a file. Then edit
-agentflow.toml and `.agentflow/project.md` with the drafted settings and the answers (knowledge
+After the answers ("ok" = every default): if there is no framegate.toml yet, run `framegate
+init` (or `framegate init --language generic`); it creates framegate.toml, `specs/_template/`,
+`.framegate/project.md` and `.gitignore` lines, and never overwrites a file. Then edit
+framegate.toml and `.framegate/project.md` with the drafted settings and the answers (knowledge
 file under ~150 lines: facts, not prose), and write the code map (`[docs] code_map`, under
 ~300 lines) in this form:
 
@@ -110,35 +110,35 @@ file under ~150 lines: facts, not prose), and write the code map (`[docs] code_m
 
 Every later feature's PR phase updates the sections it touches.
 
-## 5. Check: `agentflow doctor --brief`
+## 5. Check: `framegate doctor --brief`
 
-First `agentflow install-tools` once more: with agentflow.toml written it also installs the
+First `framegate install-tools` once more: with framegate.toml written it also installs the
 lint / format / type tools the gate commands name (ruff, mypy, black), which step 0 could not
-know yet. Then run `agentflow doctor --brief`: a one-line verdict (ready / not ready), then
+know yet. Then run `framegate doctor --brief`: a one-line verdict (ready / not ready), then
 only the failures and the warnings that need a decision. Fix every FAIL that is a config problem yourself and run
 it again until it says ready. Show the user the verdict line and, per remaining warning, one line
 with the decision and your default ("mutmut is not installed: mutation testing off until it is?
-Default: yes"). The full output (`agentflow doctor`) on request; `agentflow doctor --full` also
+Default: yes"). The full output (`framegate doctor`) on request; `framegate doctor --full` also
 times the whole test suite (the final regression run), offer it in one line.
 
 ## 6. Offer a smoke run, in one line
 
 "A smoke run (a tiny throwaway feature through the whole flow, about USD 2-4 and 15-30 minutes)
 proves the agents, gates and hooks work before a real feature. Do it? (default: yes)". On yes:
-tell them to run `/agentflow:feature smoke` with this requirement (adapt the names to the
+tell them to run `/framegate:feature smoke` with this requirement (adapt the names to the
 language):
 
     A pure function clamp(value, low, high) in the source folder: returns value limited to
     [low, high]; low > high raises an argument error with the message "low > high". One plan
     step. No other code changes.
 
-and to remove it afterwards: `agentflow cleanup smoke --tags --force`, then switch back to the
+and to remove it afterwards: `framegate cleanup smoke --tags --force`, then switch back to the
 base branch and delete the branch `feat/smoke`.
 
 ## 7. Finish
 
-In two or three lines: what to commit (agentflow.toml, `.agentflow/project.md`, the code map,
+In two or three lines: what to commit (framegate.toml, `.framegate/project.md`, the code map,
 `specs/_template/`, `.gitignore`, a tag helper if added) and that the chat skills need the CLI
-allowed: `"Bash(agentflow *)"` and `"PowerShell(agentflow *)"` in `permissions.allow` of
-`.claude/settings.local.json` (`agentflow doctor` warns while they are missing; offer to add
+allowed: `"Bash(framegate *)"` and `"PowerShell(framegate *)"` in `permissions.allow` of
+`.claude/settings.local.json` (`framegate doctor` warns while they are missing; offer to add
 them, and write the file only on a yes). Do not commit or push yourself.

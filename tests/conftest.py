@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from agentflow import cli
+from framegate import cli
 
 HERE = pathlib.Path(__file__).resolve().parent
 FAKE_CLAUDE = HERE / "fake_claude.py"
@@ -132,8 +132,8 @@ class DemoRepo:
         (self.root / "src" / "demo" / "__init__.py").write_text(STUB2, encoding="utf-8")
 
     def set_toml(self, section: str, key: str, value: str) -> None:
-        """Set `key = value` (TOML literal) in an existing [section] of agentflow.toml."""
-        p = self.root / "agentflow.toml"
+        """Set `key = value` (TOML literal) in an existing [section] of framegate.toml."""
+        p = self.root / "framegate.toml"
         text = p.read_text(encoding="utf-8")
         line = f"{key} = {value}"
         if re.search(rf"^{key} = .*$", text, re.M):
@@ -151,7 +151,7 @@ class DemoRepo:
         self.set_toml("gates", "tests", '"defer"')
 
     def add_toml(self, text: str) -> None:
-        p = self.root / "agentflow.toml"
+        p = self.root / "framegate.toml"
         p.write_text(p.read_text(encoding="utf-8") + "\n" + text, encoding="utf-8")
         git(self.root, "add", "-A")
         git(self.root, "commit", "-q", "-m", "config")
@@ -160,13 +160,13 @@ class DemoRepo:
 @pytest.fixture(autouse=True)
 def no_toast(monkeypatch: pytest.MonkeyPatch) -> None:
     """Never show Windows toasts from the test suite (tests/test_chat.py checks the call)."""
-    monkeypatch.setenv("AGENTFLOW_TOAST", "0")
+    monkeypatch.setenv("FRAMEGATE_TOAST", "0")
 
 
 @pytest.fixture(autouse=True)
 def own_claude_settings(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`agentflow doctor` never reads the developer's own ~/.claude/settings.json."""
-    from agentflow import doctor
+    """`framegate doctor` never reads the developer's own ~/.claude/settings.json."""
+    from framegate import doctor
 
     project = doctor.settings_files
     monkeypatch.setattr(doctor, "settings_files", lambda cfg: project(cfg)[:2])
@@ -174,14 +174,14 @@ def own_claude_settings(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch)
 
 @pytest.fixture
 def demo_repo(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> DemoRepo:
-    """A tiny Python repo with agentflow initialised and the `demo` spec + stub written."""
+    """A tiny Python repo with framegate initialised and the `demo` spec + stub written."""
     root = tmp_path / "repo"
     root.mkdir()
     init_git(root)
     (root / "pyproject.toml").write_text(PYPROJECT, encoding="utf-8")
     (root / ".gitignore").write_text(GITIGNORE, encoding="utf-8")
     monkeypatch.chdir(root)
-    monkeypatch.setenv("AGENTFLOW_CLAUDE", str(FAKE_CLAUDE))
+    monkeypatch.setenv("FRAMEGATE_CLAUDE", str(FAKE_CLAUDE))
     monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", str(tmp_path / "scenario.json"))
     repo = DemoRepo(root)
     repo.scenario()
@@ -191,7 +191,7 @@ def demo_repo(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> DemoRe
     # the defaults ("defer", step batches) have their own tests (DemoRepo.defer_tests_gate,
     # set_toml("agents", "step_batch_ids", ...)); no diagnosis runs unless a test sets
     # [agents] diagnose_after.
-    toml = root / "agentflow.toml"
+    toml = root / "framegate.toml"
     toml.write_text(
         toml.read_text(encoding="utf-8")
         .replace("[gates]\n", '[gates]\nmutation_runner = "native"\ntests = "human"\n', 1)
@@ -203,7 +203,7 @@ def demo_repo(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> DemoRe
     # the chat skills' allow rules (doctor checks them)
     (root / ".claude").mkdir()
     (root / ".claude" / "settings.local.json").write_text(
-        json.dumps({"permissions": {"allow": ["Bash(agentflow *)", "PowerShell(agentflow *)"]}}),
+        json.dumps({"permissions": {"allow": ["Bash(framegate *)", "PowerShell(framegate *)"]}}),
         encoding="utf-8",
     )
     git(root, "add", "-A")

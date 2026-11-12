@@ -10,10 +10,10 @@ from typing import Any
 
 import pytest
 
-from agentflow import chat, notify, procs
-from agentflow.config import Config, load_config
-from agentflow.orchestrator import EXIT_GATE, Orchestrator
 from conftest import DemoRepo, git
+from framegate import chat, notify, procs
+from framegate.config import Config, load_config
+from framegate.orchestrator import EXIT_GATE, Orchestrator
 
 FAST = "[gates.commands]\nlint = []\nformat = []\ntypecheck = []\n"
 LINE_RE = re.compile(r"^\d\d:\d\d:\d\d \S.* \[\$\d+\.\d\d\]$")
@@ -44,10 +44,10 @@ def to_final_gate(r: DemoRepo) -> None:
 
 # ---------- feature branch ----------
 def test_spec_creates_the_feature_branch_from_base(demo_repo: DemoRepo) -> None:
-    r = demo_repo  # the fixture ran `agentflow spec demo` on a clean main
+    r = demo_repo  # the fixture ran `framegate spec demo` on a clean main
     assert branch(r) == "feat/demo"
     assert git(r.root, "rev-parse", "feat/demo") == git(r.root, "rev-parse", "main")
-    assert git(r.root, "config", "--get", "branch.feat/demo.agentflowFeature").strip() == "demo"
+    assert git(r.root, "config", "--get", "branch.feat/demo.framegateFeature").strip() == "demo"
     assert (r.root / ".phase").read_text(encoding="utf-8") == "SPEC"
     # again on its own branch, with uncommitted spec edits: fine, stays
     assert r.af("spec", "demo") == 0 and branch(r) == "feat/demo"
@@ -82,7 +82,7 @@ def test_spec_switches_to_its_existing_branch_only(
     git(r.root, "branch", "feat/foreign")  # made by hand: no mark, no specs/foreign/
     capsys.readouterr()
     assert r.af("spec", "foreign") == 1
-    assert "exists but is not agentflow's branch for 'foreign'" in capsys.readouterr().err
+    assert "exists but is not framegate's branch for 'foreign'" in capsys.readouterr().err
     assert branch(r) == "main"
 
 
@@ -94,7 +94,7 @@ def test_spec_branch_options(demo_repo: DemoRepo, capsys: pytest.CaptureFixture[
     capsys.readouterr()
     assert r.af("spec", "x") == 1
     assert "Base branch 'develop' not found; set [git] base" in capsys.readouterr().err
-    toml = r.root / "agentflow.toml"
+    toml = r.root / "framegate.toml"
     toml.write_text(
         toml.read_text(encoding="utf-8").replace('base = "develop"', "branch = false"),
         encoding="utf-8",
@@ -110,7 +110,7 @@ def test_spec_refused_during_a_run_and_noted_after_approval(
     procs.write_lock(r.root / "out", "demo")  # this test process = a live run
     capsys.readouterr()
     assert r.af("spec", "demo") == 1
-    assert "an agentflow run is active (feature demo" in capsys.readouterr().err
+    assert "a framegate run is active (feature demo" in capsys.readouterr().err
     procs.remove_lock(r.root / "out")
     assert r.af("spec", "demo") == 0
     assert "NOTE: the spec of demo is already approved" in capsys.readouterr().out
@@ -192,7 +192,7 @@ def test_watch_prints_new_lines_once_and_ends_without_a_run(
     assert chat.watch(o, "demo", start_wait=0) == 0
     out = capsys.readouterr().out.splitlines()
     assert out[:-1] == log_lines(r)
-    assert out[-1] == "watch ended: waiting at the tests gate -> agentflow gate-summary demo"
+    assert out[-1] == "watch ended: waiting at the tests gate -> framegate gate-summary demo"
     o.progress("demo", "one more")
     capsys.readouterr()
     assert chat.watch(o, "demo", start_wait=0) == 0  # re-armed: only what is new
@@ -201,7 +201,7 @@ def test_watch_prints_new_lines_once_and_ends_without_a_run(
 
 
 def test_watch_follows_a_live_run(demo_repo: DemoRepo) -> None:
-    """A real `agentflow watch` process sees lines written while the run holds the lock and
+    """A real `framegate watch` process sees lines written while the run holds the lock and
     ends once the lock is gone."""
     r = demo_repo
     to_tests_gate(r)
@@ -212,7 +212,7 @@ def test_watch_follows_a_live_run(demo_repo: DemoRepo) -> None:
     import sys
 
     p = subprocess.Popen(
-        [sys.executable, "-m", "agentflow", "watch", "demo"],
+        [sys.executable, "-m", "framegate", "watch", "demo"],
         cwd=r.root,
         stdout=subprocess.PIPE,
         text=True,
@@ -394,7 +394,7 @@ def test_status_brief_and_overview(demo_repo: DemoRepo, capsys: pytest.CaptureFi
     capsys.readouterr()
     assert r.af("status", "demo", "--brief") == 0  # 0 even at a gate (skill injection)
     out = capsys.readouterr().out.splitlines()
-    assert out[0] == "demo: waiting at the tests gate -> agentflow gate-summary demo"
+    assert out[0] == "demo: waiting at the tests gate -> framegate gate-summary demo"
     assert out[1].startswith("Branch: feat/demo; cost so far $")
     assert out[2] == "Last progress:" and "TESTS GATE" in out[-1]
     assert r.af("status", "nope", "--brief") == 0
@@ -404,8 +404,8 @@ def test_status_brief_and_overview(demo_repo: DemoRepo, capsys: pytest.CaptureFi
 # ---------- toast ----------
 def test_toast_noop_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
     cfg = Config(root=tmp_path)
-    assert notify.toast(cfg, "t", "x") is None  # AGENTFLOW_TOAST=0 (conftest)
-    monkeypatch.delenv("AGENTFLOW_TOAST")
+    assert notify.toast(cfg, "t", "x") is None  # FRAMEGATE_TOAST=0 (conftest)
+    monkeypatch.delenv("FRAMEGATE_TOAST")
     monkeypatch.setattr(notify.sys, "platform", "linux")
     assert notify.toast(cfg, "t", "x") is None
     monkeypatch.setattr(notify.sys, "platform", "win32")
@@ -438,23 +438,23 @@ def test_toast_command_and_calls_at_gate_and_done(
         started.append({"cmd": cmd, **kw})
         return FakeProc()
 
-    monkeypatch.delenv("AGENTFLOW_TOAST")
+    monkeypatch.delenv("FRAMEGATE_TOAST")
     monkeypatch.setattr(notify.sys, "platform", "win32")
     monkeypatch.setattr(notify, "_spawn", fake_popen)
     r = demo_repo
     r.add_toml(FAST)
     to_final_gate(r)
     assert r.af("approve", "demo") == 0 and r.af("run", "demo") == 0
-    titles = [s["env"]["AGENTFLOW_TOAST_TITLE"] for s in started]
+    titles = [s["env"]["FRAMEGATE_TOAST_TITLE"] for s in started]
     assert titles == [
-        "agentflow: demo at the tests gate",
-        "agentflow: demo at the final gate",
-        "agentflow: demo DONE",
+        "framegate: demo at the tests gate",
+        "framegate: demo at the final gate",
+        "framegate: demo DONE",
     ]
     first = started[0]
     assert first["cmd"][:2] == ["powershell.exe", "-NoProfile"]
     assert "ToastNotificationManager" in first["cmd"][-1]
-    assert first["env"]["AGENTFLOW_TOAST_TEXT"] == "State: all clean."
+    assert first["env"]["FRAMEGATE_TOAST_TEXT"] == "State: all clean."
     assert first["stdout"] == subprocess.DEVNULL
 
 
@@ -501,12 +501,12 @@ def test_cleanup_keeps_specs_and_metrics(
 
 
 def test_protocol_command(capsys: pytest.CaptureFixture[str]) -> None:
-    """The plugin skills inject `agentflow protocol` (a plugin file outside the project can't
+    """The plugin skills inject `framegate protocol` (a plugin file outside the project can't
     be read by an injected command)."""
-    from agentflow import cli
+    from framegate import cli
 
     assert cli.main(["protocol"]) == 0
     out = capsys.readouterr().out
-    assert out.startswith("# agentflow run protocol (chat)")
-    for part in ("agentflow watch <f>", "agentflow gate-summary <f>", "agentflow cleanup <f>"):
+    assert out.startswith("# framegate run protocol (chat)")
+    for part in ("framegate watch <f>", "framegate gate-summary <f>", "framegate cleanup <f>"):
         assert part in out
