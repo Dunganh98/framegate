@@ -575,6 +575,15 @@ class LanguageAdapter(abc.ABC):
         beyond the configured commands (coverage, diff coverage, mutation)."""
         return []
 
+    def install_tools(self, dry_run: bool, echo: Callable[[str], None]) -> int:
+        """`agentflow install-tools`: install what the workflow needs into the project's
+        environment (0 = fine). Default: nothing agentflow can install for this language."""
+        echo(
+            f"Nothing agentflow installs for a {self.name} project: `agentflow doctor` lists "
+            "the tools it looks for and how to get them."
+        )
+        return 0
+
     # ---------- init ----------
     def config_template(self) -> str:
         """Commented agentflow.toml section(s) for this language, appended by `agentflow init`."""

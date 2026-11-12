@@ -17,6 +17,7 @@ a terminal.
 | `/agentflow:resume [f]` | reattach the chat to a running or waiting feature | after a restart |
 | `/agentflow:status [f]` | where features stand; tag cleanup after the PR is merged | any time |
 | `agentflow init` | write the starter files (config, spec templates, project facts, .gitignore lines) | once per repo |
+| `agentflow install-tools [--dry-run]` | install what the workflow needs into the project's environment (python: the agentflow pytest plugin, pytest, pytest-cov, hypothesis, diff-cover, and with an agentflow.toml the lint / format / type tools its gate commands name); reports versions it changed; works before `init` | first step of `/agentflow:setup`, after config changes |
 | `agentflow doctor [--full] [--brief]` | check the setup without agents; ends with a verdict and only what needs action (`--brief`: only that); `--full` also runs the whole test suite | after setup or config changes |
 | `agentflow spec <f> [--mode feature\|bugfix\|refactor]` | create the branch `feat/<f>` and open the spec phase with the mode's templates | start of a feature |
 | `agentflow spec-check <f>` | mechanical checks of the spec tables (below); exit 1 on a problem | internal |

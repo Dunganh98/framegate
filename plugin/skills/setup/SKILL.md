@@ -9,6 +9,17 @@ and approve; you read the repo, draft the files, run the `agentflow` commands. E
 the decision and its default first, details only on request, plain words. You never change the
 project's source or tests (one exception, step 3: a tagging helper the user approved).
 
+## 0. Install the tools first
+
+Before anything else run `agentflow install-tools --dry-run`: it names the project's
+interpreter and what the workflow needs there and is missing (for Python: the agentflow pytest
+plugin, pytest, pytest-cov, hypothesis, diff-cover). Nothing missing: go on without a word. Else
+tell the user in one line what goes into which interpreter ("Installing agentflow, diff-cover,
+hypothesis into .venv") and run `agentflow install-tools`. Report its result in one line; if it
+prints `CHANGED versions`, show that line as it is (a pinned package moved: the user decides
+whether to keep it). If the install fails, show the error and stop: the setup cannot be
+checked without the tools. A language agentflow installs nothing for says so; go on.
+
 ## 1. Read the repo (no edits yet)
 
 Find out, from files only (Read / Glob / Grep):
@@ -89,8 +100,10 @@ Every later feature's PR phase updates the sections it touches.
 
 ## 5. Check: `agentflow doctor --brief`
 
-Run `agentflow doctor --brief`: a one-line verdict (ready / not ready), then only the failures
-and the warnings that need a decision. Fix every FAIL that is a config problem yourself and run
+First `agentflow install-tools` once more: with agentflow.toml written it also installs the
+lint / format / type tools the gate commands name (ruff, mypy, black), which step 0 could not
+know yet. Then run `agentflow doctor --brief`: a one-line verdict (ready / not ready), then
+only the failures and the warnings that need a decision. Fix every FAIL that is a config problem yourself and run
 it again until it says ready. Show the user the verdict line and, per remaining warning, one line
 with the decision and your default ("mutmut is not installed: mutation testing off until it is?
 Default: yes"). The full output (`agentflow doctor`) on request; `agentflow doctor --full` also

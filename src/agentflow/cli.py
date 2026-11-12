@@ -43,6 +43,10 @@ commands:
   spec-brief <feature>    print the conventions brief for the SPEC session
   stats [<feature>] [--json]  what the features cost, from the events: cost, agent / check
                           time, final-gate runs; with a feature: per phase and per final run
+  install-tools [--dry-run]  install what the workflow needs into the project's
+                          environment (python: the agentflow pytest plugin, pytest,
+                          pytest-cov, hypothesis, diff-cover, the gate commands' tools);
+                          works before `init`; --dry-run: only list what is missing
   doctor [--full] [--brief]  check the setup without agents: config, git, claude CLI,
                           tools, gate commands, test selection by spec ID; --full: the whole
                           suite; --brief: only the verdict and what needs action
@@ -123,6 +127,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("stats", help="cost and time per feature, from the events")
     p.add_argument("feature", nargs="?")
     p.add_argument("--json", action="store_true", help="the numbers as JSON")
+    p = sub.add_parser(
+        "install-tools", help="install the tools the workflow needs into the project env"
+    )
+    p.add_argument("--dry-run", action="store_true", help="only list what is missing")
     p = sub.add_parser("doctor", help="check the project setup (no agents)")
     p.add_argument("--full", action="store_true", help="also run the whole test suite")
     p.add_argument("--brief", action="store_true", help="only the verdict and what needs action")
@@ -169,6 +177,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             from agentflow.scaffold import init
 
             return init(language=args.language)
+        if args.command == "install-tools":
+            from agentflow.scaffold import install_tools
+
+            return install_tools(dry_run=args.dry_run)
         root = find_root()
         if root is None:
             print(
