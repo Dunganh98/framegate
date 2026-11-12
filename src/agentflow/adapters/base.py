@@ -487,6 +487,14 @@ class LanguageAdapter(abc.ABC):
         coverage against base_ref (>= cfg.diff_coverage). Report SKIPPED (not FAIL) when a
         coverage tool is missing; a cut-short run is FAIL `ERROR: ... incomplete`."""
 
+    def scope_coverage_reports(
+        self, req_ids: Sequence[str], files: Sequence[str]
+    ) -> tuple[list[pathlib.Path], str]:
+        """A refactor, before any code moves: run the tests tagged with `req_ids` with
+        coverage of `files` (repo-relative source files) and return (Cobertura reports,
+        a note: why there is none). The default: not measured by this adapter."""
+        return [], "this adapter does not measure coverage per file"
+
     @abc.abstractmethod
     def mutation_check(
         self,

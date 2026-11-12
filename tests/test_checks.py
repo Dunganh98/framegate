@@ -284,7 +284,7 @@ def test_smells_count_only_in_the_features_test_files(tmp_path: pathlib.Path) ->
     write(tmp_path, "tests/test_new.py", PICKED)
     res = smells_check.check(a, "f")
     assert res.status == "PASS" and "NOTE: LOOP OVER PICKED CASES" in res.output
-    assert "(1 in test files this feature did not change: ignored)" in res.output
+    assert "(1 in tests this feature did not add: ignored)" in res.output
     write(tmp_path, "tests/test_new.py", PICKED + "\n\ndef test_bare() -> None:\n    x = 1\n")
     res = smells_check.check(a, "f")
     assert res.status == "FAIL" and "NO ASSERTION: tests/test_new.py::test_bare" in res.output
@@ -499,3 +499,66 @@ def test_gate_report_shows_summary_under_fail_and_pass(
         "[PASS] mutation",
         "  Mutation score 100%",
     ]
+
+
+# ---------- a refactor: existing tests first ----------
+OLD_TESTS = """\
+import pytest
+
+
+def test_old_bare() -> None:
+    x = 1
+
+
+def test_old_pins() -> None:
+    assert 1 + 1 == 2
+"""
+
+
+def test_refactor_counts_tagged_existing_tests_and_ignores_their_old_smells(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A refactor tags the existing tests that already pin a row instead of writing them again
+    (live, FCSim: 835 lines of new tests beside 789 lines of existing ones). The check says
+    which tests existed; a smell in an old test of a touched file is not the refactor's."""
+    from agentflow.checks import baseline
+
+    init_git(tmp_path)
+    write(tmp_path, "tests/test_old.py", OLD_TESTS)
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-q", "-m", "old")
+    git(tmp_path, "tag", "spec-approved/f")
+    a = adapter_for(tmp_path)
+    ids = ["FT-R-001", "FT-R-002"]
+    none = baseline.existing_tests(a, "f", ids)
+    assert none[0].startswith("0 existing test(s) tagged") and "NOTE: no existing test" in none[1]
+
+    tagged = OLD_TESTS.replace(
+        "def test_old_pins", '@pytest.mark.req("FT-R-001")\ndef test_old_pins'
+    )
+    write(tmp_path, "tests/test_old.py", tagged)
+    write(
+        tmp_path,
+        "tests/test_new.py",
+        'import pytest\n\n\n@pytest.mark.req("FT-R-002")\n'
+        "def test_new() -> None:\n    assert 2 == 2\n",
+    )
+    lines = baseline.existing_tests(a, "f", ids)
+    assert lines == [
+        "1 existing test(s) tagged with a spec ID of this refactor (they already pin the "
+        "behavior), 1 new test(s).",
+        "Existing test files with tagged tests: tests/test_old.py",
+        "Pinned by existing tests only: FT-R-001",
+    ]
+    # the old bare test sits in a file the refactor touched: still not its business
+    res = smells_check.check(a, "f")
+    assert res.status == "PASS" and "(1 in tests this feature did not add: ignored)" in res.output
+    # a new test added beside the old ones counts
+    write(tmp_path, "tests/test_old.py", tagged + "\n\ndef test_added_bare() -> None:\n    y = 2\n")
+    res = smells_check.check(a, "f")
+    assert res.status == "FAIL" and "test_added_bare" in res.output
+    assert "test_old_bare" not in res.output
+    # an existing test that was changed, not only tagged: a note for the test reviewer
+    write(tmp_path, "tests/test_old.py", tagged.replace("assert 1 + 1 == 2", "assert True"))
+    note = baseline.existing_tests(a, "f", ids)[-1]
+    assert note.startswith("NOTE: tests/test_old.py: 1 line(s) of this existing test file")

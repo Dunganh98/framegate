@@ -16,12 +16,13 @@ ID_PREFIXES = {
     "E": "Escalations",
     "R": "Human rejections",
     "V": "Review findings",
+    "S": "Structure findings (reviewer)",
     "G": "Final gate failures",
     "D": "Permission denials",
     "A": "Assumptions (implementer, from steps.md)",
     "P": "Parked items",
 }
-ITEM_ID = re.compile(r"\b([QFERVGDAP])(\d+)\b")
+ITEM_ID = re.compile(r"\b([QFERVSGDAP])(\d+)\b")
 
 
 @dataclass
@@ -237,6 +238,42 @@ def _answer_for_questions(
     return "(not answered: no numbered answer is about this question)"
 
 
+def _structure_fix(later: list[dict[str, Any]]) -> str:
+    """What the structure fixes after a `structure_findings` event cost: the implementer
+    runs and the gates of the item "structure fixes" up to its end (one item fixes all the
+    findings of the review together)."""
+    runs = gates = failed = 0
+    agent = checks = cost = 0.0
+    done = None
+    for e in later:
+        kind = e.get("kind")
+        if kind == "structure_fixed":
+            done = True
+            break
+        if kind in ("structure_findings", "final_gates"):
+            break
+        if e.get("step") != "structure fixes":
+            continue
+        if kind == "agent_run":
+            runs += 1
+            agent += float(e.get("seconds") or 0)
+            cost += float(e.get("cost") or 0)
+        elif kind == "gate":
+            gates += 1
+            failed += 0 if e.get("passed") else 1
+            checks += float(e.get("seconds") or 0)
+        elif kind == "parked":
+            done = False
+    if not runs:
+        return "(not started)"
+    state = "done" if done else "parked" if done is False else "not finished"
+    return (
+        f"{state}, together with the other findings of this review: {runs} implementer "
+        f"run(s) ({round(agent)} s, ${cost:.2f}), {gates} gate run(s) ({round(checks)} s, "
+        f"{failed} failed)"
+    )
+
+
 def build(
     feature: str,
     events: list[dict[str, Any]],
@@ -350,6 +387,15 @@ def build(
             )
             for name in e.get("tests") or []:
                 item("V", str(name), [f"Human decision: {verdict}"])
+        elif kind == "structure_findings":
+            fix = _structure_fix(events[i + 1 :])
+            for text in e.get("findings") or []:
+                head = " ".join(str(text).split())
+                item(
+                    "S",
+                    head[:70] + ("..." if len(head) > 70 else ""),
+                    [f"Finding: {_block(str(text), 800)}", f"Fix: {fix}"],
+                )
         elif kind == "final_gates" and not e.get("passed"):
             failed = ", ".join(e.get("failed") or []) or "(not recorded)"
             item(
@@ -428,6 +474,7 @@ def build(
         "E": f"escalations {counts['E']}",
         "R": f"human rejections {counts['R']}",
         "V": f"review findings {counts['V']}",
+        "S": f"structure findings {counts['S']}",
         "G": f"final gate failures {counts['G']}",
         "D": f"permission denials {counts['D']}",
         "A": f"assumptions {counts['A']}",

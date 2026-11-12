@@ -124,7 +124,18 @@ def test_build_all_kinds() -> None:
         "G1",
         "D1",
     ]  # event order
-    assert ri.counts == {"Q": 4, "F": 1, "E": 1, "R": 2, "V": 2, "G": 1, "D": 1, "A": 0, "P": 0}
+    assert ri.counts == {
+        "Q": 4,
+        "F": 1,
+        "E": 1,
+        "R": 2,
+        "V": 2,
+        "S": 0,
+        "G": 1,
+        "D": 1,
+        "A": 0,
+        "P": 0,
+    }
     t = ri.text
     assert "questions 4 (3 rounds); failed attempts 1; escalations 1; human rejections 2" in t
     assert "### Q1 — TESTS\nQuestion: A?" in t and "A: yes. B: no." in t
@@ -295,3 +306,33 @@ def test_answers_looked_up_in_every_round_and_the_archive() -> None:
     failed = build("f", plain).text
     assert "(answer lookup failed: 1 answer round(s) and a spec update followed" in failed
     assert "(not answered" not in failed
+
+
+def test_structure_findings_are_items_with_the_cost_of_their_fix() -> None:
+    """Live (FCSim, a refactor): the reviewer found a method over the spec's limit; the fix took
+    a quarter of the run, and the retro did not see it."""
+    long = "src/a.cs: `Kick` is 73 lines, the target is 70. -> Move the landing block out."
+    events = [
+        {"kind": "structure_findings", "findings": [long, "src/b.cs: no doc comment."]},
+        {"kind": "agent_run", "step": "structure fixes", "seconds": 405, "cost": 0.17},
+        {"kind": "gate", "step": "structure fixes", "passed": False, "seconds": 30},
+        {"kind": "agent_run", "step": "structure fixes", "seconds": 60, "cost": 0.1},
+        {"kind": "gate", "step": "structure fixes", "passed": True, "seconds": 231},
+        {"kind": "structure_fixed", "findings": [long]},
+        {"kind": "gate", "step": "structure fixes", "passed": True, "seconds": 999},  # later
+    ]
+    ri = build("f", events)
+    assert ri.ids == ["S1", "S2", "F1"] and ri.counts["S"] == 2  # the failed gate: F1
+    assert "review findings 0; structure findings 2; final gate failures 0" in ri.text
+    assert (
+        "### S1 \u2014 src/a.cs: `Kick` is 73 lines, the target is 70. -> Move the landing bl..."
+        in (ri.text)
+    )
+    fix = (
+        "Fix: done, together with the other findings of this review: 2 implementer run(s) "
+        "(465 s, $0.27), 2 gate run(s) (261 s, 1 failed)"
+    )
+    assert ri.text.count(fix) == 2
+    assert missing_ids("S1 cost a fix run", ri.ids) == ["S2", "F1"]
+    open_ = build("f", events[:1])
+    assert "Fix: (not started)" in open_.text

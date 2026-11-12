@@ -66,6 +66,8 @@ class FeatureStats:
     auto_approved: bool = False
     human_seconds: float = 0.0
     human_waits: int = 0
+    #: from `agentflow spec` to the approval (the spec dialogue in the chat), every round
+    spec_seconds: float = 0.0
 
     @property
     def cost(self) -> float:
@@ -94,6 +96,7 @@ class FeatureStats:
             "agent_seconds": round(self.agent_seconds),
             "check_seconds": round(self.check_seconds),
             "human_seconds": round(self.human_seconds),
+            "spec_seconds": round(self.spec_seconds),
             "wall_seconds": round(self.wall_seconds),
             "phases": {
                 name: {
@@ -152,6 +155,7 @@ def feature_stats(feature: str, events: list[dict[str, Any]]) -> FeatureStats:
     """One feature's events (in file order) -> its numbers."""
     st = FeatureStats(feature)
     waiting: str | None = None
+    spec_open: str | None = None
     for e in events:
         kind, ts = e.get("kind"), str(e.get("ts") or "")
         st.started = st.started or ts
@@ -162,6 +166,11 @@ def feature_stats(feature: str, events: list[dict[str, Any]]) -> FeatureStats:
             waiting = None
         if kind in ("spec_started", "spec_approved") and e.get("mode"):
             st.mode = str(e["mode"])
+        if kind == "spec_started":
+            spec_open = spec_open or ts
+        elif kind == "spec_approved":
+            st.spec_seconds += _between(spec_open, ts) if spec_open else 0
+            spec_open = None
         elif kind == "agent_run":
             p = st.phases.setdefault(str(e.get("phase") or "?"), PhaseStats())
             p.runs += 1
@@ -259,6 +268,7 @@ def overview(stats: list[FeatureStats]) -> list[str]:
         "agents",
         "checks",
         "you",
+        "spec",
         "final runs",
         "step fails",
         "questions",
@@ -275,6 +285,7 @@ def overview(stats: list[FeatureStats]) -> list[str]:
                 duration(st.agent_seconds),
                 duration(st.check_seconds),
                 duration(st.human_seconds),
+                duration(st.spec_seconds) if st.spec_seconds else "-",
                 _final_word(st),
                 str(st.step_gates_failed),
                 str(st.questions),
@@ -296,7 +307,8 @@ def overview(stats: list[FeatureStats]) -> list[str]:
         ]
     lines += [
         "",
-        "agents / checks: time agents and gate checks ran; you: time a gate waited for you.",
+        "agents / checks: time agents and gate checks ran; you: time a gate waited for you;",
+        "spec: from `agentflow spec` to the approval (the chat's own cost is not in the log).",
     ]
     return lines
 
@@ -309,6 +321,12 @@ def detail(st: FeatureStats) -> list[str]:
         "",
         "Agent runs per phase:",
     ]
+    if st.spec_seconds:
+        lines.insert(
+            1,
+            f"Spec: {duration(st.spec_seconds)} from `agentflow spec` to the approval (the "
+            "chat wrote it with you; its cost and the talk before are not in the log)",
+        )
     order = [p for p in PHASE_ORDER if p in st.phases]
     order += sorted(
         (p for p in st.phases if p not in PHASE_ORDER), key=lambda p: -st.phases[p].cost

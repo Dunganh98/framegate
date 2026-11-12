@@ -945,6 +945,40 @@ class DotnetAdapter(LanguageAdapter):
             self.settings.final_filter, "regression", timeout=self.cfg.regression_timeout
         )
 
+    def source_files(self) -> list[str]:
+        """Every C# file of the source folders (repo-relative posix paths)."""
+        return [
+            p.relative_to(self.root).as_posix()
+            for root in self.cfg.src_roots
+            for p in sorted((self.root / root).rglob("*.cs"))
+            if not SKIP_DIRS & set(p.relative_to(self.root).parts[:-1])
+        ]
+
+    def scope_coverage_reports(
+        self, req_ids: Sequence[str], files: Sequence[str]
+    ) -> tuple[list[pathlib.Path], str]:
+        if not self.references("coverlet.collector"):
+            return [], "the test project(s) do not reference coverlet.collector"
+        cov_dir = self.root / self.cfg.paths.out / "coverage-scope"
+        shutil.rmtree(cov_dir, ignore_errors=True)
+        # only the files in scope are recorded (as in coverage_exclude: recording a
+        # simulation's hot loops makes the run many times slower)
+        globs = unchanged_globs(self.source_files(), list(files))
+        if sum(len(g) + 1 for g in globs) > EXCLUDE_ARG_LIMIT:
+            globs = []
+        ids = [i for i in req_ids if i]
+        run = self._dotnet_test(
+            combine_filters(req_filter(ids), self.settings.base_filter),
+            "scope",
+            coverage=cov_dir,
+            timeout=self.cfg.coverage_timeout,
+            cover_exclude=globs,
+        )
+        reports = sorted(cov_dir.rglob("coverage.cobertura.xml"))
+        if run.incomplete or not reports:
+            return [], f"coverage run incomplete ({run.incomplete or 'no report'})"
+        return reports, ""
+
     def coverage_exclude(self, base_ref: str) -> tuple[list[str], str]:
         """(ExcludeByFile globs, a note for the check's output): with [dotnet] coverage_files =
         "changed", the coverage run records only the source files changed since base_ref.
@@ -963,12 +997,7 @@ class DotnetAdapter(LanguageAdapter):
             return [], ""
         if not changed:
             return [], ""
-        files = [
-            p.relative_to(self.root).as_posix()
-            for root in self.cfg.src_roots
-            for p in sorted((self.root / root).rglob("*.cs"))
-            if not SKIP_DIRS & set(p.relative_to(self.root).parts[:-1])
-        ]
+        files = self.source_files()
         globs = unchanged_globs(files, changed)
         if not globs or sum(len(g) + 1 for g in globs) > EXCLUDE_ARG_LIMIT:
             return [], ""

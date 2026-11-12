@@ -26,6 +26,10 @@ MODE_BRIEF = {
         "preserve (R and I IDs: characterization tests that PASS on today's code, before and "
         "after every step). No interface stubs, no behavior change. Golden values are "
         "measured from today's code.",
+        "- Existing tests first: find the tests that already exercise the code in scope and "
+        "list them in requirements.md ('Existing tests of the code in scope'). The test "
+        "writer tags them with the row they pin and writes new tests only for the gaps, so "
+        "a row says what must hold, not that a new test is needed.",
         "- plan.md: small steps (one move, split or rename each); step 1 covers every ID; "
         "every step is checked with all the characterization tests.",
     ],
