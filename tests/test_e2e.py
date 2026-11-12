@@ -19,7 +19,7 @@ from agentflow.adapters import get_adapter
 from agentflow.checks import frame_diff
 from agentflow.config import load_config
 from agentflow.orchestrator import EXIT_GATE, EXIT_INTERRUPTED, Orchestrator
-from conftest import DemoRepo, git
+from conftest import DemoRepo, git, marker
 
 FAST = "[gates.commands]\nlint = []\nformat = []\ntypecheck = []\n"
 
@@ -129,7 +129,7 @@ def test_full_flow_human_mode(demo_repo: DemoRepo, capsys: pytest.CaptureFixture
     assert "Should add() accept floats?" in archive and "### Answer ANS-1" in archive
     assert "No floats." in archive
     assert r.af("approve", "demo") == 0
-    assert git(r.root, "tag", "--list", "tests-approved/demo").strip()
+    assert marker(r.root, "tests-approved/demo")
     approved = git(r.root, "show", "spec-approved/demo:specs/demo/requirements.md")
     assert "(answer ANS-1)" in approved  # the tag moved to the approved spec
     assert [e["gate"] for e in r.events() if e["kind"] == "spec_reapproved"] == ["tests"]
@@ -273,14 +273,14 @@ def test_answer_parked_redoes_only_parked_items(demo_repo: DemoRepo) -> None:
     assert "the human answered questions at the final gate (answer reference ANS-1" in amend
     assert "## Orientation" in amend and "specs/demo/: design.md, plan.md" in amend
     assert [e["files"] for e in r.events() if e["kind"] == "tests_amended"] == [[]]
-    assert not git(r.root, "tag", "--list", "tests-update/demo").strip()
+    assert not marker(r.root, "tests-update/demo")
     redo = r.calls()[n + 2]
     assert "implement plan step 2" in redo["prompt"] and "redo of parked work" in redo["prompt"]
     prog = r.progress()
     assert prog["completed_steps"] == [1, 2] and prog["parked"] == [] and not prog["redo"]
     assert [e["passed"] for e in r.events() if e["kind"] == "redo_result"] == [True]
     # the spec changed after tests-approved: the frame diff allows exactly the tagged update
-    assert git(r.root, "tag", "--list", "spec-update/demo").strip()
+    assert marker(r.root, "spec-update/demo")
     assert "ALL GATES PASSED" in read(r, "out/demo/final_gates.md")
     assert "nothing parked" in r.progress()["waiting"]["message"]
     assert "spec changed from your answers" in r.progress()["waiting"]["message"]
@@ -452,7 +452,7 @@ def test_tests_gate_auto(demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
     assert r.af("approve-spec", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
     assert phases(r) == ["TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "PR"]
-    assert git(r.root, "tag", "--list", "tests-approved/demo").strip()
+    assert marker(r.root, "tests-approved/demo")
     auto = [e for e in r.events() if e["kind"] == "tests_gate_auto"]
     assert auto == [auto[0]] and auto[0]["passed"] is True and auto[0]["reasons"] == []
     assert not [e for e in r.events() if e["kind"] == "human_gate"]
@@ -479,7 +479,7 @@ def test_tests_gate_auto_stops_when_not_clean(
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "tests"
     auto = [e for e in r.events() if e["kind"] == "tests_gate_auto"]
     assert auto[-1]["passed"] is False and reason in auto[-1]["reasons"]
-    assert not git(r.root, "tag", "--list", "tests-approved/demo").strip()
+    assert not marker(r.root, "tests-approved/demo")
     if "test_review_objections" in scenario:  # 1 round back to the writer, then the gate
         assert phases(r) == ["TESTS", "TEST_REVIEW", "TESTS", "TEST_REVIEW"]
     assert r.af("approve", "demo") == 0  # the human decides as in human mode
@@ -500,7 +500,7 @@ def test_tests_gate_deferred_two_human_gates(
     assert r.af("approve-spec", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
     assert phases(r) == ["TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "PR"]
-    assert git(r.root, "tag", "--list", "tests-approved/demo").strip()
+    assert marker(r.root, "tests-approved/demo")
     deferred = [e for e in r.events() if e["kind"] == "tests_gate_deferred"]
     assert len(deferred) == 1
     assert "1 open question(s)" in deferred[0]["reasons"]
@@ -702,7 +702,7 @@ def test_answers_that_need_a_test_change_reach_the_tests(demo_repo: DemoRepo) ->
     amended = [e for e in r.events() if e["kind"] == "tests_amended"]
     assert [e["files"] for e in amended] == [["tests/test_demo.py"]]
     assert "tests updated from answers ANS-1" in git(r.root, "log", "--format=%s")
-    assert git(r.root, "tag", "--list", "tests-update/demo").strip()
+    assert marker(r.root, "tests-update/demo")
     final = read(r, "out/demo/final_gates.md")
     assert "[PASS] frame diff" in final and "[PASS] traceability" in final
     assert "the changed tests pass; no fix needed" in read(r, "out/demo/progress.log")

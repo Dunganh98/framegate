@@ -66,6 +66,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "coverage_scope": (str,),
         "mutation_scope": (str,),
         "regression_timeout": (int,),
+        "regression_baseline": (bool,),
         "coverage_timeout": (int,),
         "mutation_timeout": (int,),
         "commands": (dict,),
@@ -87,7 +88,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
     "frame": {"forbidden_patterns": (list,)},
     "spec": {"id_pattern": (str,)},
     "roles": {"extra_dir": (str,)},
-    "git": {"base": (str,), "branch_prefix": (str,), "branch": (bool,)},
+    "git": {"base": (str,), "branch_prefix": (str,), "branch": (bool,), "markers": (str,)},
     "notify": {"toast": (bool,)},
     "phases": {},
     # language adapter sections: validated here, read by the adapter (cfg.language_options)
@@ -113,6 +114,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "conventions": (str,),
         "test_timeout": (int,),
     },
+    "python": {"pytest_args": (list,)},
     "dotnet": {
         "executable": (str,),
         "solution": (str,),
@@ -130,9 +132,13 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
     },
 }
 #: sections owned by a language adapter (stored raw in Config.language_options)
-LANGUAGE_SECTIONS = ("dotnet", "generic")
+LANGUAGE_SECTIONS = ("dotnet", "generic", "python")
 GATE_COMMAND_KEYS = ("lint", "format", "typecheck", "imports")
 MUTATION_RUNNERS = ("auto", "native", "wsl")
+#: [git] markers: how spec-approved/<f>, tests-approved/<f>, ... are stored. "refs" = private
+#: refs (refs/<name>): no `git push`, `--tags` or `--all` publishes them; "tags" = git tags,
+#: for a CI job that runs `agentflow gates` and gets them through `git push --tags`
+MARKER_KINDS = ("refs", "tags")
 #: tests the final coverage / mutation runs use: the feature's tests (its spec IDs + the review
 #: tests; the whole suite then runs once more without instrumentation) or the whole suite
 GATE_SCOPES = ("feature", "suite")
@@ -278,6 +284,13 @@ class Config:
     #: [gates] format_fix: the gates apply the formatter to the changed source files before
     #: checking (a formatting slip costs no implementer attempt)
     format_fix: bool = True
+    #: [gates.commands] format_fix: the project's own formatter for that fix, `{files}` = the
+    #: changed files (e.g. black where the project checks with black, not ruff format)
+    format_fix_command: list[str] = field(default_factory=list)
+    #: [gates] regression_baseline: `approve-spec` runs the whole suite once and records the
+    #: tests that already fail; the final regression check then fails only on other failures
+    #: (for a repository whose suite is not green locally, e.g. tests that need services)
+    regression_baseline: bool = False
     #: [gates.extra] name -> command: project checks run at the final gates and shown at the
     #: final gate, never blocking (e.g. a balance measurement)
     extra_checks: dict[str, list[str]] = field(default_factory=dict)
@@ -323,6 +336,8 @@ class Config:
     git_branch: bool = True
     git_base: str = "main"
     branch_prefix: str = "feat/"
+    #: [git] markers: "refs" (private refs, never pushed) | "tags" (see MARKER_KINDS)
+    git_markers: str = "refs"
     #: [notify] toast: Windows toast at each gate, DONE and on error (no-op elsewhere / on failure)
     toast: bool = True
     #: raw, type-checked adapter sections, e.g. {"dotnet": {"configuration": "Release"}}
@@ -576,10 +591,19 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
         if value < 1:
             raise ConfigError(f"[gates] {key} must be >= 1")
         setattr(cfg, key, value)
+    cfg.regression_baseline = gates.get("regression_baseline", cfg.regression_baseline)
     for key, cmd in gates.get("commands", {}).items():
+        if key == "format_fix":
+            cfg.format_fix_command = _str_list("[gates.commands] format_fix", cmd)
+            if cfg.format_fix_command and "{files}" not in cfg.format_fix_command:
+                raise ConfigError(
+                    '[gates.commands] format_fix needs a "{files}" argument (the changed files)'
+                )
+            continue
         if key not in GATE_COMMAND_KEYS:
             raise ConfigError(
-                f"[gates.commands] unknown key '{key}' (allowed: {GATE_COMMAND_KEYS})"
+                f"[gates.commands] unknown key '{key}' "
+                f"(allowed: {(*GATE_COMMAND_KEYS, 'format_fix')})"
             )
         cfg.gate_commands[key] = _str_list(f"[gates.commands] {key}", cmd)
     for name, cmd in gates.get("extra", {}).items():
@@ -611,6 +635,11 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     cfg.git_branch = git_cfg.get("branch", cfg.git_branch)
     cfg.git_base = git_cfg.get("base", cfg.git_base)
     cfg.branch_prefix = git_cfg.get("branch_prefix", cfg.branch_prefix)
+    cfg.git_markers = git_cfg.get("markers", cfg.git_markers)
+    if cfg.git_markers not in MARKER_KINDS:
+        raise ConfigError(
+            f"[git] markers must be one of {', '.join(MARKER_KINDS)}, got '{cfg.git_markers}'"
+        )
     if not cfg.git_base.strip():
         raise ConfigError("[git] base must not be empty")
     cfg.toast = data.get("notify", {}).get("toast", cfg.toast)

@@ -15,6 +15,7 @@ failures, and skips coverage, diff coverage and mutation until the redo.
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from collections.abc import Callable
@@ -121,6 +122,44 @@ def expected_red(cfg: Config, feature: str) -> ExpectedRed:
     )
 
 
+#: out/<feature>/<this>: the tests that already failed when the spec was approved
+BASELINE_FILE = "regression_baseline.json"
+
+
+def record_regression_baseline(adapter: LanguageAdapter, feature: str) -> tuple[int, str]:
+    """[gates] regression_baseline: run the whole suite once (as the final regression check
+    does) and record the tests that fail today. Returns (number recorded, problem); with a
+    problem ("" = fine) nothing is recorded and the final check stays strict."""
+    run = adapter.regression_run()
+    if run.incomplete:
+        return 0, f"the suite run was cut short ({run.incomplete})"
+    if run.status == "passed":
+        failing: list[str] = []
+    elif run.status == "failed" and run.cases is not None:
+        failing = sorted({c.name for c in run.cases if c.outcome in ("failed", "error")})
+    else:
+        return 0, f"the suite run gave no per-test results ({run.status})"
+    path = adapter.cfg.feature_out(feature) / BASELINE_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"failing": failing}, indent=2), encoding="utf-8")
+    return len(failing), ""
+
+
+def regression_baseline(cfg: Config, feature: str) -> set[str]:
+    """Names of the tests that already failed when the spec was approved (empty: none
+    recorded, or [gates] regression_baseline is off)."""
+    if not cfg.regression_baseline or not feature:
+        return set()
+    path = cfg.feature_out(feature) / BASELINE_FILE
+    if not path.is_file():
+        return set()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    return {str(n) for n in data.get("failing") or []} if isinstance(data, dict) else set()
+
+
 def split_failures(
     cases: list[TestCase], names: set[str], contested: list[str]
 ) -> tuple[list[str], list[str], list[str]]:
@@ -147,8 +186,14 @@ def _listed(names: list[str], limit: int = 30) -> str:
     return "\n".join(f"  {n}" for n in names[:limit]) + more
 
 
-def tests_expecting(run: TestRun, exp: ExpectedRed, parked_names: set[str]) -> CheckResult:
-    """A test run judged with the expected red tests left out: FAIL only on other failures."""
+def tests_expecting(
+    run: TestRun,
+    exp: ExpectedRed,
+    parked_names: set[str],
+    known: set[str] | frozenset[str] = frozenset(),
+) -> CheckResult:
+    """A test run judged with the expected red tests left out: FAIL only on other failures.
+    `known`: tests that already failed when the spec was approved (regression baseline)."""
     if run.incomplete:
         return incomplete_result(run.incomplete, run.output)
     if run.status == "passed":
@@ -160,16 +205,22 @@ def tests_expecting(run: TestRun, exp: ExpectedRed, parked_names: set[str]) -> C
             "from other failures)",
         )
     parked, contested, other = split_failures(run.cases, parked_names, exp.contested)
+    old = [n for n in other if n in known]
+    other = [n for n in other if n not in known]
     parts = []
+    if old:
+        parts.append(f"already failing at spec approval (left out): {len(old)}")
     if exp.parked_ids:
         parts.append(f"expected red (parked): {len(parked)}")
     if exp.contested:
         parts.append(f"contested (provisional, left out): {len(contested)}")
     if other:
+        kinds = "neither a parked step's test nor a contested test"
+        if known:
+            kinds += ", and green when the spec was approved"
         return CheckResult(
             "FAIL",
-            run.output + "\n\nUNEXPECTED failures (neither a parked step's test nor a contested "
-            f"test): {len(other)}\n{_listed(other)}",
+            run.output + f"\n\nUNEXPECTED failures ({kinds}): {len(other)}\n{_listed(other)}",
             "; ".join(parts),
         )
     return CheckResult("PASS", run.output, "; ".join([*parts, "no other failure"]))
@@ -187,11 +238,14 @@ def parked_test_names(adapter: LanguageAdapter, exp: ExpectedRed) -> tuple[set[s
     return {c.name for c in run.cases}, ""
 
 
-def regression_expecting(adapter: LanguageAdapter, exp: ExpectedRed) -> CheckResult:
-    """The whole suite with parked steps / contested tests: their failures are expected
-    (counted, not failing); any other failure fails the check."""
+def regression_expecting(
+    adapter: LanguageAdapter, exp: ExpectedRed, known: set[str] | frozenset[str] = frozenset()
+) -> CheckResult:
+    """The whole suite with parked steps / contested tests / tests that already failed when
+    the spec was approved: their failures are expected (counted, not failing); any other
+    failure fails the check."""
     names, problem = parked_test_names(adapter, exp)
-    res = tests_expecting(adapter.regression_run(), exp, names)
+    res = tests_expecting(adapter.regression_run(), exp, names, known)
     if problem and res.status == "FAIL":
         res.output += f"\n({problem})"
     return res
@@ -226,17 +280,25 @@ def checks(
     else:
         cov, mut = final_scopes(adapter, feature)
         waiting = exp or ExpectedRed()
+        known = regression_baseline(adapter.cfg, feature)
         reason = f"SKIPPED ({waiting.reason()}): runs again after the redo"
         if waiting:
             c.append(
                 Check(
                     "regression: whole suite, no coverage",
-                    lambda: regression_expecting(adapter, waiting),
+                    lambda: regression_expecting(adapter, waiting, known),
                 )
             )
             c += [Check(k.name, _skipped(reason)) for k in adapter.coverage_checks(tag, cov)]
         else:
-            if cov is not None:
+            if cov is not None and known:
+                c.append(
+                    Check(
+                        "regression: whole suite, no coverage",
+                        lambda: regression_expecting(adapter, ExpectedRed(), known),
+                    )
+                )
+            elif cov is not None:
                 c.append(adapter.regression_check())
             c += adapter.coverage_checks(tag, cov)
         c.append(Check("traceability", lambda: traceability.check(adapter, feature)))

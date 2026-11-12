@@ -494,8 +494,8 @@ def test_cleanup_keeps_specs_and_metrics(
     assert r.af("cleanup", "demo", "--tags") == 0
     out = capsys.readouterr().out
     assert "Tags deleted (local): spec-approved/demo, tests-approved/demo" in out
-    assert "git push origin --delete spec-approved/demo tests-approved/demo" in out
-    assert not git(r.root, "tag", "--list", "*/demo").strip()
+    assert "git push origin --delete" not in out  # private refs: nothing was ever pushed
+    assert not git(r.root, "for-each-ref", "refs/*-approved/demo", "refs/tags").strip()
     assert r.af("status") == 0
     assert "- demo" not in capsys.readouterr().out  # finished features drop off the overview
 

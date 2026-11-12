@@ -84,6 +84,12 @@ def git(root: pathlib.Path, *args: str) -> str:
     ).stdout
 
 
+def marker(root: pathlib.Path, name: str) -> bool:
+    """True when the workflow marker `name` exists as a private ref (refs/<name>)."""
+    r = subprocess.run(["git", "show-ref", "--verify", "--quiet", f"refs/{name}"], cwd=root)
+    return r.returncode == 0
+
+
 def init_git(root: pathlib.Path) -> None:
     git(root, "init", "-q", "-b", "main")
     git(root, "config", "user.email", "test@example.com")
