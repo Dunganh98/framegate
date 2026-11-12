@@ -2045,3 +2045,33 @@ together (a short flow, mermaid optional), "where to look for X".
 **Not yet seen on a real feature:** how well the PR agent (Sonnet) writes the brief and the code
 map; the brace heuristic on FCSim's C#; whether "ok = take the defaults" reads naturally at the
 gate. FCSim needs a code map before its next feature.
+
+### 9.11 Scope: one lean core, adapters, modes; the rest in the project's setup
+
+Decided 2026-11-12 (HANDOVER decision 14), when the second kind of target repo (Python services
+with Databricks / Kafka / Spark behind them) raised the question of what belongs in this
+repository.
+
+The test for where a thing goes: **does it change how proof is produced, or only what one
+project depends on?**
+
+| Layer | Holds | Examples |
+|---|---|---|
+| Core (this repo) | phases, gates, frame, hooks, briefs, retro | orchestrator, checks, plugin |
+| Adapters (this repo) | how a language proves things: select tests by spec ID, coverage, mutation, stubs | python (pytest, mutmut), dotnet (xUnit, Stryker), generic |
+| Hosting templates (this repo) | the CI gate job per host | GitHub Actions; Azure Pipelines (to do) |
+| Modes (this repo) | the first proof of a kind of work | feature (red against stubs), bugfix, refactor; later: experiment, pipeline |
+| Project setup (target repo) | what the project's stack means for a run | agentflow.toml (`pytest_args`, baseline, protected paths, `[gates.extra]`), `.agentflow/project.md` |
+| Presets (later) | settings shared by projects with the same stack | only after two set-up projects show what repeats |
+
+Rules:
+- A project's stack (databases, brokers, cloud services, connectors) is never installed or
+  wrapped by agentflow: it is the project's dependency. `agentflow install-tools` installs only
+  what the workflow needs.
+- A new built-in adapter only after the generic one fell short on a real project.
+- The flow fits where "done" is an automated test that fails first and passes after. Where the
+  proof is something else, the answer is a mode with its own first proof, not a second tool:
+  **experiment** (a metric with noise: a threshold with a tolerance, a fixed evaluation set)
+  and **pipeline** (the real environment is the proof: plan / policy / dry-run checks before,
+  a verification step after). What only a person can judge (UI look, game feel) stays a
+  final-gate item under "Not proven".
