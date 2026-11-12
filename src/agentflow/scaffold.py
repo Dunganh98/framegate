@@ -8,7 +8,14 @@ from collections.abc import Callable
 
 from agentflow.adapters import detect_language, get_adapter
 from agentflow.adapters.base import LanguageAdapter
-from agentflow.config import CONFIG_FILE, Config, ConfigError, parse_config
+from agentflow.config import (
+    CONFIG_FILE,
+    Config,
+    ConfigError,
+    find_root,
+    load_config,
+    parse_config,
+)
 from agentflow.orchestrator import package_text
 from agentflow.specs import feature_mode, template_dir
 
@@ -128,13 +135,43 @@ def init(
     if note:
         echo("\nNote: " + note)
     echo(
-        "\nNext: `agentflow doctor` (checks the configured tools and commands, no agents), "
+        "\nNext: `agentflow install-tools` (puts the tools the workflow needs into the "
+        "project's environment), `agentflow doctor` (checks the configured tools and "
+        "commands, no agents), "
         "commit these files, then in Claude Code (agentflow plugin installed): "
         "/agentflow:feature <feature>"
         '\nAllow the CLI for the chat skills: add "Bash(agentflow *)" and '
         '"PowerShell(agentflow *)" to permissions.allow in .claude/settings.local.json'
     )
     return 0
+
+
+def install_tools(
+    dry_run: bool = False,
+    start: pathlib.Path | None = None,
+    echo: Callable[[str], None] = print,
+) -> int:
+    """`agentflow install-tools`: the tools the workflow needs, into the project's environment.
+    Works before `agentflow init` (the language is detected, the defaults apply)."""
+    here = (start or pathlib.Path(os.getcwd())).resolve()
+    root = find_root(here)
+    if root is not None:
+        cfg = load_config(root)
+    else:
+        lang = detect_language(here)
+        if lang is None:
+            echo(
+                "error: no agentflow.toml here and the project language could not be detected; "
+                "run this in the repository root."
+            )
+            return 1
+        cfg = parse_config(here, {"project": {"language": lang}})
+    try:
+        adapter = get_adapter(cfg)
+    except ConfigError as e:  # e.g. generic without its section yet
+        echo(f"Nothing to install yet: {e}")
+        return 0
+    return adapter.install_tools(dry_run, echo)
 
 
 def spec_brief(cfg: Config, feature: str) -> str:

@@ -20,7 +20,7 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised only on 3.10
     import tomli as tomllib
 
-from agentflow import __version__
+from agentflow import __version__, pytools
 from agentflow.adapters import wsl
 from agentflow.adapters.base import (
     Check,
@@ -181,8 +181,35 @@ class PythonAdapter(LanguageAdapter):
             out[0] = self.python
         return out
 
+    def tool_requirements(self) -> list[pytools.ToolReq]:
+        """What the workflow needs in the project interpreter. Always: the agentflow pytest
+        plugin (the `req` marker, `--req`), pytest, pytest-cov, hypothesis, diff-cover. With
+        an agentflow.toml also the lint / format / type tools its gate commands name (before
+        it exists the commands are not settled: `/agentflow:setup` may switch one off)."""
+        src = agentflow_source()
+        own = ("-e", str(src)) if src is not None else (f"agentflow=={__version__}",)
+        reqs = [
+            pytools.ToolReq("agentflow", own, "pytest plugin: req marker, --req"),
+            pytools.ToolReq("pytest", ("pytest",), "tests"),
+            pytools.ToolReq("pytest_cov", ("pytest-cov",), "coverage"),
+            pytools.ToolReq("hypothesis", ("hypothesis",), "property tests"),
+            pytools.ToolReq("diff_cover", ("diff-cover",), "diff coverage"),
+        ]
+        if self.cfg.loaded_from_file:
+            commands = {**self.default_gate_commands(), **self.cfg.gate_commands}
+            reqs += pytools.gate_tools([*commands.values(), self.cfg.format_fix_command])
+        return reqs
+
+    def install_tools(self, dry_run: bool, echo: Callable[[str], None]) -> int:
+        return pytools.install(
+            self.python, self.root, self.tool_requirements(), self._has_module, dry_run, echo
+        )
+
     def tool_report(self) -> list[tuple[str, bool, str]]:
         out = []
+        ok = self._has_module("agentflow")
+        hint = "run: agentflow install-tools"
+        out.append(("agentflow (pytest plugin: --req)", ok, self.python if ok else hint))
         for module, what in (
             ("pytest", "tests"),
             ("pytest_cov", "coverage"),

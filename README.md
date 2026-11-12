@@ -19,8 +19,9 @@ claude plugin install agentflow@agentflow
 
 ## Use
 
-1. **Set up the repo (once):** in Claude Code run `/agentflow:setup`, answer its questions,
-   commit the files it lists.
+1. **Set up the repo (once):** in Claude Code run `/agentflow:setup`: it first installs the
+   tools the workflow needs into the project's environment, then asks its questions; commit
+   the files it lists.
 2. **Start a feature:** `/agentflow:feature <name>`, describe what you want, answer the few
    questions (each has a default), check the spec brief (above all "Decisions I made for
    you"), then say **"spec OK"**.
@@ -61,6 +62,7 @@ In a terminal (the chat runs these for you):
 
 | Command | Does |
 |---|---|
+| `agentflow install-tools` | install what the workflow needs into the project's environment (setup does this first) |
 | `agentflow doctor` | check the setup (no agents, no cost) |
 | `agentflow run <name>` | continue a feature until it needs you |
 | `agentflow status <name>` | show its state |
