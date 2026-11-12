@@ -376,9 +376,22 @@ class LanguageAdapter(abc.ABC):
     line_scoped_format: ClassVar[bool] = False
 
     def format_fix_enabled(self) -> bool:
-        """[gates] format_fix, and only with the adapter's own format check (a configured
-        [gates.commands] format means the project runs its own formatter)."""
-        return self.cfg.format_fix and "format" not in self.cfg.gate_commands
+        """[gates] format_fix, with the adapter's own format check or with a configured
+        [gates.commands] format_fix (a configured [gates.commands] format alone means the
+        project runs its own formatter, which the adapter's fix would fight)."""
+        if not self.cfg.format_fix:
+            return False
+        return bool(self.cfg.format_fix_command) or "format" not in self.cfg.gate_commands
+
+    def configured_format_fix(self, files: list[str]) -> list[list[str]]:
+        """[gates.commands] format_fix with "{files}" replaced by `files`; [] = not configured."""
+        cmd = self.cfg.format_fix_command
+        if not cmd:
+            return []
+        i = cmd.index("{files}")
+        resolved = self.resolve_command([*cmd[:i], *cmd[i + 1 :]])
+        k = len(self.resolve_command(cmd[:i])) if i else 0
+        return [[*resolved[:k], *files, *resolved[k:]]]
 
     def format_fix(self, base_ref: str | None) -> str:
         """Before the checks of a gate: format the source files changed since base_ref, so a
@@ -410,7 +423,11 @@ class LanguageAdapter(abc.ABC):
             if (self.root / f).is_file()
             and (not self.source_suffixes or f.endswith(self.source_suffixes))
         ]
-        cmds = self.format_fix_commands(list(files)) if files else []
+        cmds = (
+            (self.configured_format_fix(list(files)) or self.format_fix_commands(list(files)))
+            if files
+            else []
+        )
         if not cmds:
             return ""
         scoped = self.line_scoped_format and bool(base_ref)

@@ -9,7 +9,7 @@ import pytest
 
 from agentflow import cli
 from agentflow.orchestrator import EXIT_GATE
-from conftest import DemoRepo, git
+from conftest import DemoRepo, git, marker
 
 
 def set_waiting(r: DemoRepo, phase: str, waiting: dict | None, **extra: object) -> None:
@@ -120,7 +120,7 @@ def test_approve_tests_gate(demo_repo: DemoRepo) -> None:
     assert r.af("approve", "demo") == 0
     prog = r.progress()
     assert prog["phase"] == "IMPLEMENT" and prog["waiting"] is None
-    assert git(r.root, "tag", "--list", "tests-approved/demo").strip()
+    assert marker(r.root, "tests-approved/demo")
     assert git(r.root, "log", "-1", "--format=%s").strip() == "demo: tests approved"
     assert r.events()[-1]["kind"] == "human_gate" and r.events()[-1]["approved"] is True
 

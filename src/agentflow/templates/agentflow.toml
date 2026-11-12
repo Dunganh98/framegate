@@ -68,6 +68,10 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 #                                  # the whole suite with coverage (slow on big suites)
 # mutation_scope = "feature"       # tests the mutation run uses: "feature" | "suite"
 # regression_timeout = 3600        # seconds for the uninstrumented whole-suite run
+# regression_baseline = false      # true: approve-spec runs the whole suite once and records
+#                                  # the tests that already fail; the final regression check
+#                                  # then fails only on other failures (a suite that is not
+#                                  # green on this machine, e.g. tests that need services)
 # coverage_timeout = 1800          # seconds per coverage run; killed -> "ERROR: test run incomplete"
 # mutation_timeout = 3600          # seconds per mutation run (same)
 # format_fix = true                # the gates format the changed source files (and review
@@ -88,6 +92,13 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 # format = ["ruff", "format", "--check", "{src}", "{tests}"]
 # typecheck = ["python", "-m", "mypy", "{src}"]
 # imports = ["lint-imports"]
+# format_fix = ["python", "-m", "black", "{files}"]   # the formatter the gates apply to the
+#                                  # changed files when `format` is the project's own check
+#                                  # (without it a configured `format` turns the fix off)
+
+# [python]                         # python adapter
+# pytest_args = ["-m", "not integration and not slow"]   # added to every pytest run of
+#                                  # agentflow and to the test command the agents get
 
 # [risk]                           # when a finished feature counts as low risk (all must
 #                                  # hold; 0 = that test off). Also needed: final gates
@@ -127,6 +138,10 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 # base = "main"                    # `agentflow spec <f>` creates branch <branch_prefix><f> from it
 # branch_prefix = "feat/"
 # branch = true                    # false: spec stays on the current branch
+# markers = "refs"                 # spec-approved/<f>, tests-approved/<f>, ... as private refs
+#                                  # (refs/<name>; no push ever publishes them); "tags" = git
+#                                  # tags, for a CI job that runs `agentflow gates`
+#                                  # (git push --tags)
 
 [notify]
 # toast = true                     # Windows toast at each gate, DONE and on error (env

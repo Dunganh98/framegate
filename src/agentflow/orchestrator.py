@@ -42,7 +42,14 @@ from agentflow.checks import (
 from agentflow.checks import structure as structure_check
 from agentflow.checks.frame_diff import knowledge_tag, path_matches, tests_update_tag
 from agentflow.config import Config
-from agentflow.gates import GateReport, expected_red, gate_report, split_failures
+from agentflow.gates import (
+    BASELINE_FILE,
+    GateReport,
+    expected_red,
+    gate_report,
+    record_regression_baseline,
+    split_failures,
+)
 from agentflow.hooks import AGENT_ENV
 from agentflow.report import (
     TestReview,
@@ -80,6 +87,7 @@ from agentflow.state import (
     clear_phase,
     clear_reqs,
     commit,
+    delete_marker,
     fresh_progress,
     git,
     load_progress,
@@ -88,6 +96,7 @@ from agentflow.state import (
     read_phase,
     save_progress,
     set_contested,
+    set_marker,
     set_phase,
     set_reqs,
     tag_exists,
@@ -1740,7 +1749,7 @@ class Orchestrator:
                     fh.write(f"- [tests amended] test reviewer objection: {o}\n")
         git(self.cfg, "add", "-A", "--", self.cfg.paths.tests)
         git(self.cfg, "commit", "-q", "-m", message)
-        git(self.cfg, "tag", "-f", tests_update_tag(feature))
+        set_marker(self.cfg, tests_update_tag(feature))
         return changed
 
     def run_test_checks(self, feature: str, prog: dict[str, Any]) -> None:
@@ -1961,7 +1970,7 @@ class Orchestrator:
             )
         commit(self.cfg, f"{feature}: tests approved")
         self.reapprove_spec(feature, prog, "tests")
-        git(self.cfg, "tag", "-f", f"tests-approved/{feature}")
+        set_marker(self.cfg, f"tests-approved/{feature}")
         prog["human_note"] = ""
         prog["round"] = 0
         self.advance(feature, prog, "IMPLEMENT")
@@ -2928,7 +2937,7 @@ class Orchestrator:
             ).split()
         )
         commit(self.cfg, f"{feature}: spec updated from answers")
-        git(self.cfg, "tag", "-f", f"spec-approved/{feature}")
+        set_marker(self.cfg, f"spec-approved/{feature}")
         prog["spec_update_notes"] = []
         save_progress(self.cfg, feature, prog)
         log_event(self.cfg, feature, "spec_reapproved", gate=gate, files=changed)
@@ -2938,7 +2947,7 @@ class Orchestrator:
         """A new spec approval restarts from the tests: the answer tags of the old one go."""
         for tag in (f"spec-update/{feature}", tests_update_tag(feature), knowledge_tag(feature)):
             if tag_exists(self.cfg, tag):
-                git(self.cfg, "tag", "-d", tag)
+                delete_marker(self.cfg, tag)
 
     def phase_spec_update(self, feature: str, prog: dict[str, Any]) -> None:
         """One agent run writes the answers into requirements.md / design.md (/ plan.md Covers
@@ -2982,7 +2991,7 @@ class Orchestrator:
                 *changed,
             )
             if gate == "final":
-                git(self.cfg, "tag", "-f", f"spec-update/{feature}")
+                set_marker(self.cfg, f"spec-update/{feature}")
         notes = []
         if changed:
             notes.append(
@@ -3269,12 +3278,34 @@ class Orchestrator:
             self.echo(f"Spec check: {len(found)} problem(s), approved anyway (--force)\n{listed}")
         clear_phase(self.cfg)
         commit(self.cfg, f"{feature}: spec approved")
-        git(self.cfg, "tag", "-f", f"spec-approved/{feature}")
+        set_marker(self.cfg, f"spec-approved/{feature}")
         self.drop_spec_update_tag(feature)
         save_progress(self.cfg, feature, fresh_progress())
         log_event(self.cfg, feature, "spec_approved", mode=feature_mode(self.cfg, feature))
+        self.record_baseline(feature)
         self.echo(f"Tagged spec-approved/{feature}. Next: agentflow run {feature}")
         return EXIT_OK
+
+    def record_baseline(self, feature: str) -> None:
+        """[gates] regression_baseline: the tests that fail today, recorded once per feature
+        (a second approve-spec keeps the first record: by then the feature's own work may be
+        what fails)."""
+        path = self.cfg.feature_out(feature) / BASELINE_FILE
+        if not self.cfg.regression_baseline or path.is_file():
+            return
+        self.echo("Regression baseline: running the whole suite once (what fails today)...")
+        count, problem = record_regression_baseline(self.adapter, feature)
+        log_event(self.cfg, feature, "regression_baseline", failing=count, problem=problem)
+        if problem:
+            self.echo(
+                f"WARNING: no regression baseline recorded: {problem}. The final regression "
+                "check will fail on every red test; fix the run and approve the spec again."
+            )
+        else:
+            self.echo(
+                f"Regression baseline: {count} test(s) already fail; the final regression check "
+                "fails only on other failures."
+            )
 
     def status(self, feature: str) -> int:
         prog = load_progress(self.cfg, feature)
@@ -3804,7 +3835,7 @@ class Orchestrator:
             "--",
             self.cfg.knowledge,
         )
-        git(self.cfg, "tag", "-f", knowledge_tag(feature))
+        set_marker(self.cfg, knowledge_tag(feature))
         log_event(self.cfg, feature, "knowledge_added", items=[list(i) for i in chosen])
         self.echo(
             f"Added {names} to {self.cfg.knowledge} (committed, tagged {knowledge_tag(feature)})."

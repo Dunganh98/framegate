@@ -35,14 +35,81 @@ def git(cfg: Config, *args: str) -> str:
     return r.stdout
 
 
+def _marker_ref(name: str) -> str:
+    return f"refs/{name}"
+
+
+def _ref_exists(cfg: Config, ref: str) -> bool:
+    r = subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", ref], cwd=cfg.root, capture_output=True
+    )
+    return r.returncode == 0
+
+
 def tag_exists(cfg: Config, name: str) -> bool:
-    return bool(git(cfg, "tag", "--list", name).strip())
+    """True when the workflow marker `name` (e.g. `tests-approved/<feature>`) exists: the
+    private ref `refs/<name>`, or a tag of that name left by an older agentflow."""
+    return _ref_exists(cfg, _marker_ref(name)) or _ref_exists(cfg, f"refs/tags/{name}")
+
+
+def set_marker(cfg: Config, name: str, rev: str = "HEAD") -> None:
+    """Point the workflow marker `name` at `rev`. By default markers are private refs
+    (`refs/<name>`), not tags: git resolves the short name (`git diff tests-approved/<f>`) the
+    same way, but no `git push`, `--tags` or `--all` ever publishes them to a shared remote.
+    `[git] markers = "tags"` keeps git tags (a CI job gets them through `git push --tags`).
+    The other kind's marker of the same name is removed so the name stays unambiguous."""
+    if cfg.git_markers == "tags":
+        git(cfg, "tag", "-f", name, rev)
+        if _ref_exists(cfg, _marker_ref(name)):
+            git(cfg, "update-ref", "-d", _marker_ref(name))
+        return
+    git(cfg, "update-ref", _marker_ref(name), rev)
+    if _ref_exists(cfg, f"refs/tags/{name}"):
+        git(cfg, "tag", "-d", name)
+
+
+def delete_marker(cfg: Config, name: str) -> None:
+    """Remove the workflow marker `name` (private ref and / or old tag); missing is fine."""
+    if _ref_exists(cfg, _marker_ref(name)):
+        git(cfg, "update-ref", "-d", _marker_ref(name))
+    if _ref_exists(cfg, f"refs/tags/{name}"):
+        git(cfg, "tag", "-d", name)
+
+
+def commit_paths(cfg: Config) -> list[str]:
+    """What a workflow commit may contain: the source and test folders, the specs, the metrics
+    folder, the knowledge file and the code map. Anything else in the working tree (the
+    user's notes, scratch files, unrelated edits) is never swept into a commit."""
+    p = cfg.paths
+    wanted = [*cfg.src_roots, p.tests, p.review_tests, p.specs, p.metrics, cfg.knowledge]
+    wanted.append(cfg.code_map)
+    out: list[str] = []
+    for rel in wanted:
+        if rel and rel not in out:
+            out.append(rel)
+    return out
 
 
 def commit(cfg: Config, msg: str) -> bool:
-    git(cfg, "add", "-A")
-    if git(cfg, "diff", "--cached", "--name-only").strip():
-        git(cfg, "commit", "-q", "-m", msg)
+    """Commit the workflow's paths (commit_paths), nothing else. False = nothing to commit."""
+    staged: list[str] = []
+    for rel in commit_paths(cfg):
+        # a path that neither exists nor is tracked makes `git add` fail: skip it
+        if (cfg.root / rel).exists() or git(cfg, "ls-files", "--", rel).strip():
+            try:
+                git(cfg, "add", "-A", "--", rel)
+            except GitError:
+                continue  # a path the project ignores (.gitignore): not part of any commit
+            # an empty folder holds nothing git knows: naming it would fail the commit;
+            # a deleted file still counts through the index diff
+            if (
+                git(cfg, "ls-files", "--", rel).strip()
+                or git(cfg, "diff", "--cached", "--name-only", "--", rel).strip()
+            ):
+                staged.append(rel)
+    if staged and git(cfg, "diff", "--cached", "--name-only", "--", *staged).strip():
+        # `-- paths`: what the user staged elsewhere stays staged and out of this commit
+        git(cfg, "commit", "-q", "-m", msg, "--", *staged)
         return True
     return False
 

@@ -337,7 +337,9 @@ true`, Windows only; env `AGENTFLOW_TOAST=0` turns them off): a toast at each ga
 on an error, through PowerShell 5.1's WinRT ToastNotificationManager (no modules); fire and
 forget, silent if it fails. `cleanup` keeps `specs/<f>/`, the metrics row and the shared
 `out/events.jsonl`, refuses while the feature's run is active or before DONE (`--force`), and
-prints the `git push origin --delete` line for tags that were pushed.
+prints the `git push origin --delete` line for tags that were pushed (`[git] markers = "tags"`).
+
+**Markers, commits, known failures.** `spec-approved/<f>`, `tests-approved/<f>`, `spec-update/<f>`, `tests-update/<f>` and `knowledge-update/<f>` are private refs (`refs/<name>`) by default: `git diff tests-approved/<f>` resolves them like a tag, but no `git push`, `--tags` or `--all` publishes them to a shared remote. `[git] markers = "tags"` stores git tags instead (needed for a CI job that runs `agentflow gates`); tags left by an older agentflow are still read and replaced on the next write. A workflow commit stages only the workflow's paths (`[paths] src`, `tests`, `specs`, `metrics`, the knowledge file, the code map), never the whole working tree: your notes and unrelated edits stay out. `[gates] regression_baseline = true`: `approve-spec` runs the whole suite once and records the tests that already fail (`out/<f>/regression_baseline.json`, kept on a second approval); the final regression check then fails only on other failures (with the default `coverage_scope = "feature"`).
 
 `run` never waits on the keyboard. It advances TESTS -> IMPLEMENT (per plan step) -> REVIEW ->
 PR -> FINAL -> RETRO -> DONE and stops only at the final gate (and the tests gate with

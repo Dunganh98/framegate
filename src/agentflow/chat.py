@@ -21,7 +21,14 @@ from agentflow.orchestrator import (
 )
 from agentflow.report import since_spec_approval
 from agentflow.specs import feature_ids, plan_steps
-from agentflow.state import GitError, git, load_progress, read_events, tag_exists
+from agentflow.state import (
+    GitError,
+    delete_marker,
+    git,
+    load_progress,
+    read_events,
+    tag_exists,
+)
 
 #: how long `watch` waits for a run to take the lock before it decides none is running
 WATCH_START_WAIT = 30.0
@@ -607,9 +614,9 @@ def cleanup(orch: Orchestrator, feature: str, tags: bool = False, force: bool = 
     if tags:
         names = feature_tags(orch, feature)
         for name in names:
-            git(orch.cfg, "tag", "-d", name)
+            delete_marker(orch.cfg, name)
         print("Tags deleted (local): " + (", ".join(names) or "none"))
-        if names:
+        if names and orch.cfg.git_markers == "tags":
             print("On the remote (if pushed): git push origin --delete " + " ".join(names))
     else:
         left = feature_tags(orch, feature)

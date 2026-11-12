@@ -12,7 +12,7 @@ from agentflow.checks import mutation
 from agentflow.config import load_config
 from agentflow.gates import red_blockers
 from agentflow.orchestrator import EXIT_GATE, Orchestrator
-from conftest import DemoRepo, git
+from conftest import DemoRepo, git, marker
 
 FAST = "[gates.commands]\nlint = []\nformat = []\ntypecheck = []\n"
 LEGACY = """\
@@ -67,7 +67,7 @@ def test_weak_tests_are_strengthened_before_the_human_sees_the_gate(demo_repo: D
     assert "found the tests too weak" in strengthen and "diff coverage" in strengthen
     assert "The failing final checks:" in strengthen
     assert "test_add_special_value" in (r.root / "tests/test_demo.py").read_text("utf-8")
-    assert git(r.root, "tag", "--list", "tests-update/demo").strip()
+    assert marker(r.root, "tests-update/demo")
     assert "tests strengthened (final gates)" in git(r.root, "log", "--format=%s")
     assert "Final gates PASSED" in r.progress()["waiting"]["message"]
 

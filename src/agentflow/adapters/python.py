@@ -137,6 +137,11 @@ def _is_skip_call(node: ast.Call) -> bool:
     return isinstance(f, ast.Name) and f.id == "skip"
 
 
+def _shell_quote(arg: str) -> str:
+    """An argument as it is typed on a command line (and read back by PYTEST_ADDOPTS)."""
+    return arg if re.fullmatch(r"[\w@%+=:,./-]+", arg) else '"' + arg.replace('"', '\\"') + '"'
+
+
 class PythonAdapter(LanguageAdapter):
     name = "python"
     source_suffixes = (".py",)
@@ -145,6 +150,13 @@ class PythonAdapter(LanguageAdapter):
     def detect(cls, root: pathlib.Path) -> bool:
         markers = ("pyproject.toml", "setup.py", "setup.cfg", "requirements.txt")
         return any((root / m).exists() for m in markers)
+
+    @property
+    def pytest_args(self) -> list[str]:
+        """[python] pytest_args: added to every pytest run agentflow starts and to the command
+        the agents are told to use (e.g. ["-m", "not integration and not spark"] for tests
+        that need services the machine does not have)."""
+        return list(self.cfg.language_options.get("python", {}).get("pytest_args", []))
 
     # ---------- interpreter ----------
     @property
@@ -213,6 +225,7 @@ class PythonAdapter(LanguageAdapter):
         junit: pathlib.Path | None = None,
     ) -> TestRun:
         cmd = [self.python, "-m", "pytest", "-q", "--no-header", "-p", "no:cacheprovider"]
+        cmd += self.pytest_args
         ids = [i for i in (req_ids or []) if i]
         if ids:
             cmd += ["--req", ",".join(ids)]
@@ -229,7 +242,8 @@ class PythonAdapter(LanguageAdapter):
 
     def test_command(self, req_ids: Sequence[str] | None = None) -> str:
         ids = [i for i in (req_ids or []) if i]
-        return "python -m pytest -q" + (f" --req {','.join(ids)}" if ids else "")
+        extra = "".join(f" {_shell_quote(a)}" for a in self.pytest_args)
+        return "python -m pytest -q" + extra + (f" --req {','.join(ids)}" if ids else "")
 
     def _test_files(self) -> list[pathlib.Path]:
         tests = self.root / self.cfg.paths.tests
@@ -316,6 +330,7 @@ class PythonAdapter(LanguageAdapter):
         junit.parent.mkdir(parents=True, exist_ok=True)
         junit.unlink(missing_ok=True)
         cmd = [self.python, "-m", "pytest", "-q", "-p", "no:cacheprovider", f"--junitxml={junit}"]
+        cmd += self.pytest_args
         code, out = run_command(cmd, self.root, timeout=timeout)
         reason = incomplete_reason(code, out, timeout) or PYTEST_INCOMPLETE.get(code, "")
         cases = parse_junit(junit) if junit.is_file() else None
@@ -354,6 +369,7 @@ class PythonAdapter(LanguageAdapter):
             out_dir.mkdir(parents=True, exist_ok=True)
             xml.unlink(missing_ok=True)
             cmd = [self.python, "-m", "pytest", "-q", "-p", "no:cacheprovider"]
+            cmd += self.pytest_args
             cmd += self.scope_args(scope)
             note = ""
             collect = self._has_module("pytest_cov")
@@ -480,7 +496,9 @@ class PythonAdapter(LanguageAdapter):
             "show_modules": list(modules),
             "show_limit": 50,
             "timeout": self.cfg.mutation_timeout,
-            "pytest_addopts": " ".join(self.scope_args(scope)),
+            "pytest_addopts": " ".join(
+                _shell_quote(a) for a in [*self.pytest_args, *self.scope_args(scope)]
+            ),
         }
 
     def _mutmut_wsl(
