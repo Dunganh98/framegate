@@ -225,6 +225,25 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
   mutation filter) were skipped: 2 is covered by tagging; its example mutants were
   equivalent ones.
 
+- **Shared target repos + install-tools (2026-11-12, branches fix/python-target-repos and
+  feat/install-tools, plugin 0.5.2; from preparing da-argos, a Python service repo on Azure
+  DevOps whose full suite needs InfluxDB / Kafka / Spark):** `[python] pytest_args` (every
+  pytest run + the agents' test command); `[gates] regression_baseline` (approve-spec records
+  the tests that already fail, the final regression fails only on others; off by default);
+  workflow commits stage only the workflow's paths (src, tests, specs, metrics, knowledge file,
+  code map), no longer `git add -A`; markers (`spec-approved/<f>` ...) are private refs
+  (`refs/<name>`) that no push publishes, `[git] markers = "tags"` keeps tags for a CI job, old
+  tags are read and replaced; `[gates.commands] format_fix` (the project's own formatter, e.g.
+  black); `agentflow install-tools` (python: agentflow's pytest plugin, pytest, pytest-cov,
+  hypothesis, diff-cover, later the gate commands' tools; reports versions it changed), run by
+  `/agentflow:setup` as step 0 and again before doctor; doctor reports a missing plugin.
+  **Not yet seen live:** all of it (unit and fake-claude tests only; the slow tests were not
+  run after these changes; a dry run of install-tools on da-argos named the right interpreter
+  and three missing packages). FCSim: the two changed defaults apply there too (set `[git]
+  markers = "tags"` if its CI gate job is used; commit agentflow.toml edits yourself).
+  The earlier out-of-repo prototype (a `.agentflow` junction to `projects/<name>/` in this
+  repo, nothing tracked in the target) is the local-only branch `legacy`; not continued.
+
 ## User decisions so far
 1. Two human gates, forward only: spec and final (2026-11-10, after the first FCSim feature;
    was three). The test reviewer checks the tests against the spec; its questions, objections
@@ -256,6 +275,19 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
 13. Questions filtered by rule, not capped (2026-11-11): only real decisions are asked, by
     impact; single-option points are decided and listed; the final brief fits one screen.
 
+14. Scope (2026-11-12): **one lean core + adapters, grown by modes; the rest in the project's
+    setup.** In this repo: the orchestrator, the language adapters (how tests are selected by
+    spec ID, coverage, mutation, stubs: python, dotnet, generic) with their proof tools (mutmut,
+    Stryker), and the hosting templates (CI gate job per host). Not in this repo: a project's
+    stack (Databricks, Kafka, Postgres, Azure services, ...): those are the project's
+    dependencies; agentflow only learns what they mean for a run through agentflow.toml
+    (`pytest_args`, baseline, protected paths, `[gates.extra]`) and `.agentflow/project.md`.
+    `install-tools` stays limited to what the workflow itself needs. Other kinds of work
+    (pipelines / infrastructure, experiments / model quality) come later as **modes** with their
+    own first proof, like bugfix and refactor, not as separate packages. Presets (shared
+    settings for projects with the same stack) only once two set-up projects show what repeats.
+    Design doc §9.11.
+
 ## FCSim integration
 - Worktree `D:\Me\Projects\FCSim-agentflow`, branch `feat/agentflow-setup` (agentflow.toml,
   roles extras, dotnet keys) — **not merged** into FCSim main.
@@ -265,6 +297,33 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
   worktree's `.claude/settings.local.json` (skill grants last one turn only).
 
 ## Next steps
+Each step waits for the run before it; stop and fix what a step shows before the next.
+1. Here, no cost: `uv run pytest -m slow` (real .NET builds, mutmut through WSL): they were not
+   run after the 2026-11-12 changes.
+2. da-argos, no agents: `/agentflow:setup` until `agentflow doctor` says ready. Look at:
+   install-tools' `CHANGED versions` line (pinned packages), the settings (source folders
+   model / data / orchestrator / utils / platform/services, base `origin/dev`, prefix
+   `feature/`, pytest_args for integration / spark / slow, regression_baseline, black as
+   format + format_fix, typecheck off, mutation off, ci/ + configs/ + wsic_pb2 protected).
+3. da-argos smoke run (the setup's clamp feature, about USD 2-4, 15-30 min): the first live
+   proof of the hooks, the baseline, the scoped commits and the private refs. Check by hand:
+   the commits hold only workflow paths, `git tag` lists nothing new, the baseline count is
+   plausible, black's format fix ran.
+4. First small real da-argos feature: pure logic in model/ or data/, no service. Read the retro,
+   fix what it shows here.
+5. After one clean feature there: mutation for da-argos (the WSL environment has to install its
+   TensorFlow / pyspark pins: measure the build time first); an Azure Pipelines gate template
+   if the team wants the frame check in CI (then `[git] markers = "tags"`).
+6. da-core: needs a way to set `PYTHONPATH=src` for the runs (no config key yet) and uses the
+   global interpreter (no .venv); then setup + smoke. da-otto after it (no importable packages:
+   decide its source folders first).
+7. With two of the three set up: extract a preset from what was identical. After that the
+   larger items: epics (decision 11), new modes for experiments and pipelines (decision 14).
+
+Small known gaps: doctor does not check hypothesis in the project interpreter; doctor's
+.gitignore hint still says the workflow commits with `git add -A`.
+
+FCSim (unchanged, from before):
 1. Install the plugin locally in the FCSim worktree (`claude plugin marketplace add
    D:\Me\Projects\agentflow` + `claude plugin install agentflow@agentflow --scope local`), set the
    two items above, confirm the toast.
