@@ -1,6 +1,6 @@
 [project]
 name = "agentflow"
-version = "0.1.0"
+version = "0.5.3"
 description = "Spec-driven, test-first workflow orchestrator for Claude Code, with deterministic gates."
 readme = "README.md"
 requires-python = ">=3.10"

@@ -20,7 +20,7 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised only on 3.10
     import tomli as tomllib
 
-from agentflow import __version__, pytools
+from agentflow import __version__, pytools, release_requirement
 from agentflow.adapters import wsl
 from agentflow.adapters.base import (
     Check,
@@ -187,7 +187,9 @@ class PythonAdapter(LanguageAdapter):
         an agentflow.toml also the lint / format / type tools its gate commands name (before
         it exists the commands are not settled: `/agentflow:setup` may switch one off)."""
         src = agentflow_source()
-        own = ("-e", str(src)) if src is not None else (f"agentflow=={__version__}",)
+        # from a checkout: that source tree; else this version from its git tag (the package
+        # is not on PyPI, where the name belongs to someone else)
+        own = ("-e", str(src)) if src is not None else (release_requirement(),)
         reqs = [
             pytools.ToolReq("agentflow", own, "pytest plugin: req marker, --req"),
             pytools.ToolReq("pytest", ("pytest",), "tests"),

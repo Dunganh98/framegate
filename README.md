@@ -12,10 +12,25 @@ spec (you) -> tests -> code -> review -> final gate (you) -> retro -> done
 ## Install (once per machine)
 
 ```
+claude plugin marketplace add Dunganh98/agentflow
+claude plugin install agentflow@agentflow
+```
+
+That is all: `/agentflow:setup` in a repository installs the `agentflow` command (with
+[uv](https://docs.astral.sh/uv/), from this repository's release tag) and what the project's
+environment needs. You need read access to this repository and git credentials for it on the
+machine.
+
+Working on agentflow itself, from a clone:
+
+```
 uv tool install --editable <path-to-agentflow>
 claude plugin marketplace add <path-to-agentflow>
 claude plugin install agentflow@agentflow
 ```
+
+Release: one version for the CLI and the plugin (`pyproject.toml`, `src/agentflow/__init__.py`,
+`plugin/.claude-plugin/plugin.json`, the setup skill), then `git tag v<version>` and push the tag.
 
 ## Use
 

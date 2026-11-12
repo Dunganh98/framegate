@@ -2,7 +2,7 @@
 name: setup
 description: Set up agentflow in this repository - read the repo, draft agentflow.toml, the project knowledge file and the code map, show a short brief that asks only the real decisions, check the setup with agentflow doctor, offer a smoke run. Run only when the user invokes it.
 disable-model-invocation: true
-allowed-tools: Bash(agentflow *) PowerShell(agentflow *) Read Write Edit Glob Grep
+allowed-tools: Bash(agentflow *) PowerShell(agentflow *) Bash(uv tool install *) PowerShell(uv tool install *) Read Write Edit Glob Grep
 ---
 You set up agentflow for this repository. The user is the manager: they answer a few questions
 and approve; you read the repo, draft the files, run the `agentflow` commands. Every message:
@@ -11,7 +11,19 @@ project's source or tests (one exception, step 3: a tagging helper the user appr
 
 ## 0. Install the tools first
 
-Before anything else run `agentflow install-tools --dry-run`: it names the project's
+The `agentflow` command itself: run `agentflow --version`. If the command is not found, tell
+the user in one line ("Installing the agentflow CLI 0.5.3 for your user") and run
+
+    uv tool install "git+https://github.com/Dunganh98/agentflow@v0.5.3"
+
+then `agentflow --version` again. If `uv` is missing or the install fails (no access to the
+repository, no git), show the error and the two ways out, then stop: install uv
+(https://docs.astral.sh/uv/) and run the setup again, or clone the repository and run
+`uv tool install --editable <clone>`. An installed CLI of another version than 0.5.3 (this
+plugin's): say so in one line and go on; the same command with `--force` updates it, only on
+the user's yes.
+
+Then run `agentflow install-tools --dry-run`: it names the project's
 interpreter and what the workflow needs there and is missing (for Python: the agentflow pytest
 plugin, pytest, pytest-cov, hypothesis, diff-cover). Nothing missing: go on without a word. Else
 tell the user in one line what goes into which interpreter ("Installing agentflow, diff-cover,
