@@ -1,4 +1,4 @@
-# agentflow
+# framegate
 
 Build features with Claude Code agents, test-first, inside checks they cannot switch off. You
 are the manager: you write the requirements and make two decisions per feature, **spec OK**
@@ -12,17 +12,32 @@ spec (you) -> tests -> code -> review -> final gate (you) -> retro -> done
 ## Install (once per machine)
 
 ```
-uv tool install --editable <path-to-agentflow>
-claude plugin marketplace add <path-to-agentflow>
-claude plugin install agentflow@agentflow
+claude plugin marketplace add Dunganh98/framegate
+claude plugin install framegate@framegate
 ```
+
+That is all: `/framegate:setup` in a repository installs the `framegate` command (with
+[uv](https://docs.astral.sh/uv/), from this repository's release tag) and what the project's
+environment needs. You need read access to this repository and git credentials for it on the
+machine.
+
+Working on framegate itself, from a clone:
+
+```
+uv tool install --editable <path-to-framegate>
+claude plugin marketplace add <path-to-framegate>
+claude plugin install framegate@framegate
+```
+
+Release: one version for the CLI and the plugin (`pyproject.toml`, `src/framegate/__init__.py`,
+`plugin/.claude-plugin/plugin.json`, the setup skill), then `git tag v<version>` and push the tag.
 
 ## Use
 
-1. **Set up the repo (once):** in Claude Code run `/agentflow:setup`: it first installs the
+1. **Set up the repo (once):** in Claude Code run `/framegate:setup`: it first installs the
    tools the workflow needs into the project's environment, then asks its questions; commit
    the files it lists.
-2. **Start a feature:** `/agentflow:feature <name>`, describe what you want, answer the few
+2. **Start a feature:** `/framegate:feature <name>`, describe what you want, answer the few
    questions (each has a default), check the spec brief (above all "Decisions I made for
    you"), then say **"spec OK"**.
 3. **Wait:** the agents run in the background; the chat shows progress and cost. If a step
@@ -36,14 +51,14 @@ claude plugin install agentflow@agentflow
    when there are none), **"no retro"**, or answer questions by number (only the affected work
    is redone).
 5. **Done:** pick the retro proposals and facts by number (the proposals go to the retro
-   backlog, `agentflow backlog`, so none is lost and repeats are counted), create the PR if
+   backlog, `framegate backlog`, so none is lost and repeats are counted), create the PR if
    you want.
 
-A bug or a refactor runs the same way with another first proof: `/agentflow:bugfix <name>`
+A bug or a refactor runs the same way with another first proof: `/framegate:bugfix <name>`
 (the tests must fail on today's code, for the reported reason, before anything is fixed) and
-`/agentflow:refactor <name>` (the tests must pass on today's code and after every step).
+`/framegate:refactor <name>` (the tests must pass on today's code and after every step).
 
-Chat closed? `/agentflow:resume <name>`. Overview: `/agentflow:status`.
+Chat closed? `/framegate:resume <name>`. Overview: `/framegate:status`.
 
 ## Commands
 
@@ -51,28 +66,30 @@ In the chat:
 
 | Command | Does |
 |---|---|
-| `/agentflow:setup` | set up agentflow in this repo |
-| `/agentflow:feature <name>` | build a feature, start to finish |
-| `/agentflow:bugfix <name>` | fix a bug: first a test that fails because of it |
-| `/agentflow:refactor <name>` | restructure code: first tests that pin what it does today |
-| `/agentflow:resume [name]` | reconnect the chat to a feature |
-| `/agentflow:status [name]` | show where features stand |
+| `/framegate:setup` | set up framegate in this repo |
+| `/framegate:feature <name>` | build a feature, start to finish |
+| `/framegate:bugfix <name>` | fix a bug: first a test that fails because of it |
+| `/framegate:refactor <name>` | restructure code: first tests that pin what it does today |
+| `/framegate:resume [name]` | reconnect the chat to a feature |
+| `/framegate:status [name]` | show where features stand |
 
 In a terminal (the chat runs these for you):
 
 | Command | Does |
 |---|---|
-| `agentflow install-tools` | install what the workflow needs into the project's environment (setup does this first) |
-| `agentflow doctor` | check the setup (no agents, no cost) |
-| `agentflow run <name>` | continue a feature until it needs you |
-| `agentflow status <name>` | show its state |
-| `agentflow approve <name>` | accept the waiting gate |
-| `agentflow answer <name>` | apply your answers from `out/<name>/answers.md` |
-| `agentflow cleanup <name>` | delete the run files after DONE |
-| `agentflow stats [name]` | what the features cost: money, agent and check time, final-gate runs |
-| `agentflow backlog` | the retro proposals you accepted and what became of them |
+| `framegate install-tools` | install what the workflow needs into the project's environment (setup does this first) |
+| `framegate doctor` | check the setup (no agents, no cost) |
+| `framegate run <name>` | continue a feature until it needs you |
+| `framegate status <name>` | show its state |
+| `framegate approve <name>` | accept the waiting gate |
+| `framegate answer <name>` | apply your answers from `out/<name>/answers.md` |
+| `framegate cleanup <name>` | delete the run files after DONE |
+| `framegate stats [name]` | what the features cost: money, agent and check time, final-gate runs |
+| `framegate backlog` | the retro proposals you accepted and what became of them |
 
-All commands and options: `agentflow --help` and [docs/reference.md](docs/reference.md).
+All commands and options: `framegate --help` and [docs/reference.md](docs/reference.md).
+
+Coming from agentflow (the old name)? [docs/migrate-from-agentflow.md](docs/migrate-from-agentflow.md).
 
 ## Docs
 

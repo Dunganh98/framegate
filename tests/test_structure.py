@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import pytest
 
-from agentflow.checks import structure
-from agentflow.orchestrator import EXIT_GATE
 from conftest import DemoRepo, git
+from framegate.checks import structure
+from framegate.orchestrator import EXIT_GATE
 
 FAST = "[gates.commands]\nlint = []\nformat = []\ntypecheck = []\n"
 

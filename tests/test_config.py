@@ -4,7 +4,7 @@ import pathlib
 
 import pytest
 
-from agentflow.config import (
+from framegate.config import (
     DEFAULT_ID_PATTERN,
     ConfigError,
     find_root,
@@ -61,7 +61,7 @@ def test_models_effort_batches_format_fix_and_extra_checks(tmp_path: pathlib.Pat
     assert {cfg.agent_model(p) for p in ("TEST_REVIEW", "REVIEW", "TRIAGE", "RETRO")} == {"opus"}
     assert cfg.agent_effort("IMPLEMENT") == ""
     assert (cfg.step_batch_ids, cfg.format_fix, cfg.extra_checks) == (15, True, {})
-    assert (cfg.diagnose_after, cfg.knowledge) == (2, ".agentflow/project.md")
+    assert (cfg.diagnose_after, cfg.knowledge) == (2, ".framegate/project.md")
     assert cfg.agent_model("DIAGNOSIS") == "opus" and cfg.write_paths("DIAGNOSIS") == ["out/"]
     other = parse_config(
         tmp_path, {"agents": {"diagnose_after": 0}, "project": {"knowledge": "docs\\k.md"}}
@@ -100,14 +100,14 @@ def test_models_effort_batches_format_fix_and_extra_checks(tmp_path: pathlib.Pat
 
 
 def test_full_config(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("AGENTFLOW_CLAUDE", raising=False)
-    (tmp_path / "agentflow.toml").write_text(
+    monkeypatch.delenv("FRAMEGATE_CLAUDE", raising=False)
+    (tmp_path / "framegate.toml").write_text(
         """
 [project]
 language = "python"
 [paths]
 src = "lib/"
-out = "build/agentflow"
+out = "build/framegate"
 review_tests = "tests/adversarial"
 [agents]
 claude = "my-claude"
@@ -121,30 +121,30 @@ typecheck = []
 [protected]
 extra = ["config/"]
 [phases.IMPLEMENT]
-write = ["lib", "build/agentflow"]
+write = ["lib", "build/framegate"]
 tools = ["Read"]
 [roles]
-extra_dir = ".agentflow/roles"
+extra_dir = ".framegate/roles"
 """,
         encoding="utf-8",
     )
     cfg = load_config(tmp_path)
     assert cfg.loaded_from_file
-    assert cfg.paths.src == "lib" and cfg.paths.out == "build/agentflow"
-    assert cfg.out_dir == tmp_path / "build/agentflow"
+    assert cfg.paths.src == "lib" and cfg.paths.out == "build/framegate"
+    assert cfg.out_dir == tmp_path / "build/framegate"
     assert cfg.claude == "my-claude" and cfg.max_attempts == 5
     assert cfg.diff_coverage == 75.5 and cfg.mutation_tool == "none"
     assert cfg.gate_commands == {"lint": ["ruff", "check", "{src}"], "typecheck": []}
     assert cfg.protected_extra == ["config/"]
-    assert cfg.write_paths("IMPLEMENT") == ["lib/", "build/agentflow/"]
-    assert cfg.write_paths("TESTS") == ["tests/", "build/agentflow/"]
+    assert cfg.write_paths("IMPLEMENT") == ["lib/", "build/framegate/"]
+    assert cfg.write_paths("TESTS") == ["tests/", "build/framegate/"]
     assert cfg.phase_tools == {"IMPLEMENT": ["Read"]}
     assert cfg.frame_exceptions() == ["tests/adversarial/"]
-    assert cfg.roles_extra_dir == ".agentflow/roles"
+    assert cfg.roles_extra_dir == ".framegate/roles"
 
 
 def test_env_overrides_claude(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("AGENTFLOW_CLAUDE", "/opt/fake-claude")
+    monkeypatch.setenv("FRAMEGATE_CLAUDE", "/opt/fake-claude")
     assert parse_config(tmp_path, {"agents": {"claude": "x"}}).claude == "/opt/fake-claude"
 
 
@@ -175,16 +175,16 @@ def test_invalid_config(tmp_path: pathlib.Path, data: dict, message: str) -> Non
 
 
 def test_missing_and_broken_file(tmp_path: pathlib.Path) -> None:
-    with pytest.raises(ConfigError, match="agentflow init"):
+    with pytest.raises(ConfigError, match="framegate init"):
         load_config(tmp_path)
     assert not load_config(tmp_path, require=False).loaded_from_file
-    (tmp_path / "agentflow.toml").write_text("[paths\n", encoding="utf-8")
+    (tmp_path / "framegate.toml").write_text("[paths\n", encoding="utf-8")
     with pytest.raises(ConfigError):
         load_config(tmp_path)
 
 
 def test_find_root_walks_up(tmp_path: pathlib.Path) -> None:
-    (tmp_path / "agentflow.toml").write_text("", encoding="utf-8")
+    (tmp_path / "framegate.toml").write_text("", encoding="utf-8")
     deep = tmp_path / "a" / "b"
     deep.mkdir(parents=True)
     assert find_root(deep) == tmp_path.resolve()

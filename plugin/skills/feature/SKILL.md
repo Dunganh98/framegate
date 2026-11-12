@@ -1,35 +1,35 @@
 ---
 name: feature
-description: Drive one agentflow feature from this chat - spec dialogue, a short spec brief to approve, the background run with a live view, the gate briefs answered in plain words, cleanup. Run only when the user invokes it.
+description: Drive one framegate feature from this chat - spec dialogue, a short spec brief to approve, the background run with a live view, the gate briefs answered in plain words, cleanup. Run only when the user invokes it.
 argument-hint: <feature-slug>
 disable-model-invocation: true
-allowed-tools: Bash(agentflow *) PowerShell(agentflow *) Monitor Read Write Edit Glob Grep
+allowed-tools: Bash(framegate *) PowerShell(framegate *) Monitor Read Write Edit Glob Grep
 ---
-You drive the agentflow workflow for feature `$ARGUMENTS` in this chat. The user is the
+You drive the framegate workflow for feature `$ARGUMENTS` in this chat. The user is the
 manager: they give the requirements, answer a few questions and check outcomes; you run every
-`agentflow` command. The spec files are precise and written for the agents; the user reads
+`framegate` command. The spec files are precise and written for the agents; the user reads
 short briefs in plain words instead (no spec IDs without their meaning). The CLI is the engine:
 never edit `progress.json`, tags or anything under the out folder by hand (the exceptions:
 `answers.md`, see the run protocol, and `spec_brief.md`, below).
 
 ## Setup (already done when this skill loaded)
 
-`agentflow spec $ARGUMENTS` created or switched to the feature branch and set the SPEC phase:
+`framegate spec $ARGUMENTS` created or switched to the feature branch and set the SPEC phase:
 
-!`agentflow spec $ARGUMENTS`
+!`framegate spec $ARGUMENTS`
 
 If the output above says the spec is **already approved**, do not start the dialogue: run
-`agentflow status $ARGUMENTS --brief`, tell the user in one line where the feature stands and
+`framegate status $ARGUMENTS --brief`, tell the user in one line where the feature stands and
 ask: continue it (default; then the run protocol below, by state as in its section B), or change
-the spec (that needs `agentflow approve-spec` again and restarts from the tests).
+the spec (that needs `framegate approve-spec` again and restarts from the tests).
 
 ## Project conventions for the spec
 
-Printed by `agentflow spec-brief $ARGUMENTS`: the spec folder, templates, source and test paths,
+Printed by `framegate spec-brief $ARGUMENTS`: the spec folder, templates, source and test paths,
 the language, how interface stubs and tests are written here, the code map and the project
 knowledge. It overrides any default you would otherwise assume.
 
-!`agentflow spec-brief $ARGUMENTS`
+!`framegate spec-brief $ARGUMENTS`
 
 ## Part 1: the spec dialogue
 
@@ -68,7 +68,7 @@ knowledge. It overrides any default you would otherwise assume.
 2. Ask only what those sources cannot decide: what the user wants (behavior, priorities,
    trade-offs), not what the code can tell. Numbered, plain words.
    A point is a question only when it is a real decision: two or more reasonable options with
-   different outcomes, and the docs, the code, `.agentflow/project.md` and earlier answers don't
+   different outcomes, and the docs, the code, `.framegate/project.md` and earlier answers don't
    settle it. Otherwise it is not a question: only one sensible option -> decide it (a "decision
    I made for you", one line); already answered or resolved, or a note -> leave it out; the same
    question twice -> one. No limit on the number; order them by impact (what changes most if
@@ -91,9 +91,9 @@ knowledge. It overrides any default you would otherwise assume.
    per file. Stubs must compile or import cleanly.
 5. Do not write tests or implementation. The test tagging conventions are for reference only;
    the TESTS phase uses them.
-   Then run `agentflow spec-check $ARGUMENTS` and fix what it lists (a rule without a spec
+   Then run `framegate spec-check $ARGUMENTS` and fix what it lists (a rule without a spec
    ID, copied code that is not in the named file: read the code again and correct the spec's
-   wording too). `agentflow approve-spec` runs the same check and refuses while it fails.
+   wording too). `framegate approve-spec` runs the same check and refuses while it fails.
 6. Write the spec gate brief to `<out>/$ARGUMENTS/spec_brief.md` (the out folder above; the
    final gate compares the run with it) and show it in the chat. About one screen, plain words,
    no spec IDs, one line per bullet, no sentence that repeats a heading or another section, a
@@ -123,4 +123,4 @@ When the user says the spec is OK (any clear approval), follow the run protocol 
 on, for the rest of this conversation: approve the spec, run in the background with the live
 view, answer the gates, clean up at the end. `<f>` there is `$ARGUMENTS`.
 
-!`agentflow protocol`
+!`framegate protocol`

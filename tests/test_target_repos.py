@@ -10,12 +10,12 @@ import pathlib
 
 import pytest
 
-from agentflow import gates
-from agentflow.adapters import get_adapter
-from agentflow.adapters.base import TestCase, TestRun
-from agentflow.config import ConfigError, load_config, parse_config
-from agentflow.state import commit, delete_marker, set_marker, tag_exists
 from conftest import DemoRepo, git, marker
+from framegate import gates
+from framegate.adapters import get_adapter
+from framegate.adapters.base import TestCase, TestRun
+from framegate.config import ConfigError, load_config, parse_config
+from framegate.state import commit, delete_marker, set_marker, tag_exists
 
 
 # ---------- [python] pytest_args ----------
@@ -177,7 +177,7 @@ def test_markers_are_private_refs(demo_repo: DemoRepo, tmp_path: pathlib.Path) -
 def test_old_tags_are_read_and_replaced(demo_repo: DemoRepo) -> None:
     r = demo_repo
     cfg = load_config(r.root)
-    git(r.root, "tag", "tests-approved/demo")  # left by an older agentflow
+    git(r.root, "tag", "tests-approved/demo")  # left by an older framegate
     assert tag_exists(cfg, "tests-approved/demo") and not marker(r.root, "tests-approved/demo")
     set_marker(cfg, "tests-approved/demo")
     assert marker(r.root, "tests-approved/demo")

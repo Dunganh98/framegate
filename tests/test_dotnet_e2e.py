@@ -10,11 +10,11 @@ import shutil
 
 import pytest
 
-from agentflow.adapters.dotnet import DotnetAdapter
-from agentflow.checks import red_stubs
-from agentflow.config import load_config
 from conftest import FAKE_CLAUDE, DemoRepo, git, init_git
 from fake_claude import CS_TESTS, cs_impl
+from framegate.adapters.dotnet import DotnetAdapter
+from framegate.checks import red_stubs
+from framegate.config import load_config
 
 pytestmark = pytest.mark.slow
 
@@ -118,12 +118,12 @@ def dotnet_repo(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Demo
     init_git(root)
     make_solution(root)
     monkeypatch.chdir(root)
-    monkeypatch.setenv("AGENTFLOW_CLAUDE", str(FAKE_CLAUDE))
+    monkeypatch.setenv("FRAMEGATE_CLAUDE", str(FAKE_CLAUDE))
     monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", str(tmp_path / "scenario.json"))
     repo = DemoRepo(root)
     repo.scenario(language="dotnet")
     assert repo.af("init") == 0  # detects dotnet from Demo.slnx
-    toml = root / "agentflow.toml"
+    toml = root / "framegate.toml"
     # this flow stops at the tests gate ("human"; the default "defer" goes on to the final gate)
     text = (
         toml.read_text(encoding="utf-8")

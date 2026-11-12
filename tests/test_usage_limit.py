@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime
 import json
 
-from agentflow.usage_limit import clock_reset, detect_usage_limit
+from framegate.usage_limit import clock_reset, detect_usage_limit
 
 UTC = datetime.timezone.utc
 NOW = datetime.datetime(2026, 11, 10, 17, 0, tzinfo=UTC)

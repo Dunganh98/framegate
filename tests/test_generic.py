@@ -1,4 +1,4 @@
-"""Generic adapter: a language without agentflow code, configured in agentflow.toml. The demo
+"""Generic adapter: a language without framegate code, configured in framegate.toml. The demo
 project (Python) is driven through [generic] commands only, end to end."""
 
 from __future__ import annotations
@@ -8,11 +8,11 @@ import sys
 
 import pytest
 
-from agentflow.adapters import get_adapter
-from agentflow.adapters.generic import GenericAdapter, _fill
-from agentflow.config import ConfigError, load_config, parse_config
-from agentflow.orchestrator import EXIT_GATE
 from conftest import DemoRepo
+from framegate.adapters import get_adapter
+from framegate.adapters.generic import GenericAdapter, _fill
+from framegate.config import ConfigError, load_config, parse_config
+from framegate.orchestrator import EXIT_GATE
 
 PYTEST = ["{py}", "-m", "pytest", "-q", "-p", "no:cacheprovider"]
 GENERIC = """
@@ -46,7 +46,7 @@ def generic_toml(py: str) -> str:
 
 
 def use_generic(r: DemoRepo) -> None:
-    p = r.root / "agentflow.toml"
+    p = r.root / "framegate.toml"
     text = p.read_text(encoding="utf-8").replace('language = "python"', 'language = "generic"', 1)
     p.write_text(text + generic_toml(sys.executable.replace("\\", "/")), encoding="utf-8")
 
@@ -112,12 +112,12 @@ def test_generic_config_and_helpers(tmp_path: pathlib.Path) -> None:
 
 
 def test_init_generic_writes_a_parsable_template(tmp_path: pathlib.Path) -> None:
-    from agentflow.scaffold import init
+    from framegate.scaffold import init
 
     lines: list[str] = []
     assert init(language="generic", root=tmp_path, echo=lines.append) == 0
-    text = (tmp_path / "agentflow.toml").read_text(encoding="utf-8")
-    assert "[generic]" in text and (tmp_path / ".agentflow/project.md").is_file()
+    text = (tmp_path / "framegate.toml").read_text(encoding="utf-8")
+    assert "[generic]" in text and (tmp_path / ".framegate/project.md").is_file()
     a = get_adapter(load_config(tmp_path))
     assert a.test_command(["X-R-001"]).startswith("npx vitest run -t X-R-001")
-    assert "agentflow doctor" in "\n".join(lines)
+    assert "framegate doctor" in "\n".join(lines)

@@ -7,15 +7,15 @@ import shutil
 
 import pytest
 
-from agentflow.adapters import get_adapter
-from agentflow.checks import baseline
-from agentflow.config import load_config
-from agentflow.gates import GateReport
-from agentflow.orchestrator import EXIT_GATE, IDLE_STEP, Orchestrator
-from agentflow.scaffold import spec_brief
-from agentflow.specs import feature_mode
 from conftest import DESIGN, PLAN, REQUIREMENTS, DemoRepo, git
 from fake_claude import LOOSE, WRONG
+from framegate.adapters import get_adapter
+from framegate.checks import baseline
+from framegate.config import load_config
+from framegate.gates import GateReport
+from framegate.orchestrator import EXIT_GATE, IDLE_STEP, Orchestrator
+from framegate.scaffold import spec_brief
+from framegate.specs import feature_mode
 
 FAST = "[gates.commands]\nlint = []\nformat = []\ntypecheck = []\n"
 

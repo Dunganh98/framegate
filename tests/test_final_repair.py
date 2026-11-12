@@ -5,14 +5,14 @@ from __future__ import annotations
 
 import pytest
 
-from agentflow import gates
-from agentflow.adapters import get_adapter
-from agentflow.adapters.base import Check, CheckResult, LanguageAdapter, TestScope
-from agentflow.checks import mutation
-from agentflow.config import load_config
-from agentflow.gates import red_blockers
-from agentflow.orchestrator import EXIT_GATE, Orchestrator
 from conftest import DemoRepo, git, marker
+from framegate import gates
+from framegate.adapters import get_adapter
+from framegate.adapters.base import Check, CheckResult, LanguageAdapter, TestScope
+from framegate.checks import mutation
+from framegate.config import load_config
+from framegate.gates import red_blockers
+from framegate.orchestrator import EXIT_GATE, Orchestrator
 
 FAST = "[gates.commands]\nlint = []\nformat = []\ntypecheck = []\n"
 LEGACY = """\

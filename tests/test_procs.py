@@ -1,4 +1,4 @@
-"""procs: child process trees die with agentflow (timeout, Ctrl+C/SIGTERM, hard kill on Windows),
+"""procs: child process trees die with framegate (timeout, Ctrl+C/SIGTERM, hard kill on Windows),
 the run lock, and stop signals."""
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import time
 
 import pytest
 
-from agentflow import procs
+from framegate import procs
 
 # a child that starts a grandchild sleeper, writes the grandchild's pid, then sleeps
 PARENT = (
@@ -59,7 +59,7 @@ def test_run_timeout_kills_the_tree(tmp_path: pathlib.Path) -> None:
 
 
 def test_run_command_timeout_reports_124(tmp_path: pathlib.Path) -> None:
-    from agentflow.adapters.base import TIMEOUT_CODE, run_command
+    from framegate.adapters.base import TIMEOUT_CODE, run_command
 
     code, out = run_command(
         [sys.executable, "-c", "print('partial', flush=True); import time; time.sleep(60)"],
@@ -85,13 +85,13 @@ def test_interrupt_kills_the_tree(tmp_path: pathlib.Path, job: bool) -> None:
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="job objects are Windows-only")
-def test_hard_kill_of_agentflow_kills_its_children(tmp_path: pathlib.Path) -> None:
+def test_hard_kill_of_framegate_kills_its_children(tmp_path: pathlib.Path) -> None:
     """A process that started a child with procs.popen is killed with TerminateProcess
     (taskkill /F, no /T): the kill-on-close job takes the child down too."""
     pid_file = tmp_path / "pid.json"
     script = (
         "import json, os, sys, time\n"
-        "from agentflow import procs\n"
+        "from framegate import procs\n"
         "c = procs.popen([sys.executable, '-c', 'import time; time.sleep(120)'], job=True)\n"
         "open(sys.argv[1] + '.tmp', 'w').write(json.dumps({'child': c.pid, 'me': os.getpid()}))\n"
         "os.replace(sys.argv[1] + '.tmp', sys.argv[1])\n"

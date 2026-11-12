@@ -1,9 +1,9 @@
 """Python final gates with real mutmut through WSL (slow; `uv run pytest -m slow`).
 
 Runs the Python e2e fixture (tests/conftest.py `demo_repo`, fake claude) to DONE with
-`[gates] mutation_runner = "wsl"`: the WSL venv is created under ~/.cache/agentflow/venvs/,
+`[gates] mutation_runner = "wsl"`: the WSL venv is created under ~/.cache/framegate/venvs/,
 mutmut runs on /mnt/<drive>/..., and the score + survivors land in final_gates.md /
-mutation_survivors.md. A second `agentflow gates --scope final` reuses the venv. Skipped when
+mutation_survivors.md. A second `framegate gates --scope final` reuses the venv. Skipped when
 WSL with python3 is not available."""
 
 from __future__ import annotations
@@ -15,9 +15,9 @@ import time
 
 import pytest
 
-from agentflow.adapters import wsl
-from agentflow.adapters.base import run_command
 from conftest import DemoRepo, git
+from framegate.adapters import wsl
+from framegate.adapters.base import run_command
 
 pytestmark = pytest.mark.slow
 
@@ -29,7 +29,7 @@ def test_final_gates_mutation_through_wsl(
     wsl_root, problem = wsl.probe(r.root, None) if os.name == "nt" else (None, "not Windows")
     if wsl_root is None:
         pytest.skip(f"needs Windows with WSL and python3: {problem}")
-    venv = f"~/.cache/agentflow/venvs/{hashlib.sha256(wsl_root.encode()).hexdigest()[:16]}"
+    venv = f"~/.cache/framegate/venvs/{hashlib.sha256(wsl_root.encode()).hexdigest()[:16]}"
     r.set_toml("gates", "mutation_runner", '"wsl"')
     try:
         assert r.af("approve-spec", "demo") == 0

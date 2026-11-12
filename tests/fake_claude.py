@@ -1,4 +1,4 @@
-"""Fake `claude -p` for the end-to-end tests (selected via AGENTFLOW_CLAUDE).
+"""Fake `claude -p` for the end-to-end tests (selected via FRAMEGATE_CLAUDE).
 
 Reads the task from stdin, the phase from .phase, and a scenario from FAKE_CLAUDE_SCENARIO
 (JSON). Writes canned files for feature `demo`, logs every call to calls.jsonl next to the
@@ -292,7 +292,7 @@ def main() -> int:
     with open(scen_path.with_name("calls.jsonl"), "a", encoding="utf-8") as f:
         call = {
             "phase": phase,
-            "agent_env": os.environ.get("AGENTFLOW_AGENT"),
+            "agent_env": os.environ.get("FRAMEGATE_AGENT"),
             "argv": sys.argv[1:],
             "prompt": prompt,
             "role": pathlib.Path(role_file).read_text(encoding="utf-8"),
@@ -446,7 +446,7 @@ def main() -> int:
                     "- ROOT CAUSE: add() subtracted its arguments (src/demo/__init__.py: add)\n"
                     "- RULED OUT: swapped arguments: add(3, 2) was wrong too\n"
                 )
-            # the step note goes where the task says (agentflow appends it to steps.md)
+            # the step note goes where the task says (framegate appends it to steps.md)
             m = re.search(r"Step note: write it with the Write tool to (\S+\.md)", prompt)
             target = pathlib.Path(m.group(1) if m else "out/demo/steps.md")
             target.parent.mkdir(parents=True, exist_ok=True)

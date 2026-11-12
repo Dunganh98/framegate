@@ -5,8 +5,9 @@ from __future__ import annotations
 
 import pathlib
 
-from agentflow.gates import GateReport, gate_report
-from agentflow.retro import (
+from conftest import git, init_git
+from framegate.gates import GateReport, gate_report
+from framegate.retro import (
     add_knowledge,
     archive_rounds,
     build,
@@ -16,7 +17,6 @@ from agentflow.retro import (
     parse_answer_items,
     split_questions,
 )
-from conftest import git, init_git
 from test_checks import adapter_for, write
 
 
@@ -154,7 +154,7 @@ def test_build_all_kinds() -> None:
 
 
 def test_summarize_denials() -> None:
-    from agentflow.orchestrator import summarize_denials
+    from framegate.orchestrator import summarize_denials
 
     raw = [
         {
@@ -195,7 +195,7 @@ def test_gate_report_details(tmp_path: pathlib.Path) -> None:
 def test_parse_result_stream_counts_api_turns() -> None:
     """stream-json (claude 2.1.321): one line per content block, blocks of one API turn share
     the message id. --max-turns caps these turns; num_turns counts prompt + tool results."""
-    from agentflow.orchestrator import hit_cap, parse_result
+    from framegate.orchestrator import hit_cap, parse_result
 
     lines = [
         {"type": "system", "subtype": "init"},

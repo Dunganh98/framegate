@@ -1,12 +1,12 @@
-"""`agentflow spec-check`: rules in design.md without a spec ID, and "Assigned as" code that is
+"""`framegate spec-check`: rules in design.md without a spec ID, and "Assigned as" code that is
 not in the file the spec names. Both from the M5-moment-scan retro."""
 
 from __future__ import annotations
 
-from agentflow.checks import spec_lint
-from agentflow.config import load_config
-from agentflow.orchestrator import package_text
 from conftest import DemoRepo
+from framegate.checks import spec_lint
+from framegate.config import load_config
+from framegate.orchestrator import package_text
 
 DESIGN = """\
 # Demo — Design

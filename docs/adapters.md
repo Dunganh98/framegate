@@ -1,16 +1,16 @@
 # Language adapters
 
-The agentflow core is language-neutral: orchestrator, phases, `progress.json`, `events.jsonl`,
+The framegate core is language-neutral: orchestrator, phases, `progress.json`, `events.jsonl`,
 the frame diff against `tests-approved/<feature>`, phase-based path protection, the gate runner
 and the CLI. Everything that depends on the project's language or test framework sits behind
-`LanguageAdapter` (`src/agentflow/adapters/base.py`). The adapter is chosen by
+`LanguageAdapter` (`src/framegate/adapters/base.py`). The adapter is chosen by
 
 ```toml
 [project]
 language = "python"   # or "dotnet"
 ```
 
-and looked up in `ADAPTERS` (`src/agentflow/adapters/__init__.py`, `"language": "module:Class"`,
+and looked up in `ADAPTERS` (`src/framegate/adapters/__init__.py`, `"language": "module:Class"`,
 imported lazily). An adapter instance gets the loaded `Config` (`self.cfg`, `self.root`).
 
 ## Result types
@@ -38,7 +38,7 @@ pytest `--junitxml` and the .NET `JunitXml.TestLogger`), `tool_path(name, near)`
 |---|---|---|
 | `name` | class attr | Language key, e.g. `"python"`, `"dotnet"` |
 | `source_suffixes` | class attr | Source file suffixes; new untracked files under `[paths] src` with these suffixes are scanned for forbidden patterns |
-| `detect(root)` | classmethod, abstract | True if the repo looks like this language (used by `agentflow init` without `--language`) |
+| `detect(root)` | classmethod, abstract | True if the repo looks like this language (used by `framegate init` without `--language`) |
 | `run_tests(req_ids, paths, fail_fast, junit)` | abstract | Run tests. `req_ids`: only tests tagged with >= 1 of these IDs (empty = all). `paths`: restrict to these test paths (the orchestrator passes `[paths] review_tests`). `junit`: write a JUnit XML report there and fill `cases`. Used by the step gate, the Stop hook (`fail_fast=True`, IDs from `.reqs`) and the review phase |
 | `test_command(req_ids)` | abstract | The command line an agent runs to check the IDs; goes into the IMPLEMENT/FIX task prompt |
 | `collect_req_tags()` | abstract | Static scan of the test sources: `{spec ID: ["file::test", ...]}`. Feeds the traceability check. Must not run or build anything |
@@ -52,12 +52,12 @@ pytest `--junitxml` and the .NET `JunitXml.TestLogger`), `tool_path(name, near)`
 | `coverage_checks(base_ref, scope=None)` | abstract | Final scope: the tests of `scope` (`None` = whole suite) with coverage (`cfg.coverage_timeout`), then diff coverage against `base_ref` (= `tests-approved/<f>`) `>= cfg.diff_coverage`, with `diff_coverage_summary` as `summary`. Names: `coverage run (feature tests)` / `diff coverage >= N% (feature tests)`, or `full test suite + coverage` / `diff coverage >= N%` for the whole suite. SKIPPED (with reason) when a coverage tool is missing, but the tests must still run. A cut-short coverage run fails both checks with `ERROR: ... incomplete` (no 0 %) |
 | `mutation_check(feature, base_ref, changed_src, scope=None)` | abstract | Mutation score on `changed_src` (src files changed since the tag) `>= cfg.mutation_score`, killing mutants only with the tests of `scope` (`None` = whole suite), `cfg.mutation_timeout`; write survivors to `<out>/<feature>/mutation_survivors.md`. SKIPPED with reason if the tool is missing/unsupported or `mutation_tool = "none"`; a cut-short run is `ERROR: mutation run (...) incomplete` |
 | `default_forbidden_patterns()` | abstract | Regexes forbidden in source lines added since the tag (suppressions, skips). `[frame] forbidden_patterns` replaces them |
-| `default_protected_paths()` | abstract | Dependency/build/tool-config paths that must not change after the tag. Added to the core list (`tests/`, `specs/`, `.claude/`, `.agentflow/`, `CLAUDE.md`, `agentflow.toml`, CI files) and `[protected] extra`. Entries are prefixes; an entry containing `*`, `?` or `[` is a case-insensitive glob where `*` also matches `/` (`*.csproj` = a project file at any depth). The same holds for `[protected] paths/extra/exceptions` |
+| `default_protected_paths()` | abstract | Dependency/build/tool-config paths that must not change after the tag. Added to the core list (`tests/`, `specs/`, `.claude/`, `.framegate/`, `CLAUDE.md`, `framegate.toml`, CI files) and `[protected] extra`. Entries are prefixes; an entry containing `*`, `?` or `[` is a case-insensitive glob where `*` also matches `/` (`*.csproj` = a project file at any depth). The same holds for `[protected] paths/extra/exceptions` |
 | `test_tools()` / `lint_tools()` | abstract | `--allowedTools` rules that let an agent run tests / lint+format+typecheck (rule syntax: `Bash(<prefix> *)`) |
 | `allowed_tools(phase)` | default | Per-phase tool list: core tools (Read/Glob/Grep, Write/Edit/MultiEdit, git diff/log) + the two lists above. `[phases.<P>] tools` replaces it |
-| `conventions_brief()` | abstract | < ~1.5 KB text: how stubs look, how tests are tagged, how to run tests/lint, what is forbidden. Appended to the TESTS / IMPLEMENT / FIX / REVIEW task prompts and printed by `agentflow spec-brief <feature>` (used by the plugin skill `/agentflow:feature`) |
-| `ci_setup()` | default | GitHub Actions steps (YAML, 6-space indent) that install the toolchain; inserted into the CI snippet `agentflow init` prints |
-| `config_template()` | default | Commented `agentflow.toml` section(s) for the language, appended by `agentflow init` (default: none) |
+| `conventions_brief()` | abstract | < ~1.5 KB text: how stubs look, how tests are tagged, how to run tests/lint, what is forbidden. Appended to the TESTS / IMPLEMENT / FIX / REVIEW task prompts and printed by `framegate spec-brief <feature>` (used by the plugin skill `/framegate:feature`) |
+| `ci_setup()` | default | GitHub Actions steps (YAML, 6-space indent) that install the toolchain; inserted into the CI snippet `framegate init` prints |
+| `config_template()` | default | Commented `framegate.toml` section(s) for the language, appended by `framegate init` (default: none) |
 | `format_fix_commands(files)` | default | Commands that format `files` in place for the gates' format fix. `[gates.commands] format_fix` (with `{files}`) replaces them and keeps the fix on when `[gates.commands] format` is the project's own check (e.g. black) |
 | `gitignore_entries()` | default | Extra `.gitignore` lines `init` adds: build outputs the orchestrator must never commit (it stages whole source and test folders) |
 | `init_note()` | default | Setup advice printed at the end of `init` |
@@ -66,18 +66,18 @@ Adapter-owned config sections (e.g. `[dotnet]`) are declared in `config.SCHEMA` 
 every other key, booleans allowed where declared) and listed in `config.LANGUAGE_SECTIONS`; the raw
 values land in `Config.language_options["<section>"]` and the adapter applies its own defaults.
 
-The base role prompts (`src/agentflow/roles/*.md`) never name a language; they refer to "the
+The base role prompts (`src/framegate/roles/*.md`) never name a language; they refer to "the
 conventions brief" for tagging, property tests and forbidden patterns.
 
 ## Generic adapter (`generic.py`, `language = "generic"`)
 
 Any language or test framework without a built-in adapter, configured entirely in
-agentflow.toml (`agentflow init --language generic` writes a commented TypeScript / vitest
-example; `/agentflow:setup` drafts it from the repository). Never auto-detected.
+framegate.toml (`framegate init --language generic` writes a commented TypeScript / vitest
+example; `/framegate:setup` drafts it from the repository). Never auto-detected.
 
 | `[generic]` key | Meaning |
 |---|---|
-| `test_all`, `test_ids`, `test_paths` (required: the first two) | commands; placeholders `{junit}` (JUnit XML agentflow reads), `{ids}` (joined by `ids_separator`, default `,`), `{ids_regex}` (`A|B`), `{paths}` (one argument per path), `{src}` `{tests}` `{out}` |
+| `test_all`, `test_ids`, `test_paths` (required: the first two) | commands; placeholders `{junit}` (JUnit XML framegate reads), `{ids}` (joined by `ids_separator`, default `,`), `{ids_regex}` (`A|B`), `{paths}` (one argument per path), `{src}` `{tests}` `{out}` |
 | `tag_pattern` (required) | regex over the test files; group 1 holds a test's spec IDs (found with the ID pattern) |
 | `test_files`, `source_suffixes` | globs under `[paths] tests`; suffixes of source files (frame diff, format fix) |
 | `stub_marker` | text in the failure of a test that hit a not-implemented stub (red check) |
@@ -97,13 +97,13 @@ locations are `file:line`. A project can start here and get a dedicated adapter 
 
 | Concern | Implementation |
 |---|---|
-| Interpreter | `[env] python`, else `<root>/.venv` interpreter, else the current one. agentflow must be installed in the project env (pinned dev dependency) for the pytest plugin |
-| Tag + select | `@pytest.mark.req("ID", ...)` + `--req ID,ID` from the `agentflow.pytest_plugin` (entry point `pytest11`; no conftest edits) |
+| Interpreter | `[env] python`, else `<root>/.venv` interpreter, else the current one. framegate must be installed in the project env (pinned dev dependency) for the pytest plugin |
+| Tag + select | `@pytest.mark.req("ID", ...)` + `--req ID,ID` from the `framegate.pytest_plugin` (entry point `pytest11`; no conftest edits) |
 | Tests | `python -m pytest -q --no-header -p no:cacheprovider [--req ...] [-x] [--junitxml=...]`; exit 0/1/5 -> passed/failed/no_tests, else error |
 | Traceability / smells | AST scan of `tests/**/test_*.py` and `*_test.py` (the guide's code) |
 | Gates | `ruff check`, `ruff format --check`, `mypy src` via `python -m`; `lint-imports` only if `.importlinter` exists |
 | Coverage | Feature scope: `pytest --req <IDs> --req-paths <review_tests> --cov=src --cov-branch --cov-report=xml:out/coverage.xml` (`--req-paths` keeps the tests under these paths, tagged or not), then `diff-cover out/coverage.xml --compare-branch=tests-approved/<f> --fail-under=90`; regression = plain `pytest -q`. `[python] pytest_args` (e.g. `["-m", "not integration"]`) is added to every pytest run and to the test command the agents get. Incomplete: exit 124 / 2 (interrupted) / 3 (internal error), or no `coverage.xml` |
-| Mutation | mutmut >= 3 via the standalone runner `mutmut_runner.py` (copied to `out/.mutmut/`): `mutmut run <module>.x*` for the changed modules, `mutmut results --all true`, `mutmut show` for up to 50 survivors (diffs go into `mutation_survivors.md`); `mutants/` is deleted before and after the run (and gitignored by `init`). Feature scope: the runner sets `PYTEST_ADDOPTS="--req <IDs> --req-paths <review_tests>"` for mutmut's pytest runs (spec key `pytest_addopts`; needs the agentflow pytest plugin with `--req-paths` in the mutmut env, which is why `MUTMUT_ENV_VERSION` is 2). Score = (killed + timeout + caught by type check + segfault) / (those + survived + no tests + suspicious); skipped / not checked are left out. Where it runs: `[gates] mutation_runner` (see below). SKIPPED when mutmut can't run there |
+| Mutation | mutmut >= 3 via the standalone runner `mutmut_runner.py` (copied to `out/.mutmut/`): `mutmut run <module>.x*` for the changed modules, `mutmut results --all true`, `mutmut show` for up to 50 survivors (diffs go into `mutation_survivors.md`); `mutants/` is deleted before and after the run (and gitignored by `init`). Feature scope: the runner sets `PYTEST_ADDOPTS="--req <IDs> --req-paths <review_tests>"` for mutmut's pytest runs (spec key `pytest_addopts`; needs the framegate pytest plugin with `--req-paths` in the mutmut env, which is why `MUTMUT_ENV_VERSION` is 2). Score = (killed + timeout + caught by type check + segfault) / (those + survived + no tests + suspicious); skipped / not checked are left out. Where it runs: `[gates] mutation_runner` (see below). SKIPPED when mutmut can't run there |
 | Forbidden | `type: ignore`, `noqa`, `pragma: no cover`, `pytest.skip`, `xfail` |
 | Protected | `pyproject.toml`, `setup.cfg`, `setup.py`, `requirements*`, `uv.lock`, `poetry.lock`, `Pipfile`, `.importlinter`, `mypy.ini`, `ruff.toml`, `.ruff.toml`, `pytest.ini`, `tox.ini`, root `conftest.py` |
 | Tools | `Bash(python -m pytest *)`, `Bash(pytest *)`, `Bash(ruff check *)`, `Bash(ruff format *)`, `Bash(python -m ruff *)`, `Bash(python -m mypy *)` |
@@ -122,15 +122,15 @@ WSL flow (`adapters/wsl.py`, `adapters/mutmut_runner.py`):
 
 1. Probe: `wsl.exe -e wslpath -a <repo>` (repo path, e.g. `/mnt/d/...`) and `python3 --version`.
    Either failing -> SKIPPED with the reason (no wsl.exe, distro won't start, no python3).
-2. Venv: `~/.cache/agentflow/venvs/<sha256(WSL repo path)[:16]>` on the Linux filesystem (not
+2. Venv: `~/.cache/framegate/venvs/<sha256(WSL repo path)[:16]>` on the Linux filesystem (not
    on `/mnt/<drive>`: slow and visible to Windows). Contents: the project's dependencies
    (`[project] dependencies`, every optional extra, every `[dependency-groups]` group,
    `[tool.uv] dev-dependencies`, `requirements*.txt`; the project itself is not installed because
-   mutmut puts its mutated copy on `sys.path`), `mutmut>=3`, `pytest`, and agentflow (its pytest
-   plugin) from this source tree when agentflow runs from one (a project's own `agentflow`
+   mutmut puts its mutated copy on `sys.path`), `mutmut>=3`, `pytest`, and framegate (its pytest
+   plugin) from this source tree when framegate runs from one (a project's own `framegate`
    requirement is then dropped). Windows paths in requirements are translated.
 3. The venv is rebuilt when its stamp changes: sha256 of the requirement list, `pyproject.toml`,
-   `uv.lock`, `poetry.lock`, `Pipfile.lock`, `pdm.lock`, the requirements files, the agentflow
+   `uv.lock`, `poetry.lock`, `Pipfile.lock`, `pdm.lock`, the requirements files, the framegate
    version and `MUTMUT_ENV_VERSION`. Built with `uv` (PATH, `~/.local/bin`, `~/.cargo/bin`;
    `uv venv --python python3` + `uv pip install`), else `python3 -m venv` + pip. If neither
    works: SKIPPED with the setup log and the one-time hint (`curl -LsSf
@@ -166,7 +166,7 @@ attribute lists, test methods, helper-method bodies; no build, no Roslyn).
 | format | `dotnet format whitespace <target> --verify-no-changes --include {changed}` |
 | typecheck | `dotnet build <target> -c <configuration> --no-incremental`; FAIL on build errors, and with `warnings = "changed"` (default) on warnings located in changed `.cs` files; `"any"` fails on every warning, `"ignore"` drops `--no-incremental` and ignores warnings |
 | Regression | `dotnet test` with `final_filter`, no coverage, `[gates] regression_timeout` |
-| Coverage | Feature scope: filter `(Req=A\|Req=B\|FullyQualifiedName~<review class>.)&(<final_filter>)` (`scope_filter`); `suite` scope: `final_filter`. With `--collect "XPlat Code Coverage"` (coverlet.collector, part of the xUnit template; if no test project references it: tests still run, coverage SKIPPED). Incomplete (status `error`, `TestRun.incomplete`): exit 124, `Test Run Aborted` / `test host process crashed` in the output, no TRX with a non-zero exit (and no compile errors), or no `coverage.cobertura.xml` after a run with results. Cobertura files are normalized to repo-relative posix paths (`out/coverage/normalized-N.xml`) and passed to `diff-cover --compare-branch=tests-approved/<f> --fail-under=<diff_coverage>`. diff-cover comes from agentflow's own environment (`pip install "agentflow[dotnet]"`), else `uvx --from diff-cover diff-cover`, else SKIPPED |
+| Coverage | Feature scope: filter `(Req=A\|Req=B\|FullyQualifiedName~<review class>.)&(<final_filter>)` (`scope_filter`); `suite` scope: `final_filter`. With `--collect "XPlat Code Coverage"` (coverlet.collector, part of the xUnit template; if no test project references it: tests still run, coverage SKIPPED). Incomplete (status `error`, `TestRun.incomplete`): exit 124, `Test Run Aborted` / `test host process crashed` in the output, no TRX with a non-zero exit (and no compile errors), or no `coverage.cobertura.xml` after a run with results. Cobertura files are normalized to repo-relative posix paths (`out/coverage/normalized-N.xml`) and passed to `diff-cover --compare-branch=tests-approved/<f> --fail-under=<diff_coverage>`. diff-cover comes from framegate's own environment (`pip install "framegate[dotnet]"`), else `uvx --from diff-cover diff-cover`, else SKIPPED |
 | Mutation | Stryker.NET (`dotnet-stryker` on PATH or in `~/.dotnet/tools`, or a local tool in `.config/dotnet-tools.json`; else SKIPPED with `dotnet tool install -g dotnet-stryker`). Runs in a temporary git worktree of the working tree (uncommitted changes copied in) where every `.cs` file of the mutated projects starts with `// Stryker disable all`, and in each changed file `// Stryker restore all` / `// Stryker disable all` frame the hunks changed since the tests-approved tag (widened to whole statements, never inside a string literal or block comment; a file without a diff, e.g. untracked, is mutated whole): Stryker compiles mutants only into the changed code (its `--mutate` alone only filters the report, see below), so hot code around a small change stays uninstrumented. Survivor lines are mapped back to the repository's file; the repository's files are never touched, the worktree is removed afterwards. One run per project owning changed `.cs` files under `src` that a test project references (its `<ProjectReference>`s, followed transitively through the referenced `.csproj` files, compared as resolved paths), with those test projects as `-tp`. A changed project no test project references is not run (Stryker can't mutate it): the result lists `not mutated (no test project references it): <X.csproj>: <files>` and names it on the score line; if no changed project is referenced, SKIPPED. A failed Stryker run is a FAIL that keeps the counts of the runs that finished (`<X.csproj>: d detected, u undetected`); their survivors are still written. `dotnet-stryker -tp <test project> --project <X.csproj> --mutate **/<file> ... --configuration <cfg> -r Json -O out/<f>/stryker/<project> --break-at 0`, plus `-f` with `test-case-filter` = the feature scope's filter ANDed with `base_filter` (`suite` scope: `base_filter`), ANDed with a filter already in the project's `stryker-config.json`. Timeout `[dotnet] mutation_timeout` if set, else `[gates] mutation_timeout`; exit 124, a killed Stryker or a missing report = `ERROR: mutation run (<project>) incomplete`. Score = (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage) over the changed files; survivors -> `mutation_survivors.md`. Runtime on the e2e fixture: ~15 s |
 | Forbidden | `#pragma warning disable`, `SuppressMessage`, `ExcludeFromCodeCoverage`, `Skip =`, `catch (Exception)` without a variable, `catch {`, single-line empty `catch (...) { }`. The null-forgiving `!` is allowed |
 | Protected | `*.csproj`, `*.sln`, `*.slnx`, `*Directory.Build.props`, `*Directory.Build.targets`, `*Directory.Packages.props`, `global.json`, `*NuGet.config`, `*.editorconfig`, `*.runsettings`, `.config/dotnet-tools.json`, `stryker-config.json` (globs: any depth) |
@@ -210,9 +210,9 @@ warnings for code an earlier step already built.
   if the gate tests are too slow for every feature.
 - Builds run `CopyToUnity`: `dotnet build` copies the core DLL and content into `unity/Assets`
   (gitignored), which makes an open Unity editor reimport. The typecheck uses `--no-incremental`.
-- agentflow writes to `[paths] out` (default `out/`, gitignored): `out/<f>/`, `out/.dotnet/`,
+- framegate writes to `[paths] out` (default `out/`, gitignored): `out/<f>/`, `out/.dotnet/`,
   `out/coverage/`, `out/runs/`. FCSim's runner also writes to `out/`; set `[paths] out` to e.g.
-  `"out/agentflow"` to keep them apart.
+  `"out/framegate"` to keep them apart.
 - `dotnet` must be on the agents' PATH: the task prompts and allowed tools use plain `dotnet`.
 
 ### Measured on FCSim (live smoke run 2026-11-09, 1,328 dev-loop tests)

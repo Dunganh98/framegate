@@ -24,7 +24,7 @@ Spec-driven, test-first workflow for Claude Code, with deterministic gates. You 
 2. **The verifier is independent of the implementer.** Tests are written from the spec and stubs only, approved by a human, then frozen. Implementers cannot change them.
 3. **Rules are checks, not prompts.** If a rule can be checked mechanically, it lives in `scripts/`, a hook, or CI, not in CLAUDE.md. CLAUDE.md is only for what can't be checked.
 4. **State lives in files, not conversations.** Each phase and step is a fresh `claude -p` process. Context never accumulates, so nothing depends on auto-compact.
-5. **Two human gates, forward only: SPEC -> FINAL** (the original design had a third, TESTS, between them; the agentflow package keeps it only with `[gates] tests = "human"` / `"auto"`). Nothing stops in between. The test writer and the test reviewer write questions to `out/<feature>/questions.md` and continue; the test reviewer checks the tests against the spec, and its questions and open objections come to the final gate. The implementer assumes from the spec and logs every assumption in `steps.md`; only when no reasonable assumption is possible it parks the step (`park.md`) and the run goes on. Parked items and assumptions are listed at the final gate. (Implemented in the agentflow package; the scripts below are the original single-repo version.)
+5. **Two human gates, forward only: SPEC -> FINAL** (the original design had a third, TESTS, between them; the framegate package keeps it only with `[gates] tests = "human"` / `"auto"`). Nothing stops in between. The test writer and the test reviewer write questions to `out/<feature>/questions.md` and continue; the test reviewer checks the tests against the spec, and its questions and open objections come to the final gate. The implementer assumes from the spec and logs every assumption in `steps.md`; only when no reasonable assumption is possible it parks the step (`park.md`) and the run goes on. Parked items and assumptions are listed at the final gate. (Implemented in the framegate package; the scripts below are the original single-repo version.)
 6. **Every human correction becomes data.** Gate rejections, escalations and gate failures are logged. A retro agent turns recurring problems into new checks.
 7. **The human is the manager, not the reader of specs.** They give clear input and check outcomes. The spec files stay precise and are written for the agents; wherever the human reads or decides, they get a short brief: the decision and its default first, about one screen, plain words, no spec ID without its meaning, the detail files only on request. The human owns the structure (what each class is for and how the classes work together), not every line or test. Details: 9.10.
 
@@ -36,7 +36,7 @@ Spec-driven, test-first workflow for Claude Code, with deterministic gates. You 
 
 | Phase | Who | Writes to | Ends with |
 |---|---|---|---|
-| SPEC | Interactive session (`/spec`; package: `/agentflow:feature`) | `specs/<feature>/`, interface stubs in `src/`, the spec brief `out/<feature>/spec_brief.md` | **Gate 1: you approve the spec brief** (task, plan, how it is proven, not proven, decisions made for you, project details, questions) → tag `spec-approved/<feature>` |
+| SPEC | Interactive session (`/spec`; package: `/framegate:feature`) | `specs/<feature>/`, interface stubs in `src/`, the spec brief `out/<feature>/spec_brief.md` | **Gate 1: you approve the spec brief** (task, plan, how it is proven, not proven, decisions made for you, project details, questions) → tag `spec-approved/<feature>` |
 | TESTS | Headless test writer, then the headless **test reviewer** (TEST_REVIEW) | `tests/`, `out/` (reviewer: `out/` only) | Red-against-stubs + traceability + smell checks → reviewer objections go back to the writer (`test_review_rounds`, default 2) → tag `tests-approved/<feature>`. Package default (`[gates] tests = "defer"`): no stop, the open points go to the final gate. With `"human"`: **Gate 2**, a brief of what the tests check in plain words and the questions with defaults (`tests_gate.md` on request) → approve / reject / answer; `"auto"` skips the stop when all is clean |
 | IMPLEMENT | Headless implementer, one fresh run per plan step | `src/`, `out/` | Step gates green → commit, next step. No stop: assumptions logged in `steps.md`; a step without a reasonable assumption or failing `max_attempts` times is parked |
 | REVIEW | Headless adversarial reviewer, then the test reviewer triages (TRIAGE) | `tests/review/`, `out/` | Failing tests for findings → triage against the spec (valid kept, invalid deleted with a reason) → implementer fixes (unfixable: parked) → structure fixes (the reviewer's structure findings, applied with every test green) → final gates + structure report |
@@ -246,8 +246,8 @@ You are in the SPEC phase for feature `$ARGUMENTS`. Templates are in specs/$ARGU
    `python scripts/orchestrate.py approve-spec $ARGUMENTS`.
 ```
 
-**agentflow package (`plugin/skills/feature/SKILL.md`):** the dialogue is manager-style (9.10).
-Claude first settles everything the docs, the code map, the code and `.agentflow/project.md`
+**framegate package (`plugin/skills/feature/SKILL.md`):** the dialogue is manager-style (9.10).
+Claude first settles everything the docs, the code map, the code and `.framegate/project.md`
 can decide (a checklist: overlaps, fixtures, input domain, serialized data, existing data,
 mirrored code, new functions, which file each concept goes in), then asks only what they
 cannot, and only the real decisions (no count cap; 9.10 "Which questions"), each with a
@@ -332,7 +332,7 @@ Write out/<feature>/pr.md with these sections:
 8. Open questions
 ```
 
-**agentflow package:** the role files live in `src/agentflow/roles/`. Beyond this original set:
+**framegate package:** the role files live in `src/framegate/roles/`. Beyond this original set:
 the implementer and the adversarial reviewer carry the readability checklist (9.10; the
 reviewer's structure findings need no test), the PR role writes `final_summary.md`,
 `final_brief.md` and the code map update, the retro role starts its file with a numbered
@@ -1290,9 +1290,9 @@ python scripts/orchestrate.py run health-index-v2
 #   -> implementation, review, triage, fixes and final gates run without a stop
 #   -> final gate: read out/<feature>/final_summary.md -> approve (retro) / finish --no-retro /
 #      answer the parked questions (redo only those)
-#   (agentflow package: driven from the chat with /agentflow:feature; the chat shows a
-#    brief at each gate, `agentflow gate-summary`, and maps "ok" / answers by number to
-#    agentflow approve / answer / finish <feature>)
+#   (framegate package: driven from the chat with /framegate:feature; the chat shows a
+#    brief at each gate, `framegate gate-summary`, and maps "ok" / answers by number to
+#    framegate approve / answer / finish <feature>)
 
 # 3. Open the PR, review in this order:
 #    assumptions -> mutation survivors -> review findings -> "where to look first" -> code
@@ -1301,7 +1301,7 @@ python scripts/orchestrate.py run health-index-v2
 python scripts/orchestrate.py status health-index-v2
 ```
 
-**What you review at each gate** (agentflow package: from the brief; the files on request):
+**What you review at each gate** (framegate package: from the brief; the files on request):
 
 | Gate | Check | Ignore |
 |---|---|---|
@@ -1401,36 +1401,36 @@ A plugin alone is not enough: the orchestrator runs **outside** Claude Code. So 
 
 | Part | Contains | Distributed as |
 |---|---|---|
-| Python package (working name `agentflow`) | Orchestrator, gates, check scripts, hook logic, config loader, `init` | pip/pipx from git or an internal package index |
+| Python package (working name `framegate`) | Orchestrator, gates, check scripts, hook logic, config loader, `init` | pip/pipx from git or an internal package index |
 | Claude Code plugin | `/spec` command, hook registration, base role prompts (as agents or skills) | Plugin marketplace (a git repo can serve as one) |
-| Templates | Spec templates, CLAUDE.md skeleton, `agentflow.toml`, CI snippets | Copied into a project by `agentflow init` |
+| Templates | Spec templates, CLAUDE.md skeleton, `framegate.toml`, CI snippets | Copied into a project by `framegate init` |
 
-Plugin hooks only call the package (`python -m agentflow.hooks.protect_paths`), so the logic exists in exactly one place.
+Plugin hooks only call the package (`python -m framegate.hooks.protect_paths`), so the logic exists in exactly one place.
 
 Framework repo layout:
 
 ```
-agentflow/
+framegate/
   pyproject.toml
-  src/agentflow/
-    cli.py                     # agentflow init | spec | approve-spec | run | status | gates
+  src/framegate/
+    cli.py                     # framegate init | spec | approve-spec | run | status | gates
     orchestrator.py
     gates.py
-    config.py                  # loads + validates agentflow.toml, applies defaults
+    config.py                  # loads + validates framegate.toml, applies defaults
     checks/ traceability.py red_stubs.py test_smells.py frame_diff.py mutation.py
     hooks/  protect_paths.py require_green.py
-    templates/                 # spec templates, CLAUDE.md skeleton, agentflow.toml, CI snippets
+    templates/                 # spec templates, CLAUDE.md skeleton, framegate.toml, CI snippets
     roles/                     # base role prompts
   plugin/
     .claude-plugin/plugin.json # [VERIFY] plugin manifest format
     commands/spec.md
-    hooks/hooks.json           # [VERIFY] calls python -m agentflow.hooks.* (use ${CLAUDE_PLUGIN_ROOT} if paths are needed)
+    hooks/hooks.json           # [VERIFY] calls python -m framegate.hooks.* (use ${CLAUDE_PLUGIN_ROOT} if paths are needed)
   marketplace/                 # [VERIFY] marketplace manifest, if distributing via marketplace
   tests/                       # the framework tests itself (dogfooding the same gates)
   CHANGELOG.md
 ```
 
-### 8.5 Config: from hardcoded constants to `agentflow.toml`
+### 8.5 Config: from hardcoded constants to `framegate.toml`
 
 | Current location | Constant | Config key |
 |---|---|---|
@@ -1475,7 +1475,7 @@ max_attempts = 3
 max_turns = 80
 
 [roles]
-extra_dir = ".agentflow/roles"
+extra_dir = ".framegate/roles"
 ```
 
 Making the gate commands configurable is also what would later allow non-Python projects. Don't build for that until a non-Python project actually needs it.
@@ -1485,12 +1485,12 @@ Making the gate commands configurable is also what would later allow non-Python 
 1. Do the tool comparison (8.2) and decide: adopt, extend, or build.
 2. Create the framework repo and move the generic scripts into the package unchanged first. Get it working before refactoring.
 3. Replace constants with `config.py` lookups, with defaults equal to the current values, so behavior is identical.
-4. Add the CLI entry points (`agentflow spec|approve-spec|run|status|gates|init`).
-5. Build the plugin: `/spec`, hook registration calling `python -m agentflow.hooks.*`, base roles.
-6. Implement `agentflow init`: scaffold templates, config, CLAUDE.md skeleton, `.gitignore` entries and a CI snippet. **Never overwrite existing files**; print what was skipped.
+4. Add the CLI entry points (`framegate spec|approve-spec|run|status|gates|init`).
+5. Build the plugin: `/spec`, hook registration calling `python -m framegate.hooks.*`, base roles.
+6. Implement `framegate init`: scaffold templates, config, CLAUDE.md skeleton, `.gitignore` entries and a CI snippet. **Never overwrite existing files**; print what was skipped.
 7. Give the framework its own tests, using its own gates.
 8. **Migrate this repo:** delete the local copies, install a pinned version, keep only project-specific files, and run the smoke test (Step 11) plus one real feature. Compare behavior with before.
-9. Adopt in the second project via `agentflow init`.
+9. Adopt in the second project via `framegate init`.
 
 ### 8.7 Versioning and upgrades
 
@@ -1511,14 +1511,14 @@ Making the gate commands configurable is also what would later allow non-Python 
 
 - Name and ownership: personal tool or team tool?
 - Role prompts as plugin **agents** or **skills**. Decide based on which one supports per-phase tool restrictions in the current Claude Code version.
-- Whether the plugin is needed at all, or whether `agentflow init` writing `.claude/settings.json` and the command files is enough. That would be simpler, with one fewer distribution channel.
+- Whether the plugin is needed at all, or whether `framegate init` writing `.claude/settings.json` and the command files is enough. That would be simpler, with one fewer distribution channel.
 - Python-only or language-agnostic gates (see 8.5: only if a real need appears).
 
 ---
 
 ## Part 9 — Next improvement steps (after the baseline runs well)
 
-**Status: planned** (except 9.10, implemented in the agentflow package). The baseline (Parts 3–4) runs first on a few real features. Each item here is adopted only when its trigger is met. Do Part 9 before Part 8: extract the framework only after these have settled.
+**Status: planned** (except 9.10, implemented in the framegate package). The baseline (Parts 3–4) runs first on a few real features. Each item here is adopted only when its trigger is met. Do Part 9 before Part 8: extract the framework only after these have settled.
 
 ### 9.0 Rules for every extension
 
@@ -1537,7 +1537,7 @@ Making the gate commands configurable is also what would later allow non-Python 
 | 4 | 9.4 Review panel with triage | pstack `/interrogate` | M | — | Better findings, visible dismissals |
 | 5 | 9.5 Orchestrator modes | pstack playbooks | M | 9.2 | **Done 2026-11-12** (see docs/reference.md, "Modes"). Bug fixes and refactors with the right first proof |
 | 6 | 9.6 Design-friction detection | pstack `/architect` (phase 5) | M | 9.1 | Stops blind retries; points to spec problems |
-| 7 | 9.7 Retro panel with backlog | pstack `/reflect` | S–M | 9.1, 9.2 | **Backlog done 2026-11-12** (`agentflow keep` / `backlog`); the two-reviewer panel is not built. Fewer one-off rules, better proposals |
+| 7 | 9.7 Retro panel with backlog | pstack `/reflect` | S–M | 9.1, 9.2 | **Backlog done 2026-11-12** (`framegate keep` / `backlog`); the two-reviewer panel is not built. Fewer one-off rules, better proposals |
 | 8 | 9.8 Epics: split + parallel sub-features | ours (scheduling ideas from harnessOrch) | L | clean single features, 9.1 | One big task, one spec approval, one final summary |
 | — | 9.10 Manager-style briefs, structure, code map | ours (FCSim M5-freekick-review) | M | — | **Done 2026-11-11.** The human decides from one-screen briefs; files stay readable at the class level |
 
@@ -1569,7 +1569,7 @@ Making the gate commands configurable is also what would later allow non-Python 
 4. **Optional:** Claude Code's OpenTelemetry export, only if dashboards become necessary. **[VERIFY]** setup for the installed version.
 
 **Orchestrator changes:**
-- Generate a `run_id` (uuid4) per agent run, and pass `AGENTFLOW_RUN_ID`, `AGENTFLOW_FEATURE`, `AGENTFLOW_STEP` and `AGENTFLOW_ATTEMPT` as environment variables to `claude -p` and `gates.py`. Hooks and pytest inherit them. **[VERIFY]** that hooks inherit the environment of the `claude` process.
+- Generate a `run_id` (uuid4) per agent run, and pass `FRAMEGATE_RUN_ID`, `FRAMEGATE_FEATURE`, `FRAMEGATE_STEP` and `FRAMEGATE_ATTEMPT` as environment variables to `claude -p` and `gates.py`. Hooks and pytest inherit them. **[VERIFY]** that hooks inherit the environment of the `claude` process.
 - Read token usage from the JSON result: `usage.input_tokens`, `usage.output_tokens`, `usage.cache_read_input_tokens`, `usage.cache_creation_input_tokens`, plus `subtype` to detect turn-limit endings. **[VERIFY]** field names.
 - New subcommand: `orchestrate.py defect <feature> "<description>" [--ids XXX-R-001,...]`, which logs an **escaped defect** (a bug found after merge). This is the only metric that measures quality rather than speed, so log every one.
 
@@ -1594,7 +1594,7 @@ def main() -> None:
         phase_file = ROOT / ".phase"
         rec = {
             "ts": datetime.datetime.now().isoformat(timespec="seconds"),
-            "run_id": os.environ.get("AGENTFLOW_RUN_ID"),
+            "run_id": os.environ.get("FRAMEGATE_RUN_ID"),
             "session_id": data.get("session_id"),
             "phase": phase_file.read_text(encoding="utf-8").strip() if phase_file.exists() else None,
             "tool": data.get("tool_name"),
@@ -1657,16 +1657,16 @@ def pytest_collection_modifyitems(config, items):
 
 
 def pytest_runtest_logreport(report):
-    run_id = os.environ.get("AGENTFLOW_RUN_ID")
+    run_id = os.environ.get("FRAMEGATE_RUN_ID")
     if not run_id or not report.failed:
         return
-    root = pathlib.Path(os.environ.get("AGENTFLOW_ROOT", os.getcwd()))
+    root = pathlib.Path(os.environ.get("FRAMEGATE_ROOT", os.getcwd()))
     out = root / "out" / "telemetry"
     out.mkdir(parents=True, exist_ok=True)
     rec = {
         "ts": datetime.datetime.now().isoformat(timespec="seconds"),
         "run_id": run_id,
-        "source": "gate" if os.environ.get("AGENTFLOW_GATE") else "agent",
+        "source": "gate" if os.environ.get("FRAMEGATE_GATE") else "agent",
         "nodeid": report.nodeid,
         "spec_ids": _REQ_BY_NODE.get(report.nodeid, []),
         "when": report.when,
@@ -1784,9 +1784,9 @@ Each assertion maps to a small Python check function in `scripts/verify/assertio
 
 ### 9.5 Orchestrator modes: feature, bugfix, refactor
 
-**Status: done 2026-11-12** in the agentflow package (docs/reference.md, "Modes"). Differences
+**Status: done 2026-11-12** in the framegate package (docs/reference.md, "Modes"). Differences
 from the plan below: the mode is a `Mode:` line in the spec's requirements.md (set by
-`agentflow spec --mode`), not a `run --mode` flag; one test-writer role with a mode section
+`framegate spec --mode`), not a `run --mode` flag; one test-writer role with a mode section
 instead of separate role files; the baseline check is `checks/baseline.py`; the bug fix's
 cause lines (`ROOT CAUSE`, `RULED OUT`) are reported in the final facts, not enforced. Not
 built: a scope-coverage check before a refactor moves code.
@@ -1842,7 +1842,7 @@ A perf mode (baseline trace, then compare) is deferred until there is profiling 
 
 **Status: the backlog is done 2026-11-12** (docs/reference.md, "The retro backlog"):
 `metrics/retro_backlog.md` with a status per proposal, the retro's text kept beside it, the
-retro names repeats (`repeats B3`) and they are counted, `agentflow keep` / `agentflow
+retro names repeats (`repeats B3`) and they are counted, `framegate keep` / `framegate
 backlog`. Differences from the plan below: the human's pick decides open / skipped (the
 retro recommends `skip` for a first-time one-off); one retro run, no two-lens panel and no
 synthesizer (points 1-3 are not built).
@@ -1904,28 +1904,28 @@ epic dialogue (Opus + you) -> split + contracts -> "split OK"      (gate 1)
 - `out/<epic>/final_summary.md`: the one summary.
 
 **Wiring:**
-- Chat: `/agentflow:epic <name>` (dialogue, split, "split OK", sub-specs, "spec OK", then background run + Monitor, one row per sub-feature). `/agentflow:status` and `/agentflow:resume` accept an epic.
-- CLI: `agentflow run <epic>` runs the scheduler; `approve`, `answer`, `cleanup` work on the epic.
+- Chat: `/framegate:epic <name>` (dialogue, split, "split OK", sub-specs, "spec OK", then background run + Monitor, one row per sub-feature). `/framegate:status` and `/framegate:resume` accept an epic.
+- CLI: `framegate run <epic>` runs the scheduler; `approve`, `answer`, `cleanup` work on the epic.
 - Engine: a scheduler over sub-features (dependencies, scope overlap, concurrency), worktree setup and teardown, serialized merges, the integration gate. Each sub-feature reuses the existing single-feature pipeline unchanged, with its working directory set to its worktree.
-- Hooks: `AGENTFLOW_AGENT` plus the sub-feature's write scope, so the existing path protection also enforces the scope.
+- Hooks: `FRAMEGATE_AGENT` plus the sub-feature's write scope, so the existing path protection also enforces the scope.
 - Telemetry: every event carries `epic` and `sub`. The report compares cost per accepted sub-feature with cost per single feature.
 - Retro: one per epic. It also looks at the split itself: wrong cuts, missing contracts, scope conflicts.
 
 **Reuse from harnessOrch** (github.com/kehuydietlatoi/harnessOrch, TypeScript, by a friend of the user). It solves the parallel half of this item already. The repo has no license file, but the author agreed to share it (2026-11-10). Credit it in each ported file's header. It is TypeScript, so every reuse is a port to Python, kept small:
 
-| harnessOrch (`packages/engine/src/`) | What it does | Use in agentflow |
+| harnessOrch (`packages/engine/src/`) | What it does | Use in framegate |
 |---|---|---|
 | `scheduler/scheduler.ts` (`nextDispatches`, `blockedBy`, `planFinished`) | Pure, ~80 lines: start a task only when its dependencies are done, below the concurrency cap, and its write scope overlaps no running task. Which tasks wait on a task that needs you. | Epic scheduler over sub-features. Drop the agent-candidate part (Claude only). |
 | `git/path-locks.ts` (`lockPathsOverlap`, `pathMatchesGlob`) | Whether two globs can match the same file (an automaton, not a guess), and repo-relative path rules. | Scope-overlap test of the scheduler; scope check at gate 1 (overlapping scopes must be dependent). `frame_diff.path_matches` only matches one path against globs. |
 | `checks/checks.ts` (`changedPaths`, `scopeViolations`) + the README's write-scope policy | Changed files via `git status -z`, renames included. Unlisted out-of-scope edit: reverted silently. Listed one: parked, you allow or revert. | Write-scope check after each sub-feature run, next to the frame diff. |
 | `adapters/usage-limit.ts` | Detects a usage-limit message and parses its reset time. | Wait for the reset and continue, without counting a failed attempt. **Useful for single features now.** |
 | `checks/filter.ts` (`filterCheckOutput`) | Failure lines with 2 lines of context plus the summary tail, max 100 lines. Measured as the biggest token saver. | Fix prompts and diagnosis input (today: last 25–30 lines). **Useful for single features now.** |
-| `git/worktree.ts` (`worktreeRemovalSafety`, `removeWorktree`, `prepareWorktreeRemoval`) | Never delete a worktree with dirty files or unmerged commits; avoid Git for Windows recursing through junctions. | Worktree teardown and `agentflow cleanup` for epics. |
+| `git/worktree.ts` (`worktreeRemovalSafety`, `removeWorktree`, `prepareWorktreeRemoval`) | Never delete a worktree with dirty files or unmerged commits; avoid Git for Windows recursing through junctions. | Worktree teardown and `framegate cleanup` for epics. |
 | `engine/git.ts` (`provideSharedDirs`, `cloneTree`) | Gives a new worktree hard-linked copies of ignored dependency folders, so builds work at once. | Only if a project's worktrees are slow to build (Python `.venv` via `uv sync` and NuGet's global cache may make it unnecessary). Measure first. |
 | `engine/lifecycle.ts` | Task states and an explicit transition table, pure. | Sub-feature states (queued, running, parked, merged, done). |
 | Serialized merges and the merge-conflict prompt (`engine/runner.ts`) | One merge at a time into the plan branch; a conflict goes to an LLM with both sides. | Merges into `feat/<epic>`. A conflict should be rare when scopes don't overlap; park it rather than let an LLM resolve it, until data says otherwise. |
 
-Not reused: multi-vendor routing (Codex, OpenCode), the Electron app, resumed long-lived sessions (agentflow uses fresh runs on purpose), cross-vendor review, process containment (`procs.py` already uses a Windows job object).
+Not reused: multi-vendor routing (Codex, OpenCode), the Electron app, resumed long-lived sessions (framegate uses fresh runs on purpose), cross-vendor review, process containment (`procs.py` already uses a Windows job object).
 
 **Not in scope:** non-Claude workers (Codex, OpenCode). Revisit only if usage limits become the main bottleneck.
 
@@ -1951,7 +1951,7 @@ Each item is adopted on its own improvement branch, followed by the smoke test (
 
 ### 9.10 Manager-style briefs, structure and the code map
 
-**Status: implemented in the agentflow package (2026-11-11, plugin 0.4.0).** No mode and no
+**Status: implemented in the framegate package (2026-11-11, plugin 0.4.0).** No mode and no
 config switch: this is how every human-facing point works.
 
 **Origin:** ours. After three FCSim features the user wanted to act as the manager of a
@@ -1970,16 +1970,16 @@ decision and its default first, details only on request.
 | Point | Brief | Built by |
 |---|---|---|
 | Spec gate | **Task** (2-4 lines) / **Plan** (one line per step) / **How it is proven** / **Not proven** (what to check by using it: feel, balance, UI, speed) / **Decisions I made for you** (one line each, with what it rules out: the part the human really checks) / **Project details that matter** (existing code and data it relies on, invariants it must keep) / **Questions** (the real decisions, by impact, each with a default) | the chat (feature skill), saved as `out/<f>/spec_brief.md` for the final gate |
-| Spec dialogue | draft everything from the docs, the code map, the code and `.agentflow/project.md` first; ask only the real decisions they cannot settle, by impact, with defaults | the chat |
+| Spec dialogue | draft everything from the docs, the code map, the code and `.framegate/project.md` first; ask only the real decisions they cannot settle, by impact, with defaults | the chat |
 | Tests gate (`[gates] tests = "human"` / `"auto"` only) | what the tests check in plain words, objections left, one line of mechanical checks, questions with defaults; no counts-only summary | `gate-summary` from the test reviewer's `## What the tests check` (test_review.md; fallback: test_summary.md's column) |
-| Final gate | **Plan followed?** (one line per step: done as planned / changed, why) / **Outcomes** with numbers (gates, diff coverage, mutation, failed attempts, parks, cost, agent and check time, structure) / **Struggles** and how they were solved / **Proven** / **Not proven** / **Code map** (one line) / **Questions** numbered 1..k by impact (parked work, provisional steps and the open questions that are real decisions; the problem in one line, then `A: ... (default) / B: ...`) / **Decisions I made** / how many gate items were left out | `gate-summary`: the PR agent's `final_brief.md` for the words, the run records for the numbers; `final_facts.md` lists the numbered gate items; the brief places each under Questions / Decisions I made / Left out by its `[N]`, and `agentflow answer` maps the answers back |
+| Final gate | **Plan followed?** (one line per step: done as planned / changed, why) / **Outcomes** with numbers (gates, diff coverage, mutation, failed attempts, parks, cost, agent and check time, structure) / **Struggles** and how they were solved / **Proven** / **Not proven** / **Code map** (one line) / **Questions** numbered 1..k by impact (parked work, provisional steps and the open questions that are real decisions; the problem in one line, then `A: ... (default) / B: ...`) / **Decisions I made** / how many gate items were left out | `gate-summary`: the PR agent's `final_brief.md` for the words, the run records for the numbers; `final_facts.md` lists the numbered gate items; the brief places each under Questions / Decisions I made / Left out by its `[N]`, and `framegate answer` maps the answers back |
 | Setup | what I found (language, tests, slow tests, protected things), the settings that differ from the defaults and why, the knowledge facts in short lines, the code map's modules, the real decisions as questions with defaults; files on request | the setup skill |
-| `agentflow doctor` | one verdict line (ready / not ready), then only the FAILs with the fix and the WARNs that need a decision (findings in the existing code need none); `--brief` prints only that | `doctor.py` |
+| `framegate doctor` | one verdict line (ready / not ready), then only the FAILs with the fix and the WARNs that need a decision (findings in the existing code need none); `--brief` prints only that | `doctor.py` |
 | Smoke run offer | one line, cost and time | the setup skill |
 | Retro | `## Brief`: numbered proposals, problem -> fix, recommend take / skip / fold into N; the knowledge facts; the user answers with numbers | the retro role |
 | DONE wrap-up, status, resume, errors, interruptions | one or two lines: the state and the one decision needed, with a default | the run protocol and the skills |
 
-**Answering:** numbered answers work as before (`answers.md`, then `agentflow answer`). New:
+**Answering:** numbered answers work as before (`answers.md`, then `framegate answer`). New:
 "ok" at a gate with numbered items takes every default (the chat writes `A: Default: ...` per
 item); "approve as is" approves and leaves the items open; without items "ok" approves.
 Every question an agent writes (test writer, test reviewer, park requests) has the options and
@@ -1988,13 +1988,13 @@ a recommended default, so the brief always has one to offer.
 **Which questions (2026-11-11, plugin 0.4.1).** The first briefs capped questions and decisions at
 5; the M5-moment-scan final brief still asked notes, closed items and the same question twice.
 Now there is no cap; a filter decides: a question only when two or more reasonable options have
-different outcomes and the spec, the code, `.agentflow/project.md` and earlier answers don't
+different outcomes and the spec, the code, `.framegate/project.md` and earlier answers don't
 settle it. One sensible option -> decided ("Decisions I made", one line); answered, resolved or a
 note -> left out; the same question twice -> one; ordered by impact. Briefs are shorter with the
 same sections: one line per bullet, a section where nothing happened is one line, Proven / Not
 proven the 3 most important points, a question as one line of problem plus `A: ... (default) /
 B: ...`; the final brief is ~20 lines when nothing went wrong. At the final gate the numbers the
-human answers are the brief's (1..k); `agentflow answer` maps them to the gate items and fills in
+human answers are the brief's (1..k); `framegate answer` maps them to the gate items and fills in
 the decided and repeated ones. A check after the PR run sends a brief with duplicates, closed
 items or notes as questions, one-option questions or unplaced items back once (not blocking).
 
@@ -2022,12 +2022,12 @@ together, not every line or test):
 **Code map** (`[docs] code_map`, default `docs/code-map.md`): a living Markdown doc per project,
 under ~300 lines: per module its purpose, its key classes (one line each), how they work
 together (a short flow, mermaid optional), "where to look for X".
-- `/agentflow:setup` drafts it from the code; the user confirms.
+- `/framegate:setup` drafts it from the code; the user confirms.
 - The PR phase updates the sections a feature touched (the only file outside `out/` the PR
-  agent may write); agentflow commits it as `<f>: code map`.
+  agent may write); framegate commits it as `<f>: code map`.
 - A non-blocking check: a new public type in the feature's diff (Python `class`, C# `public
   class|struct|interface|enum|record`, generic `export|pub|public` types) that the map does not
-  name is a WARN on the brief's code map line (`code_map` event). `agentflow doctor` WARNs when
+  name is a WARN on the brief's code map line (`code_map` event). `framegate doctor` WARNs when
   the map is missing or over 300 lines. The reviewer reads it: code that contradicts its "how
   they work together" is a structure finding.
 
@@ -2061,12 +2061,12 @@ project depends on?**
 | Adapters (this repo) | how a language proves things: select tests by spec ID, coverage, mutation, stubs | python (pytest, mutmut), dotnet (xUnit, Stryker), generic |
 | Hosting templates (this repo) | the CI gate job per host | GitHub Actions; Azure Pipelines (to do) |
 | Modes (this repo) | the first proof of a kind of work | feature (red against stubs), bugfix, refactor; later: experiment, pipeline |
-| Project setup (target repo) | what the project's stack means for a run | agentflow.toml (`pytest_args`, baseline, protected paths, `[gates.extra]`), `.agentflow/project.md` |
+| Project setup (target repo) | what the project's stack means for a run | framegate.toml (`pytest_args`, baseline, protected paths, `[gates.extra]`), `.framegate/project.md` |
 | Presets (later) | settings shared by projects with the same stack | only after two set-up projects show what repeats |
 
 Rules:
 - A project's stack (databases, brokers, cloud services, connectors) is never installed or
-  wrapped by agentflow: it is the project's dependency. `agentflow install-tools` installs only
+  wrapped by framegate: it is the project's dependency. `framegate install-tools` installs only
   what the workflow needs.
 - A new built-in adapter only after the generic one fell short on a real project.
 - The flow fits where "done" is an automated test that fails first and passes after. Where the

@@ -1,12 +1,12 @@
-"""`agentflow stats`: cost and time per feature from events.jsonl."""
+"""`framegate stats`: cost and time per feature from events.jsonl."""
 
 from __future__ import annotations
 
 import json
 
-from agentflow import stats
-from agentflow.config import load_config
 from conftest import DemoRepo
+from framegate import stats
+from framegate.config import load_config
 
 
 def ev(ts: str, kind: str, feature: str = "demo", **data: object) -> dict[str, object]:
@@ -105,14 +105,14 @@ def test_stats_command(demo_repo: DemoRepo) -> None:
 def test_spec_time_is_from_the_spec_command_to_the_approval() -> None:
     events = [
         ev("09:00:00", "spec_started", mode="refactor"),
-        ev("09:01:00", "spec_started", mode="refactor"),  # `agentflow spec` again: same round
+        ev("09:01:00", "spec_started", mode="refactor"),  # `framegate spec` again: same round
         ev("09:10:00", "spec_approved", mode="refactor"),
         ev("09:30:00", "spec_started"),  # reopened after an answer
         ev("09:35:00", "spec_approved"),
     ]
     st = stats.feature_stats("demo", events)
     assert st.spec_seconds == 900 and st.as_dict()["spec_seconds"] == 900
-    assert stats.detail(st)[1].startswith("Spec: 15 min from `agentflow spec` to the approval")
+    assert stats.detail(st)[1].startswith("Spec: 15 min from `framegate spec` to the approval")
     assert "spec" in stats.overview([st])[0].split() and "15 min" in stats.overview([st])[1]
     # logs from before the spec command was recorded: no spec time, no line
     old = stats.feature_stats("demo", EVENTS)

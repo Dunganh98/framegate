@@ -1,32 +1,32 @@
-# agentflow Claude Code plugin
+# framegate Claude Code plugin
 
-The plugin is the Claude Code side of agentflow: six skills that drive the workflow from the chat
-(`/agentflow:setup`, `/agentflow:feature`, `/agentflow:bugfix`, `/agentflow:refactor`,
-`/agentflow:resume`, `/agentflow:status`) and two hooks, all calling the
-`agentflow` CLI (the Python package in `src/`). All logic lives in the package (including the
-chat run protocol, `agentflow protocol`); the plugin only registers things. Installed
-**user-wide**, it stays inert in repos without `agentflow.toml`.
+The plugin is the Claude Code side of framegate: six skills that drive the workflow from the chat
+(`/framegate:setup`, `/framegate:feature`, `/framegate:bugfix`, `/framegate:refactor`,
+`/framegate:resume`, `/framegate:status`) and two hooks, all calling the
+`framegate` CLI (the Python package in `src/`). All logic lives in the package (including the
+chat run protocol, `framegate protocol`); the plugin only registers things. Installed
+**user-wide**, it stays inert in repos without `framegate.toml`.
 
 ## Layout
 
 ```
-.claude-plugin/marketplace.json     # marketplace "agentflow", one entry: source "./plugin"
+.claude-plugin/marketplace.json     # marketplace "framegate", one entry: source "./plugin"
 plugin/
-  .claude-plugin/plugin.json        # name agentflow, version 0.5.2
+  .claude-plugin/plugin.json        # name framegate, version 0.6.0
   hooks/hooks.json                  # PreToolUse (Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell) + Stop
-  scripts/agentflow-hook.js         # wrapper: node agentflow-hook.js <event> -> agentflow hook <event>
-  skills/setup/SKILL.md             # /agentflow:setup: read the repo, draft agentflow.toml and
-                                    # .agentflow/project.md, one batch of questions, agentflow
+  scripts/framegate-hook.js         # wrapper: node framegate-hook.js <event> -> framegate hook <event>
+  skills/setup/SKILL.md             # /framegate:setup: read the repo, draft framegate.toml and
+                                    # .framegate/project.md, one batch of questions, framegate
                                     # doctor, optional smoke run
-  skills/feature/SKILL.md           # /agentflow:feature <f>: branch + spec dialogue, then the run
-                                    # protocol (injected: agentflow protocol)
-  skills/bugfix/SKILL.md            # /agentflow:bugfix <f>: bug report dialogue (spec --mode
+  skills/feature/SKILL.md           # /framegate:feature <f>: branch + spec dialogue, then the run
+                                    # protocol (injected: framegate protocol)
+  skills/bugfix/SKILL.md            # /framegate:bugfix <f>: bug report dialogue (spec --mode
                                     # bugfix), then the run protocol
-  skills/refactor/SKILL.md          # /agentflow:refactor <f>: scope dialogue (spec --mode
+  skills/refactor/SKILL.md          # /framegate:refactor <f>: scope dialogue (spec --mode
                                     # refactor), then the run protocol
-  skills/resume/SKILL.md            # /agentflow:resume [f]: reattach after a session restart
-  skills/status/SKILL.md            # /agentflow:status [f]: where features stand, tag cleanup
-  tests/agentflow-hook.test.js      # node --test "plugin/tests/*.test.js"
+  skills/resume/SKILL.md            # /framegate:resume [f]: reattach after a session restart
+  skills/status/SKILL.md            # /framegate:status [f]: where features stand, tag cleanup
+  tests/framegate-hook.test.js      # node --test "plugin/tests/*.test.js"
 ```
 
 ## Install
@@ -35,11 +35,11 @@ User-wide (what you normally want), from the local checkout:
 
 ```
 claude plugin marketplace add D:\Me\Projects\agentflow
-claude plugin install agentflow@agentflow
+claude plugin install framegate@framegate
 ```
 
 In a session the same is `/plugin marketplace add D:\Me\Projects\agentflow`, then
-`/plugin install agentflow@agentflow`. A marketplace added from a local directory loads the plugin
+`/plugin install framegate@framegate`. A marketplace added from a local directory loads the plugin
 **in place** (no cache copy): edits apply on the next session or `/reload-plugins`.
 
 Later from GitHub (repo must contain `.claude-plugin/marketplace.json` at its root; a private repo
@@ -47,41 +47,41 @@ needs working git credentials):
 
 ```
 claude plugin marketplace add <owner>/<repo>
-claude plugin install agentflow@agentflow
+claude plugin install framegate@framegate
 ```
 
 Updates from GitHub: bump `version` in `plugin/.claude-plugin/plugin.json`, push, then
-`claude plugin marketplace update agentflow` and `claude plugin update agentflow@agentflow`
+`claude plugin marketplace update framegate` and `claude plugin update framegate@framegate`
 (restart). Users stay on a version until it changes.
 
 Requirements: `node` on PATH (any LTS; an npm-installed Claude Code already has it) and, in
-agentflow repos, the `agentflow` CLI (`uv tool install ...`, which creates a real `agentflow.exe`
+framegate repos, the `framegate` CLI (`uv tool install ...`, which creates a real `framegate.exe`
 on Windows).
 
 ## Hook wrapper: why Node
 
 | Option | Problem |
 |---|---|
-| Call `agentflow` directly in the hook | Not installed -> spawn error notice on every write in every repo |
+| Call `framegate` directly in the hook | Not installed -> spawn error notice on every write in every repo |
 | Python one-file wrapper | `python` on Windows can be the Store alias stub (it is here: `python3` -> WindowsApps); Linux often has only `python3` |
 | POSIX sh script (shell form) | Shell form runs in PowerShell on Windows without Git Bash; quoting `${CLAUDE_PLUGIN_ROOT}` needed |
 | **Node, exec form** (chosen) | Docs: exec form needs a real `.exe` on Windows, and "the `node` plus script-path pattern works on every platform because `node.exe` is a real binary". No shell, no quoting |
 
-Wrapper behaviour (`plugin/scripts/agentflow-hook.js`):
-- Looks for `agentflow.toml` walking up from the hook JSON `cwd`, `CLAUDE_PROJECT_DIR`, the
+Wrapper behaviour (`plugin/scripts/framegate-hook.js`):
+- Looks for `framegate.toml` walking up from the hook JSON `cwd`, `CLAUDE_PROJECT_DIR`, the
   target file's directory (`tool_input.file_path` / `notebook_path`) and its own cwd.
 - None found -> exit 0, no output, CLI never started (~45 ms per call measured).
-- Found -> runs `agentflow hook <event>` (or `$AGENTFLOW_BIN`) with the same stdin; stdout, stderr
+- Found -> runs `framegate hook <event>` (or `$FRAMEGATE_BIN`) with the same stdin; stdout, stderr
   and exit code pass through unchanged.
 - Found but CLI missing -> `pre-tool-use`: exit 2 + install hint (write blocked, Claude sees the
   reason); `stop`: exit 1 (non-blocking notice to the user; blocking Stop would only loop Claude,
   which can't install the CLI).
-- `Bash` / `PowerShell` calls: checked only during an agentflow run. Without the phase file
-  (`[paths] phase_file`, default `.phase`, read from `agentflow.toml` by a regex) the wrapper exits
-  0 without starting the CLI, so interactive sessions in an agentflow repo pay no Python start per
-  shell call. With it, `agentflow hook pre-tool-use` blocks a pipe / chain / several lines /
+- `Bash` / `PowerShell` calls: checked only during a framegate run. Without the phase file
+  (`[paths] phase_file`, default `.phase`, read from `framegate.toml` by a regex) the wrapper exits
+  0 without starting the CLI, so interactive sessions in a framegate repo pay no Python start per
+  shell call. With it, `framegate hook pre-tool-use` blocks a pipe / chain / several lines /
   `cd` or env prefix (not in SPEC) with the reason and the alternatives
-  (`src/agentflow/hooks/shell_form.py`). CLI missing -> exit 1 (not blocked: the permission check
+  (`src/framegate/hooks/shell_form.py`). CLI missing -> exit 1 (not blocked: the permission check
   still applies).
 - The plugin loads in place from a local marketplace: the new matcher applies to sessions started
   after the update (or `/reload-plugins`).
@@ -109,7 +109,7 @@ Timeouts: PreToolUse 30 s, Stop 600 s (the Stop hook may run a full test suite).
 | Marketplace manifest | `<repo>/.claude-plugin/marketplace.json`; required `name`, `owner.name`, `plugins[]` (`name`, `source`); relative source starts with `./`, resolved from the repo root | [marketplace reference](https://code.claude.com/docs/en/plugins/marketplace-reference.md) |
 | Local + GitHub install | `claude plugin marketplace add <dir>` (directory source, in-place) or `<owner>/<repo>` (git clone, relative sources work); `--scope user|project|local` | `claude plugin marketplace add --help`; [create marketplace](https://code.claude.com/docs/en/plugin-marketplaces) |
 | Validation | `claude plugin validate --strict ./plugin` and `claude plugin validate --strict .` both pass (only "plugin directory" catalog advice: README/LICENSE/icon, irrelevant here) | run 2026-11-09 |
-| Install smoke test | Local scope in a temp repo: marketplace add + install OK; `claude plugin details agentflow` -> Skills (1) spec, Hooks (2) PreToolUse, Stop; then uninstalled and removed | run 2026-11-09 |
+| Install smoke test | Local scope in a temp repo: marketplace add + install OK; `claude plugin details framegate` -> Skills (1) spec, Hooks (2) PreToolUse, Stop; then uninstalled and removed | run 2026-11-09 |
 
 Live check (FCSim smoke run, 2026-11-09, local-scope install): both hooks fire in `claude -p`
 runs (see docs/claude-cli-notes.md).
@@ -118,17 +118,17 @@ runs (see docs/claude-cli-notes.md).
 
 | Step | Mechanism |
 |---|---|
-| Skill load | `` !`agentflow spec <f>` ``, `` !`agentflow spec-brief <f>` ``, `` !`agentflow protocol` `` are injected (pre-approved by `allowed-tools: Bash(agentflow *) PowerShell(agentflow *)`). A refusal (dirty tree, foreign branch, active run) exits 1 and aborts the invocation with the message shown |
-| Run | Bash tool `run_in_background: true`: `agentflow run <f>`. One completion notification when it exits (exit 10 shows as status `failed`; the protocol reads the state from `agentflow status <f> --brief`, not from the code) |
-| Live view | Monitor tool: `agentflow watch <f>`, `timeout_ms` 1800000. Each progress line = one event (lines within 200 ms batch). The watch exits when the run's lock is gone (`watch ended: <state>`); at the 30-min deadline the skill re-arms it, and `progress.cursor` makes it continue without repeats or gaps |
-| Spec gate | the skill drafts the spec from the docs, the code map, the code and `.agentflow/project.md`, asks at most 5 questions per round (each with a default), writes `out/<f>/spec_brief.md` (task, plan, how it is proven, not proven, decisions made for the user, project details, questions) and shows it instead of the spec files |
-| Gate | `agentflow gate-summary <f>` (the gate brief: decision + default first, about one screen in plain words) shown unchanged; the skill ends its turn (Claude Code's own "waiting for input"); agentflow shows a Windows toast. The reply is mapped to approve / reject / answers.md + answer / finish (table in `src/agentflow/templates/chat_protocol.md`), then the run starts again in the background |
-| Resume | `/agentflow:resume [f]` injects `agentflow status [f] --brief` (always exit 0) and the protocol; a run started by another session has no task notification, so its end is the watch's last line |
-| Wrap-up | the retro's `## Brief` (numbered proposals with take / skip / fold) and its knowledge facts, answered by number; PR offer (`gh pr create --body-file out/<f>/final_summary.md`, only on yes, before the cleanup), `agentflow cleanup <f>`; later `--tags` |
+| Skill load | `` !`framegate spec <f>` ``, `` !`framegate spec-brief <f>` ``, `` !`framegate protocol` `` are injected (pre-approved by `allowed-tools: Bash(framegate *) PowerShell(framegate *)`). A refusal (dirty tree, foreign branch, active run) exits 1 and aborts the invocation with the message shown |
+| Run | Bash tool `run_in_background: true`: `framegate run <f>`. One completion notification when it exits (exit 10 shows as status `failed`; the protocol reads the state from `framegate status <f> --brief`, not from the code) |
+| Live view | Monitor tool: `framegate watch <f>`, `timeout_ms` 1800000. Each progress line = one event (lines within 200 ms batch). The watch exits when the run's lock is gone (`watch ended: <state>`); at the 30-min deadline the skill re-arms it, and `progress.cursor` makes it continue without repeats or gaps |
+| Spec gate | the skill drafts the spec from the docs, the code map, the code and `.framegate/project.md`, asks at most 5 questions per round (each with a default), writes `out/<f>/spec_brief.md` (task, plan, how it is proven, not proven, decisions made for the user, project details, questions) and shows it instead of the spec files |
+| Gate | `framegate gate-summary <f>` (the gate brief: decision + default first, about one screen in plain words) shown unchanged; the skill ends its turn (Claude Code's own "waiting for input"); framegate shows a Windows toast. The reply is mapped to approve / reject / answers.md + answer / finish (table in `src/framegate/templates/chat_protocol.md`), then the run starts again in the background |
+| Resume | `/framegate:resume [f]` injects `framegate status [f] --brief` (always exit 0) and the protocol; a run started by another session has no task notification, so its end is the watch's last line |
+| Wrap-up | the retro's `## Brief` (numbered proposals with take / skip / fold) and its knowledge facts, answered by number; PR offer (`gh pr create --body-file out/<f>/final_summary.md`, only on yes, before the cleanup), `framegate cleanup <f>`; later `--tags` |
 
 Permissions: an `allowed-tools` grant only lasts for the turn the skill was invoked in. Every
-later turn (gate replies, run restarts, the Monitor) needs `Bash(agentflow *)` /
-`PowerShell(agentflow *)` in the project's `permissions.allow` (or "always allow" at the first
+later turn (gate replies, run restarts, the Monitor) needs `Bash(framegate *)` /
+`PowerShell(framegate *)` in the project's `permissions.allow` (or "always allow" at the first
 prompt); `gh` / `git push` stay unapproved on purpose.
 
 ## Verified facts for the chat flow (Claude Code 2.1.322, docs read 2026-11-10)
@@ -139,16 +139,16 @@ prompt); `gh` / `git push` stay unapproved on purpose.
 | Monitor | Runs a command in the background, each stdout line is an event fed back to Claude; deadline 5 min default, **max 30 min** (10 min in `-p`), one notice at expiry -> re-arm; same permission rules as Bash; on Windows only with Git Bash installed; a deferred tool (loaded via ToolSearch on first use) | tools reference "Monitor tool"; Monitor tool description; `-p` check below |
 | Monitor output | stdout only, must flush per line (`watch` prints with `flush=True`); too many events -> the monitor is stopped (the progress stream is ~10-30 lines per feature) | Monitor tool description |
 | Skill string substitutions | `$ARGUMENTS`, `$N`, `${CLAUDE_SKILL_DIR}`, `${CLAUDE_PROJECT_DIR}`, `${CLAUDE_PLUGIN_ROOT}` (plugin skills) | [skills](https://code.claude.com/docs/en/skills) |
-| `` !`cmd` `` injection | Bash when Git Bash exists, else PowerShell; **any non-zero exit aborts the invocation** (exit 1 tolerated only for search/compare commands); `cat` of a file outside the session's working directories is **blocked** ("may only concatenate files from the allowed working directories"), so the protocol comes from `agentflow protocol`, not a plugin file | skills; `-p` check below |
+| `` !`cmd` `` injection | Bash when Git Bash exists, else PowerShell; **any non-zero exit aborts the invocation** (exit 1 tolerated only for search/compare commands); `cat` of a file outside the session's working directories is **blocked** ("may only concatenate files from the allowed working directories"), so the protocol comes from `framegate protocol`, not a plugin file | skills; `-p` check below |
 | Skill content lifetime | The rendered SKILL.md stays in the conversation for later turns (not re-read); the `allowed-tools` grant clears at the next user message | skills |
 | Reading plugin files | A `Read` of a plugin file from a later turn needs a permission (denied in `-p`) | `-p` check below |
 
 Headless check (2026-11-10, temp git repo, `--plugin-dir plugin`, Haiku, total $0.05): (1)
-`/agentflow:feature demo` loaded, its injected commands ran (branch `feat/demo` created from
-`main`, `specs/demo/` copied), Claude opened the spec dialogue; (2) `/agentflow:status` printed
-the overview; (3) with a written spec and the fake claude (`AGENTFLOW_CLAUDE`), the reply "spec
-is OK, start the run" (`--resume`, `--allowedTools "Bash(agentflow *)" Monitor`) made Claude run
-`approve-spec`, start `agentflow run demo` in the background and `agentflow watch demo` in a
+`/framegate:feature demo` loaded, its injected commands ran (branch `feat/demo` created from
+`main`, `specs/demo/` copied), Claude opened the spec dialogue; (2) `/framegate:status` printed
+the overview; (3) with a written spec and the fake claude (`FRAMEGATE_CLAUDE`), the reply "spec
+is OK, start the run" (`--resume`, `--allowedTools "Bash(framegate *)" Monitor`) made Claude run
+`approve-spec`, start `framegate run demo` in the background and `framegate watch demo` in a
 Monitor; the run stopped at the tests gate (5 progress lines), the task notification came, Claude
 ran `status --brief` + `gate-summary`, showed the gate with the numbered question and waited; the
 watch then ended with `watch ended: waiting at the tests gate`. Not tested: an interactive
@@ -162,5 +162,5 @@ session, and whether the toast is visible (`powershell.exe` exits 0; the user co
 - The orchestrator must **not** pass `--bare` to `claude -p`, or the phase-lock and Stop hooks don't run.
 - In the hooks, read `tool_input.file_path` or `tool_input.notebook_path`; `file_path` is absolute.
 - Stop: honour `stop_hook_active`; exit 2 + stderr continues Claude with that text as the reason.
-- The wrapper already skips repos without `agentflow.toml`; the package's own check stays as a
+- The wrapper already skips repos without `framegate.toml`; the package's own check stays as a
   second line for direct calls.

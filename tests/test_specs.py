@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pathlib
 
-from agentflow.config import parse_config
-from agentflow.specs import PlanStep, all_spec_ids, feature_ids, parse_plan, plan_steps
+from framegate.config import parse_config
+from framegate.specs import PlanStep, all_spec_ids, feature_ids, parse_plan, plan_steps
 
 
 def test_parse_plan() -> None:

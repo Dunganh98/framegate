@@ -3,7 +3,7 @@ input items of the three-gate flow (A, P, triaged V, turn-cap E)."""
 
 from __future__ import annotations
 
-from agentflow.report import (
+from framegate.report import (
     Assumption,
     parse_assumptions,
     parse_test_review,
@@ -12,7 +12,7 @@ from agentflow.report import (
     since_spec_approval,
     triage_verdict,
 )
-from agentflow.retro import build, missing_ids
+from framegate.retro import build, missing_ids
 
 
 def test_parse_assumptions() -> None:

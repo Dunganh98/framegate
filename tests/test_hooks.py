@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from agentflow.hooks import protect_paths, require_green
+from framegate.hooks import protect_paths, require_green
 
 
 def hook_json(cwd: pathlib.Path, tool: str = "Write", **tool_input: str) -> str:
@@ -17,13 +17,13 @@ def hook_json(cwd: pathlib.Path, tool: str = "Write", **tool_input: str) -> str:
 
 @pytest.fixture(autouse=True)
 def agent_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The hooks run as part of an agent of `agentflow run` unless a test removes this."""
-    monkeypatch.setenv("AGENTFLOW_AGENT", "implement")
+    """The hooks run as part of an agent of `framegate run` unless a test removes this."""
+    monkeypatch.setenv("FRAMEGATE_AGENT", "implement")
 
 
 @pytest.fixture
 def project(tmp_path: pathlib.Path) -> pathlib.Path:
-    (tmp_path / "agentflow.toml").write_text('[project]\nlanguage = "python"\n', encoding="utf-8")
+    (tmp_path / "framegate.toml").write_text('[project]\nlanguage = "python"\n', encoding="utf-8")
     return tmp_path
 
 
@@ -50,7 +50,7 @@ def test_no_phase_allows_everything(project: pathlib.Path) -> None:
         ("TESTS", "src/pkg/a.py", False),
         ("IMPLEMENT", "src/pkg/a.py", True),
         ("IMPLEMENT", "tests/test_a.py", False),
-        ("IMPLEMENT", "agentflow.toml", False),
+        ("IMPLEMENT", "framegate.toml", False),
         ("IMPLEMENT", "pyproject.toml", False),
         ("REVIEW", "tests/review/test_r.py", True),
         ("REVIEW", "tests/test_a.py", False),
@@ -106,7 +106,7 @@ def test_notebook_path_and_tool_filter(project: pathlib.Path) -> None:
 
 
 def test_configured_write_paths(project: pathlib.Path) -> None:
-    (project / "agentflow.toml").write_text(
+    (project / "framegate.toml").write_text(
         '[paths]\nphase_file = "build/.phase"\n[phases.IMPLEMENT]\nwrite = ["lib/"]\n',
         encoding="utf-8",
     )
@@ -124,7 +124,7 @@ def test_garbage_input_is_noop(project: pathlib.Path) -> None:
 
 def run_cli_hook(event: str, stdin: str, cwd: pathlib.Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-m", "agentflow", "hook", event],
+        [sys.executable, "-m", "framegate", "hook", event],
         input=stdin,
         cwd=cwd,
         capture_output=True,
@@ -209,10 +209,10 @@ def test_stop_allowed_when_parked(green_red: pathlib.Path) -> None:
 def test_stop_ignores_a_chat_session(
     green_red: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A chat session next to the run (no AGENTFLOW_AGENT) never starts a test run: parallel
+    """A chat session next to the run (no FRAMEGATE_AGENT) never starts a test run: parallel
     runs lock each other's build output and fail for no reason."""
     set_phase(green_red, "IMPLEMENT")
-    monkeypatch.delenv("AGENTFLOW_AGENT")
+    monkeypatch.delenv("FRAMEGATE_AGENT")
     assert require_green.evaluate(stop_json(green_red)) == (0, "")
 
 
@@ -238,7 +238,7 @@ def test_stop_hook_active_allows_stop(green_red: pathlib.Path) -> None:
     ],
 )
 def test_shell_form_problems(command: str, problem: str) -> None:
-    from agentflow.hooks.shell_form import form_problem
+    from framegate.hooks.shell_form import form_problem
 
     assert form_problem(command) == problem
 
@@ -257,7 +257,7 @@ def test_shell_form_problems(command: str, problem: str) -> None:
     ],
 )
 def test_shell_form_allowed(command: str) -> None:
-    from agentflow.hooks.shell_form import form_problem
+    from framegate.hooks.shell_form import form_problem
 
     assert form_problem(command) is None
 
@@ -280,7 +280,7 @@ def test_shell_form_not_checked_in_a_chat_session(
     project: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     set_phase(project, "IMPLEMENT")
-    monkeypatch.delenv("AGENTFLOW_AGENT")
+    monkeypatch.delenv("FRAMEGATE_AGENT")
     piped = hook_json(project, "Bash", command="git log --oneline | head")
     assert protect_paths.evaluate(piped) == (0, "")
     # write protection still applies to everyone while a run is active
@@ -288,7 +288,7 @@ def test_shell_form_not_checked_in_a_chat_session(
 
 
 def test_shell_block_names_the_dotnet_options(tmp_path: pathlib.Path) -> None:
-    (tmp_path / "agentflow.toml").write_text('[project]\nlanguage = "dotnet"\n', encoding="utf-8")
+    (tmp_path / "framegate.toml").write_text('[project]\nlanguage = "dotnet"\n', encoding="utf-8")
     set_phase(tmp_path, "TESTS")
     code, msg = protect_paths.evaluate(
         hook_json(tmp_path, "Bash", command="dotnet test -c Release; echo $?")

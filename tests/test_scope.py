@@ -12,10 +12,10 @@ from collections.abc import Sequence
 
 import pytest
 
-from agentflow.adapters import dotnet as dn
-from agentflow.adapters.base import TestScope
-from agentflow.config import ConfigError, parse_config
-from agentflow.gates import feature_scope, gate_report, scope_lines
+from framegate.adapters import dotnet as dn
+from framegate.adapters.base import TestScope
+from framegate.config import ConfigError, parse_config
+from framegate.gates import feature_scope, gate_report, scope_lines
 from test_checks import adapter_for, framed, write  # noqa: F401  (fixture)
 from test_dotnet import FakeDotnet, adapter, faked, tagged  # noqa: F401  (fixture)
 from test_mutmut import fake_mutmut, run_fake  # noqa: F401  (fixture)

@@ -11,15 +11,15 @@ from collections.abc import Sequence
 
 import pytest
 
-from agentflow import cli
-from agentflow.adapters import csharp, detect_language, get_adapter
-from agentflow.adapters import dotnet as dn
-from agentflow.adapters.base import TestCase, parse_junit
-from agentflow.adapters.csharp import has_assertion, method_bodies, scan, strip
-from agentflow.adapters.dotnet import DotnetAdapter
-from agentflow.checks import frame_diff
-from agentflow.config import ConfigError, load_config, parse_config
 from conftest import git, init_git
+from framegate import cli
+from framegate.adapters import csharp, detect_language, get_adapter
+from framegate.adapters import dotnet as dn
+from framegate.adapters.base import TestCase, parse_junit
+from framegate.adapters.csharp import has_assertion, method_bodies, scan, strip
+from framegate.adapters.dotnet import DotnetAdapter
+from framegate.checks import frame_diff
+from framegate.config import ConfigError, load_config, parse_config
 
 
 def write(root: pathlib.Path, rel: str, text: str) -> None:
@@ -206,7 +206,7 @@ def test_smells(tmp_path: pathlib.Path) -> None:
 def test_format_and_lint_findings_only_on_changed_lines(tmp_path: pathlib.Path) -> None:
     """dotnet format diagnostics on lines the feature did not change are ignored (no churn in
     old code, no loop on them); the format fix keeps only its changes on changed lines."""
-    from agentflow.adapters.base import merge_scoped
+    from framegate.adapters.base import merge_scoped
 
     init_git(tmp_path)
     write(tmp_path, "src/A/Old.cs", "class Old\n{\n  int a;\n  int b;\n}\n")
@@ -1068,7 +1068,7 @@ def test_detect_init_and_ci(
     monkeypatch.chdir(tmp_path)
     assert cli.main(["init"]) == 0
     out = capsys.readouterr().out
-    toml = (tmp_path / "agentflow.toml").read_text(encoding="utf-8")
+    toml = (tmp_path / "framegate.toml").read_text(encoding="utf-8")
     assert 'language = "dotnet"' in toml and "[dotnet]" in toml and '# base_filter = ""' in toml
     assert load_config(tmp_path).language == "dotnet"  # the template parses
     gi = (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines()

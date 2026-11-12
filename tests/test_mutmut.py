@@ -12,16 +12,16 @@ import sys
 
 import pytest
 
-from agentflow.adapters import mutmut_runner, wsl
-from agentflow.adapters.base import TestScope
-from agentflow.adapters.python import (
+from framegate.adapters import mutmut_runner, wsl
+from framegate.adapters.base import TestScope
+from framegate.adapters.python import (
     PythonAdapter,
     collect_requirements,
     tally_mutmut,
     translate_drive_paths,
     write_survivors,
 )
-from agentflow.config import ConfigError, parse_config
+from framegate.config import ConfigError, parse_config
 
 # captured from `python -m mutmut results --all true` (mutmut 3.8.1, WSL Ubuntu, demo fixture)
 REAL_RESULTS = """\
@@ -131,13 +131,14 @@ def test_translate_drive_paths() -> None:
 
 def test_wsl_requirements_and_stamp(tmp_path: pathlib.Path) -> None:
     (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname = "x"\ndependencies = ["agentflow==0.1.0", "attrs"]\n', encoding="utf-8"
+        '[project]\nname = "x"\ndependencies = ["framegate==0.1.0", "attrs"]\n', encoding="utf-8"
     )
     a = adapter(tmp_path)
     reqs, files, stamp = a._wsl_requirements(lambda p: wsl.fallback_path(p))
     assert "attrs" in reqs and "mutmut>=3" in reqs and "pytest" in reqs
-    assert "agentflow==0.1.0" not in reqs  # replaced by this source tree (tests run from one)
-    assert any(r.startswith("/mnt/") and r.endswith("agentflow") for r in reqs)
+    assert "framegate==0.1.0" not in reqs  # replaced by this source tree (tests run from one)
+    checkout = pathlib.Path(__file__).resolve().parents[1].name  # whatever the clone is called
+    assert any(r.startswith("/mnt/") and r.endswith("/" + checkout) for r in reqs)
     assert files == []
     _, _, same = a._wsl_requirements(lambda p: wsl.fallback_path(p))
     assert same == stamp
