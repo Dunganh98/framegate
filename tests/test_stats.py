@@ -100,3 +100,20 @@ def test_stats_command(demo_repo: DemoRepo) -> None:
     lines.clear()
     assert stats.run(cfg, "nope", echo=lines.append) == 1
     assert r.af("stats", "demo", "--json") == 0
+
+
+def test_spec_time_is_from_the_spec_command_to_the_approval() -> None:
+    events = [
+        ev("09:00:00", "spec_started", mode="refactor"),
+        ev("09:01:00", "spec_started", mode="refactor"),  # `agentflow spec` again: same round
+        ev("09:10:00", "spec_approved", mode="refactor"),
+        ev("09:30:00", "spec_started"),  # reopened after an answer
+        ev("09:35:00", "spec_approved"),
+    ]
+    st = stats.feature_stats("demo", events)
+    assert st.spec_seconds == 900 and st.as_dict()["spec_seconds"] == 900
+    assert stats.detail(st)[1].startswith("Spec: 15 min from `agentflow spec` to the approval")
+    assert "spec" in stats.overview([st])[0].split() and "15 min" in stats.overview([st])[1]
+    # logs from before the spec command was recorded: no spec time, no line
+    old = stats.feature_stats("demo", EVENTS)
+    assert old.spec_seconds == 0 and not stats.detail(old)[1].startswith("Spec:")

@@ -322,6 +322,27 @@ class PythonAdapter(LanguageAdapter):
         status = "error" if reason else PYTEST_STATUS.get(code, "error")
         return TestRun(status, code, out, cases, incomplete=reason)
 
+    def scope_coverage_reports(
+        self, req_ids: Sequence[str], files: Sequence[str]
+    ) -> tuple[list[pathlib.Path], str]:
+        if not self._has_module("pytest_cov"):
+            return [], "pytest-cov is not installed in the project environment"
+        xml = self.root / self.cfg.paths.out / "scope_coverage.xml"
+        xml.parent.mkdir(parents=True, exist_ok=True)
+        xml.unlink(missing_ok=True)
+        cmd = [self.python, "-m", "pytest", "-q", "-p", "no:cacheprovider"]
+        ids = [i for i in req_ids if i]
+        if ids:
+            cmd += ["--req", ",".join(ids)]
+        cmd += [f"--cov={root}" for root in self.cfg.src_roots]
+        cmd += [f"--cov-report=xml:{xml}"]
+        timeout = self.cfg.coverage_timeout
+        code, out = run_command(cmd, self.root, timeout=timeout)
+        reason = incomplete_reason(code, out, timeout) or PYTEST_INCOMPLETE.get(code, "")
+        if reason or not xml.is_file():
+            return [], f"coverage run incomplete ({reason or 'no report'})"
+        return [xml], ""
+
     def coverage_checks(self, base_ref: str, scope: TestScope | None = None) -> list[Check]:
         out_dir = self.root / self.cfg.paths.out
         xml = out_dir / "coverage.xml"

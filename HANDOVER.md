@@ -203,6 +203,28 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
   interactive session.
 - Tests: `uv run pytest` (fast), `-m slow` (dotnet e2e, WSL mutmut), node hook tests; ruff + mypy.
 
+- **First live refactor (FCSim M5-setpiece-model-split, 2026-11-12):** clean, $5.96, 41 min;
+  its retro and the user's feedback led to (branch feat/refactor-run-feedback):
+  structure findings are retro items with the cost of their fix (S1..; the 73-line
+  `FreeKick` cost 10 of the 41 minutes and the retro did not see it); `agentflow stats`
+  shows the spec time; a refactor's structure fix is checked with the feature's tests,
+  not the whole suite; the risk rating of a refactor leaves moved lines out (876 -> 114
+  changed lines; that run stays elevated by 36 removed lines against the limit of 30);
+  refactors use existing tests first (the test writer tags an existing test that pins a
+  row; `Green on today's code` lists them; smells count only for tests the feature
+  added). Measured there: `mutation_scope = "suite"` does not finish on FCSim (2,040
+  tests, over an hour). Also built: scope coverage, a note in test_checks.md with the lines
+  of the files in scope that no tagged test runs, before any code moves (37 s on FCSim).
+  Measured for "existing tests first": the six older test classes that name the moved
+  code kill 320/349 mutants of the change (91.7%) without any new test; the 835 new lines
+  reached 329/349 (94.3%). The older classes took 34 min in Stryker against 8 min (they
+  include match tests): tagging heavy tests makes the mutation check slower.
+  Not built, on purpose until the next real refactor shows what is left: a
+  cheaper path for small tasks (about $3 of tests and test reviews and about 20 min of
+  checks are fixed costs). The retro's proposals 1 (shared-helper table) and 2 (wider
+  mutation filter) were skipped: 2 is covered by tagging; its example mutants were
+  equivalent ones.
+
 ## User decisions so far
 1. Two human gates, forward only: spec and final (2026-11-10, after the first FCSim feature;
    was three). The test reviewer checks the tests against the spec; its questions, objections

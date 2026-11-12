@@ -7,6 +7,8 @@ Start with {out}/{feature}/retro_input.md. It lists, with item IDs and counts:
 - R: every human gate rejection with its reason
 - V: every review finding (failing reviewer test, the test reviewer's triage verdict + reason,
   resolution: fixed / parked)
+- S: every structure finding of the reviewer (a spec structure target missed, a file or
+  method too long), with what its fix cost (implementer runs, gate runs, seconds)
 - G: every final-gate failure
 - D: every tool call the permission check denied (phase/step, tool, command or path)
 - A: every assumption the implementer logged in steps.md (step, spec ID, assumption)
@@ -43,6 +45,9 @@ How to treat the items:
 - Rejections (R) and review findings (V): what should the test writer / test reviewer /
   implementer have caught? A dismissed finding (V, DISMISSED): was the reviewer or the spec
   unclear? Prefer a spec-template category or a check over a prompt line.
+- A structure finding (S) was found only at the review, after every step gate passed. If it
+  cost a fix run, ask what would have shown it at the step: a target the plan step should
+  name with its number, or a measure the step gate could print. Count its seconds as cost.
 - An assumption (A) is a spec gap the implementer filled alone; a parked item (P) is one it
   could not fill. Treat both like questions: which spec-template category or spec-dialogue question
   would have closed the gap? Group assumptions of the same kind in one proposal.

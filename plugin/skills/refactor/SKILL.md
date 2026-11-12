@@ -44,8 +44,10 @@ the language, how tests are written here, the code map and the project knowledge
    - Scope: the files / types / methods that change and what happens to each (split into,
      moved to, renamed, merged). Everything else stays untouched.
    - Behavior to preserve: what callers and users rely on in that code: outputs for given
-     inputs, errors, order, side effects, stored formats. Which of it existing tests already
-     pin, and which needs new characterization tests. Golden values come from running today's
+     inputs, errors, order, side effects, stored formats. Existing tests first: search the
+     tests for the types and methods in scope and list the files in requirements.md
+     ("Existing tests of the code in scope"). The test writer tags those that already pin
+     a row and writes new characterization tests only for the gaps. Golden values come from running today's
      code (the project's run / scan command), never from reading it.
    - Fixed points: golden / hash / snapshot / save-file tests that touch the code in scope
      must stay byte-identical; public signatures other code uses stay, or every caller is

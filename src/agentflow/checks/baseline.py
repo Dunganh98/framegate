@@ -16,6 +16,7 @@ import re
 from agentflow.adapters.base import CheckResult, LanguageAdapter, TestCase
 from agentflow.checks import red_stubs
 from agentflow.specs import feature_ids, feature_mode
+from agentflow.state import GitError, git, tag_exists
 
 #: the check's name in test_checks.md and progress.json, per mode
 NAMES = {
@@ -98,6 +99,53 @@ def bugfix(adapter: LanguageAdapter, feature: str, ids: list[str]) -> CheckResul
     return CheckResult("FAIL" if problems else "PASS", "\n".join([*lines, *problems]))
 
 
+def existing_tests(adapter: LanguageAdapter, feature: str, ids: list[str]) -> list[str]:
+    """Lines for the refactor check: how many of the tests tagged with the refactor's IDs
+    existed before it (the test writer tagged them: they already pin the behavior) and how
+    many are new; the IDs only existing tests pin; existing test files with removed lines
+    (a tag is an added line: anything else the test reviewer looks at). Notes, not blocking."""
+    cfg = adapter.cfg
+    tag = f"spec-approved/{feature}"
+    try:
+        if not tag_exists(cfg, tag):
+            return []
+        old = set(git(cfg, "ls-tree", "-r", "--name-only", tag).splitlines())
+        tags = adapter.collect_req_tags()
+    except Exception:  # a scan problem must not fail the check
+        return []
+    by_id = {i: {w.replace("\\", "/") for w in tags.get(i, [])} for i in ids}
+    tests = set().union(*by_id.values()) if by_id else set()
+    kept = {w for w in tests if w.split("::")[0] in old}
+    files = sorted({w.split("::")[0] for w in kept})
+    lines = [
+        f"{len(kept)} existing test(s) tagged with a spec ID of this refactor (they already "
+        f"pin the behavior), {len(tests) - len(kept)} new test(s)."
+    ]
+    if files:
+        lines.append("Existing test files with tagged tests: " + ", ".join(files))
+    only = sorted(i for i, ws in by_id.items() if ws and ws <= kept)
+    if only:
+        lines.append("Pinned by existing tests only: " + ", ".join(only))
+    if not kept:
+        lines.append(
+            "NOTE: no existing test was tagged. If existing tests cover the code in scope, "
+            "tag them instead of writing the same test again (test_summary.md says which "
+            "were found)."
+        )
+    for f in files:
+        try:
+            stat = git(cfg, "diff", "--numstat", tag, "--", f).split()
+        except GitError:
+            continue
+        if len(stat) >= 2 and stat[1].isdigit() and int(stat[1]) > 0:
+            lines.append(
+                f"NOTE: {f}: {stat[1]} line(s) of this existing test file were removed or "
+                "changed. Tagging adds lines only: the test reviewer checks that no "
+                "existing test was changed."
+            )
+    return lines
+
+
 def refactor(adapter: LanguageAdapter, feature: str, ids: list[str]) -> CheckResult:
     cases, tail = _run(adapter, feature, ids, "red_stubs.xml")
     if cases is None:
@@ -109,7 +157,8 @@ def refactor(adapter: LanguageAdapter, feature: str, ids: list[str]) -> CheckRes
         f"{len(cases)} characterization test(s) for feature {feature}; all must pass on "
         "today's code."
     )
-    return CheckResult("FAIL" if problems else "PASS", "\n".join([head, *problems]))
+    notes = existing_tests(adapter, feature, ids)
+    return CheckResult("FAIL" if problems else "PASS", "\n".join([head, *notes, *problems]))
 
 
 def check(adapter: LanguageAdapter, feature: str) -> CheckResult:

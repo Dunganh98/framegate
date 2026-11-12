@@ -31,7 +31,14 @@ from agentflow import backlog, notify, procs, risk
 from agentflow import brief as briefs
 from agentflow.adapters import get_adapter
 from agentflow.adapters.base import GATE_NAMES, CheckResult, LanguageAdapter
-from agentflow.checks import baseline, existing_members, spec_lint, test_smells, traceability
+from agentflow.checks import (
+    baseline,
+    existing_members,
+    scope_coverage,
+    spec_lint,
+    test_smells,
+    traceability,
+)
 from agentflow.checks import structure as structure_check
 from agentflow.checks.frame_diff import knowledge_tag, path_matches, tests_update_tag
 from agentflow.config import Config
@@ -125,7 +132,15 @@ MODE_NOTES: dict[str, dict[str, str]] = {
         "(test_checks.md, 'Green on today's code'). Check that the tests pin the behavior of "
         "the code in the spec's Scope table (branches, errors, edge inputs, order, stored "
         "formats) through the interface callers use, and that expected values were measured "
-        "from today's code, not guessed. Behavior in scope that no test pins is an objection.",
+        "from today's code, not guessed. Behavior in scope that no test pins is an objection. "
+        "Existing tests come first (test_checks.md lists the tagged ones): for each, check "
+        "that it asserts its row exactly, and that the diff of its file adds tag lines "
+        "only. A new test that repeats what a tagged or untagged existing test already "
+        "asserts is an objection too: name the existing test. test_checks.md, 'Scope "
+        "coverage', lists the lines of the files in scope that no tagged test runs: read "
+        "each range in the code; behavior there that the refactor moves or merges and no "
+        "test pins is an objection (name the lines and what to test). A range that "
+        "cannot matter (unreachable, outside what the steps touch): say so in one line.",
         "IMPLEMENT": "This is a refactor: move, split and rename as the step says; the behavior "
         "must not change. All characterization tests pass before and after (your check "
         "command runs all of them). A test that fails means your change altered behavior: "
@@ -259,14 +274,22 @@ TASKS = {
     "how it fails today. A question the report does not settle goes to {out}/{f}/questions.md; "
     "then continue with the rest (do not stop).",
     "TESTS:refactor": "Refactor '{f}': the code exists, there are no stubs, and its behavior must "
-    "not change. Write characterization tests from {specs}/{f}/ against today's code: for "
-    "every behavior and invariant row, tests that PASS now. Where your role says the tests "
+    "not change. Every behavior and invariant row of {specs}/{f}/ needs tests that PASS on "
+    "today's code. Existing tests first: search {tests}/ for the tests that already "
+    "exercise the code in the spec's Scope table (its types, methods, the golden / hash "
+    "tests that run it). A row that an existing test already asserts exactly gets that "
+    "test: add the row's ID to its tags, a tag line only, and change nothing else in an "
+    "existing test. Write a new characterization test only for what no existing test "
+    "asserts: a row, a branch, an error, an edge input. Do not write again what is "
+    "already pinned. Where your role says the tests "
     "must fail against the stubs, this rule replaces it: every test passes now. Test through "
     "the interface callers use, so the tests survive the moves and renames design.md lists. "
     "Expected values are what today's code returns (run it; say in the test how each value "
     "was measured). Cover the code in the spec's Scope table, its branches, errors and edge "
-    "inputs: after the refactor these tests are the only proof that nothing changed. Write the "
-    "summary table to {out}/{f}/test_summary.md. A question the spec does not settle goes to "
+    "inputs: after the refactor the tagged tests, old and new, are the only proof that "
+    "nothing changed, and the only tests the step checks and the mutation check run. Write "
+    "the summary table to {out}/{f}/test_summary.md; it says per row whether an existing "
+    "test (which) or a new one pins it. A question the spec does not settle goes to "
     "{out}/{f}/questions.md; then continue with the rest (do not stop).",
     "TESTS": "Feature '{f}': write the tests from {specs}/{f}/ and the interface stubs in {src}/. "
     "Write the summary table to {out}/{f}/test_summary.md. A question the spec does not settle "
@@ -337,7 +360,8 @@ TASKS = {
     "'(answer {ref})'. Never renumber, rename or delete an existing ID; a new behavior or edge "
     "case gets a new ID. List the changes in {out}/{f}/spec_update.md.",
     "RETRO": "Feature '{f}': run the retrospective. Start with {out}/{f}/retro_input.md: every "
-    "question, failed attempt, escalation, rejection, review finding, final-gate failure, "
+    "question, failed attempt, escalation, rejection, review finding, structure finding, "
+    "final-gate failure, "
     "permission denial, assumption and parked item, "
     "with item IDs. Address every ID in {out}/{f}/retro_proposals.md (a proposal, or the "
     "'Not acted on' list with a one-line reason). More detail: {out}/events.jsonl (feature={f}), "
@@ -1747,13 +1771,26 @@ class Orchestrator:
             f"### Existing members asserted (note, not blocking): {listed}\n~~~\n"
             f"{members.output}\n~~~"
         )
+        uncovered = ""
+        if mode == "refactor":
+            # before any code moves: the lines in scope that no tagged test runs (a note)
+            try:
+                cover = scope_coverage.check(self.adapter, feature)
+            except Exception as e:  # a tool problem must not stop the tests phase
+                cover = CheckResult("SKIPPED", f"SKIPPED: failed ({type(e).__name__}: {e})")
+            uncovered = cover.summary
+            sections.append(
+                f"### {scope_coverage.NAME} (note, not blocking): "
+                f"{cover.summary or cover.status}\n~~~\n{cover.output}\n~~~"
+            )
         path = self.fdir(feature) / "test_checks.md"
         path.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
         self.progress(
             feature,
             "[TESTS] checks: "
             + ", ".join(f"{n} {s}" for n, s in status.items())
-            + (f"; existing members asserted without a fixture test: {listed}" if listed else ""),
+            + (f"; existing members asserted without a fixture test: {listed}" if listed else "")
+            + (f"; scope coverage: {uncovered}" if uncovered else ""),
         )
         prog["test_checks"] = status
         save_progress(self.cfg, feature, prog)
@@ -2444,6 +2481,10 @@ class Orchestrator:
             return
         steps = plan_steps(self.cfg, feature)
         reqs = self.done_ids(prog, steps) if self.parked_steps(prog) else None
+        if reqs is None and feature_mode(self.cfg, feature) == "refactor":
+            # like a refactor step: all the characterization tests. The whole suite runs
+            # once, in the final gates (live: a helper extraction ran it three times)
+            reqs = sorted(feature_ids(self.cfg, feature)) or None
         task = self.task_text(
             "STRUCTURE",
             feature,

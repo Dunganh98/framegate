@@ -209,3 +209,75 @@ def test_elevated_risk_still_stops_in_auto_mode(demo_repo: DemoRepo) -> None:
     assert r.af("run", "demo") == EXIT_GATE
     assert r.progress()["waiting"]["gate"] == "final"
     assert [e for e in r.events() if e["kind"] == "risk"][0]["auto"] is True
+
+
+MOVE_DIFF = """diff --git a/src/big.cs b/src/big.cs
+index 1..2 100644
+--- a/src/big.cs
++++ b/src/big.cs
+@@ -10,5 +10,1 @@
+-    int Reach(int a)
+-    {
+-        return a + 1;
+-    }
+---- a dashed line that goes
++    int Reach2(int a) => Other.Reach(a);
+diff --git a/src/other.cs b/src/other.cs
+new file mode 100644
+--- /dev/null
++++ b/src/other.cs
+@@ -0,0 +1,6 @@
++int Reach(int a)
++{
++    return a + 1;
++}
++}
++int New() => 2;
+diff --git a/src/gone.cs b/src/gone.cs
+deleted file mode 100644
+--- a/src/gone.cs
++++ /dev/null
+@@ -1,1 +0,0 @@
+-int New() => 2;
+"""
+
+
+def test_moved_lines_pair_removed_with_added_lines() -> None:
+    # four lines moved out of big.cs (indent ignored; the second `}` has no partner), one line
+    # moved out of a deleted file: it counts as moved, not as a line that left a kept file
+    assert risk.moved_lines(MOVE_DIFF) == (5, 4)
+    assert risk.moved_lines("") == (0, 0)
+
+
+def test_a_refactor_does_not_count_moved_lines(
+    demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r = demo_repo
+    adapter = get_adapter(load_config(r.root))
+    src = r.root / "src" / "demo"
+    body = "".join(f"def helper_{i}(x):\n    return x + {i}\n\n\n" for i in range(6))
+    old = (src / "__init__.py").read_text(encoding="utf-8")
+    (src / "__init__.py").write_text(old + "\n\n" + body, encoding="utf-8")
+    git(r.root, "add", "-A")
+    git(r.root, "commit", "-q", "-m", "helpers")
+    base = git(r.root, "rev-parse", "HEAD").strip()
+    monkeypatch.setattr(risk, "base_ref", lambda a, f: base)
+    # the refactor: the helpers move to their own file, one line is new
+    (src / "__init__.py").write_text(old, encoding="utf-8")
+    (src / "helpers.py").write_text(body + "NEW = 1\n", encoding="utf-8")
+    git(r.root, "add", "-A")
+
+    plain = risk.change_stats(adapter, "demo")
+    assert plain is not None and "moved_lines" not in plain  # a feature: every line counts
+    assert plain["removed_lines"] >= 12
+    req = r.root / "specs" / "demo" / "requirements.md"
+    req.write_text(
+        req.read_text(encoding="utf-8").replace(
+            "Feature code: DEMO\n", "Feature code: DEMO\nMode: refactor\n"
+        ),
+        encoding="utf-8",
+    )
+    stats = risk.change_stats(adapter, "demo")
+    assert stats is not None and stats["moved_lines"] >= 12
+    assert stats["changed_lines"] == plain["changed_lines"] - 2 * stats["moved_lines"]
+    assert stats["changed_lines"] <= 4 and stats["removed_lines"] <= 2

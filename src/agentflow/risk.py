@@ -13,6 +13,7 @@ mutation score is never low risk: there the frame proves less.
 
 from __future__ import annotations
 
+import collections
 import csv
 from dataclasses import dataclass, field
 from typing import Any
@@ -20,6 +21,7 @@ from typing import Any
 from agentflow.adapters.base import LanguageAdapter
 from agentflow.checks.existing_members import base_ref
 from agentflow.checks.frame_diff import path_matches
+from agentflow.specs import feature_mode
 from agentflow.state import GitError, git
 
 LOW = "low"
@@ -59,9 +61,36 @@ class Assessment:
         return "Risk: elevated: " + "; ".join(self.reasons)
 
 
+def moved_lines(diff: str) -> tuple[int, int]:
+    """A `git diff -U0` -> (moved lines, moved lines that left a file that still exists).
+    A line is moved when it is removed in one place and added, the same but for its
+    indent, in another: each removed line pairs with one added line at most."""
+    added: collections.Counter[str] = collections.Counter()
+    removed: collections.Counter[str] = collections.Counter()
+    kept: collections.Counter[str] = collections.Counter()  # removed, the file stays
+    stays = header = False
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            header = True
+        elif line.startswith("@@"):
+            header = False
+        elif header:
+            if line.startswith("+++ "):
+                stays = not line.startswith("+++ /dev/null")
+        elif line.startswith("+"):
+            added[line[1:].strip()] += 1
+        elif line.startswith("-"):
+            removed[line[1:].strip()] += 1
+            if stays:
+                kept[line[1:].strip()] += 1
+    return sum((added & removed).values()), sum((added & kept).values())
+
+
 def change_stats(adapter: LanguageAdapter, feature: str) -> dict[str, Any] | None:
     """Source changes of the feature against its base: changed lines and files, removed lines
-    in files that existed before, and every changed path of the repository. None = unknown."""
+    in files that existed before, and every changed path of the repository. None = unknown.
+    In a refactor, moved lines (moved_lines) are not counted as changed or removed: moving
+    code is the task, and `moved_lines` in the result says how many they were."""
     cfg = adapter.cfg
     ref = base_ref(adapter, feature)
     if ref is None:
@@ -84,12 +113,22 @@ def change_stats(adapter: LanguageAdapter, feature: str) -> dict[str, Any] | Non
         return out
 
     all_rows = rows(numstat)
-    return {
+    stats: dict[str, Any] = {
         "changed_lines": sum(a + r for a, r in all_rows),
         "changed_files": len(all_rows),
         "removed_lines": sum(r for _, r in rows(modified)),
         "paths": names,
     }
+    if feature_mode(cfg, feature) == "refactor":
+        try:
+            diff = git(cfg, "diff", "-U0", "--no-renames", ref, "--", *cfg.src_roots)
+        except GitError:
+            return stats
+        moved, from_kept = moved_lines(diff)
+        stats["moved_lines"] = moved
+        stats["changed_lines"] -= 2 * moved  # the removed and the added side
+        stats["removed_lines"] = max(0, stats["removed_lines"] - from_kept)
+    return stats
 
 
 def finished_features(adapter: LanguageAdapter, feature: str) -> int:
@@ -150,6 +189,9 @@ def assess(
     else:
         paths = stats.pop("paths")
         facts.update(stats)
+        moved = (
+            f", {stats['moved_lines']} moved lines not counted" if "moved_lines" in stats else ""
+        )
         for key, what in (
             ("changed_lines", "changed source lines"),
             ("changed_files", "changed source files"),
@@ -157,7 +199,7 @@ def assess(
         ):
             limit = getattr(limits, f"max_{key}")
             if limit and stats[key] > limit:
-                reasons.append(f"{stats[key]} {what} (more than {limit})")
+                reasons.append(f"{stats[key]} {what} (more than {limit}{moved})")
         marked = sorted(p for p in paths if path_matches(p, limits.never_auto))
         if marked:
             more = f" (+{len(marked) - 3} more)" if len(marked) > 3 else ""

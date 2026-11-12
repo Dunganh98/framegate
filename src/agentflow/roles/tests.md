@@ -53,9 +53,13 @@ There are no stubs: the code exists, and your tests run against it as it is toda
   assertion, with the wrong result the bug report names. A must-not-change test passes today.
   Take the exact input from the report's reproduction row; if it does not show the bug when
   you run it, ask in questions.md (the report may be wrong) instead of inventing another input.
-- Refactor: every test PASSES today. Its expected values are what today's code returns:
+- Refactor: every test PASSES today. Existing tests first: a spec row that an existing test
+  already asserts exactly is covered by adding the row's ID to that test's tags (a tag line
+  only; never change an existing test's body, name or data). Write a new test only for what
+  no existing test asserts. A new test's expected values are what today's code returns:
   run the code and copy the value, and say in the test how it was measured. Test through the
-  interface that callers use, not through private parts the refactor will move.
+  interface that callers use, not through private parts the refactor will move. In
+  test_summary.md, say per row: existing test (file and name) or new test.
 Everything else in your role holds: one test per row, tags, fixture precondition tests,
 concrete assertions, no implementation code, the summary table.
 

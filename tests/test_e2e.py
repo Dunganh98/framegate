@@ -1006,7 +1006,7 @@ def test_retro_no_items_no_rerun(demo_repo: DemoRepo) -> None:
     finish_with_retro(r)
     ri = read(r, "out/demo/retro_input.md")
     assert "questions 0 (0 rounds); failed attempts 0" in ri
-    assert ri.count("None.") == 9  # one per item type
+    assert ri.count("None.") == 10  # one per item type
     assert len([c for c in r.calls() if c["phase"] == "RETRO"]) == 1
 
 

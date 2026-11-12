@@ -192,18 +192,45 @@ the tests (steps, step gates, review, final gates, the two human gates) is the s
 | | feature | bug fix | refactor |
 |---|---|---|---|
 | Spec (requirements.md) | requirements, edge cases, stubs | bug report: reproduction rows (R), must-not-change rows (I), suspected causes | scope, behavior to preserve (R, I), structure targets |
-| First proof (`test_checks.md`) | every test FAILS against the stubs | reproduction tests FAIL on today's code (each listed with why, for the test reviewer); must-not-change tests PASS | every test PASSES on today's code |
+| Tests | new, from the spec | new, from the bug report | existing tests first: a test that already asserts a row gets the row's ID as a tag; new tests only for the gaps |
+| First proof (`test_checks.md`) | every test FAILS against the stubs | reproduction tests FAIL on today's code (each listed with why, for the test reviewer); must-not-change tests PASS | every test PASSES on today's code; the check lists how many tagged tests existed before and how many are new |
 | Steps | per plan step, batched | usually one; the step note names `ROOT CAUSE` and `RULED OUT` lines (shown in final_facts.md and the brief) | one move per run; every step is checked with ALL the tests; a step that changes no source file fails |
 | Review | against the spec | also: the same bug through another input or caller | a finding is a difference from the code before (`git show tests-approved/<f>:<path>`) |
+| Structure fixes after the review | checked with the whole suite | checked with the whole suite | checked with the feature's tests, like a step (the whole suite runs once, in the final gates) |
+| Risk rating | every changed line counts | every changed line counts | moved lines are not counted (`moved_lines` in the `risk` event) |
 | Final-gate repair | code, then tests | code, then tests | code only: tests written after the refactor would pin the changed code, so weak tests go to the human |
 
 Templates: `specs/_template_bugfix/`, `specs/_template_refactor/` (agentflow's own unless the
 project has a copy). The events `spec_started` / `spec_approved` carry `mode`; `agentflow
 stats` shows it. An unknown `Mode:` word is refused by `approve-spec`.
 
-Not done yet for refactors: a check, before any code moves, that the characterization tests
-cover the code in scope. Today that shows only at the final gate (diff coverage and mutation
-score of the moved lines).
+Existing tests first (refactor). The first live refactor (FCSim, M5-setpiece-model-split)
+wrote 835 lines of new tests beside 789 lines of existing ones for a change with 114 lines
+that were not moves, and the mutation check ran only the new ones. Now the spec lists the
+tests that exercise the code in scope (`## Existing tests of the code in scope`), and the
+test writer tags an existing test that asserts a row exactly with the row's ID: a tag line,
+nothing else in that test. Every check selects tests by ID, so the step checks, the
+coverage run and the mutation check then run the old and the new tests alike. The check
+"Green on today's code" reports the tagged existing tests, the rows only they pin, and an
+existing test file with removed or changed lines (a note for the test reviewer). The
+test-smell check counts only tests the feature added, also in a file it touched.
+Measured on that run: the six older test classes that name the moved code kill 320 of 349
+mutants of the change without any new test (the new tests: 329), but took 34 min in the
+mutation run against 8, because they include match tests.
+`[gates] mutation_scope = "suite"` is no way around this on a large suite: on FCSim (2,040
+tests) Stryker's coverage capture did not end within the hour.
+
+Scope coverage (refactor, `src/agentflow/checks/scope_coverage.py`). Before any code moves,
+the tests checks run the tagged tests once more with coverage of the files in scope: the
+paths in backticks in the first column of the spec's `## Scope` table that are source files
+today. test_checks.md gets `### Scope coverage (note, not blocking)`: per file the share of
+lines run and the line ranges no tagged test runs. The test reviewer reads each range; moved
+or merged behavior that no test pins is an objection, so the gap is closed while the tests
+can still change (a refactor has no test repair at the final gate). It never blocks by
+itself: a line that is run is not yet asserted (the mutation check measures that at the
+end), and it is skipped with its reason when the Scope table names no existing file or the
+coverage tool is missing (python: pytest-cov; .NET: coverlet.collector; the generic adapter
+does not measure it). On FCSim the run took 37 s for one file in scope.
 
 ## The retro backlog
 
@@ -229,7 +256,9 @@ agentflow repository; mark them `done` here with a note.
 
 `agentflow stats` reads `out/events.jsonl` (no agents): one line per feature with its cost,
 the time agents and gate checks ran, the time a gate waited for you, the final-gate runs,
-failed step gates, questions, assumptions and risk level, then the averages of the finished
+the spec time (from `agentflow spec` to the approval: the dialogue in the chat; the chat's
+own cost and the talk before the command are not in the log), failed step gates,
+questions, assumptions and risk level, then the averages of the finished
 features. `agentflow stats <f>` adds the agent runs per phase (runs, cost, time, output tokens),
 every final-gate run with its failed checks and three slowest checks, and the repair runs.
 `--json` prints the numbers.
@@ -513,7 +542,9 @@ of: final gates passed with diff coverage and mutation measured (a project witho
 never low risk); nothing parked, provisional or open; no answer round, no park and no cap hit
 twice in the run; at most `max_assumptions` (3) assumptions; at most `max_changed_lines` (200)
 changed source lines in `max_changed_files` (8) files and `max_removed_lines` (30) removed
-lines in existing code, measured against the feature's base; no changed path under
+lines in existing code, measured against the feature's base (a refactor: without moved
+lines, that is lines removed in one place and added unchanged, but for the indent, in
+another; live: 876 changed lines were 114 without the moves); no changed path under
 `never_auto`; no changed file over `[gates] max_file_lines`; at least `min_features` (3)
 finished features in the metrics file. The brief shows `Risk: low` or `Risk: elevated: <the
 tests that failed>`; the `risk` event and the `human_gate` event (`risk`) record it next to
@@ -549,7 +580,8 @@ phase, step, tool + command/path of every call the permission check denied, from
 JSON), turn-cap hits (`max_turns`, and `escalation` when the re-run hit it too) and
 interruptions. Before the RETRO agent runs, agentflow writes `out/<f>/retro_input.md`: counts,
 then every question (Q1..), failed attempt (F1..), escalation (E1..), human rejection (R1..),
-review finding with its triage verdict (V1..), final-gate failure (G1..), permission denial
+review finding with its triage verdict (V1..), structure finding of the reviewer with what
+its fix cost (S1..; implementer runs, gate runs, seconds), final-gate failure (G1..), permission denial
 (D1..), assumption (A1..) and parked or provisional item (P1..). Each question is paired with
 its answer from any later answer round (the `answer` events, then every `### Answer ANS-n`
 round of `questions_archive.md`): by its first words, else by shared spec IDs and words (the

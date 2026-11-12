@@ -29,7 +29,15 @@ BUG_REPORT = (
 """
 )
 BUG_PLAN = PLAN.replace("DEMO-R-001, DEMO-E-001", "DEMO-R-001, DEMO-E-001, DEMO-I-001")
-REFACTOR = REQUIREMENTS.replace("Feature code: DEMO\n", "Feature code: DEMO\nMode: refactor\n")
+REFACTOR = (
+    REQUIREMENTS.replace("Feature code: DEMO\n", "Feature code: DEMO\nMode: refactor\n")
+    + """
+## Scope
+| File / type | What happens to it |
+|---|---|
+| `src/demo/__init__.py` | tidied |
+"""
+)
 
 
 def start(r: DemoRepo, mode: str, requirements: str, plan: str, code: str) -> None:
@@ -66,6 +74,7 @@ def test_spec_templates_per_mode(demo_repo: DemoRepo, capsys: pytest.CaptureFixt
     assert feature_mode(cfg, "demo") == "refactor"
     text = read(r, "specs/demo/requirements.md")
     assert "## Behavior to preserve" in text and "## Structure targets" in text
+    assert "## Existing tests of the code in scope" in text
     assert "every step is checked\n     with ALL" in read(r, "specs/demo/plan.md")
     assert r.af("spec", "demo") == 0  # no --mode: what the spec says
     brief = spec_brief(cfg, "demo")
@@ -149,8 +158,17 @@ def test_refactor_tests_stay_green_and_a_step_must_change_code(demo_repo: DemoRe
     assert r.af("run", "demo") == EXIT_GATE
     assert r.progress()["waiting"]["gate"] == "final"
 
-    assert "### Green on today's code: PASS" in read(r, "out/demo/test_checks.md")
-    assert prompts(r, "TESTS")[0].startswith("Refactor 'demo': the code exists")
+    checks = read(r, "out/demo/test_checks.md")
+    assert "### Green on today's code: PASS" in checks
+    assert "0 existing test(s) tagged with a spec ID of this refactor" in checks
+    # before any code moves: which lines of the file in scope the tagged tests run
+    assert "### Scope coverage (note, not blocking): 0 line(s) not run" in checks
+    assert "src/demo/__init__.py: 100% (" in checks
+    assert "'Scope coverage', lists the lines" in prompts(r, "TEST_REVIEW")[0]
+    tests = prompts(r, "TESTS")[0]
+    assert tests.startswith("Refactor 'demo': the code exists")
+    assert "Existing tests first: search tests/ for the tests that already" in tests
+    assert "Existing tests come first" in prompts(r, "TEST_REVIEW")[0]
     implement = prompts(r, "IMPLEMENT")
     assert len(implement) == 2 and "This is a refactor: move, split and rename" in implement[0]
     gates = [e for e in r.events() if e["kind"] == "gate"]
@@ -186,3 +204,28 @@ def test_feature_mode_is_unchanged(demo_repo: DemoRepo) -> None:
     task = orch.task_text("TESTS", "demo")
     assert task.startswith("Feature 'demo': write the tests from specs/demo/ and the interface")
     assert "This is a" not in orch.task_text("REVIEW", "demo")
+
+
+def test_refactor_structure_fix_is_checked_like_a_step(
+    demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live (FCSim): a helper extraction after the review ran the whole suite in the agent, in
+    its gate and again in the final gates. A refactor's structure fix uses the feature's tests;
+    the whole suite runs once, at the end."""
+    r = demo_repo
+    cfg = load_config(r.root)
+    seen: list[object] = []
+
+    def loop(
+        self: Orchestrator, feature: str, prog: dict, task: str, reqs: object, item: dict
+    ) -> bool:
+        seen.append(reqs)
+        return True
+
+    monkeypatch.setattr(Orchestrator, "implement_loop", loop)
+    orch = Orchestrator(cfg, get_adapter(cfg), echo=lambda s: None)
+    orch.fix_structure("demo", {"phase": "REVIEW", "structure_findings": ["split x"]})
+    assert seen == [None]  # a feature: the whole suite, as before
+    start(r, "refactor", REFACTOR, PLAN, LOOSE)
+    orch.fix_structure("demo", {"phase": "REVIEW", "structure_findings": ["split x"]})
+    assert seen[1] == ["DEMO-E-001", "DEMO-R-001"]

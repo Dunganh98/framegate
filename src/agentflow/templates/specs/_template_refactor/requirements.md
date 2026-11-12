@@ -9,20 +9,33 @@ Mode: refactor
 
 ## Scope
 <!-- The files / types / methods this refactor may change, and what happens to each (split
-     into, moved to, renamed, merged). Code outside this list stays untouched. -->
+     into, moved to, renamed, merged). Code outside this list stays untouched. Write each
+     existing file as its path in backticks: agentflow measures, before any code moves,
+     which lines of these files the tests run (test_checks.md, "Scope coverage"). -->
 | File / type | What happens to it |
 |---|---|
 | | |
 
 ## Behavior to preserve
 <!-- One row per behavior of the code in scope that callers or users rely on: the output for
-     a given input, errors, order, side effects, stored formats. Each row gets characterization
-     tests that PASS on today's code and must pass after every step. Use real inputs (seeds,
+     a given input, errors, order, side effects, stored formats. Each row is pinned by tests
+     that PASS on today's code and must pass after every step: existing tests where they
+     assert it already, new characterization tests where not. Use real inputs (seeds,
      recordings); a golden value is measured from today's code ("Measured with": the command
      and date), never worked out by hand. -->
 | ID | Behavior (given / when / then, exact) | Measured with |
 |---|---|---|
 | XXX-R-001 | | |
+
+## Existing tests of the code in scope
+<!-- The test files (and golden / hash / snapshot tests) that exercise the code in scope
+     today, found by searching the tests for its types and methods. The test writer starts
+     here: an existing test that asserts a row above exactly gets the row's ID as a tag and
+     no new test is written for it. New tests are for the gaps only. "None" if nothing
+     tests this code yet. -->
+| Test file | What it covers of the scope |
+|---|---|
+| | |
 
 ## Invariants (property-based test candidates)
 | ID | Invariant (must hold for all valid inputs, before and after) |
