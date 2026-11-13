@@ -66,7 +66,15 @@ Feature code: XXX   <!-- 2–10 uppercase chars, prefix for all IDs, e.g. HI2 --
      from another test (seen live: a count copied from a test that counted another way).
      Counted outputs: for every count / field a requirement defines, a row with data where it
      is not 0 (not its default); for a variant (a mode, a driver, another world) one value that
-     differs from the base case. Else an implementation that always returns 0 passes. -->
+     differs from the base case. Else an implementation that always returns 0 passes.
+     Edge cases and named outcomes: once this table pins data, EVERY E- ID gets its own row
+     (several IDs in one cell are fine: "XXX-E-001, E-002", "XXX-E-003..E-005"), and so does
+     every outcome or branch a rule names in words ("saved", "blocked", "no reach"), also when
+     the base data is the same. Does the pinned data hold the case? If not: other data that
+     does, or in the Data cell `unit-only: <which test builds the case itself>: <why no pinned
+     data is needed>`. `framegate spec-check` fails an E- ID without a row (seen live: three
+     cases the only pinned match did not hold; the test writer and the test reviewer asked
+     about them five times, and one assertion never ran). -->
 | ID | Data (seed / file / generator) | Observable that proves the situation | Measured with | Zero cases allowed |
 |---|---|---|---|---|
 | XXX-R-001 | | | | no |

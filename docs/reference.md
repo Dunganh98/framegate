@@ -134,6 +134,13 @@ is no mode or switch for this.
 
 At a gate with numbered questions, "ok" takes every default (the chat writes them to
 answers.md); answers by number work as before; "approve as is" approves and leaves them open.
+Final-gate answers that only take the defaults or keep things as they are ("Default: ...",
+"accept", "leave it") and then change nothing (the spec update and the test writer commit
+nothing, no new question, nothing to restructure, the final checks had passed with every tool
+giving a result) approve the feature with the checks you saw: the retro runs next, with no
+second round of checks, summary and final gate (`human_gate` event with `from_answers`). Seen
+live: such answers restarted everything, 26 minutes, for the same result. Any change puts the
+normal round back.
 One line per bullet; a section where nothing happened is one line; no sentence repeats a heading
 or another section.
 
@@ -171,9 +178,17 @@ The human owns what the classes are for and how they work together, not every li
   failing it parks like a review fix).
 - The final gates end with a structure report (not blocking): the size of every source file
   the feature changed (and before it), the longest methods. A file over `[gates]
-  max_file_lines` (400; 0 = off) becomes a numbered item at the final gate with a default:
-  split it now if this feature took it over the limit, else leave it for later. The answer
-  goes to the structure run (split, or leave it), and the file is not asked about again.
+  max_file_lines` (400; 0 = off) that this feature made longer becomes a numbered item at the
+  final gate with a default: split it now if this feature took it over the limit, else leave
+  it for later. A file over the limit that the feature changed without making it longer is
+  listed, not asked about, and does not count against the risk rating. "Split it" goes to
+  the structure run; "leave it" starts no run. The file is not asked about again.
+- Before that, so the code is written in the right place: the spec brief and every
+  implementer task name the source files that are already over the limit (the 12 longest),
+  the plan template asks a step that would add to one of them to name the new file, and
+  every step gate prints the changed files over the limit with `before -> after` and `GREW`
+  (not blocking; the `gate` event lists them in `grown`). Seen live: two steps added to files
+  of 1,093 and 835 lines, both step gates passed, and the reviewer's finding cost a fix run.
   Seen live: FCSim M5-freekick-review grew SetPieceShotModel.cs to 694 lines, mixing the kick
   model with the review calculators.
 - The code map (`[docs] code_map`, default `docs/code-map.md`): a living Markdown doc, per
@@ -495,7 +510,13 @@ Models and speed:
   up to at most `[agents] step_batch_ids` (15; 0 = one run per step). The batch is checked,
   committed, parked and redone as one unit (`steps 1, 2, 3`).
 - The implementer checks only with the step command (its steps' tests and the earlier ones); the
-  step gate runs everything else. Before checking, the gates format the changed source files
+  step gate runs everything else: after the step's tests it runs the whole suite (the
+  adapter's everyday selection: `[dotnet] base_filter`, `[python] pytest_args`), and fails on
+  any red test that is not a test of this feature's later or parked steps, a contested test,
+  or a test that already failed when the spec was approved (`regression_baseline`). Seen
+  live: a step made helpers public and broke another feature's frozen public-surface test;
+  both step gates passed and the break showed in a later fix run. `[gates] step_tests =
+  "feature"` keeps the step gate to the step's own tests (a suite too slow to run per step). Before checking, the gates format the changed source files
   and the changed review tests, and the test writer's files are formatted after each of its
   runs (`[gates] format_fix`, default on, only with the adapter's own format check), so a
   formatting slip costs no attempt and never sits in a file the implementer may not edit. For
@@ -530,12 +551,17 @@ Stryker's output offers it; the first output is kept in `out/<f>/stryker/<projec
 
 Spec check (`framegate spec-check <f>`, also the first step of `approve-spec`, which refuses
 while it finds something; `--force` approves anyway and logs `spec_check` with `forced`). It
-reads two columns of the spec templates' tables; a spec without them is not checked:
+reads columns of the spec templates' tables; a spec without them is not checked:
 - `Spec ID` (design.md, "Error handling" and "Command-line surface"): every filled row names
   a spec ID of requirements.md. A rule that is only written in design.md gets no test.
 - `Assigned as (code, copied)` (requirements.md, "Existing data this spec reads"): every
   backticked piece of code in the cell is in the file the "Set where" cell names (a path, or
   a file name looked up in the source folders; spacing is ignored). `n/a: <why>` skips a row.
+- `ID` and `Data` (requirements.md, "Test data and fixtures"), once a row there pins data:
+  every edge-case ID (`-E-`) of the "Edge cases" table is in the ID cell of a row. The row
+  names the data that shows the case, or says `unit-only: <which test builds the case itself>:
+  <why>`. One cell may list several IDs (`XXX-E-001, E-002`, `XXX-E-003..E-005`). A spec whose
+  fixture table is empty (every test builds its own inputs) is not checked.
 `framegate doctor` warns when a project's copy of the templates (`specs/_template/`) lacks a
 section or a table column of framegate's templates.
 
@@ -548,7 +574,7 @@ changed source lines in `max_changed_files` (8) files and `max_removed_lines` (3
 lines in existing code, measured against the feature's base (a refactor: without moved
 lines, that is lines removed in one place and added unchanged, but for the indent, in
 another; live: 876 changed lines were 114 without the moves); no changed path under
-`never_auto`; no changed file over `[gates] max_file_lines`; at least `min_features` (3)
+`never_auto`; no file over `[gates] max_file_lines` that the feature made longer; at least `min_features` (3)
 finished features in the metrics file. The brief shows `Risk: low` or `Risk: elevated: <the
 tests that failed>`; the `risk` event and the `human_gate` event (`risk`) record it next to
 your decision, so you can compare before switching on `[gates] final = "auto"`: then a low-risk
@@ -571,6 +597,16 @@ back the whole-suite runs. A run cut short (timeout `[gates] regression_timeout`
 missing report or coverage file) is `FAIL` with `ERROR: ... incomplete (<reason>)`, never a
 coverage or mutation figure. Diff coverage and mutation score lines show the figures under
 PASS/FAIL.
+
+Unreached assertions (`[gates] unreached_assertions`, default on; Python and .NET): the
+coverage run also records the lines of the test files the feature added or changed (not the
+review tests; diff coverage still counts source files only). A test that ran, with an
+assertion whose line has no hit, fails the check `unreached assertions (feature tests)`; the
+final-gate repair sends it to the test writer like a weak diff coverage. Seen live: `if the
+shot was saved: Assert...` on a match without a saved shot passed every check. Left out:
+tests that were there before the feature, tests that did not run, assertions that always fail
+(`pytest.fail`, `Assert.Fail`, `assert False`: guards), and a line marked `unreached: <why>`
+in a comment on it or above it. Without a coverage tool the check is SKIPPED.
 
 Questions, assumptions, parked items and failed retries feed the retro. Every step-gate run is
 logged in `out/events.jsonl` (`gate`: phase, step, attempt, `failed` check names, trimmed

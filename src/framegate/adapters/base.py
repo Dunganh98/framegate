@@ -214,6 +214,87 @@ def diff_coverage_summary(output: str, threshold: float) -> str:
     return ""
 
 
+def cobertura_hits(
+    reports: Sequence[pathlib.Path], root: pathlib.Path
+) -> dict[str, dict[int, int]]:
+    """Cobertura reports -> {repo-relative posix file: {line: hits}} (the most hits a line has
+    in any class or report: a lambda or an async method is a class of its own there). A file
+    name is resolved against the report's <source> folders and `root`; one that is not a file
+    under `root` is left out."""
+    out: dict[str, dict[int, int]] = {}
+    root = root.resolve()
+    for report in reports:
+        try:
+            top = ET.parse(report).getroot()
+        except (OSError, ET.ParseError):
+            continue
+        bases = [pathlib.Path(s.text.strip()) for s in top.iter("source") if s.text]
+        names: dict[str, str | None] = {}
+        for cls in top.iter("class"):
+            fname = cls.get("filename") or ""
+            if fname not in names:
+                names[fname] = None
+                for cand in [pathlib.Path(fname), *(b / fname for b in bases), root / fname]:
+                    try:
+                        if cand.is_absolute() and cand.is_file():
+                            names[fname] = cand.resolve().relative_to(root).as_posix()
+                            break
+                    except (OSError, ValueError):
+                        continue
+            rel = names[fname]
+            if rel is None:
+                continue
+            lines = out.setdefault(rel, {})
+            for line in cls.iter("line"):
+                try:
+                    n, hits = int(line.get("number") or 0), int(line.get("hits") or 0)
+                except ValueError:
+                    continue
+                lines[n] = max(lines.get(n, 0), hits)
+    return out
+
+
+def cobertura_without(
+    src: pathlib.Path, dst: pathlib.Path, root: pathlib.Path, prefix: str
+) -> None:
+    """Copy a Cobertura report without the files under `prefix` (repo-relative, e.g.
+    `tests/`). The coverage run may record the test files (which assertions ran); diff
+    coverage must not count them: review tests are new lines that all run, and would hide
+    uncovered source lines behind a high percentage."""
+    tree = ET.parse(src)
+    top = tree.getroot()
+    bases = [pathlib.Path(s.text.strip()) for s in top.iter("source") if s.text]
+    root = root.resolve()
+
+    def under_prefix(fname: str) -> bool:
+        for cand in [pathlib.Path(fname), *(b / fname for b in bases), root / fname]:
+            try:
+                if cand.is_absolute() and cand.is_file():
+                    return cand.resolve().relative_to(root).as_posix().startswith(prefix)
+            except (OSError, ValueError):
+                continue
+        return fname.replace("\\", "/").startswith(prefix)
+
+    for parent in top.iter():
+        for cls in [c for c in parent if c.tag == "class"]:
+            if under_prefix(cls.get("filename") or ""):
+                parent.remove(cls)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tree.write(dst, encoding="utf-8", xml_declaration=True)
+
+
+@dataclass
+class TestAssertions:
+    """A test of a test file: its lines and the lines of its assertions (1-based)."""
+
+    __test__ = False  # not a pytest class
+
+    name: str
+    first: int
+    last: int
+    lines: list[int] = field(default_factory=list)
+
+
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.M)
 
 
@@ -499,10 +580,28 @@ class LanguageAdapter(abc.ABC):
         return Check("regression: whole suite, no coverage", run)
 
     @abc.abstractmethod
-    def coverage_checks(self, base_ref: str, scope: TestScope | None = None) -> list[Check]:
+    def coverage_checks(
+        self,
+        base_ref: str,
+        scope: TestScope | None = None,
+        cover_tests: Sequence[str] = (),
+    ) -> list[Check]:
         """Final scope: the tests of `scope` (None = the whole suite) with coverage, then diff
         coverage against base_ref (>= cfg.diff_coverage). Report SKIPPED (not FAIL) when a
-        coverage tool is missing; a cut-short run is FAIL `ERROR: ... incomplete`."""
+        coverage tool is missing; a cut-short run is FAIL `ERROR: ... incomplete`.
+        cover_tests: test files (repo-relative) whose own lines the run records too, where
+        the adapter can (test_line_hits reads them)."""
+
+    def test_line_hits(self) -> tuple[dict[str, dict[int, int]], str]:
+        """({test file: {line: hits}} from the last coverage run of the final gates, a note:
+        why there is none). The default: this adapter does not record the tests' lines."""
+        return {}, f"the {self.name} adapter does not record which test lines ran"
+
+    def test_assertions(self, rel: str) -> list[TestAssertions]:
+        """The tests of a test file with the lines of their assertions; calls that always
+        fail (`pytest.fail`, `Assert.Fail`, `assert False`) are left out: they are meant
+        not to run. The default: none known."""
+        return []
 
     def scope_coverage_reports(
         self, req_ids: Sequence[str], files: Sequence[str]

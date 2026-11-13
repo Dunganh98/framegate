@@ -1,6 +1,6 @@
 """framegate: spec-driven, test-first workflow orchestrator for Claude Code."""
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 #: where this package is released: the plugin marketplace and the git tags `v<version>`
 #: (one version for the CLI and the plugin; tests/test_release.py keeps them equal)
 SOURCE_URL = "https://github.com/Dunganh98/framegate"

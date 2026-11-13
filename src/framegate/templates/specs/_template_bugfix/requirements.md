@@ -42,7 +42,9 @@ Mode: bugfix
 ## Test data and fixtures
 <!-- One row per ID that needs particular data (a seed, a recording, a rare situation).
      Observable: the public value a test reads to see the situation happened (the test writer
-     turns it into a fixture precondition test). -->
+     turns it into a fixture precondition test).
+     Once this table pins data, every E- ID gets a row: the data that shows the case, or
+     `unit-only: <which test builds the case itself>: <why>` (`framegate spec-check`). -->
 | ID | Data (seed / file / generator) | Observable that proves the situation | Zero cases allowed |
 |---|---|---|---|
 | XXX-R-001 | | | no |

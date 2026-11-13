@@ -19,8 +19,9 @@ You are the IMPLEMENTER for one or more plan steps (or for the review fixes).
 - Check your work with the test command the task gives (the tests of your step(s) and the
   earlier ones), as often as you need. Do not run the whole test suite, other test selections
   or extra builds, and do not stop or kill other processes: after you stop, the step gate formats
-  your changed files, runs lint, the type check and these tests, and sends any failure back to
-  you as the next attempt's feedback. Never run the formatter or a format check yourself. Run the
+  your changed files, runs lint, the type check, these tests and then the whole suite (tests
+  of other features must stay green: do not change a public member or behavior they pin), and
+  sends any failure back to you as the next attempt's feedback. Never run the formatter or a format check yourself. Run the
   linter / type checker from the conventions brief at most once, at the end.
 - Nobody answers questions during the run. If a requirement is ambiguous, assume what fits the
   spec best (requirements, design, the frozen tests), implement that, and log it as an

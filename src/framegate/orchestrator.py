@@ -206,11 +206,36 @@ KNOWLEDGE_MAX_LINES = 300
 #: failed final checks one automatic repair may fix before the human sees them (by the start
 #: of the check's name): the implementer owns the first group, the test writer the second
 FINAL_SRC_CHECKS = (*GATE_NAMES.values(), "regression", "coverage run", "full test suite")
-FINAL_TESTS_CHECKS = ("diff coverage", "mutation score")
+FINAL_TESTS_CHECKS = ("diff coverage", "mutation score", "unreached assertions")
 FIX_OWNER_RE = re.compile(r"^\W*Fix owner\W*:\W*(src|tests|spec)\b", re.I | re.M)
 #: a park request (or diagnosis) saying only the frozen tests are wrong, and which ones
 TESTS_WRONG_RE = re.compile(r"^\W*Park kind\W*:\W*tests[ -]wrong\b", re.I | re.M)
 CONTESTED_RE = re.compile(r"^\W*Contested tests\W*:\s*(.+)$", re.I | re.M)
+
+
+#: an answer that takes the default or keeps things as they are
+NO_CHANGE_RE = re.compile(
+    r"^\W*(?:default|accept(?:ed)?|leave|keep|ok(?:ay)?|fine|as is|no change|no answer needed)\b",
+    re.I,
+)
+SAME_AS_RE = re.compile(r"^\W*same as item \d+\s*:\s*(.*)$", re.I | re.S)
+#: an answer to a file-size question that leaves the file as it is
+LEAVE_RE = re.compile(r"^\W*(?:default\W+)?(?:leave|keep)\b", re.I)
+
+
+def take_defaults(items: list[dict[str, Any]]) -> bool:
+    """Do all the numbered answers take the default or keep things as they are ("Default:
+    ...", "accept", "leave it", "No answer needed")? Such answers may still need work (a
+    default can be "split the file now"), so this alone ends nothing: see
+    Orchestrator.answers_changed_nothing."""
+    if not items:
+        return False
+    for it in items:
+        text = str(it.get("a") or "")
+        same = SAME_AS_RE.match(text)
+        if not NO_CHANGE_RE.match(same.group(1) if same else text):
+            return False
+    return True
 
 
 def contested_tests(text: str, tests_owner: bool = False) -> list[str]:
@@ -337,7 +362,9 @@ TASKS = {
     "behavior (then park with that question). Check with: {check}\n" + NO_STOP,
     "TESTS_STRENGTHEN": "Feature '{f}': the implementation passes its tests, but the final gates "
     "found the tests too weak: {failed}. Add or sharpen tests so they catch what is listed "
-    "below (uncovered changed lines; surviving mutants in {out}/{f}/mutation_survivors.md). "
+    "below (uncovered changed lines; surviving mutants in {out}/{f}/mutation_survivors.md; "
+    "assertions that never ran: give that test data that holds the case, or build the case "
+    "in the test, so the assertion runs; do not delete it). "
     "Every new assertion must follow from {specs}/{f}/ and carry its spec ID; do not derive "
     "expected values from the implementation. If such a test fails against the code, keep it: "
     "it is a finding and the implementer fixes the code. A line or mutant the spec does not "
@@ -1198,6 +1225,7 @@ class Orchestrator:
                 failed=rep.failed,
                 excerpt=rep.excerpt() if not rep.ok else "",
                 seconds=round(time.time() - t0),
+                grown=rep.structure.get("grown") or [],
             )
             if rep.ok:
                 commit(self.cfg, f"{feature}: {label}")
@@ -1723,6 +1751,48 @@ class Orchestrator:
         )
         prog.update(phase=nxt.get("phase"), sub=nxt.get("sub"), amend=None, attempt=0)
         save_progress(self.cfg, feature, prog)
+        quiet = prog.pop("quiet_answers", None)
+        if nxt.get("phase") == "PR" and self.answers_changed_nothing(feature, prog, quiet):
+            self.approve_unchanged(feature, prog, str(quiet["ref"]))
+
+    def answers_changed_nothing(
+        self, feature: str, prog: dict[str, Any], quiet: dict[str, Any] | None
+    ) -> bool:
+        """The answers at the final gate only took the defaults (`quiet`: recorded by
+        `answer`), and the spec update and the test writer then changed nothing: no commit,
+        no new question, nothing to restructure, nothing parked, and the final checks the
+        human saw had passed with every tool giving a result. Seen live: such answers
+        restarted the whole loop (a fix run that changed nothing, every check again, the
+        summary again: 26 minutes) and the human approved the same result a second time."""
+        if not quiet or prog.get("parked") or prog.get("provisional"):
+            return False
+        if prog.get("structure_findings") or self.open_questions(feature):
+            return False
+        if git(self.cfg, "rev-parse", "HEAD").strip() != quiet.get("head"):
+            return False
+        last = [e for e in read_events(self.cfg, feature) if e.get("kind") == "final_gates"]
+        return bool(last and last[-1].get("passed") and not last[-1].get("tool_failures"))
+
+    def approve_unchanged(self, feature: str, prog: dict[str, Any], ref: str) -> None:
+        """The final gate, passed by the human's answers (answers_changed_nothing): no second
+        final-gate run, summary or stop. Retro next, then DONE; nothing is pushed."""
+        log_event(
+            self.cfg,
+            feature,
+            "human_gate",
+            gate="final",
+            approved=True,
+            reason=f"the answers {ref} took the defaults and changed nothing",
+            from_answers=ref,
+            risk=(prog.get("risk") or {}).get("level"),
+        )
+        self.progress(
+            feature,
+            f"FINAL GATE: your answers ({ref}) took the defaults and changed nothing (no spec, "
+            "test or code change): approved with the checks you saw. Retro next.",
+        )
+        self.reapprove_spec(feature, prog, "final")
+        self.advance(feature, prog, "RETRO")
 
     def commit_test_changes(
         self, feature: str, prog: dict[str, Any], what: str, message: str
@@ -2012,6 +2082,23 @@ class Orchestrator:
         parked = self.parked_steps(prog)
         return [i for s in steps if s.num in parked for i in s.reqs]
 
+    def size_context(self) -> str:
+        """Task lines naming the source files that are already over [gates] max_file_lines,
+        so new code goes elsewhere while it is written (seen live: two steps added to files
+        of 1,093 and 835 lines, and the split cost a fix run after the review)."""
+        files, total = structure_check.oversized(self.adapter)
+        if not files:
+            return ""
+        more = f", and {total - len(files)} more" if total > len(files) else ""
+        return (
+            f"\n\nSource files already over {self.cfg.max_file_lines} lines: "
+            + ", ".join(f"{p} ({n})" for p, n in files)
+            + more
+            + ". Do not make them longer: a new type or a new block of code goes into its own "
+            "file (one concept per file), unless plan.md names another place. The step gate "
+            "reports every such file your change made longer."
+        )
+
     def parked_context(self, prog: dict[str, Any], steps: list[PlanStep]) -> str:
         """Task lines about parked steps: their IDs are off limits until they are redone."""
         parked = self.parked_steps(prog)
@@ -2124,6 +2211,7 @@ class Orchestrator:
                     note=note,
                 )
             task += self.parked_context(prog, steps) + self.provisional_context(prog)
+            task += self.size_context()
             if redo:
                 task += REDO_NOTE.format(**self.placeholders(feature))
             for r in redo:
@@ -2518,12 +2606,14 @@ class Orchestrator:
             log_event(self.cfg, feature, "structure_fixed", findings=findings)
 
     def file_size_questions(self, feature: str, prog: dict[str, Any]) -> None:
-        """A question at the final gate for every changed source file over [gates]
-        max_file_lines (from the last final-gate structure report), with a default: split it
-        now when this feature took it over the limit, else leave it for later."""
+        """A question at the final gate for every source file over [gates] max_file_lines
+        that this feature made longer (from the last final-gate structure report), with a
+        default: split it now when this feature took it over the limit, else leave it for
+        later. A file the feature changed without making it longer is not asked about (the
+        report lists it)."""
         last = [e for e in read_events(self.cfg, feature) if e.get("kind") == "final_gates"]
         shape = (last[-1].get("structure") if last else None) or {}
-        over = shape.get("over") or []
+        over = (shape["grown"] if "grown" in shape else shape.get("over")) or []
         if not over:
             return
         asked = "\n".join(self.open_questions(feature))
@@ -3601,18 +3691,25 @@ class Orchestrator:
             # answers to the file-size questions: the structure fix run applies them (split,
             # or leave as is) before the final gates
             tag = f"[{STRUCTURE_WHO}] "
-            shape = [
-                f"{shown[it['n'] - 1].removeprefix(tag)}\n  The human's answer: {it['a']}"
+            sized = [
+                (shown[it["n"] - 1].removeprefix(tag), str(it["a"]))
                 for it in parse_answer_items(text)
                 if 0 < it["n"] <= len(shown) and shown[it["n"] - 1].startswith(tag) and it["a"]
             ]
+            # "leave it" needs no run (seen live: three such answers started an implementer
+            # run that changed nothing, and every check after it again)
+            shape = [f"{q}\n  The human's answer: {a}" for q, a in sized if not LEAVE_RE.match(a)]
             if shape:
                 prog["structure_findings"] = [*(prog.get("structure_findings") or []), *shape]
+            if sized:
                 # answered once: not asked again in a later round
                 prog["size_answered"] = [
                     *(prog.get("size_answered") or []),
-                    *(x.split(" ", 1)[0] for x in shape),
+                    *(q.split(" ", 1)[0] for q, _ in sized),
                 ]
+                left = [q.split(" ", 1)[0] for q, a in sized if LEAVE_RE.match(a)]
+                if left:
+                    logged["size_left"] = left
         if gate == "tests":
             self.archive_questions(feature, "tests gate", open_q, reply)
             log_event(self.cfg, feature, "answer", gate="tests", **logged)
@@ -3656,6 +3753,15 @@ class Orchestrator:
                     parked=[],
                     **logged,
                 )
+                # answers that only take the defaults: if the spec update and the test
+                # writer then change nothing, the feature is approved with the checks the
+                # human saw (answers_changed_nothing), without a second round of everything
+                quiet = take_defaults(items)
+                prog["quiet_answers"] = (
+                    {"ref": ref, "head": git(self.cfg, "rev-parse", "HEAD").strip()}
+                    if quiet
+                    else None
+                )
                 prog.update(
                     waiting=None,
                     redo_mode=False,
@@ -3680,6 +3786,12 @@ class Orchestrator:
                     "writer applies the ones that need a test change; if the spec changed, the "
                     "reviewer checks the code against it again (changed tests: the implementer "
                     "makes them pass); then the final gate again."
+                    + (
+                        " Your answers take the defaults: if they change nothing, the feature "
+                        "is approved with the checks you saw (retro, then DONE)."
+                        if quiet
+                        else ""
+                    )
                 )
                 self.echo(f"Next: framegate run {feature}")
                 return EXIT_OK
@@ -3708,6 +3820,7 @@ class Orchestrator:
                 waiting=None,
                 redo=parked,
                 parked=[],
+                quiet_answers=None,
                 redo_mode=True,
                 final_repair=[],  # a new final-gate cycle: one repair per owner again
                 attempt=0,

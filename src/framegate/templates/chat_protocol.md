@@ -107,6 +107,8 @@ fail for no reason. Reading files and git log/diff/status are fine.
    ```
 
 5. After the command succeeds, continue with A.2 (finish --no-retro ends in DONE: section D).
+   After answers at the final gate that only took the defaults, that run may end in DONE
+   without a second final gate (nothing changed: approved with the checks already shown).
    A command that fails: its error in one line, in words, and the decision with a default.
 
 ## D. DONE: wrap-up and cleanup

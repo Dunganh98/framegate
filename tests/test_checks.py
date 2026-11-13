@@ -422,6 +422,89 @@ def test_gate_runner_step_scope(framed: pathlib.Path) -> None:
     assert not ok and "FAILED: frame diff, tests (current + earlier steps)" in report
 
 
+STEP_TESTS = """\
+import pytest
+
+from pkg.a import f, g
+
+
+@pytest.mark.req("FT-R-001")
+def test_one() -> None:
+    assert f() == 1
+
+
+@pytest.mark.req("FT-R-002")
+def test_two() -> None:
+    assert g() == 2
+"""
+STEP_SRC = """\
+def f() -> int:
+    return {f}
+
+
+def g() -> int:
+    raise NotImplementedError
+
+
+def old() -> int:
+    return {old}
+"""
+
+
+def test_step_gate_runs_the_whole_suite(framed: pathlib.Path) -> None:
+    """Seen live: a step broke another feature's frozen test and both step gates passed,
+    because they ran only this feature's tests. The step gate now also runs the whole suite;
+    the tests of this feature's later steps are red by design and left out."""
+    from framegate.gates import STEP_SUITE, is_test_at, later_step_tests
+    from framegate.state import clear_reqs, set_reqs
+
+    write(framed, "specs/f/requirements.md", "FT-R-001\nFT-R-002\n")
+    write(
+        framed,
+        "pyproject.toml",
+        "[project]\nname = 'x'\n[tool.pytest.ini_options]\npythonpath = ['src']\n",
+    )
+    write(framed, ".gitignore", "out/\n.phase\n.reqs\n__pycache__/\n")
+    write(framed, "src/pkg/a.py", STEP_SRC.format(f="None", old=7))
+    write(framed, "tests/test_feat.py", STEP_TESTS)
+    other = "from pkg.a import old\n\n\ndef test_two() -> None:\n    assert old() == 7\n"
+    write(framed, "tests/test_other.py", other)
+    git(framed, "add", "-A")
+    git(framed, "commit", "-q", "-m", "tests")
+    git(framed, "tag", "-f", "tests-approved/f")
+    off = {"commands": {"lint": [], "format": [], "typecheck": []}}
+    a = adapter_for(framed, {"gates": off})
+    assert later_step_tests(a, "f", ["FT-R-001"]) == ["tests/test_feat.py::test_two"]
+    # the same method name in another file or class is another test
+    assert is_test_at("tests.test_feat::test_two", ["tests/test_feat.py::test_two"])
+    assert not is_test_at("tests.test_other::test_two", ["tests/test_feat.py::test_two"])
+    assert is_test_at("Ns.FeatTests.Two(x: 1)", ["tests/Match/Feat.cs::FeatTests.Two"])
+    assert not is_test_at("Ns.OtherTests.Two", ["tests/Match/Feat.cs::FeatTests.Two"])
+
+    set_reqs(a.cfg, ["FT-R-001"])
+    try:
+        # step 1 done, step 2 (FT-R-002) still a stub: its test is left out
+        write(framed, "src/pkg/a.py", STEP_SRC.format(f=1, old=7))
+        ok, report = run_gates(a, "f", "step")
+        assert ok and f"[PASS] {STEP_SUITE}" in report and "left out" in report
+        # the step breaks what another test pins: the step gate fails and names that test
+        write(framed, "src/pkg/a.py", STEP_SRC.format(f=1, old=8))
+        ok, report = run_gates(a, "f", "step")
+        assert not ok and f"[FAIL] {STEP_SUITE}" in report
+        broken = report.split("Tests outside this step fail")[1]
+        assert "test_other::test_two" in broken and "test_feat::test_two" not in broken
+        # [gates] step_tests = "feature": only the step's IDs, as before
+        b = adapter_for(framed, {"gates": {**off, "step_tests": "feature"}})
+        ok, report = run_gates(b, "f", "step")
+        assert ok and STEP_SUITE not in report, report
+        # the step's own tests are red: the suite is not run on top
+        write(framed, "src/pkg/a.py", STEP_SRC.format(f=3, old=7))
+        ok, report = run_gates(a, "f", "step")
+        assert not ok and f"[SKIPPED] {STEP_SUITE}" in report
+    finally:
+        clear_reqs(a.cfg)
+
+
 def test_gate_runner_final_scope_and_skips(framed: pathlib.Path) -> None:
     a = adapter_for(
         framed,

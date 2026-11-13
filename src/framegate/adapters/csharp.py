@@ -57,6 +57,8 @@ class CsMethod:
     line: int
     body: str  # body text with comments removed and literals masked ("" if none)
     cls: CsClass | None = None
+    body_line: int = 0  # the line the body text starts on (0: no body)
+    end_line: int = 0  # the line the body ends on
 
     @property
     def is_test(self) -> bool:
@@ -431,18 +433,25 @@ def scan(text: str) -> CsFile:
         # skip generic constraints (`where T : ...`) up to the body
         rest = re.match(r"[^{;=]*", mask[k:])
         k += rest.end() if rest else 0
+        span = None
         if k < len(mask) and mask[k] == "{":
-            body = mask[k + 1 : match_forward(mask, k)]
+            span = (k + 1, match_forward(mask, k))
         elif mask.startswith("=>", k):
             semi = mask.find(";", k)
-            body = mask[k + 2 : semi if semi >= 0 else len(mask)]
+            span = (k + 2, semi if semi >= 0 else len(mask))
+        if span:
+            body = mask[span[0] : span[1]]
         attrs = []
         for sec_start, sec_end in _sections(mask, start, end):
             attrs += parse_attribute_section(code[sec_start:sec_end])
         owners = [c for c in result.classes if c.start < start < c.end]
         owner = max(owners, key=lambda c: c.start) if owners else None
         line = text.count("\n", 0, m2.start()) + 1
-        result.methods.append(CsMethod(idents[-1], attrs, line, body, owner))
+        method = CsMethod(idents[-1], attrs, line, body, owner)
+        if span:
+            method.body_line = text.count("\n", 0, span[0]) + 1
+            method.end_line = text.count("\n", 0, span[1]) + 1
+        result.methods.append(method)
     return result
 
 
@@ -466,6 +475,23 @@ ASSERTION = re.compile(
     r"\bAssert\w*\s*[.(<]|\.Should\w*\s*\(|\bShould\w*\s*\(|\bThrows\w*\s*[(<]"
     r"|\bVerify\w*\s*\(|\bFail\s*\("
 )
+#: an assertion that always fails: a guard that is meant not to run
+ALWAYS_FAILS = re.compile(
+    r"\b(?:Assert\s*\.\s*)?Fail\w*\s*\(|\bAssert\s*\.\s*(?:True\s*\(\s*false|False\s*\(\s*true)\b"
+)
+
+
+def assertion_lines(method: CsMethod) -> list[int]:
+    """The lines of a method's assertions (ASSERTION), without the ones that always fail."""
+    if not method.body_line:
+        return []
+    return [
+        method.body_line + i
+        for i, line in enumerate(method.body.split("\n"))
+        if ASSERTION.search(ALWAYS_FAILS.sub("", line))
+    ]
+
+
 _CALL = re.compile(r"\b([A-Za-z_]\w*)\s*(?:<[^<>()]*>)?\s*\(")
 _NOT_METHODS = {
     "if",

@@ -78,9 +78,17 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 #                                  # tests; the test writer's files after its runs) before checking
 #                                  # (only with the adapter's own format check)
 # extra_timeout = 1800             # seconds per [gates.extra] check
-# max_file_lines = 400             # a changed source file longer than this is a numbered item
-#                                  # at the final gate (split now / later); 0 = off. The
-#                                  # final gates report all changed files' sizes (not blocking)
+# max_file_lines = 400             # a source file this feature made longer, and that is
+#                                  # over this, is a numbered item at the final gate (split
+#                                  # now / later); 0 = off. Every step gate and the final
+#                                  # gates report the changed files' sizes (not blocking)
+# step_tests = "suite"             # a step gate also runs the whole suite (the everyday
+#                                  # selection: [dotnet] base_filter, [python] pytest_args),
+#                                  # with the tests of this feature's later steps left out;
+#                                  # "feature" = only the tests of the step's IDs (slow suite)
+# unreached_assertions = true      # the final gate fails on an assertion of a new test that
+#                                  # never ran in the feature's tests (`if (x) Assert...` on
+#                                  # data without x); false = off
 
 # [gates.extra]                    # project checks run after the final gates and shown at the
 #                                  # final gate with their exit code and output; never blocking

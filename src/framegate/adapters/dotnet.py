@@ -25,9 +25,12 @@ from framegate.adapters.base import (
     Check,
     CheckResult,
     LanguageAdapter,
+    TestAssertions,
     TestCase,
     TestRun,
     TestScope,
+    cobertura_hits,
+    cobertura_without,
     diff_coverage_summary,
     diff_hunks,
     incomplete_reason,
@@ -625,9 +628,12 @@ class DotnetAdapter(LanguageAdapter):
         coverage: pathlib.Path | None = None,
         timeout: int | None = None,
         cover_exclude: Sequence[str] = (),
+        cover_tests: bool = False,
     ) -> TestRun:
         """cover_exclude: source-file globs the coverage run does not record (coverlet's
-        ExcludeByFile), passed as a run setting so a project's own .runsettings still holds."""
+        ExcludeByFile), passed as a run setting so a project's own .runsettings still holds.
+        cover_tests: record the test assembly's own lines too (coverlet leaves it out by
+        default): which assertions of the tests ran."""
         targets = self.test_targets()
         outputs = []
         if junit is not None:
@@ -657,8 +663,13 @@ class DotnetAdapter(LanguageAdapter):
                 args += ["--filter", filt]
             if coverage is not None:
                 args += ["--collect", "XPlat Code Coverage"]
+                settings = []
                 if cover_exclude:
-                    args += ["--", COVERLET_SETTING + "ExcludeByFile=" + ",".join(cover_exclude)]
+                    settings.append(COVERLET_SETTING + "ExcludeByFile=" + ",".join(cover_exclude))
+                if cover_tests:
+                    settings.append(COVERLET_SETTING + "IncludeTestAssembly=true")
+                if settings:
+                    args += ["--", *settings]
             code, out = self._exec(args, limit)
             codes.append(code)
             outputs.append(out)
@@ -979,13 +990,17 @@ class DotnetAdapter(LanguageAdapter):
             return [], f"coverage run incomplete ({run.incomplete or 'no report'})"
         return reports, ""
 
-    def coverage_exclude(self, base_ref: str) -> tuple[list[str], str]:
+    def coverage_exclude(
+        self, base_ref: str, cover_tests: Sequence[str] = ()
+    ) -> tuple[list[str], str]:
         """(ExcludeByFile globs, a note for the check's output): with [dotnet] coverage_files =
         "changed", the coverage run records only the source files changed since base_ref.
         Diff coverage reads nothing else, and recording every line of a simulation's hot loops
         made the feature's tests ~9 times slower than without coverage (seen live: 70-80 s
         plain, 624-732 s under coverage). No globs when nothing changed, the diff cannot be
-        read, or the list is too long for a command line: then everything is recorded."""
+        read, or the list is too long for a command line: then everything is recorded.
+        cover_tests: test files recorded as well (the test assembly is part of the run then);
+        the other test files are left out like the unchanged source files."""
         if self.settings.coverage_files != "changed":
             return [], ""
         from framegate.checks.frame_diff import changed_src_files
@@ -998,7 +1013,8 @@ class DotnetAdapter(LanguageAdapter):
         if not changed:
             return [], ""
         files = self.source_files()
-        globs = unchanged_globs(files, changed)
+        tests = [self.rel(p) for p in self._test_files()] if cover_tests else []
+        globs = unchanged_globs([*files, *tests], [*changed, *cover_tests])
         if not globs or sum(len(g) + 1 for g in globs) > EXCLUDE_ARG_LIMIT:
             return [], ""
         note = (
@@ -1008,8 +1024,34 @@ class DotnetAdapter(LanguageAdapter):
         )
         return globs, note
 
-    def coverage_checks(self, base_ref: str, scope: TestScope | None = None) -> list[Check]:
+    def test_line_hits(self) -> tuple[dict[str, dict[int, int]], str]:
         cov_dir = self.root / self.cfg.paths.out / "coverage"
+        reports = sorted(cov_dir.rglob("coverage.cobertura.xml")) if cov_dir.is_dir() else []
+        if not reports:
+            return {}, "no coverage report (see the coverage run)"
+        tests = self.cfg.paths.tests.rstrip("/") + "/"
+        hits = {f: v for f, v in cobertura_hits(reports, self.root).items() if f.startswith(tests)}
+        return hits, "" if hits else "the coverage run did not record the test files"
+
+    def test_assertions(self, rel: str) -> list[TestAssertions]:
+        path = self.root / rel
+        if not path.is_file():
+            return []
+        parsed, _ = self._scan(path)
+        return [
+            TestAssertions(m.qualified, m.body_line, m.end_line, csharp.assertion_lines(m))
+            for m in parsed.tests
+            if m.body_line
+        ]
+
+    def coverage_checks(
+        self,
+        base_ref: str,
+        scope: TestScope | None = None,
+        cover_tests: Sequence[str] = (),
+    ) -> list[Check]:
+        cov_dir = self.root / self.cfg.paths.out / "coverage"
+        cover_tests = [f for f in cover_tests if f.endswith(".cs")]
 
         #: why the coverage run was cut short ("" = complete; None = not run / no coverage)
         state: dict[str, str | None] = {"incomplete": None}
@@ -1018,13 +1060,16 @@ class DotnetAdapter(LanguageAdapter):
         def full_suite() -> CheckResult:
             shutil.rmtree(cov_dir, ignore_errors=True)
             collect = self.references("coverlet.collector")
-            exclude, scope_note = self.coverage_exclude(base_ref) if collect else ([], "")
+            exclude, scope_note = (
+                self.coverage_exclude(base_ref, cover_tests) if collect else ([], "")
+            )
             run = self._dotnet_test(
                 self.scope_filter(scope, self.settings.final_filter),
                 "coverage" if feature else "final",
                 coverage=cov_dir if collect else None,
                 timeout=self.cfg.coverage_timeout,
                 cover_exclude=exclude,
+                cover_tests=bool(cover_tests),
             )
             run.output += scope_note
             if collect:
@@ -1057,6 +1102,9 @@ class DotnetAdapter(LanguageAdapter):
             for i, r in enumerate(reports):
                 dst = cov_dir / f"normalized-{i}.xml"
                 normalize_cobertura(r, dst, self.root)
+                if cover_tests:  # diff coverage is about the source files only
+                    tests = self.cfg.paths.tests.rstrip("/") + "/"
+                    cobertura_without(dst, dst, self.root, tests)
                 normalized.append(str(dst))
             code, out = run_command(
                 [

@@ -17,7 +17,8 @@ For every spec ID (R, E, I) check:
   mocks of the module under test, exact float equality where the spec gives a tolerance.
 - Pinned data (seed, recording) without a fixture precondition test (`test_fixture_*` /
   `Fixture_*`) proving that the data has the situation; a check over picked cases that passes
-  when zero cases are picked.
+  when zero cases are picked; an assertion behind a condition the pinned data never meets
+  (`if saved: assert ...` on data without a saved shot: the test passes without it).
 - Claims about existing code: test_checks.md lists "Existing members asserted", members of
   code that existed before this feature that the tests assert and no fixture precondition test
   checks (the red run cannot catch a wrong claim there: the stub fails first). For each, read

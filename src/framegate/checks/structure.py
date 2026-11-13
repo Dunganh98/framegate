@@ -22,6 +22,8 @@ from framegate.checks.existing_members import base_ref
 from framegate.checks.frame_diff import changed_src_files
 from framegate.state import GitError, git
 
+#: folders that hold no source of the project (build output, packages)
+SKIP_DIRS = {"bin", "obj", "TestResults", "node_modules", ".git", "__pycache__", ".venv"}
 #: methods listed per report (the longest first)
 LONGEST = 5
 #: a method signature in a brace language (C#, Java, TypeScript, Go, Rust, ...)
@@ -69,6 +71,28 @@ class Structure:
     def over_limit(self) -> list[FileSize]:
         return [f for f in self.files if self.limit and f.lines > self.limit]
 
+    @property
+    def grown(self) -> list[FileSize]:
+        """Files over the limit that this feature made longer (or added). Seen live: the
+        final gate asked about a file the feature had not made longer (869 -> 869) and about
+        two that had become shorter; only a file that grew is this feature's to answer for."""
+        return [f for f in self.over_limit if f.before is None or f.lines > f.before]
+
+    def step_lines(self) -> list[str]:
+        """The lines a step gate prints: the changed files over the limit, with what the
+        feature did to their length. Seen live: two steps each added to a file that was
+        already over the limit, both step gates passed, and the reviewer's finding cost a fix
+        run afterwards."""
+        if self.note or not self.over_limit:
+            return []
+        grown = {f.path for f in self.grown}
+        out = [f"Structure (not blocking; changed files over {self.limit} lines):"]
+        for f in sorted(self.over_limit, key=lambda x: -x.lines):
+            size = f"{f.lines} (new)" if f.before is None else f"{f.before} -> {f.lines}"
+            flag = "  GREW: put new code in its own file" if f.path in grown else ""
+            out.append(f"  {f.path}: {size}{flag}")
+        return out
+
     def longest_methods(self, n: int = LONGEST) -> list[tuple[str, str, int]]:
         """(file, method, lines) over all files, longest first."""
         every = [(f.path, m, n_) for f in self.files for m, n_ in f.methods]
@@ -81,8 +105,11 @@ class Structure:
             return [*out, f"  {self.note}"]
         if not self.files:
             return [*out, "  no changed source files"]
+        grown = {f.path for f in self.grown}
         for f in sorted(self.files, key=lambda x: -x.lines):
             flag = f"  OVER {self.limit}" if self.limit and f.lines > self.limit else ""
+            if flag and f.path not in grown:
+                flag += " (not longer than before this feature)"
             was = "new" if f.before is None else f"was {f.before}"
             out.append(f"  {f.path}: {f.lines} lines ({was}){flag}")
         longest = self.longest_methods()
@@ -96,6 +123,7 @@ class Structure:
             "files": {f.path: f.lines for f in self.files},
             "before": {f.path: f.before for f in self.files if f.before is not None},
             "over": [f.path for f in self.over_limit],
+            "grown": [f.path for f in self.grown],
             "longest": [list(x) for x in self.longest_methods()],
             "note": self.note,
         }
@@ -169,6 +197,38 @@ def report(adapter: LanguageAdapter, feature: str) -> Structure:
             FileSize(path, len(text.splitlines()), methods(adapter, text)[:LONGEST], before)
         )
     return Structure(sizes, cfg.max_file_lines)
+
+
+def oversized(adapter: LanguageAdapter, most: int = 12) -> tuple[list[tuple[str, int]], int]:
+    """(the longest source files over [gates] max_file_lines as (path, lines), how many there
+    are in all): what an implementer is told before it writes code, so new code does not go
+    into a file that is already too long."""
+    cfg = adapter.cfg
+    if not cfg.max_file_lines:
+        return [], 0
+    suffixes = tuple(adapter.source_suffixes)
+    if not suffixes:
+        return [], 0
+    found = []
+    for root in cfg.src_roots:
+        base = cfg.root / root
+        if not base.is_dir():
+            continue
+        for p in base.rglob("*"):
+            if not p.name.endswith(suffixes) or not p.is_file():
+                continue
+            rel = p.relative_to(cfg.root)
+            if SKIP_DIRS & set(rel.parts[:-1]):
+                continue
+            try:
+                with open(p, "rb") as fh:
+                    n = sum(1 for _ in fh)
+            except OSError:
+                continue
+            if n > cfg.max_file_lines:
+                found.append((rel.as_posix(), n))
+    found.sort(key=lambda x: (-x[1], x[0]))
+    return found[:most], len(found)
 
 
 def new_public_types(adapter: LanguageAdapter, feature: str) -> list[str]:
