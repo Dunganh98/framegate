@@ -12,16 +12,24 @@ project's source or tests (one exception, step 3: a tagging helper the user appr
 ## 0. Install the tools first
 
 The `framegate` command itself: run `framegate --version`. If the command is not found, tell
-the user in one line ("Installing the framegate CLI 0.7.0 for your user") and run
+the user in one line ("Installing the framegate CLI 0.8.0 for your user") and run
 
-    uv tool install "git+https://github.com/Dunganh98/framegate@v0.7.0"
+    uv tool install "git+https://github.com/Dunganh98/framegate@v0.8.0"
 
 then `framegate --version` again. If `uv` is missing or the install fails (no access to the
 repository, no git), show the error and the two ways out, then stop: install uv
 (https://docs.astral.sh/uv/) and run the setup again, or clone the repository and run
-`uv tool install --editable <clone>`. An installed CLI of another version than 0.7.0 (this
-plugin's): say so in one line and go on; the same command with `--force` updates it, only on
-the user's yes.
+`uv tool install --editable <clone>`. An installed CLI of another version than 0.8.0 (this
+plugin's): run the same command with `--force` (the tool follows the plugin's version), then
+`framegate --version` again; say nothing when it worked, one line when it failed, and go on.
+
+Automatic updates (ask at most once per machine): read `~/.claude/plugins/known_marketplaces.json`.
+If its `framegate` entry has no `"autoUpdate": true`, ask in one line: "Keep framegate up to
+date automatically? (default: yes)". On yes, tell the user the one step only they can do:
+`/plugin` > Marketplaces > framegate > Enable auto-update. From then on Claude Code fetches
+a new plugin version in the background, the next session uses it and shows one line saying
+what changed, and the next new feature brings the command-line tool to the same version.
+The file is missing or has no `framegate` entry (a local install): skip this without a word.
 
 Then run `framegate install-tools --dry-run`: it names the project's
 interpreter and what the workflow needs there and is missing (for Python: the framegate pytest

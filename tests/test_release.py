@@ -28,6 +28,26 @@ def test_one_version_everywhere() -> None:
     assert "Bash(uv tool install *)" in skill and "PowerShell(uv tool install *)" in skill
 
 
+def test_the_skills_bring_the_cli_to_the_plugin_version() -> None:
+    """Claude Code updates the plugin only; the skills that start work install the CLI of the
+    plugin's own version, and the session-start notice has a line for it."""
+    version = framegate.__version__
+    install = f'uv tool install --force "git+{framegate.SOURCE_URL}@v{version}"'
+    for name in ("feature", "bugfix", "refactor"):
+        skill = (ROOT / f"plugin/skills/{name}/SKILL.md").read_text(encoding="utf-8")
+        assert f"This plugin is version {version}." in skill, name
+        assert install in skill and "!`framegate --version`" in skill, name
+        assert "Bash(uv tool install *)" in skill and "PowerShell(uv tool install *)" in skill
+        # checked before the conventions are read: they are printed again after an update
+        assert skill.index("## Version") < skill.index("## Project conventions"), name
+    notes = json.loads((ROOT / "plugin/whats-new.json").read_text(encoding="utf-8"))
+    assert len(notes.get(version, "")) > 20 and "\n" not in notes[version]
+    hooks = json.loads((ROOT / "plugin/hooks/hooks.json").read_text(encoding="utf-8"))["hooks"]
+    (start,) = hooks["SessionStart"]
+    assert start["matcher"] == "startup"
+    assert start["hooks"][0]["args"] == ["${CLAUDE_PLUGIN_ROOT}/scripts/session-start.js"]
+
+
 def test_marketplace_serves_the_plugin_from_this_repository() -> None:
     market = json.loads((ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8"))
     entry = next(p for p in market["plugins"] if p["name"] == "framegate")

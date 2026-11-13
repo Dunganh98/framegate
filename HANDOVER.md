@@ -285,6 +285,25 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
   - **Not yet seen live:** all of it. The .NET part of #2 is checked by the slow e2e test
     with a real coverlet run; the others by unit and fake-claude tests.
 
+- **Updates without the user doing them (2026-11-13, branch feat/auto-update, 0.8.0; user
+  decision: inform at the start of a session, apply only when nothing is in progress, one
+  line per new version saying what changed, nothing else):**
+  - The plugin: Claude Code's marketplace auto-update (off by default for a GitHub
+    marketplace; `/framegate:setup` asks once and names the switch: `/plugin` > Marketplaces
+    > framegate > Enable auto-update). No updater of our own.
+  - The notice: SessionStart hook `plugin/scripts/session-start.js`, the line from
+    `plugin/whats-new.json` (a release adds its line; tests/test_release.py checks it), once
+    per version, only in a repository with a framegate.toml.
+  - The CLI: `/framegate:feature`, `:bugfix`, `:refactor` have a "Version" step: another CLI
+    version than the plugin's and the spec not approved yet -> `uv tool install --force` from
+    the plugin's tag, silent unless it fails. Work in progress keeps its CLI; resume never
+    updates. So the new plugin's chat commands must work with the previous CLI for the rest
+    of a feature in progress.
+  - **Not yet seen live:** the notice in the interactive terminal (a headless session showed
+    the hook running and its `systemMessage` accepted), the background update itself, and
+    the version step on a machine with an older CLI. Each machine needs the auto-update
+    switch once, and one manual update to 0.8.0 (older plugins have none of this).
+
 ## User decisions so far
 1. Two human gates, forward only: spec and final (2026-11-10, after the first FCSim feature;
    was three). The test reviewer checks the tests against the spec; its questions, objections
