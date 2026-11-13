@@ -58,6 +58,16 @@ Mode: bugfix
 |---|---|---|---|
 | XXX-R-001 | | | no |
 
+## Pipeline follow-up
+<!-- Deploy files (Dockerfile, compose, k8s manifests, ...) and CI files (yml, scripts) are
+     never changed by a feature, not even now: they stay locked. What must change there
+     BECAUSE of this feature is a separate step after it; note it here so it is not lost
+     (the final summary raises it). One bullet per change: `- <file>: <what must change>
+     (<why>)`, e.g. `- platform/deploy/Dockerfile: COPY the new runner/ folder (the image
+     must contain the new package)`, a new dependency the image must install, a new test
+     selection for CI. "None." when the feature needs no such change. -->
+None.
+
 ## Non-goals
 <what this fix does not touch: related bugs, cleanups, refactors (each is its own task)>
 

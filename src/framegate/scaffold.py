@@ -196,6 +196,7 @@ def spec_brief(cfg: Config, feature: str) -> str:
     from framegate.checks.structure import oversized
 
     long_files, total = oversized(adapter)
+    extra = [e for e in cfg.protected_extra if e not in setup_entries(adapter)]
     sizes = (
         [
             f"- Source files over {cfg.max_file_lines} lines ([gates] max_file_lines): "
@@ -240,6 +241,14 @@ def spec_brief(cfg: Config, feature: str) -> str:
                 if cfg.env_refresh
                 else "."
             ),
+            "- Pipeline follow-up: deploy and CI files (Dockerfile, compose, k8s, CI yml / "
+            "scripts"
+            + (f"; here also [protected] extra: {', '.join(cfg.protected_extra)}" if extra else "")
+            + ") are never changed by a feature, not even now; they stay locked. If the feature "
+            "means one must change (a new folder the image must copy, a new dependency it must "
+            "install, a new test selection for CI), write it under 'Pipeline follow-up' in "
+            "requirements.md (file, what, why) and show it on the spec brief: it is done as a "
+            "separate step after the feature and raised again in the final summary.",
             *references.brief_lines(cfg),
             "",
             adapter.conventions_brief().rstrip(),

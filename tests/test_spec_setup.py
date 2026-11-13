@@ -39,7 +39,17 @@ def phases(r: DemoRepo) -> list[str]:
         ("pytest.ini", True),
         ("requirements-dev.txt", True),
         ("conftest.py", True),
-        ("config/app.yaml", True),  # [protected] extra
+        ("ruff.toml", True),
+        (".ruff.toml", True),
+        ("tox.ini", True),
+        ("mypy.ini", True),
+        ("setup.cfg", True),
+        ("requirements.txt", True),  # also listed in [protected] extra: setup all the same
+        # [protected] extra alone (deploy, CI, generated files): never a feature's to change
+        ("config/app.yaml", False),
+        ("ci/build.yml", False),
+        ("platform/deploy/Dockerfile", False),
+        ("src/demo/wsic_pb2.py", False),
         ("tests/conftest.py", False),
         ("specs/other/plan.md", False),
         ("CLAUDE.md", False),
@@ -56,7 +66,8 @@ def test_setup_files(demo_repo: DemoRepo, path: str, setup: bool) -> None:
     r = demo_repo
     toml = r.root / "framegate.toml"
     text = toml.read_text(encoding="utf-8")
-    text = text.replace("[protected]\n", '[protected]\nextra = ["config/"]\n', 1)
+    extra = '["config/", "ci/", "platform/deploy/", "*_pb2.py", "requirements.txt", "pytest.ini"]'
+    text = text.replace("[protected]\n", f"[protected]\nextra = {extra}\n", 1)
     toml.write_text(text + '\n[roles]\nextra_dir = "roles"\n', encoding="utf-8")
     adapter = get_adapter(load_config(r.root))
     assert frame_diff.is_setup_file(adapter, path) is setup

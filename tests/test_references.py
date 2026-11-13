@@ -378,3 +378,92 @@ def test_fidelity_counts_identical_and_skipped(demo_repo: DemoRepo) -> None:
         f"({otto.as_posix()})"
     ]
     assert references.fidelity_summary(rep).startswith("port fidelity (not blocking): SKIPPED")
+
+
+# ---------- a port keeps the reference's file layout; its later test runs ----------
+def test_port_targets_are_not_asked_about_their_size(
+    demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With a limit of 3 lines the stub file is over it. A normal feature is told so in the
+    implementer task, gets GREW at the step gate and a question at the final gate; a port's
+    target file gets none of the three, and the structure report still lists its size."""
+    from framegate.adapters import get_adapter
+    from framegate.checks import structure
+
+    shape = structure.Structure(
+        [structure.FileSize("src/a.py", 900), structure.FileSize("src/b.py", 500, before=450)],
+        limit=400,
+        ported=frozenset({"src/a.py"}),
+    )
+    assert [f.path for f in shape.grown] == ["src/b.py"]
+    assert shape.step_lines() == [
+        "Structure (not blocking; changed files over 400 lines):",
+        "  src/b.py: 450 -> 500  GREW: put new code in its own file",
+    ]
+    assert (
+        "  src/a.py: 900 lines (new)  OVER 400 (ported: the reference's file layout is kept)"
+        in shape.lines()
+    )
+    assert shape.as_dict()["ported"] == ["src/a.py"]
+
+    r = demo_repo
+    r.add_toml(FAST)
+    r.set_toml("gates", "max_file_lines", "3")
+    make_otto(r)
+    cfg = load_config(r.root)
+    target = "src/demo/__init__.py"
+    assert references.port_targets(cfg, "demo") == set()
+    assert structure.oversized(get_adapter(cfg))[0][0][0] == target
+    use(r, PORT_SECTION.format(commit="0000000aaa"))
+    assert references.port_targets(cfg, "demo") == {
+        target,
+        "tests/test_demo.py",
+        "src/demo/gone.py",
+    }
+    assert structure.oversized(get_adapter(cfg), skip={target}) == ([], 0)
+
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE
+    assert r.af("approve", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE
+    task = next(c["prompt"] for c in r.calls() if c["phase"] == "IMPLEMENT")
+    assert "Source files already over" not in task
+    gates = [e for e in r.events() if e["kind"] == "gate"]
+    assert gates and all(not e.get("grown") for e in gates)
+    assert "GREW" not in (r.root / "out/demo/progress.log").read_text(encoding="utf-8")
+    final = (r.root / "out/demo/final_gates.md").read_text(encoding="utf-8")
+    assert f"  {target}: " in final
+    assert "OVER 3 (ported: the reference's file layout is kept)" in final
+    last = [e for e in r.events() if e["kind"] == "final_gates"][-1]["structure"]
+    assert last["grown"] == [] and last["ported"] == [target] and last["over"] == [target]
+    oq = r.root / "out/demo/open_questions.md"
+    assert not oq.exists() or "Split it" not in oq.read_text(encoding="utf-8")
+    capsys.readouterr()
+    assert r.af("gate-summary", "demo") == 0
+    assert "Split it into one file per concept" not in capsys.readouterr().out
+
+
+def test_port_notes_for_the_later_test_runs(demo_repo: DemoRepo) -> None:
+    """Answers at the final gate (TESTS_AMEND) and strengthening after weak final gates
+    (TESTS_STRENGTHEN) stay with the reference's tests too."""
+    from framegate.orchestrator import Orchestrator
+
+    r = demo_repo
+    make_otto(r)
+    orch = Orchestrator(load_config(r.root))
+    plain = orch.task_text("TESTS_STRENGTHEN", "demo", failed="diff coverage")
+    assert "This feature is a PORT" not in plain
+    use(r, PORT_SECTION.format(commit="0000000aaa"))
+    amend = orch.task_text("TESTS_AMEND", "demo", ref="ANS-1")
+    strengthen = orch.task_text("TESTS_STRENGTHEN", "demo", failed="diff coverage")
+    carried = "carried over (tests/test_demo.py -> tests/test_demo.py)"
+    for task in (amend, strengthen):
+        assert "This feature is a PORT (specs/demo/requirements.md, 'Ported from')" in task
+        assert f"The tests are the reference's tests, {carried}" in task
+        assert "## New tests (not in the reference)" in task
+    assert "the human answered questions at the final gate" in amend
+    assert "carry over the reference test that covers it if one exists" in amend
+    assert "Never rewrite, rename or drop a carried-over test" in amend
+    assert "found the tests too weak" in strengthen
+    assert "only where no reference test exists for it" in strengthen
+    assert "first look in the reference's test files".lower() in strengthen.lower()

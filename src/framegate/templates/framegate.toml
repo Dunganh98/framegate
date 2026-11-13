@@ -129,9 +129,16 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 #                                  # drafts it; the PR phase updates what a feature touched)
 
 [protected]
-# extra = ["config/", "data/reference/"]   # added to the core + adapter protected paths
-#                                  # (like the packaging files: writable in the spec phase,
-#                                  # committed by approve-spec, frozen from then on)
+# extra = ["ci/", "deploy/", "config/"]    # added to the core + adapter protected paths:
+#                                  # deploy, CI, generated files. Locked always, also in the
+#                                  # spec phase (no feature changes them; what a feature needs
+#                                  # there goes to the spec's "Pipeline follow-up" and is done
+#                                  # as a separate step). Only framegate.toml and the
+#                                  # language's packaging / test / tool-config files
+#                                  # (pyproject.toml, pytest.ini, ruff.toml, *.csproj, ...) are
+#                                  # setup files: writable in the spec phase, committed by
+#                                  # approve-spec, frozen from then on; listing one of them
+#                                  # here does not change that.
 # exceptions = ["tests/review/"]           # default: [paths] review_tests
 
 # [frame]

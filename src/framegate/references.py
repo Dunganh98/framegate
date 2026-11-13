@@ -8,9 +8,11 @@ names them, and `framegate run` warns when a pinned reference moved.
 
 A port is a feature whose requirements.md fills `## Ported from`: a reference, the source ->
 target files, the tests to carry over and what may differ. It is no mode of its own (modes are
-grown from evidence): the tasks of the test writer, the test reviewer, the implementer and the
-reviewer get added text (PORT_NOTES), and the final gates report how far each target file is
-from its reference file (fidelity, never blocking).
+grown from evidence): the tasks of the test writer (also its later runs: answers at the final
+gate, strengthening), the test reviewer, the implementer and the reviewer get added text
+(port_note), the final gates report how far each target file is from its reference file
+(fidelity, never blocking), and the file-size rule leaves the port's target files alone (they
+keep the reference's file layout: port_targets).
 
 Seen live (da-argos, a runner ported from da-otto): the agents were not given the sibling
 repository, so its files were copied into the spec folder by hand; and the test writer wrote
@@ -124,6 +126,15 @@ def parse_port(text: str) -> Port | None:
 
 def feature_port(cfg: Config, feature: str) -> Port | None:
     return parse_port(_requirements(cfg, feature))
+
+
+def port_targets(cfg: Config, feature: str) -> set[str]:
+    """The target files of the feature's port (set() for a normal feature): they keep the
+    reference's file layout, so the file-size rule does not apply to them."""
+    if not feature:
+        return set()
+    port = feature_port(cfg, feature)
+    return {f.target for f in port.files} if port else set()
 
 
 def named(cfg: Config, feature: str) -> list[str]:
@@ -369,6 +380,27 @@ def port_note(cfg: Config, feature: str, kind: str) -> str:
         "reference's text there. Nothing else in a ported file moves away from the "
         f"reference ({code}).",
     }
+    notes["TESTS_AMEND"] = (
+        f"The tests are the reference's tests, carried over ({tests}): stay with them. Where "
+        "an answer needs a test change, make it the reference's way: carry over the reference "
+        "test that covers it if one exists (same name, structure and assertions; only the "
+        "imports and what may differ change), else change the carried-over test as little as "
+        "the answer needs. A test of your own is right only for a spec ID or a case that no "
+        "reference test covers: list it in "
+        f"{out}/{feature}/test_summary.md under '## New tests (not in the reference)' with the "
+        "ID and the reason. Never rewrite, rename or drop a carried-over test for any other "
+        "reason."
+    )
+    notes["TESTS_STRENGTHEN"] = (
+        f"The tests are the reference's tests, carried over ({tests}): leave them as they "
+        "are. First look in the reference's test files for a test that catches the uncovered "
+        "line or the surviving mutant and was not carried over: carry it over as it is (same "
+        "name, structure and assertions; only the imports and what may differ change). Write "
+        "a strengthening test of your own only where no reference test exists for it, and "
+        f"list each one in {out}/{feature}/test_summary.md under '## New tests (not in the "
+        "reference)' with the ID and what it catches. Code that the reference leaves untested "
+        "and the spec does not cover goes under '## Not covered on purpose', as your task says."
+    )
     notes["IMPLEMENT_STEPS"] = notes["IMPLEMENT"]
     notes["FIX"] = notes["FIX_FINAL"] = (
         "Fix with the smallest change, and keep the ported files as close to the reference as "

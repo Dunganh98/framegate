@@ -634,6 +634,15 @@ class LanguageAdapter(abc.ABC):
         """Dependency / build / tool-config paths (prefixes) that must not change after the
         tests were approved."""
 
+    def setup_paths(self) -> list[str]:
+        """The setup files of a project in this language (prefixes / globs): packaging, test
+        and tool configuration. The spec phase may change them and `approve-spec` commits
+        them with the spec (frame_diff.is_setup_file). The adapter's protected defaults hold
+        nothing else, so they are the list; an adapter whose defaults ever mix in other files
+        (deploy, CI) overrides this with the subset. Never `[protected] extra`: what a project
+        adds there (deploy, CI, generated files) is no feature's to change."""
+        return self.default_protected_paths()
+
     # ---------- agents ----------
     @abc.abstractmethod
     def test_tools(self) -> list[str]:

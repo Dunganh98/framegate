@@ -98,16 +98,23 @@ def test_phase_permissions(project: pathlib.Path, phase: str, rel: str, allowed:
 
 
 def test_spec_phase_setup_files_follow_the_config(project: pathlib.Path) -> None:
-    """[protected] extra is setup too; another language has its own project files; a config
-    the adapter cannot be built from still lets the chat repair framegate.toml."""
+    """[protected] extra is not setup (deploy, CI, generated files stay locked, also inside
+    a source folder), unless the path is one of the language's setup files; another language
+    has its own project files; a config the adapter cannot be built from still lets the chat
+    repair framegate.toml."""
     set_phase(project, "SPEC")
 
     def code(rel: str) -> int:
         return protect_paths.evaluate(hook_json(project, file_path=str(project / rel)))[0]
 
     toml = project / "framegate.toml"
-    toml.write_text('[protected]\nextra = ["configs/"]\n', encoding="utf-8")
-    assert (code("configs/app.yaml"), code("App.sln")) == (0, 2)
+    toml.write_text(
+        '[protected]\nextra = ["configs/", "ci/", "*_pb2.py", "pytest.ini"]\n', encoding="utf-8"
+    )
+    assert (code("configs/app.yaml"), code("ci/build.yml"), code("App.sln")) == (2, 2, 2)
+    assert (code("pytest.ini"), code("src/pkg/a.py"), code("src/pkg/wsic_pb2.py")) == (0, 0, 2)
+    msg = protect_paths.evaluate(hook_json(project, file_path=str(project / "ci/build.yml")))[1]
+    assert "[protected] extra" in msg and "## Pipeline follow-up" in msg
     toml.write_text('[project]\nlanguage = "dotnet"\n', encoding="utf-8")
     assert (code("App.sln"), code("pyproject.toml"), code("tests/T/T.csproj")) == (0, 2, 2)
     toml.write_text('[project]\nlanguage = "cobol"\n', encoding="utf-8")

@@ -137,13 +137,22 @@ knowledge. It overrides any default you would otherwise assume.
    so that it needs none). `framegate approve-spec` runs the same check and refuses while it
    fails.
    Setup files: if the task needs a new package or source folder, a dependency or a tool
-   setting, change those files now, in the spec phase: `framegate.toml`, the packaging /
-   build / tool-config files (e.g. `pyproject.toml`, `pytest.ini`, a project file) and the
-   `[protected] extra` paths are writable for you until the approval, which commits them with
-   the spec and freezes them. Nothing can change them later in the run. Tests, `.claude/`,
-   `.framegate/`, `CLAUDE.md` and CI files stay locked for you: if one must change, tell the
-   user. `spec-check` prints "Setup files changed" (for the brief) and lists other uncommitted
+   setting, change those files now, in the spec phase: `framegate.toml` and the project's
+   packaging / test / tool-config files (e.g. `pyproject.toml`, `requirements*.txt`,
+   `pytest.ini`, `ruff.toml`, a project file; `framegate spec-brief` lists them) are writable
+   for you until the approval, which commits them with the spec and freezes them. Nothing
+   can change them later in the run. Tests, `.claude/`, `.framegate/`, `CLAUDE.md`, CI files,
+   deploy files and every `[protected] extra` path stay locked for you, now and later.
+   `spec-check` prints "Setup files changed" (for the brief) and lists other uncommitted
    protected files, which the approval refuses: ask the user to commit or revert those.
+   Pipeline follow-up: deploy files (Dockerfile, compose, k8s manifests) and CI files (yml,
+   scripts) are never changed by a feature, not even at spec time. When the task means one of
+   them must change (a new package folder the Dockerfile must COPY, a new dependency the image
+   must install, a new test selection or path for CI), do not change it and do not ask to:
+   write one bullet per change under "Pipeline follow-up" in requirements.md (`- <file>: <what
+   must change> (<why>)`; "None." otherwise; add the section if the project's template lacks
+   it). It is done as a separate step after the feature; framegate raises it again in the
+   final summary.
 6. Write the spec gate brief to `<out>/$ARGUMENTS/spec_brief.md` (the out folder above; the
    final gate compares the run with it) and show it in the chat. About one screen, plain words,
    no spec IDs, one line per bullet, no sentence that repeats a heading or another section, a
@@ -159,6 +168,8 @@ knowledge. It overrides any default you would otherwise assume.
          must keep (saves, hashes, public APIs)
        **Setup files changed** — one line: the files `spec-check` lists, each with why
          ("pyproject.toml: registers the new package"); they are approved with the spec
+       **Pipeline follow-up** — deploy / CI changes this task makes necessary, one line each
+         (file: what, why); not part of the task, a separate step after it ("None.")
        **Questions** — the real decisions still open (step 2's rule), by impact ("None.")
 
    "Decisions I made for you" is the part the user really checks: list the ones that change

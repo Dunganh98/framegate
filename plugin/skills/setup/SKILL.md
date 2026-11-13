@@ -124,6 +124,14 @@ e.g. `refresh = ["python", "-m", "pip", "install", "-e", ".", "--no-deps"]`: eve
 approval runs it, so a package or source folder a feature adds in its spec phase imports in
 the run without a step by hand.
 
+Deploy and CI files outside the built-in list (`.github/`, `.gitlab-ci.yml`,
+`azure-pipelines.yml`): put them in `[protected] extra` (e.g. `ci/`, `deploy/`, `k8s/`,
+`Dockerfile`, `docker-compose*.yml`, generated files such as `*_pb2.py`). They are locked for
+every feature, also in its spec phase; what a feature needs there is noted in its spec
+("Pipeline follow-up"), raised in the final summary and done as a separate step. The
+packaging / test / tool-config files need no entry: the language adapter protects them, and
+they are the setup files a spec phase may change.
+
 ## 5. Check: `framegate doctor --brief`
 
 First `framegate install-tools` once more: with framegate.toml written it also installs the

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ast
 import re
+from collections.abc import Collection
 from dataclasses import dataclass, field
 
 from framegate.adapters.base import LanguageAdapter
@@ -66,6 +67,9 @@ class Structure:
     files: list[FileSize] = field(default_factory=list)
     limit: int = 0
     note: str = ""
+    #: target files of a port (the spec's `## Ported from`): they keep the reference's file
+    #: layout, so their size is listed and never asked about (no GREW line, no gate item)
+    ported: frozenset[str] = frozenset()
 
     @property
     def over_limit(self) -> list[FileSize]:
@@ -75,19 +79,25 @@ class Structure:
     def grown(self) -> list[FileSize]:
         """Files over the limit that this feature made longer (or added). Seen live: the
         final gate asked about a file the feature had not made longer (869 -> 869) and about
-        two that had become shorter; only a file that grew is this feature's to answer for."""
-        return [f for f in self.over_limit if f.before is None or f.lines > f.before]
+        two that had become shorter; only a file that grew is this feature's to answer for.
+        A ported file is the reference's to answer for."""
+        return [
+            f
+            for f in self.over_limit
+            if (f.before is None or f.lines > f.before) and f.path not in self.ported
+        ]
 
     def step_lines(self) -> list[str]:
         """The lines a step gate prints: the changed files over the limit, with what the
         feature did to their length. Seen live: two steps each added to a file that was
         already over the limit, both step gates passed, and the reviewer's finding cost a fix
         run afterwards."""
-        if self.note or not self.over_limit:
+        over = [f for f in self.over_limit if f.path not in self.ported]
+        if self.note or not over:
             return []
         grown = {f.path for f in self.grown}
         out = [f"Structure (not blocking; changed files over {self.limit} lines):"]
-        for f in sorted(self.over_limit, key=lambda x: -x.lines):
+        for f in sorted(over, key=lambda x: -x.lines):
             size = f"{f.lines} (new)" if f.before is None else f"{f.before} -> {f.lines}"
             flag = "  GREW: put new code in its own file" if f.path in grown else ""
             out.append(f"  {f.path}: {size}{flag}")
@@ -108,7 +118,9 @@ class Structure:
         grown = {f.path for f in self.grown}
         for f in sorted(self.files, key=lambda x: -x.lines):
             flag = f"  OVER {self.limit}" if self.limit and f.lines > self.limit else ""
-            if flag and f.path not in grown:
+            if flag and f.path in self.ported:
+                flag += " (ported: the reference's file layout is kept)"
+            elif flag and f.path not in grown:
                 flag += " (not longer than before this feature)"
             was = "new" if f.before is None else f"was {f.before}"
             out.append(f"  {f.path}: {f.lines} lines ({was}){flag}")
@@ -124,6 +136,7 @@ class Structure:
             "before": {f.path: f.before for f in self.files if f.before is not None},
             "over": [f.path for f in self.over_limit],
             "grown": [f.path for f in self.grown],
+            "ported": sorted(self.ported & {f.path for f in self.files}),
             "longest": [list(x) for x in self.longest_methods()],
             "note": self.note,
         }
@@ -196,13 +209,19 @@ def report(adapter: LanguageAdapter, feature: str) -> Structure:
         sizes.append(
             FileSize(path, len(text.splitlines()), methods(adapter, text)[:LONGEST], before)
         )
-    return Structure(sizes, cfg.max_file_lines)
+    from framegate import references  # the spec's port table
+
+    return Structure(
+        sizes, cfg.max_file_lines, ported=frozenset(references.port_targets(cfg, feature))
+    )
 
 
-def oversized(adapter: LanguageAdapter, most: int = 12) -> tuple[list[tuple[str, int]], int]:
+def oversized(
+    adapter: LanguageAdapter, most: int = 12, skip: Collection[str] = ()
+) -> tuple[list[tuple[str, int]], int]:
     """(the longest source files over [gates] max_file_lines as (path, lines), how many there
     are in all): what an implementer is told before it writes code, so new code does not go
-    into a file that is already too long."""
+    into a file that is already too long. `skip`: paths left out (a port's target files)."""
     cfg = adapter.cfg
     if not cfg.max_file_lines:
         return [], 0
@@ -225,7 +244,7 @@ def oversized(adapter: LanguageAdapter, most: int = 12) -> tuple[list[tuple[str,
                     n = sum(1 for _ in fh)
             except OSError:
                 continue
-            if n > cfg.max_file_lines:
+            if n > cfg.max_file_lines and rel.as_posix() not in skip:
                 found.append((rel.as_posix(), n))
     found.sort(key=lambda x: (-x[1], x[0]))
     return found[:most], len(found)

@@ -3,6 +3,12 @@ You are the IMPLEMENTER for one or more plan steps (or for the review fixes).
 - Sources: {specs}/{feature}/, the stubs in {src}/, the frozen tests, {out}/{feature}/answers.md if present.
 - Make the tests for the given IDs pass. Tests of earlier steps must stay green.
 - You cannot and must not edit tests, specs, config or dependency files.
+- Deploy and CI files (a Dockerfile, a compose or k8s file, a CI yml or script) and every other
+  locked file are never changed by a feature. If your work needs such a change (the image must
+  copy a new folder or install a new dependency, CI must select new tests), do not attempt it
+  and do not work around it: write one line in your step note,
+  `- PIPELINE FOLLOW-UP [<file>]: <what must change and why>`. It is raised at the final gate
+  as a separate step after the feature.
 - Keep the public signatures from the stubs. Do not add dependencies.
 - A bug fix or a refactor (your task says so) has no stubs: the code exists. Bug fix: name the
   cause in your step note (`- ROOT CAUSE: ...`, `- RULED OUT: <cause>: <evidence>`) and change

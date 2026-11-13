@@ -69,6 +69,14 @@ Mode: refactor
 |---|---|---|
 | | | |
 
+## Pipeline follow-up
+<!-- Deploy files (Dockerfile, compose, k8s manifests, ...) and CI files (yml, scripts) are
+     never changed by a feature, not even now: they stay locked. What must change there
+     BECAUSE of this feature is a separate step after it; note it here so it is not lost
+     (the final summary raises it). One bullet per change: `- <file>: <what must change>
+     (<why>)`. "None." when the feature needs no such change. -->
+None.
+
 ## Test data and fixtures
 <!-- One row per ID that needs particular data (a seed, a recording, a rare situation).
      Once this table pins data, every E- ID gets a row: the data that shows the case, or

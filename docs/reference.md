@@ -182,7 +182,11 @@ The human owns what the classes are for and how they work together, not every li
   final gate with a default: split it now if this feature took it over the limit, else leave
   it for later. A file over the limit that the feature changed without making it longer is
   listed, not asked about, and does not count against the risk rating. "Split it" goes to
-  the structure run; "leave it" starts no run. The file is not asked about again.
+  the structure run; "leave it" starts no run. The file is not asked about again. The
+  target files of a port (the spec's `## Ported from` table) keep the reference's file
+  layout: the report lists their size ("ported: the reference's file layout is kept"), and
+  they raise no gate item, no `GREW` line at a step gate and no "already over the limit"
+  note in the implementer task.
 - Before that, so the code is written in the right place: the spec brief and every
   implementer task name the source files that are already over the limit (the 12 longest),
   the plan template asks a step that would add to one of them to name the new file, and
@@ -301,6 +305,7 @@ What may differ:
 |---|---|
 | Spec dialogue | the stubs mirror the reference's public names and signatures; the IDs describe what the reference does today; questions only about what differs |
 | Test writer | carries over the listed reference tests: same names, order, structure and assertions, adapted only for imports and "What may differ", tagged with the spec IDs. A new test only for an ID no reference test covers, listed in test_summary.md under `## New tests (not in the reference)`; a test that cannot be carried over under `## Reference tests not carried over` |
+| Test writer, later runs | answers at the final gate (TESTS_AMEND): a test change follows the reference (carry over the reference test that covers it, else the smallest change to the carried-over test). Strengthening after weak final gates (TESTS_STRENGTHEN): first a reference test that was not carried over; a test of its own only where no reference test exists, listed under `## New tests (not in the reference)` |
 | Test reviewer | reads each reference test file next to its target: a missing, renamed, rewritten or weakened reference test is an objection |
 | Implementer | copies the reference file and changes only what "What may differ" lists: no rewording, no restructuring, comments and docstrings kept; any other change is logged as an assumption |
 | Reviewer | a difference from the reference that the spec does not list is a finding: a failing test when behavior differs, else a `## Structure findings` bullet ("restore the reference's text"), applied by the structure-fixes run. The readability checklist does not apply to ported files |
@@ -425,20 +430,29 @@ prints the `git push origin --delete` line for tags that were pushed (`[git] mar
 "spec OK"; after it the frame is locked and no agent (and no later hand edit) may change a
 protected path. So in the SPEC phase the chat may write, besides `specs/` and the source
 folders (stubs):
-- the **setup files**: `framegate.toml`, and every protected path that is not spec-locked: the
-  adapter's packaging / build / tool-config files (python: `pyproject.toml`, `setup.cfg`,
-  `setup.py`, `requirements*`, lock files, `pytest.ini`, `mypy.ini`, `ruff.toml`, `tox.ini`,
-  the root `conftest.py`, ...; dotnet: `*.csproj`, `*.sln`, `Directory.Build.props`,
-  `global.json`, ...; generic: `[generic] protected`) and `[protected] extra`;
+- the **setup files**: `framegate.toml` and the language's packaging / test / tool-config
+  files, i.e. the adapter's own list (`setup_paths()`; python: `pyproject.toml`, `setup.cfg`,
+  `setup.py`, `requirements*`, `uv.lock` / `poetry.lock` / `Pipfile`, `pytest.ini`,
+  `tox.ini`, `mypy.ini`, `ruff.toml` / `.ruff.toml`, `.importlinter`, the root `conftest.py`;
+  dotnet: `*.csproj`, `*.sln` / `*.slnx`, `Directory.Build.props` / `.targets`,
+  `Directory.Packages.props`, `global.json`, `NuGet.config`, `.editorconfig`,
+  `*.runsettings`, `.config/dotnet-tools.json`, `stryker-config.json`, outside the tests
+  folder; generic: `[generic] protected`);
 - `out/<f>/spec_brief.md` (and `answers.md`).
 
 Spec-locked, also for the chat: `tests/`, `.claude/`, `.framegate/`, `CLAUDE.md`, the CI files
-(`.github/`, `.gitlab-ci.yml`, `azure-pipelines.yml`) and `[roles] extra_dir`.
+(`.github/`, `.gitlab-ci.yml`, `azure-pipelines.yml`), `[roles] extra_dir` and **every
+`[protected] extra` path** (deploy, CI, generated files such as `ci/`, `platform/deploy/`,
+`*_pb2.py`), also where it lies inside a source folder. Deploy and CI files are never a
+feature's to change, not even at spec time ("Pipeline follow-up" below). A path listed in
+`[protected] extra` that is also one of the language's setup files (`pyproject.toml`,
+`pytest.ini`, `requirements.txt`, `ruff.toml`, ...) is a setup file all the same.
 
 `approve-spec` then, in this order: (1) spec check; (2) refuses while a protected file that is
 neither a setup file nor in a path the workflow commits has uncommitted changes or is untracked
-(e.g. an edited `CLAUDE.md`, an untracked `.claude/settings.local.json` that is not ignored),
-naming the files: commit or revert them, since every frame check of the run would fail on them;
+(e.g. an edited `CLAUDE.md`, a changed CI file), and likewise for a changed `[protected] extra`
+path wherever it lies, naming the files: commit or revert them, since the approval must not
+commit them and every frame check of the run would fail on them;
 (3) runs `[env] refresh` if set (e.g. `["python", "-m", "pip", "install", "-e", ".",
 "--no-deps"]`; `python` = the project interpreter; a non-zero exit refuses the approval, with
 the last output lines); (4) commits the specs, the stubs and the changed setup files in one
@@ -447,6 +461,31 @@ commit (`<f>: spec approved`), prints `Setup files committed with the spec: ...`
 (`spec-check` prints the list beforehand), so the user approves them knowingly. After this
 commit the frame check has a clean baseline: a `PROTECTED PATH CHANGED` at a step gate can only
 come from the run itself. `framegate doctor` warns about uncommitted protected files.
+
+`.claude/settings.local.json` is left out of all of this: it is Claude Code's per-machine
+settings file (the allow rules of this checkout, which Claude Code itself rewrites when a
+permission prompt is answered with "don't ask again"), so it is neither a stray file at the
+approval nor a `PROTECTED PATH CHANGED` in the frame check, tracked or not, ignored or not.
+The agents still cannot write it (no phase's write paths hold `.claude/`); the rest of
+`.claude/` (`settings.json`, skills, hooks) stays protected.
+
+**Pipeline follow-up.** When a feature means a deploy file (Dockerfile, compose, k8s
+manifests) or a CI file (yml, scripts) must change, that change is a separate step after the
+feature, never part of it; framegate only makes sure it is not lost. (1) The spec:
+requirements.md has `## Pipeline follow-up` (all three templates; one bullet per change,
+`- <file>: <what must change> (<why>)`, "None." by default), filled by the spec dialogue (a
+new package folder the Dockerfile must COPY, a new dependency the image must install, a new
+test selection for CI) and shown on the spec brief. (2) The run: an agent that finds such a
+need does not attempt the change; the implementer writes `- PIPELINE FOLLOW-UP [<file>]:
+<what must change and why>` in its step note (-> steps.md, like an assumption), the reviewer
+the same line in review.md. (3) The final gate: framegate itself lists every item (the
+spec's and the run's, each once) in `out/<f>/pipeline_followup.md`, in final_facts.md, in a
+generated section of final_summary.md (so the PR description has it) and in the final brief
+(`gate-summary`: "Pipeline follow-up (a separate step after this feature; not part of it):
+N; nothing to answer"). It is no gate item: not a question, not blocking, and the summary
+agent cannot place it under "Left out". (4) After DONE: the list is written to
+`specs/<f>/pipeline_followup.md` (a checklist, committed with the metrics row; `cleanup`
+keeps the spec folder) and logged as a `pipeline_followup` event.
 
 `run` never waits on the keyboard. It advances TESTS -> IMPLEMENT (per plan step) -> REVIEW ->
 PR -> FINAL -> RETRO -> DONE and stops only at the final gate (and the tests gate with
@@ -765,8 +804,9 @@ it parked: an `out/*/park.md` exists). Both read
 the hook JSON on stdin, exit 0 silently without `framegate.toml` or `.phase`, and block with exit
 2. The write protection holds for every session while a phase is set, the chat included; in the
 SPEC phase the chat may also write the setup files and `out/<f>/spec_brief.md` ("The spec phase
-covers the setup" above). A path outside the repository is blocked only for the agents of a run
-(`FRAMEGATE_AGENT` set): a chat session keeps writing its own files there (memory, scratch). Shell calls: only plain single commands are pre-approved, so a pipe (`dotnet test ... |
+covers the setup" above), and never a `[protected] extra` path. A path outside the repository is blocked only for the agents of a run
+(`FRAMEGATE_AGENT` set): a chat session keeps writing its own files there (memory, scratch);
+a `[references]` folder is read-only for both. Shell calls: only plain single commands are pre-approved, so a pipe (`dotnet test ... |
 Select-String`), a `;` / `&&` / `||` chain, several lines, or a `cd` / env-variable prefix would
 be denied by the permission check without a reason. During a run (any phase but SPEC) the hook
 blocks them first and tells the agent why and what to do instead: one command per call, and the

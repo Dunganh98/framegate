@@ -304,6 +304,84 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
     the version step on a machine with an older CLI. Each machine needs the auto-update
     switch once, and one manual update to 0.8.0 (older plugins have none of this).
 
+- **The spec phase covers the setup; references and ports; pipeline follow-up (2026-11-13,
+  branch feat/spec-setup-references = fix/spec-setup-lock + feat/references-port + changes on
+  top; from the first real da-argos feature, `runner-skeleton`, a runner ported from
+  da-otto).** What went wrong there: setup edits the chat could not make in the spec phase
+  stayed uncommitted, every step gate failed the frame check on them, four steps parked
+  after 3 attempts + a diagnosis each, and a review, the final checks and a summary ran
+  about nothing; the agents were not given the sibling repository (its files were copied
+  into the spec folder by hand), and the test writer wrote 1,217 lines of new tests where
+  the reference's tests were to be carried over.
+  - **Setup files (decision 16):** in SPEC the chat may write `framegate.toml` and the
+    language's packaging / test / tool-config files (the adapter's `setup_paths()`: python
+    pyproject.toml, setup.cfg, setup.py, requirements*, lock files, pytest.ini, tox.ini,
+    mypy.ini, ruff.toml / .ruff.toml, .importlinter, the root conftest.py; dotnet the project
+    / build files outside the tests folder; generic `[generic] protected`) and
+    `out/<f>/spec_brief.md`. `approve-spec`: spec check, refuse stray files, `[env] refresh`
+    (a project command, e.g. the editable install again; a failure refuses), then one commit
+    with the specs, the stubs and the changed setup files (printed, `spec_approved` event).
+    After it the frame check has a clean baseline. spec-check also finds forbidden markers
+    (noqa, type: ignore, ...) in lines the spec phase added, with file and line.
+  - **Deploy and CI are no feature's to change (decision 17):** `[protected] extra` (ci/,
+    platform/deploy/, generated `*_pb2.py`, ...) is NOT setup (fix/spec-setup-lock had made
+    it writable in SPEC; reversed): locked for the chat in SPEC too, also inside a source
+    folder, and a dirty one refuses the approval like CLAUDE.md or a built-in CI path (also
+    with `--force`). A path listed in extra that is one of the language's setup files
+    (da-argos lists pyproject.toml, pytest.ini, requirements.txt, ruff.toml there) is still
+    setup. What a feature needs in those files is a **pipeline follow-up**
+    (`src/framegate/followup.py`): `## Pipeline follow-up` in requirements.md (three
+    templates, "None." by default; the skills fill it and show it on the spec brief); the
+    implementer writes `- PIPELINE FOLLOW-UP [<file>]: <what, why>` in its step note, the
+    reviewer in review.md, instead of attempting the change; framegate lists every item
+    itself in final_facts.md, final_summary.md (generated section) and the final brief
+    ("a separate step after this feature; nothing to answer"; no gate item, so the PR agent
+    cannot leave it out), and at DONE writes `specs/<f>/pipeline_followup.md` (committed
+    with the metrics row; survives `cleanup`) plus a `pipeline_followup` event.
+  - **`.claude/settings.local.json`** (per-machine by Claude Code's convention; Claude Code
+    rewrites it on "don't ask again", and framegate's docs tell the user to put allow rules
+    there) is left out of the stray-file refusal and of the frame check's comparison. The
+    agents still cannot write it through the tools (no phase's write paths hold `.claude/`).
+  - **No work on what cannot be fixed:** a step gate whose only failure is the frame check
+    on protected files the implementer may not edit parks at once (no further attempt, no
+    diagnosis). Every plan step parked: no reviewer, no final checks, no summary run; the
+    final gate comes at once with a generated brief (`review_skipped`, in `stats`). The
+    first round that builds something gets the whole review.
+  - **The chat may write outside the repository** in every phase (its memory folder,
+    scratch files); agents of a run may not; a `[references]` folder is read-only for both.
+  - **References:** `[references] name = path | {path, note}` declares other projects on
+    this machine; requirements.md `## References` names the ones the feature uses.
+    `approve-spec` pins each one's commit (progress.json, `references_pinned`); every agent
+    run gets them as `claude --add-dir <folder>` plus `--disallowedTools
+    "Edit(//<abs>/**)"`, and its orientation names path, note and pin; each run warns when
+    a pin moved, the tree is dirty or the folder is gone (`reference_changed`; never
+    blocks). doctor lists them, spec-brief shows them, spec-check refuses an undeclared name.
+    **Live findings (docs/claude-cli-notes.md, six Haiku probes):** the bare `Read` / `Grep`
+    / `Glob` allow rules framegate always passed already let an agent read any path, so
+    the sibling repository was readable all along; the agents lacked the path and the
+    instruction. `--add-dir` with `acceptEdits` makes the folder writable, so the deny rule
+    `Edit(//<abs>/**)` is passed with it (it denied Write and Edit in the probes, also for
+    a path with spaces and commas).
+  - **Ports:** a filled `## Ported from` (reference, commit, source -> target rows with
+    Kind code / tests, "What may differ") is no mode: it adds text to the tasks
+    (`references.port_note`). Test writer: carry over the reference's tests, a new test
+    only for an ID no reference test covers (listed); the same for its later runs
+    (TESTS_AMEND after answers, TESTS_STRENGTHEN after weak final gates: first a reference
+    test, an own one only where none exists, listed). Test reviewer: a missing, renamed or
+    weakened reference test is an objection. Implementer: copy, change only what is listed.
+    Reviewer: an unlisted difference is a finding. Final gates: a fidelity report per file
+    pair (changed / added / removed lines against the pinned commit, diffs in
+    `out/<f>/fidelity/`; never blocking). A port's target files keep the reference's file
+    layout: no file-size question at the final gate, no `GREW` line at a step gate, not in
+    the implementer's "already over the limit" note (the structure report still lists them).
+  - **Not yet seen live:** all of it. The whole branch is tested with the fake `claude`
+    only; no real agent run got `--add-dir` + the deny rule, no real test writer carried a
+    reference's tests over, no real agent wrote a `PIPELINE FOLLOW-UP` line, `[env] refresh`
+    never ran on da-argos, and the deny rule's Linux / macOS path form is unverified. A
+    shell command that writes into a reference or into `.claude/settings.local.json` is not
+    checked (the agents' shell rules allow only the test and lint commands). The first
+    check is the rerun of `runner-skeleton` (Next steps).
+
 ## User decisions so far
 1. Two human gates, forward only: spec and final (2026-11-10, after the first FCSim feature;
    was three). The test reviewer checks the tests against the spec; its questions, objections
@@ -353,6 +431,12 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
     CLI (uv, from the tag) and the project's tools. Machines and repositories that used
     agentflow are moved once with docs/migrate-from-agentflow.md (commands + a prompt).
     The name is free on PyPI and npm (checked 2026-11-12); not published there.
+16. Everything the human adds or changes happens at spec time; after "spec OK" the lock
+    stays; a change needed later means framegate's process is wrong — fix the process
+    (2026-11-13).
+17. Deploy and CI files are never changed by a feature, not even at spec time; the need is
+    noted as a pipeline follow-up in the spec and the final summary and done as a separate
+    step (2026-11-13).
 
 ## FCSim integration
 - Worktree `D:\Me\Projects\FCSim-agentflow`, branch `feat/agentflow-setup` (framegate.toml,
@@ -382,6 +466,11 @@ Each step waits for the run before it; stop and fix what a step shows before the
    plausible, black's format fix ran.
 4. First small real da-argos feature: pure logic in model/ or data/, no service. Read the retro,
    fix what it shows here.
+4a. Rerun da-argos `runner-skeleton` from a clean start (new branch, no hand-copied files)
+   with `[references] otto` in framegate.toml, the `## Ported from` section filled in the
+   spec and `[env] refresh` set (the editable install). Look at: the setup files committed
+   with the spec, no frame failure at a step gate, the carried-over tests, the fidelity
+   report, the pipeline follow-up lines (the Dockerfile must copy the new package).
 5. After one clean feature there: mutation for da-argos (the WSL environment has to install its
    TensorFlow / pyspark pins: measure the build time first); an Azure Pipelines gate template
    if the team wants the frame check in CI (then `[git] markers = "tags"`).
