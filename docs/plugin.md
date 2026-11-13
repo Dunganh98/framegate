@@ -12,9 +12,11 @@ chat run protocol, `framegate protocol`); the plugin only registers things. Inst
 ```
 .claude-plugin/marketplace.json     # marketplace "framegate", one entry: source "./plugin"
 plugin/
-  .claude-plugin/plugin.json        # name framegate, version 0.7.0
-  hooks/hooks.json                  # PreToolUse (Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell) + Stop
+  .claude-plugin/plugin.json        # name framegate, version 0.8.0
+  hooks/hooks.json                  # PreToolUse (Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell), SessionStart, Stop
   scripts/framegate-hook.js         # wrapper: node framegate-hook.js <event> -> framegate hook <event>
+  scripts/session-start.js          # SessionStart: one line after an update (what changed)
+  whats-new.json                    # version -> that one line
   skills/setup/SKILL.md             # /framegate:setup: read the repo, draft framegate.toml and
                                     # .framegate/project.md, one batch of questions, framegate
                                     # doctor, optional smoke run
@@ -50,9 +52,29 @@ claude plugin marketplace add <owner>/<repo>
 claude plugin install framegate@framegate
 ```
 
-Updates from GitHub: bump `version` in `plugin/.claude-plugin/plugin.json`, push, then
-`claude plugin marketplace update framegate` and `claude plugin update framegate@framegate`
-(restart). Users stay on a version until it changes.
+Updates from GitHub: bump `version` in `plugin/.claude-plugin/plugin.json`, add its line to
+`plugin/whats-new.json`, push `main` and the tag `v<version>`. Users stay on a version until
+the `version` string changes.
+
+How a machine gets the new version:
+- The plugin: Claude Code's own marketplace auto-update, which is **off** for a marketplace
+  added from GitHub until it is switched on once per machine: `/plugin` > Marketplaces >
+  framegate > Enable auto-update (`/framegate:setup` asks for it). Claude Code then fetches
+  the new version in the background of a session and the next session loads it. By hand:
+  `claude plugin marketplace update framegate`, `claude plugin update framegate@framegate`,
+  restart.
+- The notice: the first session with the new version, in a repository with a framegate.toml,
+  shows one line, `framegate was updated to <version>: <what changed>` (SessionStart hook
+  `scripts/session-start.js`, the line from `whats-new.json`; the version last seen is kept
+  in `CLAUDE_PLUGIN_DATA`). Checked 2026-11-13 in a headless session: the hook runs and its
+  `systemMessage` is accepted; how the interactive terminal shows it is not yet seen.
+- The CLI: Claude Code does not update it. `/framegate:feature`, `:bugfix` and `:refactor`
+  compare `framegate --version` with the plugin's version when they load and, when no work
+  is in progress for that slug (the spec is not approved yet), install the CLI from the
+  plugin's tag (`uv tool install --force ...@v<version>`), without a message unless it fails.
+  Work in progress keeps the CLI it was started with; `/framegate:resume` never updates.
+  `/framegate:setup` does the same install. An editable install from a clone is replaced by
+  the tagged version too: on a development machine keep the clone at the plugin's version.
 
 Requirements: `node` on PATH (any LTS; an npm-installed Claude Code already has it) and, in
 framegate repos, the `framegate` CLI (`uv tool install ...`, which creates a real `framegate.exe`

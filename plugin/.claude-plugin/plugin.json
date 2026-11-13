@@ -1,6 +1,6 @@
 {
   "name": "framegate",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Spec-driven, test-first workflow driven from the chat: /framegate:feature (spec dialogue, short briefs at every gate, background run with a live view, cleanup), /framegate:setup, /framegate:resume, /framegate:status, plus phase-lock (PreToolUse) and require-green (Stop) hooks that call the framegate CLI. Inactive in repos without framegate.toml.",
   "author": {
     "name": "Anh Pham"

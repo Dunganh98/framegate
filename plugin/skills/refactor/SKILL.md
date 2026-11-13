@@ -3,7 +3,7 @@ name: refactor
 description: Drive one framegate refactor from this chat - scope dialogue, a short brief to approve, then the background run - tests that pin today's behavior first, the restructuring in small steps, review, the gate briefs answered in plain words, cleanup. Run only when the user invokes it.
 argument-hint: <refactor-slug>
 disable-model-invocation: true
-allowed-tools: Bash(framegate *) PowerShell(framegate *) Monitor Read Write Edit Glob Grep
+allowed-tools: Bash(framegate *) PowerShell(framegate *) Bash(uv tool install *) PowerShell(uv tool install *) Monitor Read Write Edit Glob Grep
 ---
 You drive the framegate workflow for the refactor `$ARGUMENTS` in this chat. The user is the
 manager: they say what should get better, answer a few questions and check outcomes; you run
@@ -29,6 +29,27 @@ If the output above says the spec is **already approved**, do not start the dial
 continue it (default; then the run protocol below, by state as in its section B), or change the
 spec (that needs `framegate approve-spec` again and restarts from the tests). If it says the
 folder is a spec of another kind, tell the user and stop.
+
+## Version (checked when this skill loaded)
+
+This plugin is version 0.8.0. The installed command-line tool is:
+
+!`framegate --version`
+
+- The same version: go on without a word.
+- Another version, and the output under "Setup" above says the spec is **already approved**
+  (work in progress that was started with that version): leave it as it is and go on without
+  a word. The next new feature, bug fix or refactor brings it in line.
+- Another version otherwise (nothing in progress here): bring the tool to this plugin's
+  version before anything else:
+
+      uv tool install --force "git+https://github.com/Dunganh98/framegate@v0.8.0"
+
+  Then run `framegate spec-brief $ARGUMENTS` again and use its output in place of the one
+  under "Project conventions" below (that one came from the old version). When it worked, say
+  nothing about it: the user saw the one update line when the session started. If it fails
+  (no network, no access, the tool is running in another window), say so in one line and go
+  on with the installed version.
 
 ## Project conventions for the spec
 
