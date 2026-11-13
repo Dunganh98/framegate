@@ -25,7 +25,7 @@ the spec (that needs `framegate approve-spec` again and restarts from the tests)
 
 ## Version (checked when this skill loaded)
 
-This plugin is version 0.8.0. The installed command-line tool is:
+This plugin is version 0.9.0. The installed command-line tool is:
 
 !`framegate --version`
 
@@ -36,7 +36,7 @@ This plugin is version 0.8.0. The installed command-line tool is:
 - Another version otherwise (nothing in progress here): bring the tool to this plugin's
   version before anything else:
 
-      uv tool install --force "git+https://github.com/Dunganh98/framegate@v0.8.0"
+      uv tool install --force "git+https://github.com/Dunganh98/framegate@v0.9.0"
 
   Then run `framegate spec-brief $ARGUMENTS` again and use its output in place of the one
   under "Project conventions" below (that one came from the old version). When it worked, say

@@ -12,14 +12,14 @@ project's source or tests (one exception, step 3: a tagging helper the user appr
 ## 0. Install the tools first
 
 The `framegate` command itself: run `framegate --version`. If the command is not found, tell
-the user in one line ("Installing the framegate CLI 0.8.0 for your user") and run
+the user in one line ("Installing the framegate CLI 0.9.0 for your user") and run
 
-    uv tool install "git+https://github.com/Dunganh98/framegate@v0.8.0"
+    uv tool install "git+https://github.com/Dunganh98/framegate@v0.9.0"
 
 then `framegate --version` again. If `uv` is missing or the install fails (no access to the
 repository, no git), show the error and the two ways out, then stop: install uv
 (https://docs.astral.sh/uv/) and run the setup again, or clone the repository and run
-`uv tool install --editable <clone>`. An installed CLI of another version than 0.8.0 (this
+`uv tool install --editable <clone>`. An installed CLI of another version than 0.9.0 (this
 plugin's): run the same command with `--force` (the tool follows the plugin's version), then
 `framegate --version` again; say nothing when it worked, one line when it failed, and go on.
 

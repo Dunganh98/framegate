@@ -12,7 +12,7 @@ chat run protocol, `framegate protocol`); the plugin only registers things. Inst
 ```
 .claude-plugin/marketplace.json     # marketplace "framegate", one entry: source "./plugin"
 plugin/
-  .claude-plugin/plugin.json        # name framegate, version 0.8.0
+  .claude-plugin/plugin.json        # name framegate, version 0.9.0
   hooks/hooks.json                  # PreToolUse (Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell), SessionStart, Stop
   scripts/framegate-hook.js         # wrapper: node framegate-hook.js <event> -> framegate hook <event>
   scripts/session-start.js          # SessionStart: one line after an update (what changed)

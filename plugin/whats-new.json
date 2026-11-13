@@ -1,4 +1,5 @@
 {
+  "0.9.0": "setup files (pyproject.toml, pytest.ini, framegate.toml) are edited in the spec phase and committed with \"spec OK\"; specs can name read-only reference projects and what is ported from them; deploy / CI changes become a pipeline follow-up.",
   "0.8.0": "framegate now keeps itself up to date: the command-line tool follows the plugin's version when you start a feature, and you see one line like this after an update.",
   "0.7.0": "step checks now run the whole normal test suite, the final checks fail on assertions that never ran, and answers that only take the defaults no longer repeat every check."
 }
