@@ -6,6 +6,7 @@ import os
 import pathlib
 from collections.abc import Callable
 
+from framegate import references
 from framegate.adapters import detect_language, get_adapter
 from framegate.adapters.base import LanguageAdapter
 from framegate.config import (
@@ -191,9 +192,11 @@ def spec_brief(cfg: Config, feature: str) -> str:
         if kpath.is_file()
         else [f"(No project knowledge file {cfg.knowledge}; `framegate init` creates one.)", ""]
     )
+    from framegate.checks.frame_diff import setup_entries
     from framegate.checks.structure import oversized
 
     long_files, total = oversized(adapter)
+    extra = [e for e in cfg.protected_extra if e not in setup_entries(adapter)]
     sizes = (
         [
             f"- Source files over {cfg.max_file_lines} lines ([gates] max_file_lines): "
@@ -229,6 +232,24 @@ def spec_brief(cfg: Config, feature: str) -> str:
             + ("exists: read it first" if (cfg.root / cfg.code_map).is_file() else "missing")
             + ")",
             *sizes,
+            "- Setup files (change them now if the task needs a new package / source folder, a "
+            "dependency or a tool setting; the approval commits them with the spec and they "
+            "are frozen from then on): "
+            + ", ".join(setup_entries(adapter))
+            + (
+                f". The approval then runs [env] refresh ({' '.join(cfg.env_refresh)})."
+                if cfg.env_refresh
+                else "."
+            ),
+            "- Pipeline follow-up: deploy and CI files (Dockerfile, compose, k8s, CI yml / "
+            "scripts"
+            + (f"; here also [protected] extra: {', '.join(cfg.protected_extra)}" if extra else "")
+            + ") are never changed by a feature, not even now; they stay locked. If the feature "
+            "means one must change (a new folder the image must copy, a new dependency it must "
+            "install, a new test selection for CI), write it under 'Pipeline follow-up' in "
+            "requirements.md (file, what, why) and show it on the spec brief: it is done as a "
+            "separate step after the feature and raised again in the final summary.",
+            *references.brief_lines(cfg),
             "",
             adapter.conventions_brief().rstrip(),
             "",

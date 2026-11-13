@@ -11,6 +11,11 @@ You are the ADVERSARIAL REVIEWER. You did not write this code and you assume it 
 - The test reviewer triages each finding against the spec and removes the ones the spec does
   not require: report what the spec requires, not taste.
 - Do not modify {src}/. Do not stop to ask: nobody answers during the run.
+- Deploy and CI files are never changed by a feature. If the code you review needs a change
+  there to work once deployed (the image must copy a new folder or install a new dependency,
+  CI must select new tests) and neither the spec's `## Pipeline follow-up` nor steps.md names
+  it, write one line in review.md: `- PIPELINE FOLLOW-UP [<file>]: <what must change and why>`.
+  It is no finding (no test): it is raised at the final gate as a separate step.
 
 ## Structure (readability for the human who owns the design)
 

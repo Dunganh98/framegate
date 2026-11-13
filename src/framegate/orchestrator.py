@@ -27,10 +27,10 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from framegate import backlog, notify, procs, risk
+from framegate import backlog, followup, notify, procs, references, risk
 from framegate import brief as briefs
 from framegate.adapters import get_adapter
-from framegate.adapters.base import GATE_NAMES, CheckResult, LanguageAdapter
+from framegate.adapters.base import GATE_NAMES, CheckResult, LanguageAdapter, run_command
 from framegate.checks import (
     baseline,
     existing_members,
@@ -40,7 +40,14 @@ from framegate.checks import (
     traceability,
 )
 from framegate.checks import structure as structure_check
-from framegate.checks.frame_diff import knowledge_tag, path_matches, tests_update_tag
+from framegate.checks.frame_diff import CHECK_NAME as FRAME_CHECK
+from framegate.checks.frame_diff import (
+    PROTECTED_CHANGED,
+    knowledge_tag,
+    path_matches,
+    setup_state,
+    tests_update_tag,
+)
 from framegate.config import Config
 from framegate.gates import (
     BASELINE_FILE,
@@ -278,13 +285,21 @@ LOOK_AROUND = (
 )
 #: names left out of the orientation's file lists
 ORIENTATION_SKIP = {"prompts", "progress.log", "progress.cursor", "progress.json", "parked"}
+#: deploy / CI files are no feature's to change (followup.py): the need is noted, not met
+PIPELINE_NOTE = (
+    "If the work needs a change in a deploy, CI or other locked file (a Dockerfile, a compose "
+    "or k8s file, a CI yml or script, any protected path), do not attempt it: add one line "
+    "to your step note, `- PIPELINE FOLLOW-UP [<file>]: <what must change and why>`. It is "
+    "raised at the final gate as a separate step after the feature. Park only if your step "
+    "cannot be done without that change."
+)
 NO_STOP = (
     "Nobody answers questions during the run. Where the spec is ambiguous, assume what fits the "
     "spec best and log it in your step note (`- ASSUMPTION [<spec ID>]: ...`). Only if no "
     "reasonable assumption is possible, write the question to {out}/{f}/park.md and stop: the "
     "work is parked and the run continues.\n"
     "Step note: write it with the Write tool to {note} (framegate appends it to "
-    "{out}/{f}/steps.md; do not edit steps.md yourself)."
+    "{out}/{f}/steps.md; do not edit steps.md yourself).\n" + PIPELINE_NOTE
 )
 REDO_NOTE = (
     "\n\nThis is a redo of parked work: the human answered the parked question(s) in "
@@ -561,6 +576,20 @@ def item_steps(item: dict[str, Any]) -> list[int]:
     return list(steps) if steps else [item["step"]]
 
 
+def stray_files_text(stray: list[str]) -> str:
+    """Why uncommitted protected files that are not setup files block the spec approval."""
+    return (
+        f"{len(stray)} protected file(s) have uncommitted changes that are not part of this "
+        "spec's setup (the approval does not commit them, and the frame check would fail on "
+        "them at every step): "
+        + ", ".join(stray)
+        + ". Commit or revert them (an untracked file: commit it, delete it or add it to "
+        ".gitignore). A deploy / CI change this feature needs is not part of it: revert it, "
+        "note it under `## Pipeline follow-up` of requirements.md and make it as a separate "
+        "step."
+    )
+
+
 class WorkflowError(Exception):
     """A user-facing error (exit code 1)."""
 
@@ -666,6 +695,9 @@ class Orchestrator:
         note = MODE_NOTES.get(mode, {}).get(kind)
         if note:
             task += "\n\n" + note.format(**values)
+        port = references.port_note(self.cfg, feature, kind)
+        if port:
+            task += "\n\n" + port
         task += "\n\n" + LOOK_AROUND + "\n\n" + self.orientation(feature)
         if kind in BRIEF_PHASES:
             task += "\n\n## Conventions\n" + self.adapter.conventions_brief().strip()
@@ -698,6 +730,9 @@ class Orchestrator:
                 "## Orientation (gathered by framegate just now; no need to look it up again)",
                 f"- {p.specs}/{feature}/: {files(self.cfg.spec_dir(feature))}",
                 f"- {p.out}/{feature}/: {files(self.cfg.feature_out(feature))}",
+                *references.orientation_lines(
+                    self.cfg, feature, load_progress(self.cfg, feature).get("references")
+                ),
                 "- Last commits (git log -3 --stat):",
                 *(f"    {line}" for line in log or ["(none)"]),
             ]
@@ -832,6 +867,8 @@ class Orchestrator:
             args += ["--model", model]
         if effort:
             args += ["--effort", effort]
+        # the feature's reference folders: readable, edits denied (references.py)
+        args += references.agent_args(self.cfg, feature)
         runs = self.cfg.out_dir / "runs"
         runs.mkdir(parents=True, exist_ok=True)
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -1378,19 +1415,34 @@ class Orchestrator:
         return {"owner": owner, "text": text, "question": question}
 
     def unfixable(self, rep: Any) -> str:
-        """If every failing check of a step gate is a lint / format check whose findings are all
-        in files the implementer may not edit (frozen tests, review tests): what and where, so
-        the item parks at once instead of looping through attempts it cannot win. "" else."""
+        """If every failing check of a step gate is one the implementer cannot fix: what and
+        where, so the item parks at once instead of looping through attempts (and a diagnosis
+        run) it cannot win. "" else. Two kinds: a lint / format check whose findings are all
+        in files it may not edit (frozen tests, review tests), and the frame check with
+        nothing but changed protected paths it may not write (a suppression it added itself
+        is its own to remove and keeps the normal retry)."""
         style = {GATE_NAMES["lint"], GATE_NAMES["format"]}
-        if not rep.failed or any(name not in style for name in rep.failed):
+        if not rep.failed or any(name not in {*style, FRAME_CHECK} for name in rep.failed):
             return ""
         writable = self.cfg.write_paths("IMPLEMENT")
         parts = []
         for name in rep.failed:
-            paths = self.failure_paths(rep.full_outputs.get(name) or rep.outputs.get(name, ""))
+            text = rep.full_outputs.get(name) or rep.outputs.get(name, "")
+            if name == FRAME_CHECK:
+                lines = [x.strip() for x in text.splitlines() if x.strip()]
+                if not all(x.startswith(PROTECTED_CHANGED) for x in lines):
+                    return ""
+                paths = {x[len(PROTECTED_CHANGED) :] for x in lines}
+            else:
+                paths = self.failure_paths(text)
             if not paths or any(path_matches(p, writable) for p in paths):
                 return ""
-            parts.append(f"{name} fails only in files it may not edit: {', '.join(sorted(paths))}")
+            parts.append(
+                "the frame check fails only on protected files it may not edit, changed since "
+                f"the tests were approved: {', '.join(sorted(paths))}"
+                if name == FRAME_CHECK
+                else f"{name} fails only in files it may not edit: {', '.join(sorted(paths))}"
+            )
         return "; ".join(parts)
 
     def failure_paths(self, text: str) -> set[str]:
@@ -2082,11 +2134,14 @@ class Orchestrator:
         parked = self.parked_steps(prog)
         return [i for s in steps if s.num in parked for i in s.reqs]
 
-    def size_context(self) -> str:
+    def size_context(self, feature: str) -> str:
         """Task lines naming the source files that are already over [gates] max_file_lines,
         so new code goes elsewhere while it is written (seen live: two steps added to files
-        of 1,093 and 835 lines, and the split cost a fix run after the review)."""
-        files, total = structure_check.oversized(self.adapter)
+        of 1,093 and 835 lines, and the split cost a fix run after the review). Not the
+        target files of a port: they keep the reference's layout."""
+        files, total = structure_check.oversized(
+            self.adapter, skip=references.port_targets(self.cfg, feature)
+        )
         if not files:
             return ""
         more = f", and {total - len(files)} more" if total > len(files) else ""
@@ -2211,7 +2266,7 @@ class Orchestrator:
                     note=note,
                 )
             task += self.parked_context(prog, steps) + self.provisional_context(prog)
-            task += self.size_context()
+            task += self.size_context(feature)
             if redo:
                 task += REDO_NOTE.format(**self.placeholders(feature))
             for r in redo:
@@ -2238,12 +2293,62 @@ class Orchestrator:
                 prog["redo"] = [r for r in prog["redo"] if r not in redo]
             save_progress(self.cfg, feature, prog)
         clear_reqs(self.cfg)
-        if redo_mode:
+        if self.nothing_built(prog):
+            self.skip_review(feature, prog)
+        elif prog.pop("review_skipped", False):
+            # the first code of this feature: the reviewer has not seen any of it yet
+            self.advance(feature, prog, "REVIEW", sub="agent")
+        elif redo_mode:
             findings = [r for r in prog.get("redo") or [] if r.get("kind") == "finding"]
             fix = findings or prog.get("tests_amended")
             self.advance(feature, prog, "REVIEW", sub="fix" if fix else "final")
         else:
             self.advance(feature, prog, "REVIEW", sub="agent")
+
+    def nothing_built(self, prog: dict[str, Any]) -> bool:
+        """Every plan step is parked: none done, none kept as provisional."""
+        return not prog.get("completed_steps") and not prog.get("provisional")
+
+    def skip_review(self, feature: str, prog: dict[str, Any]) -> None:
+        """Every plan step is parked, so there is no code to review, check or summarize: no
+        reviewer run, no final checks (a whole-suite run among them), no summary run. The final
+        gate comes at once with the parked items; its brief is generated (no final_brief.md),
+        and final_gates.md / final_summary.md say why they are empty. Seen live
+        (runner-skeleton): four parked steps, then a review, a 66 s suite run and a summary
+        run about nothing."""
+        d = self.fdir(feature)
+        parked = prog.get("parked") or []
+        log_event(
+            self.cfg,
+            feature,
+            "review_skipped",
+            reason="every plan step is parked",
+            parked=[p["label"] for p in parked],
+        )
+        self.progress(
+            feature,
+            f"Nothing built: all {len(parked)} item(s) parked. Review, final checks and "
+            "summary skipped; the final gate comes now.",
+        )
+        why = "every plan step is parked, so there is nothing to review or check."
+        (d / "final_brief.md").unlink(missing_ok=True)  # of an earlier round
+        (d / "final_gates.md").write_text(f"Not run: {why}\n", encoding="utf-8")
+        self.write_final_facts(feature, prog)
+        listed = "\n".join(
+            f"- {p['label']}: {p.get('reason')}"
+            + (f"\n  Question: {p['question']}" if p.get("question") else "")
+            for p in parked
+        )
+        table = phase_table(since_spec_approval(read_events(self.cfg, feature)))
+        (d / "final_summary.md").write_text(
+            f"# Final summary: {feature}\n\nNothing was built: {why} The review, the final "
+            f"checks and the summary run were skipped. Parked:\n\n{listed}\n\n"
+            f"## Cost, time, turns per phase (generated by framegate)\n\n{table}\n",
+            encoding="utf-8",
+        )
+        prog["review_skipped"] = True
+        prog["redo_mode"] = False
+        self.advance(feature, prog, "FINAL")
 
     # ---------- REVIEW: adversarial reviewer -> triage -> fixes -> final gates ----------
     def review_failures(self, feature: str) -> list[str]:
@@ -2442,6 +2547,7 @@ class Orchestrator:
             results=rep.results,
             structure=rep.structure,
             tool_failures=rep.tool_failures,
+            **({"fidelity": rep.fidelity} if rep.fidelity else {}),
         )
         names = [n + (" [tool failure]" if n in rep.tool_failures else "") for n in rep.failed]
         self.progress(
@@ -2713,6 +2819,9 @@ class Orchestrator:
             text += "\n" + "\n".join(spec).replace(
                 "## Spec changes from your answers", "## Spec changes from your answers (generated)"
             )
+        todo = followup.section_lines(followup.items(self.cfg, feature))
+        if todo:  # generated: the summary agent cannot drop it
+            text += "\n\n" + "\n".join(todo).replace(": ", " (generated by framegate): ", 1)
         summary.write_text(
             text + "\n\n## Cost, time, turns per phase (generated by framegate)\n\n" + table + "\n",
             encoding="utf-8",
@@ -2738,6 +2847,7 @@ class Orchestrator:
             self.code_map_note(feature),
             feature_mode(self.cfg, feature),
             parse_causes(steps.read_text(encoding="utf-8") if steps.is_file() else ""),
+            followup.section_lines(followup.write(self.cfg, feature)),
         )
         (d / "final_facts.md").write_text(facts, encoding="utf-8")
 
@@ -2856,7 +2966,12 @@ class Orchestrator:
         last = [e for e in read_events(self.cfg, feature) if e["kind"] == "final_gates"]
         passed = bool(last and last[-1].get("passed"))
         parked = prog.get("parked") or []
-        state = f"Final gates {'PASSED' if passed else 'FAILED'}; " + (
+        verdict = (
+            "Nothing built (review and final checks skipped)"
+            if prog.get("review_skipped")
+            else f"Final gates {'PASSED' if passed else 'FAILED'}"
+        )
+        state = f"{verdict}; " + (
             f"{len(parked)} parked: " + ", ".join(p["label"] for p in parked)
             if parked
             else "nothing parked"
@@ -3233,7 +3348,22 @@ class Orchestrator:
                 mfile.write_text("\n".join([METRICS_HEADER, *lines[1:]]) + "\n", encoding="utf-8")
         with open(mfile, "a", encoding="utf-8") as fh:
             fh.write(",".join(map(str, row)) + "\n")
+        self.keep_pipeline_followup(feature)
         commit(self.cfg, f"{feature}: workflow metrics")
+
+    def keep_pipeline_followup(self, feature: str) -> None:
+        """The feature ends: its pipeline follow-ups (followup.py) go to
+        {specs}/<f>/pipeline_followup.md, committed with the metrics row (`framegate cleanup`
+        keeps the spec folder), and to an event."""
+        todo = followup.write(self.cfg, feature, durable=True)
+        if not todo:
+            return
+        log_event(self.cfg, feature, "pipeline_followup", items=[it.line() for it in todo])
+        self.progress(
+            feature,
+            f"Pipeline follow-up, {len(todo)} item(s) to do as a separate step (deploy / CI): "
+            f"{self.cfg.paths.specs}/{feature}/{followup.FILE}",
+        )
 
     def advance(
         self, feature: str, prog: dict[str, Any], phase: str, sub: str | None = None
@@ -3356,7 +3486,7 @@ class Orchestrator:
                 f"{self.cfg.paths.specs}/{feature}/requirements.md says 'Mode: {word}'; "
                 f"known modes: {', '.join(MODES)}."
             )
-        found = spec_lint.problems(self.cfg, feature)
+        found = spec_lint.problems(self.cfg, feature, self.adapter)
         if found:
             log_event(self.cfg, feature, "spec_check", problems=found, forced=force)
             listed = "\n".join(f"- {x}" for x in found)
@@ -3366,15 +3496,89 @@ class Orchestrator:
                     f"(or: framegate approve-spec {feature} --force)\n{listed}"
                 )
             self.echo(f"Spec check: {len(found)} problem(s), approved anyway (--force)\n{listed}")
+        self.refuse_stray_files(feature)
+        self.refresh_env(feature)
+        # read again after the refresh: a lock file it rewrote is part of the setup too
+        setup = self.refuse_stray_files(feature)
         clear_phase(self.cfg)
-        commit(self.cfg, f"{feature}: spec approved")
+        commit(self.cfg, f"{feature}: spec approved", extra=setup)
         set_marker(self.cfg, f"spec-approved/{feature}")
         self.drop_spec_update_tag(feature)
         save_progress(self.cfg, feature, fresh_progress())
-        log_event(self.cfg, feature, "spec_approved", mode=feature_mode(self.cfg, feature))
+        log_event(
+            self.cfg, feature, "spec_approved", mode=feature_mode(self.cfg, feature), setup=setup
+        )
+        self.pin_references(feature)
         self.record_baseline(feature)
+        self.echo("Setup files committed with the spec: " + (", ".join(setup) or "none") + ".")
         self.echo(f"Tagged spec-approved/{feature}. Next: framegate run {feature}")
         return EXIT_OK
+
+    def refuse_stray_files(self, feature: str) -> list[str]:
+        """The setup files the approval commits with the spec (framegate.toml, packaging /
+        test / tool-config files changed in the spec phase). Refuses while another protected
+        file is uncommitted (CLAUDE.md, .claude/, CI and deploy files, `[protected] extra`,
+        ...): the approval does not commit it, and every frame check of the run would then
+        fail on a file no agent may touch."""
+        setup, stray = setup_state(self.adapter)
+        if stray:
+            log_event(self.cfg, feature, "spec_check", stray=stray)
+            raise WorkflowError(stray_files_text(stray) + " Then approve again.")
+        return setup
+
+    def refresh_env(self, feature: str) -> None:
+        """[env] refresh: bring the project's environment in line with the setup files the
+        spec phase changed (e.g. the editable install again, so a new package imports),
+        before the approval is committed. A failure refuses the approval."""
+        cmd = self.cfg.env_refresh
+        if not cmd:
+            return
+        self.echo(f"Environment refresh: {' '.join(cmd)} ...")
+        t0 = time.time()
+        code, out = run_command(self.adapter.resolve_command(cmd), self.cfg.root, timeout=1800)
+        log_event(self.cfg, feature, "env_refresh", code=code, seconds=round(time.time() - t0))
+        if code != 0:
+            tail = "\n".join(out.splitlines()[-15:])
+            raise WorkflowError(
+                f"[env] refresh failed (exit {code}): {' '.join(cmd)}\n{tail}\n"
+                "The spec is not approved. Fix the setup files (or the command in "
+                "framegate.toml), then approve again."
+            )
+
+    def pin_references(self, feature: str) -> None:
+        """ "spec OK" pins the references the spec uses: each one's commit, and whether its
+        files differed from it, go to progress.json and an event."""
+        pins = references.pin(self.cfg, feature)
+        if not pins:
+            return
+        prog = load_progress(self.cfg, feature)
+        prog["references"] = pins
+        save_progress(self.cfg, feature, prog)
+        log_event(self.cfg, feature, "references_pinned", references=pins)
+        self.echo("References (read-only for the agents), pinned:")
+        for rec in pins:
+            self.echo(f"- {references.describe(rec)}")
+        port = references.feature_port(self.cfg, feature)
+        pinned = next((r for r in pins if port and r["name"] == port.reference), None)
+        if port and port.commit and pinned and not str(pinned["commit"]).startswith(port.commit):
+            self.echo(
+                f"WARNING: the spec's 'Ported from' names commit {port.commit}, but "
+                f"'{port.reference}' is at {references.short(pinned['commit'])}: the spec was "
+                "written against another state of it."
+            )
+        for rec in pins:
+            if rec["missing"] or rec["dirty"]:
+                what = "is not on this machine" if rec["missing"] else "has uncommitted changes"
+                self.echo(f"WARNING: reference '{rec['name']}' {what}: its state is not pinned.")
+
+    def warn_moved_references(self, feature: str, prog: dict[str, Any]) -> None:
+        """Each `framegate run`: say (never block) when a reference is no longer what was
+        pinned at the spec approval."""
+        warnings = references.pin_warnings(self.cfg, feature, prog.get("references"))
+        if warnings:
+            log_event(self.cfg, feature, "reference_changed", warnings=warnings)
+        for text in warnings:
+            self.progress(feature, f"WARNING: {text}")
 
     def record_baseline(self, feature: str) -> None:
         """[gates] regression_baseline: the tests that fail today, recorded once per feature
@@ -3434,6 +3638,8 @@ class Orchestrator:
         self.take_run_lock(feature)
         try:
             with procs.stop_signals():
+                if prog["phase"] != "DONE":
+                    self.warn_moved_references(feature, prog)
                 while prog["phase"] != "DONE":
                     if prog["phase"] not in runners:
                         raise WorkflowError(f"unknown phase in progress.json: {prog['phase']}")

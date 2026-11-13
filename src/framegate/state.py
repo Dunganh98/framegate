@@ -90,8 +90,9 @@ def commit_paths(cfg: Config) -> list[str]:
     return out
 
 
-def commit(cfg: Config, msg: str) -> bool:
-    """Commit the workflow's paths (commit_paths), nothing else. False = nothing to commit."""
+def commit(cfg: Config, msg: str, extra: list[str] | None = None) -> bool:
+    """Commit the workflow's paths (commit_paths) and the `extra` files (approve-spec: the
+    setup files changed in the spec phase), nothing else. False = nothing to commit."""
     staged: list[str] = []
     for rel in commit_paths(cfg):
         # a path that neither exists nor is tracked makes `git add` fail: skip it
@@ -107,6 +108,12 @@ def commit(cfg: Config, msg: str) -> bool:
                 or git(cfg, "diff", "--cached", "--name-only", "--", rel).strip()
             ):
                 staged.append(rel)
+    for rel in extra or []:
+        try:
+            git(cfg, "add", "-A", "--", rel)
+        except GitError:
+            continue  # ignored by the project (.gitignore)
+        staged.append(rel)
     if staged and git(cfg, "diff", "--cached", "--name-only", "--", *staged).strip():
         # `-- paths`: what the user staged elsewhere stays staged and out of this commit
         git(cfg, "commit", "-q", "-m", msg, "--", *staged)

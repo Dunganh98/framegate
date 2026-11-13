@@ -13,6 +13,8 @@ Scenario keys:
   implement_fail: number of IMPLEMENT runs that write a wrong implementation
   park_steps: plan step numbers whose first IMPLEMENT run writes park.md (and half-done code)
   assume: true -> the first successful IMPLEMENT run logs one assumption in steps.md
+  followup: true -> every IMPLEMENT step note has one pipeline follow-up line (the
+    Dockerfile), and REVIEW writes one of its own (the CI file) into review.md
   review_finding: true -> the reviewer writes one failing test (bool accepted as int); TRIAGE
     marks it VALID
   review_invalid: true -> the reviewer also writes an invalid finding (negative ints rejected);
@@ -441,6 +443,11 @@ def main() -> int:
             if scen.get("assume") and not state.get("assumed"):
                 state["assumed"] = True
                 note = "- ASSUMPTION [DEMO-E-001]: bool counts as int (spec silent).\n"
+            if scen.get("followup"):
+                note += (
+                    "- PIPELINE FOLLOW-UP [deploy/Dockerfile]: COPY the new demo/ folder "
+                    "(the image does not contain it)\n"
+                )
             if scen.get("mode") == "bugfix":
                 note += (
                     "- ROOT CAUSE: add() subtracted its arguments (src/demo/__init__.py: add)\n"
@@ -464,6 +471,11 @@ def main() -> int:
             lines += (
                 "\n## Structure findings\n- src/demo/__init__.py: add() and neg() are two "
                 "concepts -> one file each\n"
+            )
+        if scen.get("followup"):
+            lines += (
+                "No findings.\n- PIPELINE FOLLOW-UP [ci/tests.yml]: add tests/test_demo.py to "
+                "the unit selection (CI does not run it)\n"
             )
         write("out/demo/review.md", lines or "No findings.\n")
     elif phase == "TRIAGE":

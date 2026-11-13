@@ -3,6 +3,16 @@ one-plain-command form of Bash / PowerShell calls during a run (shell_form.py).
 
 No framegate.toml or no .phase -> normal interactive session -> everything allowed.
 Exit code 2 blocks the tool call; stderr is shown to Claude.
+
+The spec phase (SPEC) is the human's chat: besides the specs and the source folders (stubs) it
+may write the setup files (frame_diff.is_setup_file: framegate.toml and the language's
+packaging / test / tool-config files) and its own two files under the out folder
+(SPEC_OUT_FILES). `approve-spec` commits the setup files with the spec; from then on they are
+frozen. `[protected] extra` (deploy, CI, generated files) stays locked in the spec phase too,
+also inside a source folder: such a change is a separate step, noted as a pipeline follow-up.
+A path outside the repository is blocked for the agents of a run only: a chat session keeps
+its memory folder and scratch files in every phase. A `[references]` folder is read-only for
+both.
 """
 
 from __future__ import annotations
@@ -10,10 +20,58 @@ from __future__ import annotations
 import pathlib
 from typing import Any
 
+from framegate.config import CONFIG_FILE
 from framegate.hooks import find_root_fast, in_agent_run, parse_input
 from framegate.hooks.shell_form import SHELL_TOOLS, form_problem, message
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+#: files the spec dialogue writes under {out}/<feature>/ (the spec gate brief; answers.md is
+#: the chat's file at the later gates, where no phase is set)
+SPEC_OUT_FILES = ("spec_brief.md", "answers.md")
+
+
+def spec_extra_allowed(cfg: Any, rel: str) -> bool:
+    """SPEC phase, beyond cfg.write_paths: the setup files and {out}/<feature>/spec_brief.md
+    (answers.md)."""
+    from framegate.adapters import get_adapter
+    from framegate.checks.frame_diff import is_setup_file
+    from framegate.config import ConfigError
+
+    out = cfg.paths.out.rstrip("/") + "/"
+    if rel.startswith(out):
+        parts = rel[len(out) :].split("/")
+        return len(parts) == 2 and parts[1] in SPEC_OUT_FILES
+    try:
+        return is_setup_file(get_adapter(cfg), rel)
+    except ConfigError:  # an unknown language: only the file that fixes it
+        return rel == CONFIG_FILE
+
+
+def spec_extra_locked(cfg: Any, rel: str) -> bool:
+    """SPEC phase: a `[protected] extra` path that is not a setup file
+    (frame_diff.extra_locked)."""
+    if not cfg.protected_extra:
+        return False
+    from framegate.adapters import get_adapter
+    from framegate.checks.frame_diff import extra_locked
+    from framegate.config import ConfigError
+
+    try:
+        return extra_locked(get_adapter(cfg), rel)
+    except ConfigError:
+        return False
+
+
+def in_reference(cfg: Any, path: pathlib.Path) -> str | None:
+    """The `[references]` folder this path lies in, if any: read-only for the chat as well."""
+    for name in cfg.references:
+        try:
+            folder = cfg.reference_dir(name).resolve()
+        except OSError:
+            continue
+        if path == folder or folder in path.parents:
+            return str(name)
+    return None
 
 
 def evaluate_shell(data: dict[str, Any]) -> tuple[int, str]:
@@ -73,10 +131,34 @@ def evaluate(stdin_text: str) -> tuple[int, str]:
     try:
         rel = path.relative_to(root).as_posix()
     except ValueError:
-        return 2, f"[{phase}] Blocked: {raw} is outside the repository."
+        reference = in_reference(cfg, path)
+        if reference is None and not in_agent_run():
+            return 0, ""  # the chat's own files (memory, scratch): not the run's business
+        return 2, f"[{phase}] Blocked: {raw} is outside the repository" + (
+            f" (reference '{reference}': read-only)." if reference else "."
+        )
     allowed = cfg.write_paths(phase)
+    if phase == "SPEC" and spec_extra_locked(cfg, rel):
+        return 2, (
+            f"[SPEC] Blocked write to {rel}: it is in [protected] extra (deploy, CI or "
+            "generated files), which no feature changes, not even in the spec phase. Write "
+            "what must change there, and why, under `## Pipeline follow-up` of the spec's "
+            "requirements.md: it is done as a separate step after the feature."
+        )
     if any(rel == a.rstrip("/") or rel.startswith(a) for a in allowed):
         return 0, ""
+    if phase == "SPEC":
+        if spec_extra_allowed(cfg, rel):
+            return 0, ""
+        return 2, (
+            f"[SPEC] Blocked write to {rel}. Allowed in the spec phase: {allowed}, the setup "
+            f"files ({CONFIG_FILE}, packaging / test / tool-config files) and "
+            f"{cfg.paths.out}/<feature>/spec_brief.md. Tests, other workflow files "
+            "(.claude/, .framegate/, CLAUDE.md), deploy and CI files stay locked: a deploy / "
+            "CI change the feature needs goes under `## Pipeline follow-up` of "
+            "requirements.md (a separate step after the feature); anything else, tell the "
+            "user."
+        )
     return 2, (
         f"[{phase}] Blocked write to {rel}. Allowed in this phase: {allowed}. "
         + (

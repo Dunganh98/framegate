@@ -71,6 +71,11 @@ the language, how tests are written here, the code map and the project knowledge
      them; the implementer confirms one and rules out the others.
    - Existing data: every field the report names resolved to its exact member, with the line
      that assigns it copied into the spec.
+   - references: when the task builds on another project listed under "References" in the
+     conventions above (a sibling repository), read what you need there and list the ones
+     used in requirements.md, "References" (name, files / folders, what for): only those are
+     given to the agents, read-only, pinned at their commit at "spec OK". Name them in the
+     spec brief, so the user approves them.
 2. Ask only what those sources cannot decide (the right result, how far the fix may go).
    Numbered, plain words, each "A: ... (default) / B: ..." on one line. A point with one
    sensible answer is a decision you make and list, not a question.
@@ -79,6 +84,23 @@ the language, how tests are written here, the code map and the project knowledge
    fixed), must-not-change rows are I IDs (each gets a test that passes today and after).
    Usually one plan step that covers every ID. Do not write tests and do not fix anything.
    Then run `framegate spec-check $ARGUMENTS` and fix what it lists.
+   Setup files: if the task needs a new package or source folder, a dependency or a tool
+   setting, change those files now, in the spec phase: `framegate.toml` and the project's
+   packaging / test / tool-config files (e.g. `pyproject.toml`, `requirements*.txt`,
+   `pytest.ini`, `ruff.toml`, a project file; `framegate spec-brief` lists them) are writable
+   for you until the approval, which commits them with the spec and freezes them. Nothing
+   can change them later in the run. Tests, `.claude/`, `.framegate/`, `CLAUDE.md`, CI files,
+   deploy files and every `[protected] extra` path stay locked for you, now and later.
+   `spec-check` prints "Setup files changed" (for the brief) and lists other uncommitted
+   protected files, which the approval refuses: ask the user to commit or revert those.
+   Pipeline follow-up: deploy files (Dockerfile, compose, k8s manifests) and CI files (yml,
+   scripts) are never changed by a feature, not even at spec time. When the task means one of
+   them must change (a new package folder the Dockerfile must COPY, a new dependency the image
+   must install, a new test selection or path for CI), do not change it and do not ask to:
+   write one bullet per change under "Pipeline follow-up" in requirements.md (`- <file>: <what
+   must change> (<why>)`; "None." otherwise; add the section if the project's template lacks
+   it). It is done as a separate step after the feature; framegate raises it again in the
+   final summary.
 4. Write the spec gate brief to `<out>/$ARGUMENTS/spec_brief.md` (the out folder above) and
    show it in the chat. About one screen, plain words, no spec IDs, one line per bullet;
    exactly these sections:
@@ -89,6 +111,10 @@ the language, how tests are written here, the code map and the project knowledge
        **How it is proven** — the tests that fail today and pass after; what stays as it is
        **Not proven** — what to check by using it
        **Decisions I made for you** — one line each, with what it rules out
+       **Setup files changed** — one line: the files `spec-check` lists, each with why
+         ("None." when it lists none); they are approved with the spec
+       **Pipeline follow-up** — deploy / CI changes this task makes necessary, one line each
+         (file: what, why); not part of the task, a separate step after it ("None.")
        **Questions** — the real decisions still open ("None.")
 
 5. Ask: "Is the report OK? Then I start the run." (default: yes, with the defaults of any open

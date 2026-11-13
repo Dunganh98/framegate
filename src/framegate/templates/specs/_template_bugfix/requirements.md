@@ -39,6 +39,15 @@ Mode: bugfix
 |---|---|---|---|
 | | | | |
 
+## References
+<!-- Other projects on this machine that the agents read for this task (never write): only
+     names declared in framegate.toml `[references]` (`framegate spec-brief` lists them). Only
+     the ones listed here are given to the agents; `framegate approve-spec` pins each one's
+     commit, and a run warns when it moved. "None." when the task needs none. -->
+| Name | Files / folders that matter | What for |
+|---|---|---|
+| | | |
+
 ## Test data and fixtures
 <!-- One row per ID that needs particular data (a seed, a recording, a rare situation).
      Observable: the public value a test reads to see the situation happened (the test writer
@@ -48,6 +57,16 @@ Mode: bugfix
 | ID | Data (seed / file / generator) | Observable that proves the situation | Zero cases allowed |
 |---|---|---|---|
 | XXX-R-001 | | | no |
+
+## Pipeline follow-up
+<!-- Deploy files (Dockerfile, compose, k8s manifests, ...) and CI files (yml, scripts) are
+     never changed by a feature, not even now: they stay locked. What must change there
+     BECAUSE of this feature is a separate step after it; note it here so it is not lost
+     (the final summary raises it). One bullet per change: `- <file>: <what must change>
+     (<why>)`, e.g. `- platform/deploy/Dockerfile: COPY the new runner/ folder (the image
+     must contain the new package)`, a new dependency the image must install, a new test
+     selection for CI. "None." when the feature needs no such change. -->
+None.
 
 ## Non-goals
 <what this fix does not touch: related bugs, cleanups, refactors (each is its own task)>

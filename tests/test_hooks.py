@@ -65,6 +65,23 @@ def test_no_phase_allows_everything(project: pathlib.Path) -> None:
         ("SPEC", "specs/demo/plan.md", True),
         ("SPEC", "src/pkg/a.py", True),
         ("SPEC", "tests/test_a.py", False),
+        # the spec phase covers the setup: config, packaging / tool config, the spec brief
+        ("SPEC", "framegate.toml", True),
+        ("SPEC", "pyproject.toml", True),
+        ("SPEC", "pytest.ini", True),
+        ("SPEC", "requirements-dev.txt", True),
+        ("SPEC", "out/demo/spec_brief.md", True),
+        ("SPEC", "out/demo/answers.md", True),
+        ("SPEC", "out/demo/progress.json", False),
+        ("SPEC", "out/spec_brief.md", False),
+        ("SPEC", "tests/conftest.py", False),
+        ("SPEC", "CLAUDE.md", False),
+        ("SPEC", ".claude/settings.json", False),
+        ("SPEC", ".framegate/project.md", False),
+        ("SPEC", ".github/workflows/ci.yml", False),
+        ("SPEC", "README.md", False),
+        ("TESTS", "pyproject.toml", False),
+        ("SPEC_UPDATE", "framegate.toml", False),
         ("UNKNOWN", "out/x.md", False),
     ],
 )
@@ -76,7 +93,32 @@ def test_phase_permissions(project: pathlib.Path, phase: str, rel: str, allowed:
     else:
         assert code == 2
         assert f"[{phase}] Blocked write to {rel}" in msg
-        assert ("park.md" if phase == "IMPLEMENT" else "questions.md") in msg
+        hint = {"IMPLEMENT": "park.md", "SPEC": "spec_brief.md"}.get(phase, "questions.md")
+        assert hint in msg
+
+
+def test_spec_phase_setup_files_follow_the_config(project: pathlib.Path) -> None:
+    """[protected] extra is not setup (deploy, CI, generated files stay locked, also inside
+    a source folder), unless the path is one of the language's setup files; another language
+    has its own project files; a config the adapter cannot be built from still lets the chat
+    repair framegate.toml."""
+    set_phase(project, "SPEC")
+
+    def code(rel: str) -> int:
+        return protect_paths.evaluate(hook_json(project, file_path=str(project / rel)))[0]
+
+    toml = project / "framegate.toml"
+    toml.write_text(
+        '[protected]\nextra = ["configs/", "ci/", "*_pb2.py", "pytest.ini"]\n', encoding="utf-8"
+    )
+    assert (code("configs/app.yaml"), code("ci/build.yml"), code("App.sln")) == (2, 2, 2)
+    assert (code("pytest.ini"), code("src/pkg/a.py"), code("src/pkg/wsic_pb2.py")) == (0, 0, 2)
+    msg = protect_paths.evaluate(hook_json(project, file_path=str(project / "ci/build.yml")))[1]
+    assert "[protected] extra" in msg and "## Pipeline follow-up" in msg
+    toml.write_text('[project]\nlanguage = "dotnet"\n', encoding="utf-8")
+    assert (code("App.sln"), code("pyproject.toml"), code("tests/T/T.csproj")) == (0, 2, 2)
+    toml.write_text('[project]\nlanguage = "cobol"\n', encoding="utf-8")
+    assert (code("framegate.toml"), code("pyproject.toml")) == (0, 2)
 
 
 def test_relative_path_resolves_against_cwd(project: pathlib.Path) -> None:
@@ -94,6 +136,23 @@ def test_outside_repository_blocked(
     elsewhere = tmp_path_factory.mktemp("elsewhere") / "x.py"
     code, msg = protect_paths.evaluate(hook_json(project, file_path=str(elsewhere)))
     assert code == 2 and "outside the repository" in msg
+
+
+@pytest.mark.parametrize("phase", ["SPEC", "IMPLEMENT"])
+def test_outside_repository_allowed_for_the_chat(
+    project: pathlib.Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+) -> None:
+    """The chat's memory folder and scratch files are not the run's business; inside the
+    repository the phase's rules hold for the chat as before."""
+    monkeypatch.delenv("FRAMEGATE_AGENT")
+    set_phase(project, phase)
+    elsewhere = tmp_path_factory.mktemp("elsewhere") / "memory.md"
+    assert protect_paths.evaluate(hook_json(project, file_path=str(elsewhere))) == (0, "")
+    inside = hook_json(project, file_path=str(project / "tests" / "test_a.py"))
+    assert protect_paths.evaluate(inside)[0] == 2
 
 
 def test_notebook_path_and_tool_filter(project: pathlib.Path) -> None:

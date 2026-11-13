@@ -89,6 +89,20 @@ knowledge. It overrides any default you would otherwise assume.
      the choices to copy (cut-offs, raw vs clamped values, tie-breaks, order of checks);
    - new functions: which inputs each clamps itself, what every output holds on "no result",
      and which error wins when two inputs are bad;
+   - references: when the task builds on another project listed under "References" in the
+     conventions above (a sibling repository), read what you need there and list the ones
+     used in requirements.md, "References" (name, files / folders, what for): only those are
+     given to the agents, read-only, pinned at their commit at "spec OK". Name them in the
+     spec brief under "Project details that matter", so the user approves them;
+   - a port (the user wants code of a reference copied here: "port", "file for file", "same
+     names as in X"): fill requirements.md, "Ported from": the reference and its commit, every
+     source -> target file, the reference's test files to carry over (Kind `tests`), and
+     "What may differ" (import names, things only this repository has, things left out). The
+     stubs mirror the reference's public names and signatures exactly; the spec's IDs describe
+     what the reference does today (read its code and tests; do not decide the behavior
+     again); ask the user only about what is to differ. The agents then carry over the
+     reference's tests and copy its files instead of writing their own, and the final gate
+     shows how far each file is from its source;
    - structure: which file each new concept goes in (one concept per file; the code map says
      where things live), so no file grows past ~400 lines or mixes two concepts.
 2. Ask only what those sources cannot decide: what the user wants (behavior, priorities,
@@ -119,7 +133,26 @@ knowledge. It overrides any default you would otherwise assume.
    the TESTS phase uses them.
    Then run `framegate spec-check $ARGUMENTS` and fix what it lists (a rule without a spec
    ID, copied code that is not in the named file: read the code again and correct the spec's
-   wording too). `framegate approve-spec` runs the same check and refuses while it fails.
+   wording too; a forbidden marker in a stub, e.g. a lint or type suppression: write the stub
+   so that it needs none). `framegate approve-spec` runs the same check and refuses while it
+   fails.
+   Setup files: if the task needs a new package or source folder, a dependency or a tool
+   setting, change those files now, in the spec phase: `framegate.toml` and the project's
+   packaging / test / tool-config files (e.g. `pyproject.toml`, `requirements*.txt`,
+   `pytest.ini`, `ruff.toml`, a project file; `framegate spec-brief` lists them) are writable
+   for you until the approval, which commits them with the spec and freezes them. Nothing
+   can change them later in the run. Tests, `.claude/`, `.framegate/`, `CLAUDE.md`, CI files,
+   deploy files and every `[protected] extra` path stay locked for you, now and later.
+   `spec-check` prints "Setup files changed" (for the brief) and lists other uncommitted
+   protected files, which the approval refuses: ask the user to commit or revert those.
+   Pipeline follow-up: deploy files (Dockerfile, compose, k8s manifests) and CI files (yml,
+   scripts) are never changed by a feature, not even at spec time. When the task means one of
+   them must change (a new package folder the Dockerfile must COPY, a new dependency the image
+   must install, a new test selection or path for CI), do not change it and do not ask to:
+   write one bullet per change under "Pipeline follow-up" in requirements.md (`- <file>: <what
+   must change> (<why>)`; "None." otherwise; add the section if the project's template lacks
+   it). It is done as a separate step after the feature; framegate raises it again in the
+   final summary.
 6. Write the spec gate brief to `<out>/$ARGUMENTS/spec_brief.md` (the out folder above; the
    final gate compares the run with it) and show it in the chat. About one screen, plain words,
    no spec IDs, one line per bullet, no sentence that repeats a heading or another section, a
@@ -133,6 +166,10 @@ knowledge. It overrides any default you would otherwise assume.
          ("Goals from rebounds count for the free kick: rules out crediting the rebounder.")
        **Project details that matter** — existing code / data it relies on, invariants it
          must keep (saves, hashes, public APIs)
+       **Setup files changed** — one line: the files `spec-check` lists, each with why
+         ("pyproject.toml: registers the new package"); they are approved with the spec
+       **Pipeline follow-up** — deploy / CI changes this task makes necessary, one line each
+         (file: what, why); not part of the task, a separate step after it ("None.")
        **Questions** — the real decisions still open (step 2's rule), by impact ("None.")
 
    "Decisions I made for you" is the part the user really checks: list the ones that change
