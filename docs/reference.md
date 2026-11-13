@@ -248,6 +248,67 @@ end), and it is skipped with its reason when the Scope table names no existing f
 coverage tool is missing (python: pytest-cov; .NET: coverlet.collector; the generic adapter
 does not measure it). On FCSim the run took 37 s for one file in scope.
 
+## References and ports
+
+**Reference folders.** Another project on this machine (a sibling repository) that the agents
+may read and never write. Declared once in framegate.toml, chosen per feature in the spec:
+
+```toml
+[references]
+otto = { path = "../da-otto", note = "the runner this repository ports" }
+core = "../da-core"            # path only; relative to the repository root, or absolute
+```
+
+- `framegate doctor` lists each one with its commit; a folder that is missing is a WARN
+  (paths differ per machine). `framegate spec-brief` shows them to the spec dialogue.
+- The spec names the ones the feature uses: requirements.md, `## References` (name, files /
+  folders that matter, what for; all three templates have the section). Only those reach the
+  agents. A name that `[references]` does not declare fails `framegate spec-check`. The chat
+  lists them on the spec brief ("Project details that matter").
+- `approve-spec` pins them: each one's git commit and whether it had uncommitted changes go
+  to `progress.json` (`references`) and a `references_pinned` event, and are printed. Every
+  `framegate run` compares: another commit, uncommitted changes or a missing folder is a
+  `reference_changed` event and a `WARNING:` progress line, never a stop.
+- Every agent run of the feature gets the folders as `claude --add-dir <folder>...` and a
+  deny rule for edits there (`--disallowedTools "Edit(//<folder>/**)"`), and its task's
+  orientation block names them: name, absolute path, note, pinned commit, read-only. The
+  write guard (PreToolUse hook) blocks every agent write outside the repository as before.
+  What was checked live: docs/claude-cli-notes.md, "Reference folders".
+- A reference folder that is missing on this machine is left out of the run (the orientation
+  says so).
+
+**Ports.** A feature that copies code of a reference ("file for file, same names, so a diff
+between the two repositories shows only the additions"). No mode of its own yet: a mode is
+built after two port runs showed what repeats. A feature is a port when its requirements.md
+fills `## Ported from` (feature template; "None." otherwise):
+
+```markdown
+## Ported from
+Reference: otto
+Commit: 1a2b3c4d5e
+
+| Source (path in the reference) | Target (path in this repository) | Kind (code / tests) |
+|---|---|---|
+| runner/controller.py | runner/controller.py | code |
+| tests/test_controller.py | tests/runner/test_controller.py | tests |
+
+What may differ:
+- import names: `otto.` becomes `argos.`
+- `Controller.report()` exists only here
+```
+
+| Who | What changes for a port (added task text, `references.port_note`) |
+|---|---|
+| Spec dialogue | the stubs mirror the reference's public names and signatures; the IDs describe what the reference does today; questions only about what differs |
+| Test writer | carries over the listed reference tests: same names, order, structure and assertions, adapted only for imports and "What may differ", tagged with the spec IDs. A new test only for an ID no reference test covers, listed in test_summary.md under `## New tests (not in the reference)`; a test that cannot be carried over under `## Reference tests not carried over` |
+| Test reviewer | reads each reference test file next to its target: a missing, renamed, rewritten or weakened reference test is an objection |
+| Implementer | copies the reference file and changes only what "What may differ" lists: no rewording, no restructuring, comments and docstrings kept; any other change is logged as an assumption |
+| Reviewer | a difference from the reference that the spec does not list is a finding: a failing test when behavior differs, else a `## Structure findings` bullet ("restore the reference's text"), applied by the structure-fixes run. The readability checklist does not apply to ported files |
+| Final gates | **fidelity report**, not blocking: per source -> target row the changed / added / removed line counts against the reference file (at the pinned commit; the working file when the reference was not clean or is no git repository), in final_gates.md; the diffs in `out/<f>/fidelity/<target>.diff`; one line in the final brief's outcomes. `SKIPPED` with the reason when the reference is not on this machine |
+
+`approve-spec` warns when the section's `Commit:` is not the commit the reference is at.
+The first proof stays the feature mode's: the carried-over tests must fail against the stubs.
+
 ## The retro backlog
 
 `framegate keep <f> <numbers | take | all | none>` records the human's pick of a retro's
@@ -560,6 +621,8 @@ Models and speed:
   formatting slip costs no attempt and never sits in a file the implementer may not edit. For
   .NET the format / lint checks report only findings on changed lines, and the format fix keeps
   only its changes there: no churn in code the feature did not touch.
+- `[references]` (name = path, or `{ path, note }`): other projects the agents may read, see
+  "References and ports".
 - `[gates.extra]` (name = command): project checks after the final gates, e.g. a balance
   measurement. Shown at the final gate with exit code and output (full output in
   `out/<f>/extra_<name>.log`); never part of the verdict.

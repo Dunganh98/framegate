@@ -9,7 +9,8 @@ may write the setup files (frame_diff.is_setup_file: framegate.toml, the packagi
 tool-config files, `[protected] extra`) and its own two files under the out folder
 (SPEC_OUT_FILES). `approve-spec` commits the setup files with the spec; from then on they are
 frozen. A path outside the repository is blocked for the agents of a run only: a chat session
-keeps its memory folder and scratch files in every phase.
+keeps its memory folder and scratch files in every phase. A `[references]` folder is read-only
+for both.
 """
 
 from __future__ import annotations
@@ -42,6 +43,18 @@ def spec_extra_allowed(cfg: Any, rel: str) -> bool:
         return is_setup_file(get_adapter(cfg), rel)
     except ConfigError:  # an unknown language: only the file that fixes it
         return rel == CONFIG_FILE
+
+
+def in_reference(cfg: Any, path: pathlib.Path) -> str | None:
+    """The `[references]` folder this path lies in, if any: read-only for the chat as well."""
+    for name in cfg.references:
+        try:
+            folder = cfg.reference_dir(name).resolve()
+        except OSError:
+            continue
+        if path == folder or folder in path.parents:
+            return str(name)
+    return None
 
 
 def evaluate_shell(data: dict[str, Any]) -> tuple[int, str]:
@@ -101,9 +114,12 @@ def evaluate(stdin_text: str) -> tuple[int, str]:
     try:
         rel = path.relative_to(root).as_posix()
     except ValueError:
-        if not in_agent_run():  # the chat's own files (memory, scratch): not the run's business
-            return 0, ""
-        return 2, f"[{phase}] Blocked: {raw} is outside the repository."
+        reference = in_reference(cfg, path)
+        if reference is None and not in_agent_run():
+            return 0, ""  # the chat's own files (memory, scratch): not the run's business
+        return 2, f"[{phase}] Blocked: {raw} is outside the repository" + (
+            f" (reference '{reference}': read-only)." if reference else "."
+        )
     allowed = cfg.write_paths(phase)
     if any(rel == a.rstrip("/") or rel.startswith(a) for a in allowed):
         return 0, ""

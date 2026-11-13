@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import sys
 from dataclasses import dataclass, field
 from typing import Any
@@ -93,6 +94,8 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
     "git": {"base": (str,), "branch_prefix": (str,), "branch": (bool,), "markers": (str,)},
     "notify": {"toast": (bool,)},
     "phases": {},
+    # name -> path, or name -> {path, note}: checked in parse_references
+    "references": {},
     # language adapter sections: validated here, read by the adapter (cfg.language_options)
     # generic adapter: any language, commands with placeholders (adapters/generic.py)
     "generic": {
@@ -214,6 +217,18 @@ FALLBACK_MAX_BUDGET_USD = 2.0
 
 class ConfigError(Exception):
     """framegate.toml is missing or invalid."""
+
+
+@dataclass
+class Reference:
+    """[references] <name>: a folder outside this repository (a sibling project) that the
+    agents may read, never write. A spec names the ones its feature uses (references.py)."""
+
+    name: str
+    #: as written in framegate.toml: absolute, or relative to the repository root
+    path: str
+    #: one line: what this project is to the repository ("the runner this repo ports")
+    note: str = ""
 
 
 @dataclass
@@ -356,6 +371,8 @@ class Config:
     git_markers: str = "refs"
     #: [notify] toast: Windows toast at each gate, DONE and on error (no-op elsewhere / on failure)
     toast: bool = True
+    #: [references] name -> folder the agents may read (see Reference)
+    references: dict[str, Reference] = field(default_factory=dict)
     #: raw, type-checked adapter sections, e.g. {"dotnet": {"configuration": "Release"}}
     language_options: dict[str, dict[str, Any]] = field(default_factory=dict)
     loaded_from_file: bool = False
@@ -390,6 +407,11 @@ class Config:
 
     def spec_dir(self, feature: str) -> pathlib.Path:
         return self.root / self.paths.specs / feature
+
+    def reference_dir(self, name: str) -> pathlib.Path:
+        """The folder of a declared reference, absolute (it may not exist on this machine)."""
+        path = pathlib.Path(self.references[name].path).expanduser()
+        return pathlib.Path(os.path.normpath(path if path.is_absolute() else self.root / path))
 
     def turn_cap(self, phase: str) -> int:
         """--max-turns of an agent run in this phase: [phases.<P>] max_turns, else
@@ -500,6 +522,29 @@ def _effort(where: str, value: Any) -> str:
     raise ConfigError(f"{where} must be one of {', '.join(EFFORT_LEVELS)} (or empty)")
 
 
+REFERENCE_NAME = re.compile(r"^[A-Za-z][\w-]*$")
+
+
+def parse_references(body: dict[str, Any]) -> dict[str, Reference]:
+    """[references]: `name = "<path>"` or `name = { path = "<path>", note = "<one line>" }`."""
+    refs: dict[str, Reference] = {}
+    for name, value in body.items():
+        where = f"[references] {name}"
+        if not REFERENCE_NAME.match(name):
+            raise ConfigError(f"{where}: a name is letters, digits, '-' and '_'")
+        if isinstance(value, str):
+            value = {"path": value}
+        if not isinstance(value, dict) or set(value) - {"path", "note"}:
+            raise ConfigError(f'{where} must be a path or {{ path = "...", note = "..." }}')
+        path, note = value.get("path"), value.get("note", "")
+        if not isinstance(path, str) or not path.strip():
+            raise ConfigError(f"{where} needs a path (a folder outside this repository)")
+        if not isinstance(note, str):
+            raise ConfigError(f"{where}: note must be a string")
+        refs[name] = Reference(name, path.strip(), " ".join(note.split()))
+    return refs
+
+
 def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     cfg = Config(root=root)
     for section, body in data.items():
@@ -507,7 +552,7 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
             raise ConfigError(f"unknown section [{section}] (allowed: {', '.join(SCHEMA)})")
         if not isinstance(body, dict):
             raise ConfigError(f"[{section}] must be a table")
-        if section != "phases":
+        if section not in ("phases", "references"):
             _check_types(section, body)
 
     proj = data.get("project", {})
@@ -666,6 +711,7 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     if not cfg.git_base.strip():
         raise ConfigError("[git] base must not be empty")
     cfg.toast = data.get("notify", {}).get("toast", cfg.toast)
+    cfg.references = parse_references(data.get("references", {}))
     for section in LANGUAGE_SECTIONS:
         if section in data:
             body = dict(data[section])

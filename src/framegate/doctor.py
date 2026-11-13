@@ -19,6 +19,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from framegate import references
 from framegate.adapters import get_adapter
 from framegate.adapters.base import LanguageAdapter
 from framegate.checks import frame_diff, spec_lint
@@ -243,6 +244,19 @@ def run(
                 f"code map {cfg.code_map}",
                 "missing: /framegate:setup drafts it from the code (or set [docs] code_map); "
                 "without it the final gate cannot show what changed in it",
+            )
+        )
+    for name in cfg.references:
+        rec = references.state(cfg, name)
+        # a path is machine-specific: a missing folder is a warning, never a failure
+        add(
+            Item(
+                "WARN" if rec["missing"] else "OK",
+                f"reference '{name}'",
+                f"{rec['path']} is not on this machine: features that use it run without it "
+                "(set its path in [references], or clone the project there)"
+                if rec["missing"]
+                else references.describe(rec).split(": ", 1)[1],
             )
         )
     stale = outdated_templates(cfg)

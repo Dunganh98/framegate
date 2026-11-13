@@ -2,8 +2,9 @@
 
 scope step   fast checks after each implementation step (tests of current + earlier steps)
 scope final  everything, including coverage on the diff, traceability and mutation testing,
-             then the structure report (sizes of the changed files, longest methods) and the
-             project's own [gates.extra] checks (both reported, never blocking)
+             then the structure report (sizes of the changed files, longest methods), for a
+             port the fidelity report (each target file against its reference file) and the
+             project's own [gates.extra] checks (all reported, never blocking)
 
 Both scopes first format the changed source files ([gates] format_fix).
 
@@ -21,6 +22,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from framegate import references
 from framegate.adapters.base import (
     Check,
     CheckResult,
@@ -452,6 +454,8 @@ class GateReport:
     structure: dict[str, object] = field(default_factory=dict)
     #: failed checks whose tool gave no result (CheckResult.tool_failure): no agent can fix them
     tool_failures: list[str] = field(default_factory=list)
+    #: final scope, a port: each target file against its reference file (references.fidelity)
+    fidelity: dict[str, object] = field(default_factory=dict)
 
     def excerpt(self, lines_per_check: int = 12, limit: int = 2000) -> str:
         """A trimmed excerpt of the failing checks' output (for events and the retro)."""
@@ -577,6 +581,7 @@ def gate_report(
             emit(line)
         if scope == "final" or shown:
             shape = report.as_dict()
+    fidelity = port_fidelity(adapter.cfg, feature, emit) if scope == "final" else {}
     extra = run_extra_checks(adapter, feature, emit, durations) if scope == "final" else {}
     return GateReport(
         not failed,
@@ -590,7 +595,23 @@ def gate_report(
         results,
         shape,
         tool_failures,
+        fidelity,
     )
+
+
+def port_fidelity(cfg: Config, feature: str, emit: Callable[[str], None]) -> dict[str, object]:
+    """A port's fidelity report (references.py): reported, never part of the verdict."""
+    try:
+        pins = load_progress(cfg, feature).get("references")
+        rep: dict[str, object] = references.fidelity(cfg, feature, pins)
+    except Exception as e:  # a report, never a reason to fail the gate
+        rep = {"reference": "?", "skipped": f"report failed: {type(e).__name__}: {e}"}
+    lines = references.fidelity_lines(rep)
+    if lines:
+        emit("")
+    for line in lines:
+        emit(line)
+    return rep
 
 
 def save_full_output(adapter: LanguageAdapter, feature: str, check: str, text: str) -> str:

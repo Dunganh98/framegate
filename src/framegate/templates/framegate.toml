@@ -163,3 +163,12 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 
 # [roles]
 # extra_dir = ".framegate/roles"   # <phase>.md files appended to the base role prompts
+
+# [references]                     # other projects on this machine the agents may READ (never
+#                                  # write): name = path (absolute, or relative to this file).
+#                                  # A spec lists the ones its feature uses (requirements.md,
+#                                  # "References"; a port also "Ported from"); approve-spec
+#                                  # pins their commit, a run warns when it moved. A missing
+#                                  # folder is a doctor WARN (paths differ per machine)
+# otto = { path = "../da-otto", note = "the runner this repository ports" }
+# core = "../da-core"

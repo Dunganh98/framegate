@@ -27,7 +27,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from framegate import backlog, notify, procs, risk
+from framegate import backlog, notify, procs, references, risk
 from framegate import brief as briefs
 from framegate.adapters import get_adapter
 from framegate.adapters.base import GATE_NAMES, CheckResult, LanguageAdapter, run_command
@@ -685,6 +685,9 @@ class Orchestrator:
         note = MODE_NOTES.get(mode, {}).get(kind)
         if note:
             task += "\n\n" + note.format(**values)
+        port = references.port_note(self.cfg, feature, kind)
+        if port:
+            task += "\n\n" + port
         task += "\n\n" + LOOK_AROUND + "\n\n" + self.orientation(feature)
         if kind in BRIEF_PHASES:
             task += "\n\n## Conventions\n" + self.adapter.conventions_brief().strip()
@@ -717,6 +720,9 @@ class Orchestrator:
                 "## Orientation (gathered by framegate just now; no need to look it up again)",
                 f"- {p.specs}/{feature}/: {files(self.cfg.spec_dir(feature))}",
                 f"- {p.out}/{feature}/: {files(self.cfg.feature_out(feature))}",
+                *references.orientation_lines(
+                    self.cfg, feature, load_progress(self.cfg, feature).get("references")
+                ),
                 "- Last commits (git log -3 --stat):",
                 *(f"    {line}" for line in log or ["(none)"]),
             ]
@@ -851,6 +857,8 @@ class Orchestrator:
             args += ["--model", model]
         if effort:
             args += ["--effort", effort]
+        # the feature's reference folders: readable, edits denied (references.py)
+        args += references.agent_args(self.cfg, feature)
         runs = self.cfg.out_dir / "runs"
         runs.mkdir(parents=True, exist_ok=True)
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -2526,6 +2534,7 @@ class Orchestrator:
             results=rep.results,
             structure=rep.structure,
             tool_failures=rep.tool_failures,
+            **({"fidelity": rep.fidelity} if rep.fidelity else {}),
         )
         names = [n + (" [tool failure]" if n in rep.tool_failures else "") for n in rep.failed]
         self.progress(
@@ -3467,6 +3476,7 @@ class Orchestrator:
         log_event(
             self.cfg, feature, "spec_approved", mode=feature_mode(self.cfg, feature), setup=setup
         )
+        self.pin_references(feature)
         self.record_baseline(feature)
         self.echo("Setup files committed with the spec: " + (", ".join(setup) or "none") + ".")
         self.echo(f"Tagged spec-approved/{feature}. Next: framegate run {feature}")
@@ -3501,6 +3511,41 @@ class Orchestrator:
                 "The spec is not approved. Fix the setup files (or the command in "
                 "framegate.toml), then approve again."
             )
+
+    def pin_references(self, feature: str) -> None:
+        """ "spec OK" pins the references the spec uses: each one's commit, and whether its
+        files differed from it, go to progress.json and an event."""
+        pins = references.pin(self.cfg, feature)
+        if not pins:
+            return
+        prog = load_progress(self.cfg, feature)
+        prog["references"] = pins
+        save_progress(self.cfg, feature, prog)
+        log_event(self.cfg, feature, "references_pinned", references=pins)
+        self.echo("References (read-only for the agents), pinned:")
+        for rec in pins:
+            self.echo(f"- {references.describe(rec)}")
+        port = references.feature_port(self.cfg, feature)
+        pinned = next((r for r in pins if port and r["name"] == port.reference), None)
+        if port and port.commit and pinned and not str(pinned["commit"]).startswith(port.commit):
+            self.echo(
+                f"WARNING: the spec's 'Ported from' names commit {port.commit}, but "
+                f"'{port.reference}' is at {references.short(pinned['commit'])}: the spec was "
+                "written against another state of it."
+            )
+        for rec in pins:
+            if rec["missing"] or rec["dirty"]:
+                what = "is not on this machine" if rec["missing"] else "has uncommitted changes"
+                self.echo(f"WARNING: reference '{rec['name']}' {what}: its state is not pinned.")
+
+    def warn_moved_references(self, feature: str, prog: dict[str, Any]) -> None:
+        """Each `framegate run`: say (never block) when a reference is no longer what was
+        pinned at the spec approval."""
+        warnings = references.pin_warnings(self.cfg, feature, prog.get("references"))
+        if warnings:
+            log_event(self.cfg, feature, "reference_changed", warnings=warnings)
+        for text in warnings:
+            self.progress(feature, f"WARNING: {text}")
 
     def record_baseline(self, feature: str) -> None:
         """[gates] regression_baseline: the tests that fail today, recorded once per feature
@@ -3560,6 +3605,8 @@ class Orchestrator:
         self.take_run_lock(feature)
         try:
             with procs.stop_signals():
+                if prog["phase"] != "DONE":
+                    self.warn_moved_references(feature, prog)
                 while prog["phase"] != "DONE":
                     if prog["phase"] not in runners:
                         raise WorkflowError(f"unknown phase in progress.json: {prog['phase']}")

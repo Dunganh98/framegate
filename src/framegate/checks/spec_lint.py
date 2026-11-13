@@ -321,7 +321,10 @@ def stub_marker_problems(adapter: LanguageAdapter) -> list[str]:
 def problems(cfg: Config, feature: str, adapter: LanguageAdapter | None = None) -> list[str]:
     """Everything the spec check finds; [] = fine. With the adapter also the forbidden
     markers in the stubs."""
+    from framegate import references  # it reads the spec tables with this module
+
     return [
+        *references.spec_problems(cfg, feature),
         *spec_id_problems(cfg, feature),
         *assigned_as_problems(cfg, feature),
         *edge_case_fixture_problems(cfg, feature),

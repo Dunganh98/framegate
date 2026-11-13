@@ -71,6 +71,11 @@ the language, how tests are written here, the code map and the project knowledge
      them; the implementer confirms one and rules out the others.
    - Existing data: every field the report names resolved to its exact member, with the line
      that assigns it copied into the spec.
+   - references: when the task builds on another project listed under "References" in the
+     conventions above (a sibling repository), read what you need there and list the ones
+     used in requirements.md, "References" (name, files / folders, what for): only those are
+     given to the agents, read-only, pinned at their commit at "spec OK". Name them in the
+     spec brief, so the user approves them.
 2. Ask only what those sources cannot decide (the right result, how far the fix may go).
    Numbered, plain words, each "A: ... (default) / B: ..." on one line. A point with one
    sensible answer is a decision you make and list, not a question.
