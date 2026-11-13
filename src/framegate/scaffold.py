@@ -191,6 +191,7 @@ def spec_brief(cfg: Config, feature: str) -> str:
         if kpath.is_file()
         else [f"(No project knowledge file {cfg.knowledge}; `framegate init` creates one.)", ""]
     )
+    from framegate.checks.frame_diff import setup_entries
     from framegate.checks.structure import oversized
 
     long_files, total = oversized(adapter)
@@ -229,6 +230,15 @@ def spec_brief(cfg: Config, feature: str) -> str:
             + ("exists: read it first" if (cfg.root / cfg.code_map).is_file() else "missing")
             + ")",
             *sizes,
+            "- Setup files (change them now if the task needs a new package / source folder, a "
+            "dependency or a tool setting; the approval commits them with the spec and they "
+            "are frozen from then on): "
+            + ", ".join(setup_entries(adapter))
+            + (
+                f". The approval then runs [env] refresh ({' '.join(cfg.env_refresh)})."
+                if cfg.env_refresh
+                else "."
+            ),
             "",
             adapter.conventions_brief().rstrip(),
             "",

@@ -19,9 +19,12 @@ commands:
                           set the SPEC phase lock. bugfix: the tests must fail on today's
                           code first; refactor: they must pass on it, before and after
   spec-check <feature>    mechanical checks of the spec tables (rules without a spec ID,
-                          copied code that is not in the named file); exit 1 on a problem
-  approve-spec <feature> [--force]  spec-check, then commit + tag spec-approved/<feature>,
-                          reset progress; --force: approve with spec-check problems
+                          copied code that is not in the named file) and of the stubs
+                          (forbidden markers); lists the setup files approve-spec will commit
+                          and the uncommitted protected files it refuses; exit 1 on a problem
+  approve-spec <feature> [--force]  spec-check, [env] refresh, then commit (specs, stubs,
+                          setup files) + tag spec-approved/<feature>, reset progress;
+                          --force: approve with spec-check problems
   run <feature>           advance to the next human gate (tests, final) or DONE; no other stops
   status [<feature>] [--brief]   progress and which gate is waiting; no feature: all
                           features; --brief: short state + last progress lines (for the chat)
@@ -204,13 +207,22 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             return stats.run(cfg, args.feature, as_json=args.json)
         if args.command == "spec-check":
-            from framegate.checks import spec_lint
+            from framegate.adapters import get_adapter
+            from framegate.checks import frame_diff, spec_lint
+            from framegate.orchestrator import stray_files_text
 
-            found = spec_lint.problems(cfg, args.feature)
+            adapter = get_adapter(cfg)
+            found = spec_lint.problems(cfg, args.feature, adapter)
+            setup, stray = frame_diff.setup_state(adapter)
             for line in found:
                 print(f"- {line}")
-            print(f"Spec check: {len(found)} problem(s)" if found else "Spec check: OK")
-            return 1 if found else 0
+            if stray:
+                print(f"- {stray_files_text(stray)}")
+            # for the spec brief: the user approves these with the spec
+            print("Setup files changed (committed with the spec): " + (", ".join(setup) or "none"))
+            n = len(found) + (1 if stray else 0)
+            print(f"Spec check: {n} problem(s)" if n else "Spec check: OK")
+            return 1 if n else 0
         if args.command == "gates":
             from framegate.adapters import get_adapter
             from framegate.gates import run_gates

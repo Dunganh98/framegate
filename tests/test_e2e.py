@@ -375,14 +375,13 @@ def test_auto_tests_gate_stops_for_a_spec_change(demo_repo: DemoRepo) -> None:
 
 
 def test_max_attempts_parks_then_redo(demo_repo: DemoRepo) -> None:
-    """A step failing max_attempts times is parked (no stop): review and the final gate still
-    run; after an answer the redo passes."""
+    """A step failing max_attempts times is parked (no stop): the final gate comes (the only
+    step is parked, so without a review); after an answer the redo passes and is reviewed."""
     r = demo_repo
     r.add_toml(FAST)
     r.scenario(implement_fail=3)
     to_final_gate(r)
-    expected = ["TESTS", "TEST_REVIEW", "IMPLEMENT", "IMPLEMENT", "IMPLEMENT", "REVIEW", "PR"]
-    assert phases(r) == expected
+    assert phases(r) == ["TESTS", "TEST_REVIEW", "IMPLEMENT", "IMPLEMENT", "IMPLEMENT"]
     impl = [c for c in r.calls() if c["phase"] == "IMPLEMENT"]
     assert "Attempt 1 failed these gates" in impl[1]["prompt"]
     assert "Attempt 2 failed these gates" in impl[2]["prompt"]
@@ -608,8 +607,8 @@ def test_a_parked_batch_is_redone_as_one(demo_repo: DemoRepo) -> None:
     (r.root / "out/demo/answers.md").write_text("1. neg(0) is 0.\n", encoding="utf-8")
     assert r.af("answer", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    # the batch once, as one run
-    assert phases(r)[-4:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "PR"]
+    # the batch once, as one run; its code is the first the reviewer sees
+    assert phases(r)[-5:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "REVIEW", "PR"]
     assert r.progress()["completed_steps"] == [1, 2] and not r.progress()["parked"]
     redo = [e for e in r.events() if e["kind"] == "redo_result"]
     assert [(e["label"], e["passed"]) for e in redo] == [("steps 1, 2", True)]
@@ -617,46 +616,79 @@ def test_a_parked_batch_is_redone_as_one(demo_repo: DemoRepo) -> None:
 
 def test_dependent_steps_wait_for_a_parked_step(demo_repo: DemoRepo) -> None:
     """Step 2 depends on step 1 (plan.md): when step 1 parks, step 2 waits without a run instead
-    of building half of step 1; a review finding only on parked IDs is deferred to the redo (no
-    review-fix run on a parked step's work); the redo does both steps in plan order."""
+    of building half of step 1. Nothing is built then, so the final gate comes without a
+    review; the redo does both steps in plan order and its code is reviewed."""
     r = demo_repo
     r.add_toml(FAST)
     r.two_steps()
     r.defer_tests_gate()
-    r.scenario(park_steps=[1], review_finding=True)
+    r.scenario(park_steps=[1])
     assert r.af("approve-spec", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    assert phases(r) == ["TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "TRIAGE", "PR"]
+    assert phases(r) == ["TESTS", "TEST_REVIEW", "IMPLEMENT"]
     parked = r.progress()["parked"]
     assert [(p["label"], p["reason"]) for p in parked] == [
         ("step 1 - add", "no reasonable assumption possible (question)"),
         ("step 2 - neg", "waits for parked step 1 (plan.md)"),
     ]
     assert parked[0]["dependents"] == [2]
-    review = r.calls()[3]["prompt"]
-    assert "own these spec IDs: DEMO-R-001, DEMO-E-001, DEMO-R-002. Write no findings" in review
+    assert [e["kind"] for e in r.events()].count("review_skipped") == 1
+    (r.root / "out/demo/answers.md").write_text("1. Q: step 1\n   A: Ints only.\n", "utf-8")
+    assert r.af("answer", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+    assert phases(r)[3:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "IMPLEMENT", "REVIEW", "PR"]
+    redo = [e for e in r.events() if e["kind"] == "redo_result"]
+    assert [(e["label"], e["passed"]) for e in redo] == [
+        ("step 1 - add", True),
+        ("step 2 - neg", True),
+    ]
+    assert "nothing parked" in r.progress()["waiting"]["message"]
+    steps_md = read(r, "out/demo/steps.md")
+    assert steps_md.count("## Step ") == 2 and not list((r.root / "out/demo/notes").glob("*"))
+
+
+def test_a_review_finding_on_a_parked_step_is_deferred(demo_repo: DemoRepo) -> None:
+    """Step 1 parks, the independent step 2 is built and reviewed: a review finding only on
+    parked IDs is deferred to the redo (no review-fix run on a parked step's work)."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.two_steps()
+    plan = r.root / "specs/demo/plan.md"
+    plan.write_text(read(r, "specs/demo/plan.md").replace("Depends on: Step 1\n", ""), "utf-8")
+    r.defer_tests_gate()
+    r.scenario(park_steps=[1], review_finding=True)
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+    assert phases(r) == [
+        "TESTS",
+        "TEST_REVIEW",
+        "IMPLEMENT",
+        "IMPLEMENT",
+        "REVIEW",
+        "TRIAGE",
+        "PR",
+    ]
+    parked = r.progress()["parked"]
+    assert [p["label"] for p in parked] == ["step 1 - add"]
+    assert r.progress()["completed_steps"] == [2]
+    review = r.calls()[4]["prompt"]
+    assert "own these spec IDs: DEMO-R-001, DEMO-E-001. Write no findings" in review
     triage = [e for e in r.events() if e["kind"] == "triage"][0]
     assert [f["verdict"] for f in triage["findings"]] == ["DEFERRED"] and not triage["remaining"]
     assert [e["kind"] for e in r.events()].count("findings_deferred") == 1
     (r.root / "out/demo/answers.md").write_text("1. Q: step 1\n   A: Ints only.\n", "utf-8")
     assert r.af("answer", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    assert phases(r)[6:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "IMPLEMENT", "IMPLEMENT", "PR"]
     redo = [e for e in r.events() if e["kind"] == "redo_result"]
-    assert [(e["label"], e["passed"]) for e in redo] == [
-        ("step 1 - add", True),
-        ("step 2 - neg", True),
-    ]
+    assert [(e["label"], e["passed"]) for e in redo] == [("step 1 - add", True)]
     # the deferred review test ran with step 1's IDs: its redo failed once on it, then fixed it
     gates = [e for e in r.events() if e["kind"] == "gate"]
     assert [(e["step"], e["passed"]) for e in gates] == [
+        ("step 2 - neg", True),
         ("step 1 - add", False),
         ("step 1 - add", True),
-        ("step 2 - neg", True),
     ]
     assert "nothing parked" in r.progress()["waiting"]["message"]
-    steps_md = read(r, "out/demo/steps.md")
-    assert steps_md.count("## Step ") == 3 and not list((r.root / "out/demo/notes").glob("*"))
 
 
 def test_a_check_on_files_the_implementer_may_not_edit_parks_at_once(demo_repo: DemoRepo) -> None:
@@ -670,7 +702,7 @@ def test_a_check_on_files_the_implementer_may_not_edit_parks_at_once(demo_repo: 
     r.defer_tests_gate()
     assert r.af("approve-spec", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    assert phases(r) == ["TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "PR"]
+    assert phases(r) == ["TESTS", "TEST_REVIEW", "IMPLEMENT"]
     (p,) = r.progress()["parked"]
     assert p["attempts"] == 1 and p["reason"] == (
         "unfixable in IMPLEMENT: format fails only in files it may not edit: tests/test_demo.py"
@@ -771,9 +803,7 @@ def test_a_diagnosed_test_problem_is_approved_at_the_final_gate(
         "IMPLEMENT",
         "IMPLEMENT",
         "DIAGNOSIS",
-        "REVIEW",
-        "PR",
-    ]
+    ]  # the only step is parked: nothing to review
     (p,) = r.progress()["parked"]
     assert p["reason"] == "diagnosis: the fix needs a tests change" and p["attempts"] == 2
     assert "Proposed fix (tests): return a + b." in p["question"]
@@ -786,11 +816,11 @@ def test_a_diagnosed_test_problem_is_approved_at_the_final_gate(
     )
     assert r.af("answer", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    assert phases(r)[7:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "PR"]
+    assert phases(r)[5:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "REVIEW", "PR"]
     assert "Diagnosis (out/demo/diagnoses/step-1-add.md)" in read(
         r, "out/demo/questions_archive.md"
     )
-    assert "approves a diagnosis' proposed fix" in r.calls()[9]["prompt"]
+    assert "approves a diagnosis' proposed fix" in r.calls()[7]["prompt"]
     assert r.progress()["completed_steps"] == [1]
 
 

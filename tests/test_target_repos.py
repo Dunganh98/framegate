@@ -133,19 +133,20 @@ def test_commit_leaves_the_users_other_files_alone(demo_repo: DemoRepo) -> None:
     (r.root / "notes.md").write_text("my notes\n", encoding="utf-8")  # untracked
     (r.root / "scratch").mkdir()
     (r.root / "scratch" / "try.py").write_text("X = 1\n", encoding="utf-8")
-    (r.root / "pyproject.toml").write_text(
-        (r.root / "pyproject.toml").read_text(encoding="utf-8") + "\n# local edit\n",
-        encoding="utf-8",
-    )
+    (r.root / "docs").mkdir()
+    (r.root / "docs" / "guide.md").write_text("v1\n", encoding="utf-8")
+    git(r.root, "add", "docs")
+    git(r.root, "commit", "-q", "-m", "docs")
+    (r.root / "docs" / "guide.md").write_text("v2, a local edit\n", encoding="utf-8")
     (r.root / "README.md").write_text("staged by the user\n", encoding="utf-8")
     git(r.root, "add", "README.md")
     assert r.af("approve-spec", "demo") == 0
     committed = git(r.root, "show", "--name-only", "--format=", "HEAD").split()
     assert "specs/demo/requirements.md" in committed and "src/demo/__init__.py" in committed
-    assert not {"notes.md", "scratch/try.py", "pyproject.toml", "README.md"} & set(committed)
+    assert not {"notes.md", "scratch/try.py", "docs/guide.md", "README.md"} & set(committed)
     status = git(r.root, "status", "--porcelain")
     assert "?? notes.md" in status and "?? scratch/" in status
-    assert " M pyproject.toml" in status and "A  README.md" in status  # still staged, not lost
+    assert " M docs/guide.md" in status and "A  README.md" in status  # still staged, not lost
 
 
 def test_commit_with_nothing_of_its_own_is_no_commit(demo_repo: DemoRepo) -> None:

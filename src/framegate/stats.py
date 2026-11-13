@@ -68,6 +68,8 @@ class FeatureStats:
     human_waits: int = 0
     #: from `framegate spec` to the approval (the spec dialogue in the chat), every round
     spec_seconds: float = 0.0
+    #: rounds in which every plan step was parked (no review, final checks or summary run)
+    reviews_skipped: int = 0
 
     @property
     def cost(self) -> float:
@@ -125,6 +127,7 @@ class FeatureStats:
             "assumptions": self.assumptions,
             "risk": self.risk,
             "auto_approved": self.auto_approved,
+            "reviews_skipped": self.reviews_skipped,
         }
 
 
@@ -203,6 +206,8 @@ def feature_stats(feature: str, events: list[dict[str, Any]]) -> FeatureStats:
             st.assumptions = (e.get("facts") or {}).get("assumptions", st.assumptions)
         elif kind == "human_gate":
             st.auto_approved = st.auto_approved or bool(e.get("auto"))
+        elif kind == "review_skipped":
+            st.reviews_skipped += 1
         elif kind == "waiting":
             waiting = ts
         elif kind == "retro_coverage":
@@ -366,6 +371,11 @@ def detail(st: FeatureStats) -> list[str]:
         f"{'-' if st.assumptions is None else st.assumptions}; risk {st.risk or '-'}"
         + (" (approved automatically)" if st.auto_approved else "")
     )
+    if st.reviews_skipped:
+        lines.append(
+            f"Rounds with every step parked (review, final checks and summary skipped): "
+            f"{st.reviews_skipped}"
+        )
     return lines
 
 

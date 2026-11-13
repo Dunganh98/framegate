@@ -118,6 +118,12 @@ file under ~150 lines: facts, not prose), and write the code map (`[docs] code_m
 
 Every later feature's PR phase updates the sections it touches.
 
+If the project is installed into its environment from its packaging files (a Python editable
+install, for example), set `[env] refresh` in framegate.toml to the command that redoes it,
+e.g. `refresh = ["python", "-m", "pip", "install", "-e", ".", "--no-deps"]`: every spec
+approval runs it, so a package or source folder a feature adds in its spec phase imports in
+the run without a step by hand.
+
 ## 5. Check: `framegate doctor --brief`
 
 First `framegate install-tools` once more: with framegate.toml written it also installs the

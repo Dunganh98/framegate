@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 from framegate.adapters import get_adapter
 from framegate.adapters.base import LanguageAdapter
-from framegate.checks import spec_lint
+from framegate.checks import frame_diff, spec_lint
 from framegate.config import CONFIG_FILE, Config, ConfigError
 from framegate.state import GitError, git
 
@@ -277,6 +277,29 @@ def run(
             "WARN" if absent else "OK",
             ".gitignore",
             f"add: {', '.join(absent)} (the workflow commits with `git add -A`)" if absent else "",
+        )
+    )
+
+    try:
+        setup, stray = frame_diff.setup_state(adapter)
+    except GitError:
+        setup, stray = [], []  # reported above (no repository / no commit)
+    dirty = []
+    if stray:
+        dirty.append(
+            f"commit or revert before a feature (approve-spec refuses): {', '.join(stray)}"
+        )
+    if setup:
+        dirty.append(
+            f"setup files, committed with the next approved spec: {', '.join(setup)} (commit "
+            "them now if they are not part of that feature)"
+        )
+    add(
+        Item(
+            "WARN" if stray or setup else "OK",
+            "git: uncommitted protected files",
+            "\n".join(dirty),
+            info=not stray,
         )
     )
 

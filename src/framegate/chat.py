@@ -447,6 +447,8 @@ def _final_brief(
         ("Not proven (check it by using it)", ("not proven",)),
     ):
         found = _section(sections, *names)
+        if prog.get("review_skipped"):
+            continue  # nothing built: nothing proven, nothing to try
         lines += (
             _titled(title, found, BRIEF_PROVEN_LINES)
             if found
@@ -518,7 +520,9 @@ def _outcomes(
     fg = [e for e in events if e.get("kind") == "final_gates"]
     last = fg[-1] if fg else {}
     verdict = (
-        "final gates PASSED"
+        "nothing built, so no review and no final checks"
+        if prog.get("review_skipped")
+        else "final gates PASSED"
         if last.get("passed")
         else f"final gates FAILED ({', '.join(last.get('failed') or [])})"
         if last
