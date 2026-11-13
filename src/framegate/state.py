@@ -8,6 +8,7 @@ import json
 import os
 import pathlib
 import subprocess
+import time
 from typing import Any
 
 from framegate.config import Config
@@ -243,4 +244,21 @@ def save_progress(cfg: Config, feature: str, prog: dict[str, Any]) -> None:
     # written to a temp file and moved into place: a run killed mid-write leaves the old file
     target, tmp = d / "progress.json", d / "progress.json.tmp"
     tmp.write_text(json.dumps(prog, indent=2), encoding="utf-8")
+    replace_file(tmp, target)
+
+
+#: waits (s) between tries of the move below: about 3 s in all
+REPLACE_WAITS = (0.05, 0.1, 0.2, 0.4, 0.8, 1.5)
+
+
+def replace_file(tmp: pathlib.Path, target: pathlib.Path) -> None:
+    """os.replace, tried again on PermissionError. On Windows the move is refused (WinError 5)
+    while another process has the target open: the chat's `framegate watch` / `status` reading
+    it, a virus scanner, a file-sync client (seen in the test suite on a OneDrive folder)."""
+    for wait in REPLACE_WAITS:
+        try:
+            os.replace(tmp, target)
+            return
+        except PermissionError:
+            time.sleep(wait)
     os.replace(tmp, target)

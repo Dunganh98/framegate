@@ -59,3 +59,41 @@ def test_token_usage_of_a_result() -> None:
         "cache_write": 800,
     }
     assert token_usage({}) == {} and token_usage({"usage": "n/a"}) == {}
+
+
+def test_progress_move_is_tried_again_when_the_file_is_held(
+    demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows refuses the move while a reader has progress.json open (WinError 5)."""
+    import framegate.state as state
+
+    cfg = load_config(demo_repo.root)
+    real, calls = state.os.replace, []
+
+    def held_twice(src: object, dst: object) -> None:
+        calls.append(1)
+        if len(calls) <= 2:
+            raise PermissionError(13, "Access is denied")
+        real(src, dst)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(state.os, "replace", held_twice)
+    monkeypatch.setattr(state.time, "sleep", lambda s: None)
+    save_progress(cfg, "demo", {"phase": "REVIEW"})
+    assert len(calls) == 3
+    assert load_progress(cfg, "demo")["phase"] == "REVIEW"
+
+
+def test_progress_move_gives_up_with_the_error(
+    demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import framegate.state as state
+
+    cfg = load_config(demo_repo.root)
+
+    def held(src: object, dst: object) -> None:
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr(state.os, "replace", held)
+    monkeypatch.setattr(state.time, "sleep", lambda s: None)
+    with pytest.raises(PermissionError):
+        save_progress(cfg, "demo", {"phase": "REVIEW"})
