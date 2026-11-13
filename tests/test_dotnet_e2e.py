@@ -198,8 +198,25 @@ def test_dotnet_full_flow(dotnet_repo: DemoRepo) -> None:
         "or in tests/Demo.Tests/Review/)",
         "[PASS] traceability",
         "[PASS] test smells",
+        # the coverage run recorded the test assembly's own lines (coverlet leaves it out
+        # unless asked), and every assertion of the feature's tests ran
+        "[PASS] unreached assertions (feature tests)",
     ):
         assert check in final, (check, final)
+    adapter = DotnetAdapter(load_config(r.root))
+    hits, note = adapter.test_line_hits()
+    rel = "tests/Demo.Tests/CalcTests.cs"
+    assert rel in hits, (note, sorted(hits))
+    found = adapter.test_assertions(rel)
+    assert found and all(t.lines for t in found), found
+    # the scanner's assertion lines are lines coverlet records, and they ran
+    assert all(hits[rel].get(n, 0) > 0 for t in found for n in t.lines), (found, hits[rel])
+    # the review tests are not the feature's own tests: not recorded
+    assert not [f for f in hits if "/Review/" in f], sorted(hits)
+    gates = [e for e in r.events() if e["kind"] == "gate"]
+    assert gates and all(e["passed"] for e in gates)
+    step_log = (r.root / "out/demo/progress.log").read_text(encoding="utf-8")
+    assert "green (attempt 1)" in step_log
     if DotnetAdapter(load_config(r.root)).stryker_command():
         assert "[PASS] mutation score (feature tests)" in final, final
         survivors = (r.root / "out/demo/mutation_survivors.md").read_text(encoding="utf-8")

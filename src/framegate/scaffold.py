@@ -191,6 +191,20 @@ def spec_brief(cfg: Config, feature: str) -> str:
         if kpath.is_file()
         else [f"(No project knowledge file {cfg.knowledge}; `framegate init` creates one.)", ""]
     )
+    from framegate.checks.structure import oversized
+
+    long_files, total = oversized(adapter)
+    sizes = (
+        [
+            f"- Source files over {cfg.max_file_lines} lines ([gates] max_file_lines): "
+            + ", ".join(f"{path} ({n})" for path, n in long_files)
+            + (f", and {total - len(long_files)} more" if total > len(long_files) else "")
+            + ". A plan step that would add code to one of them names the new file the code "
+            'goes to instead ("New file: <path> (<what goes there>)").'
+        ]
+        if long_files
+        else []
+    )
     return "\n".join(
         [
             f"framegate spec brief: feature '{feature}', language {cfg.language}",
@@ -214,6 +228,7 @@ def spec_brief(cfg: Config, feature: str) -> str:
             f"{cfg.code_map} ("
             + ("exists: read it first" if (cfg.root / cfg.code_map).is_file() else "missing")
             + ")",
+            *sizes,
             "",
             adapter.conventions_brief().rstrip(),
             "",

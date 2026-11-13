@@ -140,3 +140,66 @@ def test_approve_spec_refuses_until_fixed_or_forced(demo_repo: DemoRepo, capsys)
     design.write_text(before, encoding="utf-8")
     assert r.af("spec-check", "demo") == 0
     assert capsys.readouterr().out.strip().endswith("Spec check: OK")
+
+
+FIXTURES = """\
+# Demo — Requirements
+
+Feature code: DEMO
+
+## Requirements
+| ID | Requirement | Acceptance criterion |
+|---|---|---|
+| DEMO-R-001 | a shot review holds the save chance | given a saved shot then > 0 |
+
+## Edge cases
+| ID | Situation | Expected behavior | Decided by (method, when) |
+|---|---|---|---|
+| DEMO-E-001 | the likely span is empty | NaN | |
+| DEMO-E-002 | the outer span is unknown | the start, not clipped | |
+| DEMO-E-003 | a blocked shot | no review | |
+| DEMO-E-004 | no shot at all | empty list | |
+| DEMO-E-005 | | | |
+
+## Test data and fixtures
+| ID | Data (seed / file / generator) | Observable | Measured with | Zero cases allowed |
+|---|---|---|---|---|
+{rows}
+"""
+
+
+def test_every_edge_case_needs_a_fixture_row(demo_repo: DemoRepo) -> None:
+    """Seen live (M5-reach-by-save-chance): the pinned match held none of three cases the
+    spec named, the fixture table had rows per requirement group only, and the test writer
+    and the test reviewer asked about the gaps five times."""
+    r = demo_repo
+    cfg = load_config(r.root)
+    path = r.root / "specs/demo/requirements.md"
+
+    def found(rows: str) -> list[str]:
+        path.write_text(FIXTURES.format(rows=rows), encoding="utf-8")
+        return spec_lint.edge_case_fixture_problems(cfg, "demo")
+
+    # nothing pinned (the template's empty row): every test builds its own inputs
+    assert found("| DEMO-R-001 | | | | no |") == []
+    got = found("| DEMO-R-001 | seed 39, slot 10 | 2 shot reviews | scan 2026-11-12 | no |")
+    assert [x.split(": ")[1].split(" has")[0] for x in got] == [
+        f"edge case DEMO-E-00{n}" for n in (1, 2, 3, 4)
+    ]
+    assert 'or write "unit-only: ' in got[0]
+    # one row may name several IDs; a unit-only row needs no data
+    rows = (
+        "| DEMO-R-001, DEMO-E-003 | seed 39, slot 10 | 2 shot reviews | scan | no |\n"
+        "| DEMO-E-001..E-002 | unit-only: calculator test: no match has an empty span | | | no |\n"
+    )
+    (problem,) = found(rows)
+    assert "edge case DEMO-E-004 has no row" in problem
+    assert found(rows + "| E-004 | unit-only: empty match | | | yes |") == []
+    assert spec_lint.listed_ids("XXX-E-001, E-003 to E-005; XXX-R-002") == {
+        "XXX-E-001",
+        "XXX-E-003",
+        "XXX-E-004",
+        "XXX-E-005",
+        "XXX-R-002",
+    }
+    assert spec_lint.listed_ids("E-002", "ABC") == {"ABC-E-002"}

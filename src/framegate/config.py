@@ -74,6 +74,8 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "extra": (dict,),
         "extra_timeout": (int,),
         "max_file_lines": (int,),
+        "step_tests": (str,),
+        "unreached_assertions": (bool,),
     },
     "risk": {
         "max_changed_lines": (int,),
@@ -142,6 +144,11 @@ MARKER_KINDS = ("refs", "tags")
 #: tests the final coverage / mutation runs use: the feature's tests (its spec IDs + the review
 #: tests; the whole suite then runs once more without instrumentation) or the whole suite
 GATE_SCOPES = ("feature", "suite")
+#: [gates] step_tests: "suite" (default) = a step gate also runs the whole suite (the adapter's
+#: everyday selection), with the tests of this feature's later steps left out: a step that
+#: breaks another feature's tests fails at once, not at the final gate. "feature" = only the
+#: tests of the step's and the earlier steps' IDs (a suite too slow to run after every step)
+STEP_TESTS = ("suite", "feature")
 #: [gates] tests: "defer" (default) = never stop at the tests gate: the test reviewer has checked
 #: the tests against the spec; open questions, objections left and failed test checks go to the
 #: final gate (two human gates: spec and final); "human" = always stop at the tests gate;
@@ -298,6 +305,11 @@ class Config:
     #: [gates] max_file_lines: a changed source file longer than this is listed in the final
     #: gate's structure report and asked about at the final gate (never blocking; 0 = off)
     max_file_lines: int = 400
+    #: [gates] step_tests: "suite" | "feature" (see STEP_TESTS)
+    step_tests: str = "suite"
+    #: [gates] unreached_assertions: the final gate fails on an assertion of a test the
+    #: feature added that the feature's own tests never ran (needs the coverage run)
+    unreached_assertions: bool = True
     #: [docs] code_map: the living code map (per module: purpose, key classes, how they work
     #: together, where to look for X); drafted by /framegate:setup, updated by the PR phase
     code_map: str = "docs/code-map.md"
@@ -583,6 +595,12 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
             )
         setattr(cfg, key, value)
     cfg.format_fix = gates.get("format_fix", cfg.format_fix)
+    cfg.step_tests = gates.get("step_tests", cfg.step_tests)
+    if cfg.step_tests not in STEP_TESTS:
+        raise ConfigError(
+            f"[gates] step_tests must be one of {', '.join(STEP_TESTS)}, got '{cfg.step_tests}'"
+        )
+    cfg.unreached_assertions = gates.get("unreached_assertions", cfg.unreached_assertions)
     cfg.max_file_lines = gates.get("max_file_lines", cfg.max_file_lines)
     if cfg.max_file_lines < 0:
         raise ConfigError("[gates] max_file_lines must be >= 0 (0 = no file size question)")

@@ -26,8 +26,11 @@ from framegate.adapters.base import (
     Check,
     CheckResult,
     LanguageAdapter,
+    TestAssertions,
     TestRun,
     TestScope,
+    cobertura_hits,
+    cobertura_without,
     diff_coverage_summary,
     incomplete_reason,
     incomplete_result,
@@ -124,6 +127,25 @@ def _vacuous_loop(fn: ast.AST) -> bool:
         for n in ast.walk(fn)
     )
     return not guarded
+
+
+def _always_fails(node: ast.Assert) -> bool:
+    """`assert False` / `assert 0, "not reached"`: a guard that is meant not to run."""
+    return isinstance(node.test, ast.Constant) and not node.test.value
+
+
+def assertion_lines(fn: ast.AST) -> list[int]:
+    """The lines of a test's assertions: `assert ...`, `pytest.raises` / `warns` and
+    `assert_*` helper calls. Not `pytest.fail` and `assert False` (guards meant not to run)."""
+    lines = set()
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Assert) and not _always_fails(n):
+            lines.add(n.lineno)
+        elif isinstance(n, ast.Call):
+            name = _call_name(n)
+            if name in {"raises", "warns"} or name.startswith("assert"):
+                lines.add(n.lineno)
+    return sorted(lines)
 
 
 def _is_skip_call(node: ast.Call) -> bool:
@@ -387,7 +409,37 @@ class PythonAdapter(LanguageAdapter):
             return [], f"coverage run incomplete ({reason or 'no report'})"
         return [xml], ""
 
-    def coverage_checks(self, base_ref: str, scope: TestScope | None = None) -> list[Check]:
+    def test_line_hits(self) -> tuple[dict[str, dict[int, int]], str]:
+        xml = self.root / self.cfg.paths.out / "coverage.xml"
+        if not xml.is_file():
+            return {}, "no coverage report (see the coverage run)"
+        tests = self.cfg.paths.tests.rstrip("/") + "/"
+        hits = {f: v for f, v in cobertura_hits([xml], self.root).items() if f.startswith(tests)}
+        return hits, "" if hits else "the coverage run did not record the test files"
+
+    def test_assertions(self, rel: str) -> list[TestAssertions]:
+        try:
+            tree = ast.parse((self.root / rel).read_text(encoding="utf-8"))
+        except (OSError, SyntaxError):
+            return []
+        out = []
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not node.name.startswith("test") or not node.body:
+                continue
+            first = node.body[0].lineno  # (the `def` line runs when the file is imported)
+            out.append(
+                TestAssertions(node.name, first, node.end_lineno or first, assertion_lines(node))
+            )
+        return out
+
+    def coverage_checks(
+        self,
+        base_ref: str,
+        scope: TestScope | None = None,
+        cover_tests: Sequence[str] = (),
+    ) -> list[Check]:
         out_dir = self.root / self.cfg.paths.out
         xml = out_dir / "coverage.xml"
 
@@ -404,6 +456,8 @@ class PythonAdapter(LanguageAdapter):
             collect = self._has_module("pytest_cov")
             if collect:
                 cmd += [f"--cov={root}" for root in self.cfg.src_roots]
+                if cover_tests:  # the tests' own lines: which assertions ran (unreached.py)
+                    cmd.append(f"--cov={self.cfg.paths.tests}")
                 cmd += ["--cov-branch", f"--cov-report=xml:{xml}"]
             else:
                 note = "\nSKIPPED coverage: pytest-cov is not installed in the project environment"
@@ -428,10 +482,14 @@ class PythonAdapter(LanguageAdapter):
             tool = self.tool_path("diff-cover", self.python)
             if not tool:
                 return CheckResult("SKIPPED", "SKIPPED: diff-cover is not installed")
+            report = xml
+            if cover_tests:  # diff coverage is about the source files only
+                report = out_dir / "coverage_src.xml"
+                cobertura_without(xml, report, self.root, self.cfg.paths.tests.rstrip("/") + "/")
             code, out = run_command(
                 [
                     tool,
-                    str(xml),
+                    str(report),
                     f"--compare-branch={base_ref}",
                     f"--fail-under={self.cfg.diff_coverage}",
                 ],

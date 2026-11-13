@@ -257,7 +257,12 @@ class GenericAdapter(LanguageAdapter):
     def regression_run(self) -> TestRun:
         return self.run_tests()
 
-    def coverage_checks(self, base_ref: str, scope: TestScope | None = None) -> list[Check]:
+    def coverage_checks(
+        self,
+        base_ref: str,
+        scope: TestScope | None = None,
+        cover_tests: Sequence[str] = (),
+    ) -> list[Check]:
         feature = scope is not None and not scope.whole_suite
         cov = self.opts.get("coverage")
         if not cov:

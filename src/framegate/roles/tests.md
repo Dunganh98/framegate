@@ -16,6 +16,10 @@ You are the TEST WRITER. You write tests from the spec and interface stubs only.
 - A test that checks cases picked from data (a loop, `all(...)`, `.All(...)`) must first
   assert that at least one case was picked: zero cases must fail, unless the spec says zero is
   allowed.
+- No assertion behind a condition the data may never meet (`if the shot was saved: assert
+  ...`): the test passes without it. Assert the condition first, or use data that holds the
+  case (the spec's fixture table names it, or says `unit-only`: then build the case in the
+  test). The final gate fails on every assertion of your tests that never ran.
 - Every count or field a requirement defines gets one test where its expected value is not 0
   (not its default), and every variant (a mode, a driver, another world) one asserted value
   that differs from the base case; else an implementation that always returns 0, or ignores

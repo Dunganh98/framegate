@@ -19,10 +19,10 @@ uv tool uninstall agentflow
 
 claude plugin marketplace add Dunganh98/framegate
 claude plugin install framegate@framegate
-uv tool install "git+https://github.com/Dunganh98/framegate@v0.6.0"
+uv tool install "git+https://github.com/Dunganh98/framegate@v0.7.0"
 ```
 
-Then restart Claude Code. Check: `framegate --version` prints `framegate 0.6.0`, and
+Then restart Claude Code. Check: `framegate --version` prints `framegate 0.7.0`, and
 `/framegate:status` exists in the chat.
 
 Notes:
@@ -69,7 +69,7 @@ change source code, tests or specs, and do not commit or push: show me the resul
      `framegate@framegate`; a marketplace entry named agentflow -> framegate;
    - CI files that call `agentflow gates` -> `framegate gates`, and their install step;
    - a dependency entry `agentflow` in pyproject.toml / requirements files (Python projects)
-     -> `framegate @ git+https://github.com/Dunganh98/framegate@v0.6.0`;
+     -> `framegate @ git+https://github.com/Dunganh98/framegate@v0.7.0`;
    - `.gitignore` lines and docs that name `.agentflow/` or `agentflow.toml`.
    Leave alone: text that is history (retro documents, findings, changelogs, commit messages)
    and names of branches or folders that merely contain the word. List what you left.

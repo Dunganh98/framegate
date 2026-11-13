@@ -250,6 +250,41 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
   The earlier out-of-repo prototype (a `.framegate` junction to `projects/<name>/` in this
   repo, nothing tracked in the target) is the local-only branch `legacy`; not continued.
 
+- **From the M5-reach-by-save-chance retro (FCSim, 2026-11-12: $9.27; branch
+  feat/retro-keeper-reach, 2026-11-13; docs/findings/2026-11-13-M5-reach-by-save-chance-retro.md;
+  FCSim backlog rows B1-B5, to be closed there with `framegate backlog done`):**
+  - #1 Edge cases without pinned data (five questions): `framegate spec-check` fails an
+    edge-case ID without a row in "Test data and fixtures" once that table pins data (the
+    data, or `unit-only: <why>`; `checks/spec_lint.py: edge_case_fixture_problems`); template
+    text, a spec-dialogue point. "Every outcome a rule names in words" is template text only
+    (not mechanical).
+  - #2 An assertion behind `if saved` never ran: the coverage run records the feature's own
+    test files (Python `--cov=<tests>`, .NET coverlet `IncludeTestAssembly`, unchanged test
+    files excluded; diff coverage still on source files only), and the final check
+    `unreached assertions (feature tests)` fails on an assertion line without a hit in a test
+    that ran (`checks/unreached.py`; guards and lines marked `unreached: <why>` are left out;
+    the test writer repairs it; `[gates] unreached_assertions = false` turns it off).
+  - #3 Answers that only took defaults restarted everything (26 min): such answers
+    (`take_defaults`) that change nothing (`answers_changed_nothing`: no commit, no new
+    question, nothing to restructure, final checks passed) approve the feature without a
+    second round. The spec update and the test amend still run (two short agent runs): only
+    they can tell that a default needs no change. A "leave it" answer to a file-size
+    question starts no implementer run.
+  - #4 "File too long" only at the review: the spec brief and every implementer task name
+    the files already over the limit, the plan template asks for the new file, every step
+    gate prints changed files over the limit (`GREW`), and the final gate asks only about
+    files the feature made longer (risk rating the same).
+  - #5 A step broke another feature's frozen test, both step gates passed: the step gate
+    runs the whole everyday suite after the step's tests, leaving out this feature's later
+    steps, contested tests and the regression baseline (`gates.step_suite`; `[gates]
+    step_tests = "feature"` turns it off). **This reverses** "a refactor's structure fix is
+    checked with the feature's tests, not the whole suite": that fix now also runs the suite
+    once per attempt (FCSim: about 1 min).
+  - Not done: #6 (FCSim: one boundary test). The mutation score that moved 99.1 % -> 97.4 %
+    on the same code is not looked into.
+  - **Not yet seen live:** all of it. The .NET part of #2 is checked by the slow e2e test
+    with a real coverlet run; the others by unit and fake-claude tests.
+
 ## User decisions so far
 1. Two human gates, forward only: spec and final (2026-11-10, after the first FCSim feature;
    was three). The test reviewer checks the tests against the spec; its questions, objections

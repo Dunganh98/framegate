@@ -31,7 +31,14 @@ from framegate.adapters.base import (
     incomplete_result,
     run_command,
 )
-from framegate.checks import frame_diff, mutation, structure, test_smells, traceability
+from framegate.checks import (
+    frame_diff,
+    mutation,
+    structure,
+    test_smells,
+    traceability,
+    unreached,
+)
 from framegate.config import Config
 from framegate.failure_filter import filter_failure_output
 from framegate.report import short_name
@@ -255,6 +262,86 @@ def _skipped(reason: str) -> Callable[[], CheckResult]:
     return lambda: CheckResult("SKIPPED", reason)
 
 
+#: step scope: the whole suite beside the step's own tests ([gates] step_tests = "suite")
+STEP_SUITE = "other tests (whole suite; this feature's later steps left out)"
+
+
+def _name_parts(name: str) -> list[str]:
+    """`tests.test_x.TestA::test_b[1]` / `Ns.Class.Method(x: 1)` -> their name parts."""
+    head = re.split(r"[(\[]", name, maxsplit=1)[0]
+    return [p for p in re.split(r"[.:/\\]+", head) if p]
+
+
+def later_step_tests(adapter: LanguageAdapter, feature: str, covered: list[str]) -> list[str]:
+    """Where the feature's tests are that carry none of the `covered` IDs (`file::name`, as
+    collect_req_tags gives them): tests of later or parked steps, red by design at a step."""
+    ids = feature_ids(adapter.cfg, feature)
+    by_test: dict[str, set[str]] = {}
+    for req, places in adapter.collect_req_tags().items():
+        for where in places:
+            by_test.setdefault(where, set()).add(req)
+    done = set(covered)
+    return sorted(w for w, reqs in by_test.items() if reqs & ids and not reqs & done)
+
+
+def is_test_at(case_name: str, places: list[str]) -> bool:
+    """Is the test case (a name from the test report) one of `places` (`file::Class.name`)?
+    The name must match, and so must its file or its class: a test of another feature with
+    the same method name is not left out."""
+    parts = _name_parts(case_name)
+    for where in places:
+        file, _, tail = where.rpartition("::")
+        names = _name_parts(tail)
+        if not names or names[-1] not in parts:
+            continue
+        stem = file.replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        if stem in parts or (len(names) > 1 and names[-2] in parts):
+            return True
+    return False
+
+
+def step_suite(adapter: LanguageAdapter, feature: str, covered: list[str]) -> CheckResult:
+    """The whole suite (the adapter's everyday selection) at a step gate. Seen live: a step
+    made helpers public and broke another feature's frozen public-surface test; both step
+    gates passed (they ran only this feature's tests) and the break showed in a later fix
+    run. Failures of this feature's later steps, of contested tests and of tests that
+    already failed when the spec was approved are left out."""
+    cfg = adapter.cfg
+    later = later_step_tests(adapter, feature, covered)
+    run = adapter.run_tests(junit=cfg.out_dir / "step_suite.xml")
+    if run.status == "passed":
+        return CheckResult("PASS", run.output)
+    if run.status != "failed" or run.cases is None:
+        if run.status == "failed" and later:
+            return CheckResult(
+                "SKIPPED",
+                "SKIPPED: the suite fails, but the run gave no per-test results, so the tests "
+                "of this feature's later steps cannot be told apart from other failures",
+            )
+        return CheckResult("FAIL", run.output)
+    known = regression_baseline(cfg, feature)
+    contested = {short_name(n) for n in read_contested(cfg)}
+    left_out = 0
+    other = []
+    for c in run.cases:
+        if c.outcome not in ("failed", "error"):
+            continue
+        if c.name in known or short_name(c.name) in contested or is_test_at(c.name, later):
+            left_out += 1
+        else:
+            other.append(c.name)
+    note = f"left out (later steps, contested, failing before the feature): {left_out}"
+    if other:
+        return CheckResult(
+            "FAIL",
+            run.output
+            + f"\n\nTests outside this step fail ({len(other)}); they passed before it. Your "
+            f"change broke them: fix the code, not the tests.\n{_listed(other)}",
+            note,
+        )
+    return CheckResult("PASS", run.output, note + "; no other failure")
+
+
 def checks(
     adapter: LanguageAdapter,
     feature: str,
@@ -277,11 +364,19 @@ def checks(
             return tests_expecting(run, ExpectedRed(contested=contested), set())
 
         c.append(Check("tests (current + earlier steps)", step_tests))
+        if reqs and feature and adapter.cfg.step_tests == "suite":
+            # without IDs the check above already ran everything
+            c.append(
+                Check(STEP_SUITE, lambda: step_suite(adapter, feature, reqs), needs_green=True)
+            )
     else:
         cov, mut = final_scopes(adapter, feature)
         waiting = exp or ExpectedRed()
         known = regression_baseline(adapter.cfg, feature)
         reason = f"SKIPPED ({waiting.reason()}): runs again after the redo"
+        # the coverage run also records the feature's own test files: which assertions ran
+        watch = adapter.cfg.unreached_assertions and bool(feature)
+        cover_tests = unreached.feature_test_files(adapter, feature) if watch else []
         if waiting:
             c.append(
                 Check(
@@ -289,7 +384,10 @@ def checks(
                     lambda: regression_expecting(adapter, waiting, known),
                 )
             )
-            c += [Check(k.name, _skipped(reason)) for k in adapter.coverage_checks(tag, cov)]
+            c += [
+                Check(k.name, _skipped(reason))
+                for k in adapter.coverage_checks(tag, cov, cover_tests)
+            ]
         else:
             if cov is not None and known:
                 c.append(
@@ -300,9 +398,14 @@ def checks(
                 )
             elif cov is not None:
                 c.append(adapter.regression_check())
-            c += adapter.coverage_checks(tag, cov)
+            c += adapter.coverage_checks(tag, cov, cover_tests)
         c.append(Check("traceability", lambda: traceability.check(adapter, feature)))
         c.append(Check("test smells", lambda: test_smells.check(adapter, feature)))
+        if cover_tests:
+            run_unreached = (
+                _skipped(reason) if waiting else (lambda: unreached.check(adapter, feature))
+            )
+            c.append(Check(unreached.NAME, run_unreached))
         if not skip_mutation:
             name = "mutation score" + (" (feature tests)" if mut is not None else "")
             run = _skipped(reason) if waiting else (lambda: mutation.check(adapter, feature, mut))
@@ -318,7 +421,7 @@ TOOL_FAILURE_NOTE = (
 )
 
 #: final checks whose failure means the build or the tests are red (by the start of their name)
-RED_CHECKS = ("typecheck", "regression", "coverage run", "full test suite")
+RED_CHECKS = ("typecheck", "regression", "coverage run", "full test suite", "tests (current")
 
 
 def red_blockers(failed: list[str]) -> list[str]:
@@ -462,15 +565,18 @@ def gate_report(
         summary += f" (SKIPPED: {', '.join(skipped)})"
     emit(f"\n{summary}")
     shape: dict[str, object] = {}
-    if scope == "final":
+    if scope == "final" or (feature and adapter.cfg.max_file_lines):
         try:
             report = structure.report(adapter, feature)
         except Exception as e:  # a report, never a reason to fail the gate
             report = structure.Structure(note=f"report failed: {type(e).__name__}: {e}")
-        emit("")
-        for line in report.lines():
+        shown = report.lines() if scope == "final" else report.step_lines()
+        if shown:
+            emit("")
+        for line in shown:
             emit(line)
-        shape = report.as_dict()
+        if scope == "final" or shown:
+            shape = report.as_dict()
     extra = run_extra_checks(adapter, feature, emit, durations) if scope == "final" else {}
     return GateReport(
         not failed,

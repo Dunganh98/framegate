@@ -96,6 +96,8 @@ def test_a_broken_existing_test_goes_to_the_implementer(demo_repo: DemoRepo) -> 
     """The feature's own tests pass, but the whole-suite regression finds an older test the
     new code breaks: the implementer fixes the code, the gates run again and pass."""
     r = demo_repo
+    # (the step gate's own whole-suite check would catch it first: test_checks.py)
+    r.set_toml("gates", "step_tests", '"feature"')
     (r.root / "tests/test_legacy.py").write_text(LEGACY, encoding="utf-8")
     git(r.root, "add", "-A")
     git(r.root, "commit", "-q", "-m", "legacy test")

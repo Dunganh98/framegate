@@ -205,8 +205,11 @@ def assess(
             more = f" (+{len(marked) - 3} more)" if len(marked) > 3 else ""
             reasons.append("touches paths marked never automatic: " + ", ".join(marked[:3]) + more)
 
-    sizes = (last.get("structure") or {}).get("files") or {}
+    shape = last.get("structure") or {}
+    sizes = shape.get("files") or {}
     big = sorted(p for p, n in sizes.items() if cfg.max_file_lines and n > cfg.max_file_lines)
+    if "grown" in shape:  # only a file this feature made longer counts against it
+        big = [p for p in big if p in shape["grown"]]
     if big:
         reasons.append(f"file(s) over {cfg.max_file_lines} lines: " + ", ".join(big[:3]))
 

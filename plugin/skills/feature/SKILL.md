@@ -44,6 +44,11 @@ knowledge. It overrides any default you would otherwise assume.
    - fixtures: for each case that needs particular data (a seed, a recording, a rare
      situation), how a test sees from outside that the situation happened, and whether a check
      over picked cases may pass with zero cases;
+   - edge cases against the pinned data: for each edge case, and each outcome a rule names in
+     words ("saved", "blocked", "no result"), does the pinned data hold it? Scan for data that
+     does (the project's scan command), or decide now that a test builds the case itself
+     (`unit-only: <why>` in the fixture table). `framegate spec-check` refuses an edge case
+     without a fixture row; undecided, the test writer and the test reviewer each ask about it;
    - numbers: every number in an acceptance criterion measured with this spec's own definition
      (run the project's scan / measure command if the project knowledge names one), never
      copied from another test; for every count the feature outputs, data where it is not 0;
