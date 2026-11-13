@@ -41,7 +41,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "phase_file": (str,),
         "reqs_file": (str,),
     },
-    "env": {"python": (str,), "wsl_distro": (str,)},
+    "env": {"python": (str,), "wsl_distro": (str,), "refresh": (list,)},
     "agents": {
         "claude": (str,),
         "max_attempts": (int,),
@@ -258,6 +258,10 @@ class Config:
     python: str | None = None
     #: WSL distribution for mutation_runner = "wsl" (None = the default distribution)
     wsl_distro: str | None = None
+    #: [env] refresh: a command `approve-spec` runs before it commits (e.g. the editable
+    #: install again after the spec phase added a package); [] = none. A failure refuses
+    #: the approval
+    env_refresh: list[str] = field(default_factory=list)
     claude: str = "claude"
     max_attempts: int = 3
     #: [agents] max_turns: one cap for every phase without its own (None = DEFAULT_MAX_TURNS)
@@ -522,6 +526,7 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
 
     cfg.python = data.get("env", {}).get("python")
     cfg.wsl_distro = data.get("env", {}).get("wsl_distro")
+    cfg.env_refresh = _str_list("[env] refresh", data.get("env", {}).get("refresh", []))
 
     agents = data.get("agents", {})
     cfg.claude = agents.get("claude", cfg.claude)

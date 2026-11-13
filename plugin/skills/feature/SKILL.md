@@ -119,7 +119,17 @@ knowledge. It overrides any default you would otherwise assume.
    the TESTS phase uses them.
    Then run `framegate spec-check $ARGUMENTS` and fix what it lists (a rule without a spec
    ID, copied code that is not in the named file: read the code again and correct the spec's
-   wording too). `framegate approve-spec` runs the same check and refuses while it fails.
+   wording too; a forbidden marker in a stub, e.g. a lint or type suppression: write the stub
+   so that it needs none). `framegate approve-spec` runs the same check and refuses while it
+   fails.
+   Setup files: if the task needs a new package or source folder, a dependency or a tool
+   setting, change those files now, in the spec phase: `framegate.toml`, the packaging /
+   build / tool-config files (e.g. `pyproject.toml`, `pytest.ini`, a project file) and the
+   `[protected] extra` paths are writable for you until the approval, which commits them with
+   the spec and freezes them. Nothing can change them later in the run. Tests, `.claude/`,
+   `.framegate/`, `CLAUDE.md` and CI files stay locked for you: if one must change, tell the
+   user. `spec-check` prints "Setup files changed" (for the brief) and lists other uncommitted
+   protected files, which the approval refuses: ask the user to commit or revert those.
 6. Write the spec gate brief to `<out>/$ARGUMENTS/spec_brief.md` (the out folder above; the
    final gate compares the run with it) and show it in the chat. About one screen, plain words,
    no spec IDs, one line per bullet, no sentence that repeats a heading or another section, a
@@ -133,6 +143,8 @@ knowledge. It overrides any default you would otherwise assume.
          ("Goals from rebounds count for the free kick: rules out crediting the rebounder.")
        **Project details that matter** — existing code / data it relies on, invariants it
          must keep (saves, hashes, public APIs)
+       **Setup files changed** — one line: the files `spec-check` lists, each with why
+         ("pyproject.toml: registers the new package"); they are approved with the spec
        **Questions** — the real decisions still open (step 2's rule), by impact ("None.")
 
    "Decisions I made for you" is the part the user really checks: list the ones that change

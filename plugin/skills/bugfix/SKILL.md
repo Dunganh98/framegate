@@ -79,6 +79,14 @@ the language, how tests are written here, the code map and the project knowledge
    fixed), must-not-change rows are I IDs (each gets a test that passes today and after).
    Usually one plan step that covers every ID. Do not write tests and do not fix anything.
    Then run `framegate spec-check $ARGUMENTS` and fix what it lists.
+   Setup files: if the task needs a new package or source folder, a dependency or a tool
+   setting, change those files now, in the spec phase: `framegate.toml`, the packaging /
+   build / tool-config files (e.g. `pyproject.toml`, `pytest.ini`, a project file) and the
+   `[protected] extra` paths are writable for you until the approval, which commits them with
+   the spec and freezes them. Nothing can change them later in the run. Tests, `.claude/`,
+   `.framegate/`, `CLAUDE.md` and CI files stay locked for you: if one must change, tell the
+   user. `spec-check` prints "Setup files changed" (for the brief) and lists other uncommitted
+   protected files, which the approval refuses: ask the user to commit or revert those.
 4. Write the spec gate brief to `<out>/$ARGUMENTS/spec_brief.md` (the out folder above) and
    show it in the chat. About one screen, plain words, no spec IDs, one line per bullet;
    exactly these sections:
@@ -89,6 +97,8 @@ the language, how tests are written here, the code map and the project knowledge
        **How it is proven** — the tests that fail today and pass after; what stays as it is
        **Not proven** — what to check by using it
        **Decisions I made for you** — one line each, with what it rules out
+       **Setup files changed** — one line: the files `spec-check` lists, each with why
+         ("None." when it lists none); they are approved with the spec
        **Questions** — the real decisions still open ("None.")
 
 5. Ask: "Is the report OK? Then I start the run." (default: yes, with the defaults of any open

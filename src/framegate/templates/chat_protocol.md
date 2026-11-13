@@ -19,7 +19,11 @@ of it.
 
 1. Only the first time: `framegate approve-spec <f>`. If it lists spec-check problems, fix
    the spec (they are mechanical: add the missing spec ID, copy the code line as it is) and
-   approve again; `--force` only when the user says so.
+   approve again; `--force` only when the user says so. It commits the setup files changed in
+   the spec phase with the spec (it prints which) and runs `[env] refresh` if the project has
+   one. If it refuses because of other uncommitted protected files (e.g. CLAUDE.md, CI
+   files) or a failed refresh: say which and why in one line and ask the user what to do
+   (commit or revert the files; fix the setup); never commit or revert them yourself.
 2. Start the run in the background: Bash tool, `run_in_background: true`, command
    `framegate run <f>` (PowerShell tool the same if Bash is not available). Note its task id.
 3. Start the live view: Monitor tool, command `framegate watch <f>`, description

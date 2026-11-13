@@ -14,6 +14,10 @@ from an older template) is not checked.
 - "Test data and fixtures" (requirements.md), for a spec that pins data: every edge-case ID
   has a row there (the data that shows it, or `unit-only: <why>`); see
   edge_case_fixture_problems.
+- Forbidden markers in the stubs (stub_marker_problems): a line the spec phase added to a
+  source file that holds one of the frame check's forbidden patterns (suppressions, skips).
+  Seen live (runner-skeleton): a suppression comment written into a stub during the spec
+  dialogue surfaced only at a step gate, where nobody could fix it.
 """
 
 from __future__ import annotations
@@ -22,7 +26,9 @@ import pathlib
 import re
 from dataclasses import dataclass, field
 
+from framegate.adapters.base import LanguageAdapter
 from framegate.config import Config
+from framegate.state import GitError, git
 
 _COMMENT = re.compile(r"<!--.*?-->", re.S)
 _SEPARATOR = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
@@ -258,10 +264,66 @@ def edge_case_fixture_problems(cfg: Config, feature: str) -> list[str]:
     ]
 
 
-def problems(cfg: Config, feature: str) -> list[str]:
-    """Everything the spec check finds; [] = fine."""
+_HUNK = re.compile(r"^@@ -\S+ \+(\d+)")
+
+
+def added_source_lines(adapter: LanguageAdapter) -> list[tuple[str, int, str]]:
+    """(file, line number, text) of every line in the source folders that is new since the
+    feature branch left `[git] base` (committed or not; untracked source files whole)."""
+    cfg = adapter.cfg
+    roots = [r for r in cfg.src_roots if (cfg.root / r).exists()]
+    if not roots:
+        return []
+    try:
+        ref = git(cfg, "merge-base", "HEAD", cfg.git_base).strip()
+    except GitError:  # no such base (e.g. [git] branch = false): the uncommitted work
+        ref = "HEAD"
+    out: list[tuple[str, int, str]] = []
+    path, num = "", 0
+    for line in git(cfg, "diff", "-U0", "--no-color", ref, "--", *roots).splitlines():
+        if line.startswith("+++ "):
+            path = line[6:] if line.startswith("+++ b/") else ""
+        elif m := _HUNK.match(line):
+            num = int(m.group(1))
+        elif line.startswith("+") and path:
+            out.append((path, num, line[1:]))
+            num += 1
+    for rel in git(cfg, "ls-files", "--others", "--exclude-standard", "--", *roots).splitlines():
+        file = cfg.root / rel
+        named = not adapter.source_suffixes or rel.endswith(adapter.source_suffixes)
+        if named and file.is_file():
+            text = file.read_text(encoding="utf-8", errors="replace")
+            out += [(rel, i, x) for i, x in enumerate(text.splitlines(), 1)]
+    return out
+
+
+def stub_marker_problems(adapter: LanguageAdapter) -> list[str]:
+    """Source lines added in the spec phase (the stubs) that hold a forbidden pattern of the
+    frame check: found now, while the human can still change the stub, not at a step gate."""
+    from framegate.checks.frame_diff import forbidden_regex
+
+    rx = forbidden_regex(adapter)
+    if rx is None:
+        return []
+    try:
+        lines = added_source_lines(adapter)
+    except GitError:
+        return []  # not a git repository yet: approve-spec says so itself
+    return [
+        f"{path}:{num}: forbidden marker `{m.group(0)}` in a stub ({_clip(text.strip())}). "
+        "The frame check rejects it at every step gate: remove it and write the stub so that "
+        "it needs none"
+        for path, num, text in lines
+        if (m := rx.search(text))
+    ]
+
+
+def problems(cfg: Config, feature: str, adapter: LanguageAdapter | None = None) -> list[str]:
+    """Everything the spec check finds; [] = fine. With the adapter also the forbidden
+    markers in the stubs."""
     return [
         *spec_id_problems(cfg, feature),
         *assigned_as_problems(cfg, feature),
         *edge_case_fixture_problems(cfg, feature),
+        *(stub_marker_problems(adapter) if adapter is not None else []),
     ]

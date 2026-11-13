@@ -18,7 +18,7 @@ import re
 
 from framegate.adapters.base import CheckResult, LanguageAdapter
 from framegate.config import CONFIG_FILE, Config
-from framegate.state import GitError, git, tag_exists
+from framegate.state import GitError, commit_paths, git, tag_exists
 
 CORE_PROTECTED = (
     ".claude/",
@@ -82,6 +82,59 @@ def protected_paths(adapter: LanguageAdapter) -> list[str]:
     return base + list(cfg.protected_extra)
 
 
+def spec_locked(cfg: Config) -> list[str]:
+    """Protected entries that stay locked in the spec phase too: the tests, the specs (the
+    spec dialogue writes them through its own permission), the workflow's own rules and the
+    CI files."""
+    locked = [cfg.paths.tests + "/", cfg.paths.specs + "/"]
+    locked += [e for e in CORE_PROTECTED if e != CONFIG_FILE]
+    if cfg.roles_extra_dir:
+        locked.append(cfg.roles_extra_dir.rstrip("/") + "/")
+    return locked
+
+
+def setup_entries(adapter: LanguageAdapter) -> list[str]:
+    """The setup paths as configured (prefixes / globs), for messages: the config file and
+    the protected entries that are not spec-locked."""
+    locked = spec_locked(adapter.cfg)
+    rest = [e for e in protected_paths(adapter) if e not in locked and e != CONFIG_FILE]
+    return [CONFIG_FILE, *rest]
+
+
+def is_setup_file(adapter: LanguageAdapter, path: str) -> bool:
+    """A setup file: the config file, or a protected path that is not spec-locked (the
+    adapter's packaging / build / tool-config files, `[protected] extra`). The human's chat
+    may change these in the spec phase, and `approve-spec` commits them with the spec, so the
+    frame check starts from a clean baseline; after "spec OK" they are frozen like the rest."""
+    if path == CONFIG_FILE:
+        return True
+    cfg = adapter.cfg
+    return path_matches(path, protected_paths(adapter)) and not path_matches(path, spec_locked(cfg))
+
+
+def setup_state(adapter: LanguageAdapter) -> tuple[list[str], list[str]]:
+    """Uncommitted (changed, deleted or untracked) protected files, split in two:
+    (setup files: `approve-spec` commits them with the spec; stray files: protected, not a
+    setup file and not in a path the workflow commits, e.g. CLAUDE.md, .claude/, CI files:
+    `approve-spec` refuses while one is there, because every later frame check would fail
+    on it)."""
+    cfg = adapter.cfg
+    changed, _ = changed_files(cfg, "HEAD")
+    protected, exceptions = protected_paths(adapter), cfg.frame_exceptions()
+    committed = [p.rstrip("/") for p in commit_paths(cfg)]
+    setup, stray = [], []
+    for path in sorted(changed):
+        if is_setup_file(adapter, path):
+            setup.append(path)
+        elif (
+            path_matches(path, protected)
+            and not path_matches(path, exceptions)
+            and not any(path == p or path.startswith(p + "/") for p in committed)
+        ):
+            stray.append(path)
+    return setup, stray
+
+
 GLOB_CHARS = ("*", "?", "[")
 
 
@@ -121,6 +174,11 @@ def changed_src_files(adapter: LanguageAdapter, ref: str) -> list[str]:
     return sorted(f for f in changed if cfg.in_src(f) and (cfg.root / f).is_file())
 
 
+#: the check's name in the gate reports
+CHECK_NAME = "frame diff"
+PROTECTED_CHANGED = "PROTECTED PATH CHANGED: "
+
+
 def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
     cfg = adapter.cfg
     tag = approved_tag(feature)
@@ -138,7 +196,7 @@ def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
     protected = protected_paths(adapter)
     exceptions = cfg.frame_exceptions()
     problems = [
-        f"PROTECTED PATH CHANGED: {f}"
+        f"{PROTECTED_CHANGED}{f}"
         for f in sorted(changed)
         if path_matches(f, protected) and not path_matches(f, exceptions) and f not in spec_ok
     ]

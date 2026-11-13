@@ -18,6 +18,10 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 # [env]
 # python = ".venv/Scripts/python.exe"   # python adapter: default = .venv interpreter, else current
 # wsl_distro = "Ubuntu"            # WSL distribution for mutation_runner = "wsl" (default: WSL's default)
+# refresh = ["python", "-m", "pip", "install", "-e", ".", "--no-deps"]
+#                                  # run by approve-spec before it commits ("python" = the project
+#                                  # interpreter): the environment follows the setup files the spec
+#                                  # phase changed (a new package imports); a failure refuses the approval
 
 [agents]
 # claude = "claude"                # override with env FRAMEGATE_CLAUDE
@@ -126,6 +130,8 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 
 [protected]
 # extra = ["config/", "data/reference/"]   # added to the core + adapter protected paths
+#                                  # (like the packaging files: writable in the spec phase,
+#                                  # committed by approve-spec, frozen from then on)
 # exceptions = ["tests/review/"]           # default: [paths] review_tests
 
 # [frame]

@@ -351,7 +351,7 @@ def checks(
 ) -> list[Check]:
     tag = frame_diff.approved_tag(feature)
     c = list(adapter.lint_checks(tag))
-    c.append(Check("frame diff", lambda: frame_diff.check(adapter, feature)))
+    c.append(Check(frame_diff.CHECK_NAME, lambda: frame_diff.check(adapter, feature)))
     if scope == "step":
         reqs = read_reqs(adapter.cfg)
         contested = read_contested(adapter.cfg)
