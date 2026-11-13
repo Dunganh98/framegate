@@ -6,6 +6,7 @@ import os
 import pathlib
 from collections.abc import Callable
 
+from framegate import references
 from framegate.adapters import detect_language, get_adapter
 from framegate.adapters.base import LanguageAdapter
 from framegate.config import (
@@ -229,6 +230,7 @@ def spec_brief(cfg: Config, feature: str) -> str:
             + ("exists: read it first" if (cfg.root / cfg.code_map).is_file() else "missing")
             + ")",
             *sizes,
+            *references.brief_lines(cfg),
             "",
             adapter.conventions_brief().rstrip(),
             "",

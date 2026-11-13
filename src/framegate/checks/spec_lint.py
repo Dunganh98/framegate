@@ -260,7 +260,10 @@ def edge_case_fixture_problems(cfg: Config, feature: str) -> list[str]:
 
 def problems(cfg: Config, feature: str) -> list[str]:
     """Everything the spec check finds; [] = fine."""
+    from framegate import references  # it reads the spec tables with this module
+
     return [
+        *references.spec_problems(cfg, feature),
         *spec_id_problems(cfg, feature),
         *assigned_as_problems(cfg, feature),
         *edge_case_fixture_problems(cfg, feature),

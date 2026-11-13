@@ -39,6 +39,15 @@ Mode: bugfix
 |---|---|---|---|
 | | | | |
 
+## References
+<!-- Other projects on this machine that the agents read for this task (never write): only
+     names declared in framegate.toml `[references]` (`framegate spec-brief` lists them). Only
+     the ones listed here are given to the agents; `framegate approve-spec` pins each one's
+     commit, and a run warns when it moved. "None." when the task needs none. -->
+| Name | Files / folders that matter | What for |
+|---|---|---|
+| | | |
+
 ## Test data and fixtures
 <!-- One row per ID that needs particular data (a seed, a recording, a rare situation).
      Observable: the public value a test reads to see the situation happened (the test writer

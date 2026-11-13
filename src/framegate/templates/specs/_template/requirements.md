@@ -55,6 +55,35 @@ Feature code: XXX   <!-- 2–10 uppercase chars, prefix for all IDs, e.g. HI2 --
 |---|---|---|---|
 | | | | |
 
+## References
+<!-- Other projects on this machine that the agents read for this task (never write): only
+     names declared in framegate.toml `[references]` (`framegate spec-brief` lists them). Only
+     the ones listed here are given to the agents; `framegate approve-spec` pins each one's
+     commit, and a run warns when it moved. "None." when the task needs none. -->
+| Name | Files / folders that matter | What for |
+|---|---|---|
+| | | |
+
+## Ported from
+<!-- Only when this feature copies code of a reference ("file for file, same names"); else
+     "None." and nothing below. Then the tests are the reference's tests, carried over, and the
+     code is the reference's code, changed only as "What may differ" says; the final gate shows
+     how far each target file is from its source (not blocking).
+     Reference: its name in `[references]`. Commit: the commit you read (spec-brief shows it).
+     One row per file, with paths relative to the reference's folder / to this repository;
+     Kind `tests` = a test file of the reference to carry over, `code` = everything else.
+     What may differ: every allowed deviation, one bullet each (import names, things only this
+     repository has, things left out). A difference that is not listed is a review finding. -->
+Reference:
+Commit:
+
+| Source (path in the reference) | Target (path in this repository) | Kind (code / tests) |
+|---|---|---|
+| | | |
+
+What may differ:
+-
+
 ## Test data and fixtures
 <which recorded/synthetic data the tests use, where it lives, how it is generated>
 <!-- One row per ID that needs particular data (a seed, a recording, a rare situation).

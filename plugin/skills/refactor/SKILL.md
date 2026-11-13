@@ -77,6 +77,11 @@ the language, how tests are written here, the code map and the project knowledge
      only does Z, no method over 60 lines). Checkable statements, not "cleaner".
    - Steps: one move, split or rename per step; the code builds and every test passes after
      each. Order them so no step needs a later one.
+   - references: when the task builds on another project listed under "References" in the
+     conventions above (a sibling repository), read what you need there and list the ones
+     used in requirements.md, "References" (name, files / folders, what for): only those are
+     given to the agents, read-only, pinned at their commit at "spec OK". Name them in the
+     spec brief, so the user approves them.
 2. Ask only what those sources cannot decide (how far to go, names, what must stay public).
    Numbered, plain words, each "A: ... (default) / B: ..." on one line. A point with one
    sensible answer is a decision you make and list, not a question.

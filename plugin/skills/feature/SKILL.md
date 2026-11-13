@@ -89,6 +89,20 @@ knowledge. It overrides any default you would otherwise assume.
      the choices to copy (cut-offs, raw vs clamped values, tie-breaks, order of checks);
    - new functions: which inputs each clamps itself, what every output holds on "no result",
      and which error wins when two inputs are bad;
+   - references: when the task builds on another project listed under "References" in the
+     conventions above (a sibling repository), read what you need there and list the ones
+     used in requirements.md, "References" (name, files / folders, what for): only those are
+     given to the agents, read-only, pinned at their commit at "spec OK". Name them in the
+     spec brief under "Project details that matter", so the user approves them;
+   - a port (the user wants code of a reference copied here: "port", "file for file", "same
+     names as in X"): fill requirements.md, "Ported from": the reference and its commit, every
+     source -> target file, the reference's test files to carry over (Kind `tests`), and
+     "What may differ" (import names, things only this repository has, things left out). The
+     stubs mirror the reference's public names and signatures exactly; the spec's IDs describe
+     what the reference does today (read its code and tests; do not decide the behavior
+     again); ask the user only about what is to differ. The agents then carry over the
+     reference's tests and copy its files instead of writing their own, and the final gate
+     shows how far each file is from its source;
    - structure: which file each new concept goes in (one concept per file; the code map says
      where things live), so no file grows past ~400 lines or mixes two concepts.
 2. Ask only what those sources cannot decide: what the user wants (behavior, priorities,

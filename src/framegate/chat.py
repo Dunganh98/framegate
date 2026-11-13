@@ -12,7 +12,7 @@ import time
 from typing import Any
 
 from framegate import brief as briefs
-from framegate import procs, risk
+from framegate import procs, references, risk
 from framegate.orchestrator import (
     PROGRESS_CURSOR,
     PROGRESS_LOG,
@@ -546,6 +546,9 @@ def _outcomes(
             "  project checks (not blocking): "
             + ", ".join(f"{n} {'OK' if c == 0 else f'exit {c}'}" for n, c in extra.items())
         )
+    fidelity = references.fidelity_summary(last.get("fidelity") or {})
+    if fidelity:
+        lines.append("  " + fidelity)
     shape = last.get("structure") or {}
     longest = shape.get("longest") or []
     if shape.get("files"):

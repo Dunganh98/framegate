@@ -19,6 +19,43 @@ What the orchestrator relies on, and how it was verified. No real `claude -p` ag
 | Hooks in `-p` mode | Fire (per the hooks/headless docs, checked by the plugin agent) | docs/plugin.md |
 | Windows `.cmd` shim | `shutil.which("claude")` resolves the npm `claude.cmd` shim (here `C:\Users\D.Anh\AppData\Roaming\npm\claude`). Arguments contain spaces, `*`, `(`, `)` and `,` but no `%`, `^`, `&`, `|`, `"`, so cmd.exe passes them through when quoted. The prompt never goes on the command line. A native `claude.exe` (`claude install`) avoids cmd.exe entirely | `which claude` |
 
+## Reference folders: `--add-dir` (probes 2026-11-13, claude 2.1.323, Windows 11, `--model haiku`)
+
+Six headless runs (`claude -p --permission-mode acceptEdits --output-format json`, about 1.5
+cents in total) in a temp folder `work/`, asked to Read / Glob / Grep / Write in a sibling
+folder `ref/` by absolute path. No permission rules in the user settings; rows 3-6 ran
+without the parent session's `CLAUDE*` environment variables.
+
+| `--allowedTools` | Extra arguments | Read / Glob / Grep in `ref/` | Write in `ref/` |
+|---|---|---|---|
+| `Read,Grep,Glob` | none | Read allowed (Glob / Grep not asked) | **denied** (`permission_denials`) |
+| `Read,Grep,Glob` | `--add-dir <ref>` | Read allowed | **allowed**, the file was written |
+| `Read,Grep,Glob,Write,Edit` | none | all allowed | **allowed** |
+| `Read,Grep,Glob,Write,Edit` | `--add-dir <ref>` | all allowed | **allowed** |
+| `Read,Grep,Glob,Write,Edit` | `--add-dir <ref> --disallowedTools "Edit(//c/.../ref/**)"` | all allowed | **denied** |
+| as above, `ref` named `ref dir - x, y` | the same two, each one argument | all allowed | **denied** |
+
+What follows:
+
+- A bare tool name in `--allowedTools` (`Read`, `Write`) allows that tool for **every path**,
+  not only the working directory. framegate passes bare `Read`, `Grep`, `Glob`, so a headless
+  agent can read a sibling repository by absolute path with or without `--add-dir`. The
+  expectation "it cannot without the flag" was **wrong** in this setup. What the agents of the
+  first port run lacked was the path and the instruction (and `ls` / `cat` in a shell are
+  denied): the orientation block now gives both.
+- `--add-dir` makes the folder a working directory. With `acceptEdits` that also **auto-accepts
+  edits there** (row 2), so the flag alone makes a reference writable, not read-only.
+- A deny rule wins over both: `Edit(//<absolute path>/**)` (`//` = absolute; a Windows drive is
+  `/c/...`) denies Write and Edit under the folder. framegate passes `--add-dir` (the folder is
+  then a working directory whatever a project's own `[phases.<P>] tools` or permission
+  settings allow) **and** the deny rule, each folder / rule as its own argument (paths with
+  spaces and commas arrived intact). The PreToolUse write guard blocks writes outside the
+  repository on top (unit-tested, not part of these probes).
+- Not checked: a shell command that writes into a reference (the agents' shell rules allow
+  only the test and lint commands); NotebookEdit; Linux / macOS path forms (`Edit(//home/...)`
+  follows the documented rule syntax, **not verified live**); a real framegate agent run with
+  these arguments (the tests use the fake claude).
+
 ## Orchestrator invocation
 
 ```
@@ -26,6 +63,7 @@ What the orchestrator relies on, and how it was verified. No real `claude -p` ag
          --allowedTools "<rule>,<rule>,..." --permission-mode acceptEdits
          --max-turns <cap of the phase> --output-format stream-json --verbose
          [--max-budget-usd <cap of the phase>]   (task on stdin)
+         [--add-dir <reference>... --disallowedTools "Edit(//<reference>/**)"...]
 ```
 
 `<claude>` = `[agents] claude` (default `claude`) or env `FRAMEGATE_CLAUDE`; a `.py` path is run
