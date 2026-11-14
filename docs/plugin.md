@@ -12,7 +12,7 @@ chat run protocol, `framegate protocol`); the plugin only registers things. Inst
 ```
 .claude-plugin/marketplace.json     # marketplace "framegate", one entry: source "./plugin"
 plugin/
-  .claude-plugin/plugin.json        # name framegate, version 0.9.0
+  .claude-plugin/plugin.json        # name framegate, version 0.10.0
   hooks/hooks.json                  # PreToolUse (Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell), SessionStart, Stop
   scripts/framegate-hook.js         # wrapper: node framegate-hook.js <event> -> framegate hook <event>
   scripts/session-start.js          # SessionStart: one line after an update (what changed)
@@ -98,7 +98,7 @@ How a machine gets the new version:
   machine keep the clone at the plugin's version.
 - Why the skills do not inject the check at load (`` !`framegate preflight ...` ``): a load
   command that exits non-zero aborts the whole skill ("Shell command failed for pattern
-  ..."; seen 2026-11-14, claude 2.1.325, with the 0.9.0 tool, which has no `preflight`), and
+  ..."; seen 2026-11-14, claude 2.1.325, with the 0.10.0 tool, which has no `preflight`), and
   a new plugin must work with the previous tool while a feature is in progress. Run as a
   tool call, the unknown command is an ordinary error the skill reads (`invalid choice:
   'preflight'` -> the old rule: install the plugin's version unless work is in progress).
