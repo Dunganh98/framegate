@@ -22,6 +22,7 @@ a terminal.
 | `framegate doctor [--full] [--brief]` | check the setup without agents; ends with a verdict and only what needs action (`--brief`: only that); `--full` also runs the whole test suite | after setup or config changes |
 | `framegate spec <f> [--mode feature\|bugfix\|refactor]` | create the branch `feat/<f>` and open the spec phase with the mode's templates | start of a feature |
 | `framegate spec-check <f>` | mechanical checks of the spec tables and the stubs (below); lists the setup files the approval commits; exit 1 on a problem | internal |
+| `framegate port-stubs <f> [--force]` | a port: write the stubs of its code files from the reference (text kept, function bodies replaced; python); lists imports that will not resolve here ("References and ports") | internal (spec dialogue of a port) |
 | `framegate approve-spec <f> [--force]` | spec-check, `[env] refresh`, then freeze the spec and the setup files ("spec OK"); restarts the feature if the spec changed later | gate 1 |
 | `framegate run <f>` | run the agents until the next human gate or DONE | after every decision |
 | `framegate watch <f>` | follow the progress lines of a run | while it runs |
@@ -300,20 +301,80 @@ Commit: 1a2b3c4d5e
 What may differ:
 - import names: `otto.` becomes `argos.`
 - `Controller.report()` exists only here
+
+Kept quirks:
+- runner/common.py: is_name(): the regex `$` also accepts a trailing newline
 ```
+
+Ticket / plan / ADR numbers and repository names inside the reference's docstrings and
+comments stay the reference's, word for word, unless "What may differ" lists them: they say
+where the code comes from, and every reworded line is a difference someone has to explain.
 
 | Who | What changes for a port (added task text, `references.port_note`) |
 |---|---|
-| Spec dialogue | the stubs mirror the reference's public names and signatures; the IDs describe what the reference does today; questions only about what differs |
+| Spec dialogue | the IDs describe what the reference does today; questions only about what differs. It asks for the reference's quirks ("Kept quirks", or a fix here plus a "Reference follow-up" line) and for carried tests that cannot fail before the implementation ("Green against stubs"). The stubs of the `code` rows are not written by hand: `framegate port-stubs <f>` (below). plan.md: one step per target file, leaf modules first; a step covers the IDs its file serves |
+| Test checks | test_checks.md, "Reference tests carried over" (not blocking): per `tests` row the reference file's test functions and the ones whose name is not in the target file ("NOT CARRIED OVER: <name>"); python, other languages `SKIPPED`. One line in the final brief's outcomes ("reference tests carried: 14 of 60; not carried: see ...") |
 | Test writer | carries over the listed reference tests: same names, order, structure and assertions, adapted only for imports and "What may differ", tagged with the spec IDs. A new test only for an ID no reference test covers, listed in test_summary.md under `## New tests (not in the reference)`; a test that cannot be carried over under `## Reference tests not carried over` |
 | Test writer, later runs | answers at the final gate (TESTS_AMEND): a test change follows the reference (carry over the reference test that covers it, else the smallest change to the carried-over test). Strengthening after weak final gates (TESTS_STRENGTHEN): first a reference test that was not carried over; a test of its own only where no reference test exists, listed under `## New tests (not in the reference)` |
-| Test reviewer | reads each reference test file next to its target: a missing, renamed, rewritten or weakened reference test is an objection |
-| Implementer | copies the reference file and changes only what "What may differ" lists: no rewording, no restructuring, comments and docstrings kept; any other change is logged as an assumption |
-| Reviewer | a difference from the reference that the spec does not list is a finding: a failing test when behavior differs, else a `## Structure findings` bullet ("restore the reference's text"), applied by the structure-fixes run. The readability checklist does not apply to ported files |
+| Test reviewer | reads each reference test file next to its target: a missing, renamed, rewritten or weakened reference test is an objection, and so is a reference test not carried over (the report above) without a reason tied to "What may differ" or to code that is not ported yet |
+| Implementer | copies the reference file and changes only what "What may differ" lists: no rewording, no restructuring, comments and docstrings kept; any other change is logged as an assumption. Kept quirks stay. A bug of the reference fixed here gets a `REFERENCE FOLLOW-UP` line in the step note |
+| Step gates | **fidelity at every step and fix gate**, not blocking: each ported target file the run touched against its reference file, with the final report's numbers and the rule "every hunk must match a 'What may differ' bullet; restore the rest". The lines are part of the gate report, so a failed attempt's feedback holds them; the next step's task lists what the earlier steps left different; the `gate` event has `fidelity` |
+| Reviewer | a difference from the reference that the spec does not list is a finding: a failing test when behavior differs, else a `## Structure findings` bullet ("restore the reference's text"), applied by the structure-fixes run. The readability checklist does not apply to ported files. No finding about a kept quirk. A finding about behaviour the reference has too stays a finding when the spec promises otherwise, with a `REFERENCE FOLLOW-UP` line in review.md |
+| Triage | a finding about a kept quirk is INVALID, with the "Kept quirks" line as the reason; "the reference does the same" is no reason to dismiss; a VALID finding the reference shares gets a `REFERENCE FOLLOW-UP` line in triage.md |
 | Final gates | **fidelity report**, not blocking: per source -> target row the changed / added / removed line counts against the reference file (at the pinned commit; the working file when the reference was not clean or is no git repository), in final_gates.md; the diffs in `out/<f>/fidelity/<target>.diff`; one line in the final brief's outcomes. `SKIPPED` with the reason when the reference is not on this machine |
 
 `approve-spec` warns when the section's `Commit:` is not the commit the reference is at.
-The first proof stays the feature mode's: the carried-over tests must fail against the stubs.
+The first proof stays the feature mode's: the carried-over tests must fail against the stubs,
+except the ones the spec lists under `## Green against stubs` (below).
+
+**Stubs of a port: `framegate port-stubs <f> [--force]`.** For every `code` row the target
+file is written as the reference file's text (at the spec's `Commit:`; after the approval at
+the pinned commit; "as it is now" when that commit does not have the file) with the bodies
+of functions and methods replaced by `raise NotImplementedError`. Module, class and function
+docstrings, signatures, annotations, decorators, constants, imports and all other
+module-level code stay byte for byte; no spec IDs are added (the tests' tags carry the
+traceability). So a file the implementer leaves alone is identical to the reference, and
+its wording is the reference's from the start. Rules:
+- a function whose body already does nothing (`...`, `pass`, `raise NotImplementedError`:
+  an overload, a protocol or abstract method) stays as it is;
+- a function that runs while the module is imported (called at module or class level, used
+  as a decorator, or called by such a function; not the `if __name__ == "__main__":` block)
+  keeps its body, and the command says so ("kept whole"): with the body replaced the stub
+  could not be imported. A test of such a function passes before the implementation: list
+  it under "Green against stubs";
+- a `code` row that is no source file of the language (data, config) is copied as it is;
+- imports are the reference's. Each one that will not resolve here is printed as `IMPORT:
+  <file>:<line>: ...` (a module ported under another name, a module that is not ported, a
+  package the project's interpreter does not have): fix those lines in the stub by hand
+  (the red check needs tests that can be collected) and list the kind of change under
+  "What may differ";
+- an existing target that is not the generated stub is kept (`KEPT:`; `--force` overwrites);
+  after the spec approval the command refuses without `--force`;
+- python only. Another language prints `NOT SUPPORTED` (exit 0) and the spec dialogue
+  writes those stubs by hand, with the reference's names, signatures and doc comments.
+
+**Green against stubs (any feature, not only a port).** requirements.md, `## Green against
+stubs`: the tests that cannot fail before the implementation, by design, one bullet each,
+`- <test name or node ID>: <reason>` (a scan "no analytic name appears in the code", a
+negative check, a structure test; in a port a carried-over test of that kind). "Red against
+stubs" then accepts exactly those when they pass ("passes by design (listed ...)"); a listed
+test that fails against the stubs fails the check ("LISTED AS GREEN BY DESIGN BUT RED"), any
+other passing test fails it as before, and so does a spec ID whose every tagged test is green
+by design ("ONLY TESTS THAT PASS BY DESIGN PROVE <ID>"; from the tag scan). A listed test
+that is not among the feature's tests is a note. `spec-check` refuses a bullet that is not
+`- <test>: <reason>`. The section is general because a normal feature can have such a test
+too (it cost nothing more); bug fixes and refactors have no red check and no such section.
+
+**Reference follow-up.** What the reference should change because of the feature (a bug
+fixed here that the reference shares, a deliberate improvement) has the life cycle of the
+pipeline follow-up ("Pipeline follow-up" below; `followup.py` holds both lists):
+requirements.md `## Reference follow-up` (all three templates, `- <reference file>: <what
+should change> (<why>)`), agent lines `- REFERENCE FOLLOW-UP [<reference file>]: <what and
+why>` (implementer step note, review.md, triage.md; the tasks of a feature that uses a
+reference say so), `out/<f>/reference_followup.md`, a section of final_facts.md and
+final_summary.md, the final brief ("Reference follow-up (for otto; not part of this
+feature): N; nothing to answer"), and after DONE `specs/<f>/reference_followup.md` plus a
+`reference_followup` event. The reference itself is never changed.
 
 ## The retro backlog
 
@@ -379,6 +440,8 @@ framegate spec <f> [--mode feature|bugfix|refactor]
 framegate spec-check <f>                    # rules without a spec ID, copied code not in the
                                             # file, forbidden markers in the stubs; lists the
                                             # setup files and stray protected files
+framegate port-stubs <f> [--force]          # a port: the stubs of its code files from the
+                                            # reference (text kept, bodies replaced; python)
 framegate approve-spec <f> [--force]        # spec-check, [env] refresh, commit (specs, stubs,
                                             # setup files), then tag spec-approved/<f>
 framegate run <f>                           # runs to the next gate (tests, final) or DONE;
@@ -491,7 +554,17 @@ generated section of final_summary.md (so the PR description has it) and in the 
 N; nothing to answer"). It is no gate item: not a question, not blocking, and the summary
 agent cannot place it under "Left out". (4) After DONE: the list is written to
 `specs/<f>/pipeline_followup.md` (a checklist, committed with the metrics row; `cleanup`
-keeps the spec folder) and logged as a `pipeline_followup` event.
+keeps the spec folder) and logged as a `pipeline_followup` event. The line is only for
+deploy / CI files (the agents are told so: a note about anything else is an assumption or a
+park request). What a reference project should change has its own list with the same life
+cycle: "Reference follow-up" under "References and ports".
+
+**An idle plan step.** A plan step (feature, bug fix) whose implementer run changed nothing
+is neither a failure nor a full gate: when HEAD is still the commit the last green step gate
+left and the workflow's paths are clean, the gate runs only the step's own tests (scope
+"idle" in the `gate` event) and the progress line says that lint, the frame check and the
+whole suite are that gate's results. Red tests there fail the attempt as usual. A refactor
+is different: its tests were green all along, so an idle refactor step fails.
 
 `run` never waits on the keyboard. It advances TESTS -> IMPLEMENT (per plan step) -> REVIEW ->
 SUMMARY -> FINAL -> RETRO -> DONE and stops only at the final gate (and the tests gate with
@@ -721,6 +794,8 @@ while it finds something; `--force` approves anyway and logs `spec_check` with `
 reads columns of the spec templates' tables; a spec without them is not checked:
 - `Spec ID` (design.md, "Error handling" and "Command-line surface"): every filled row names
   a spec ID of requirements.md. A rule that is only written in design.md gets no test.
+- "Green against stubs" (requirements.md): every bullet is `- <test name or node ID>:
+  <reason>` ("References and ports").
 - `Assigned as (code, copied)` (requirements.md, "Existing data this spec reads"): every
   backticked piece of code in the cell is in the file the "Set where" cell names (a path, or
   a file name looked up in the source folders; spacing is ignored). `n/a: <why>` skips a row.

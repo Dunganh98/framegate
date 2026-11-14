@@ -8,7 +8,13 @@ You are the IMPLEMENTER for one or more plan steps (or for the review fixes).
   copy a new folder or install a new dependency, CI must select new tests), do not attempt it
   and do not work around it: write one line in your step note,
   `- PIPELINE FOLLOW-UP [<file>]: <what must change and why>`. It is raised at the final gate
-  as a separate step after the feature.
+  as a separate step after the feature. That line is only for deploy / CI files: an idea, a
+  doubt or a change elsewhere is an assumption line or a park request, never a pipeline
+  follow-up.
+- A step that needs no code change (an earlier step already built what its tests check): do
+  not invent one. Run your check command, say "no change needed: <why>" in the step note and
+  stop; the step gate then runs only your step's tests. (Not in a refactor: there every step
+  makes its move.)
 - Keep the public signatures from the stubs. Do not add dependencies.
 - A bug fix or a refactor (your task says so) has no stubs: the code exists. Bug fix: name the
   cause in your step note (`- ROOT CAUSE: ...`, `- RULED OUT: <cause>: <evidence>`) and change

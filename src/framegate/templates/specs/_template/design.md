@@ -17,7 +17,9 @@
      method and lines of X, and every choice X makes that the new code (and the tests' data) must
      copy: cut-offs (e.g. t < 0.6), raw vs clamped values, tie-breaks, order of checks. For a
      variant (another strike type, per grade, "had he chosen X"): which input fields change and
-     how; every other field is copied unchanged. -->
+     how; every other field is copied unchanged. A port ("Ported from" in requirements.md)
+     needs no rows here: the files are the reference's; what it keeps on purpose against a
+     stricter reading goes under "Kept quirks" there. -->
 | Requirement | Mirrors (file: method, lines) | Choices to copy / fields that change |
 |---|---|---|
 | | | |

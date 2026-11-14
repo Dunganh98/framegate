@@ -26,6 +26,11 @@ For every spec ID (R, E, I) check:
   meaning is an objection (read the right member, or add a fixture precondition test that
   shows the claim holds on the existing code); if the spec does not say which member is meant,
   ask.
+- Tests that pass before the implementation: test_checks.md marks them "passes by design"
+  when requirements.md lists them under "Green against stubs". Check each one's reason: can
+  the test really not fail before the implementation (a scan, a negative check), and does
+  every spec ID it is tagged with have another test that fails against the stubs? A listed
+  test that could assert more is an objection like any weak test.
 Do not object to style, naming or file layout.
 
 Write {out}/{feature}/test_review.md:

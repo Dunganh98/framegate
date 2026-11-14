@@ -213,7 +213,8 @@ def final_facts(
     followup: list[str] | None = None,
 ) -> str:
     """{out}/{f}/final_facts.md: what the summary agent must report, from the run's records.
-    `followup`: the pipeline follow-up section (followup.section_lines), if there is any."""
+    `followup`: the pipeline / reference follow-up sections with their note
+    (followup.facts_lines), if there are any."""
     ev = since_spec_approval(events)
     parked = prog.get("parked") or []
     parked_steps = {
@@ -324,15 +325,7 @@ def final_facts(
         out.append("Name them under Struggles in the brief (one line).")
 
     if followup:
-        out += [
-            "",
-            *followup,
-            "",
-            "Deploy / CI changes this feature makes necessary; the feature did not make them. "
-            "Not a gate item: do not turn it into a question, a decision or a 'Left out' line. "
-            "framegate shows the list on the final brief and appends it to final_summary.md "
-            "itself.",
-        ]
+        out += ["", *followup]
     out += ["", "## Final gates (final_gates.md)", "", "~~~", final_gates.strip(), "~~~"]
     out += ["", "## Open questions", "", open_questions.strip() or "None."]
     items = items or []

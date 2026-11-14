@@ -8,7 +8,14 @@
      A step that adds code to a source file already over [gates] max_file_lines (default 400)
      names where the new code goes instead: "New file: <path> (<what goes there>)". Seen live:
      two steps added to files of 1,093 and 835 lines, and the split cost a fix run after the
-     review. `framegate spec-brief` lists the files that are over the limit. -->
+     review. `framegate spec-brief` lists the files that are over the limit.
+     A port (requirements.md, "Ported from"): the steps follow the FILES, not the spec IDs.
+     One step per `code` target file, in import order (leaf modules first: a file comes
+     after the files it imports); a step's "Covers:" IDs are the ones its file serves, and
+     an ID that two files serve goes to the later one. The code lands whole files at a time
+     anyway (seen live: steps cut by ID, step 1 ported two files whole and step 4 "needed no
+     code change": a run and a gate for nothing). A step whose run changes nothing is still
+     checked, but only with its own tests. -->
 
 ## Step 1: <short title>
 Covers: XXX-R-001, XXX-E-001

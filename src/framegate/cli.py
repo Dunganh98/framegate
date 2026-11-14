@@ -22,6 +22,11 @@ commands:
                           copied code that is not in the named file) and of the stubs
                           (forbidden markers); lists the setup files approve-spec will commit
                           and the uncommitted protected files it refuses; exit 1 on a problem
+  port-stubs <feature> [--force]  a port (the spec's "Ported from"): write the stub of
+                          every `code` target from the reference: its text at the spec's
+                          commit, function bodies replaced by "not implemented" (python;
+                          other languages: says so, stubs by hand); lists imports that will
+                          not resolve here; --force: overwrite an existing target file
   approve-spec <feature> [--force]  spec-check, [env] refresh, then commit (specs, stubs,
                           setup files) + tag spec-approved/<feature>, reset progress;
                           --force: approve with spec-check problems
@@ -102,6 +107,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("approve-spec")
     p.add_argument("feature")
     p.add_argument("--force", action="store_true", help="approve with spec-check problems")
+    p = sub.add_parser("port-stubs", help="a port: write the code stubs from the reference")
+    p.add_argument("feature")
+    p.add_argument("--force", action="store_true", help="overwrite an existing target file")
     p = sub.add_parser("status")
     p.add_argument("feature", nargs="?")
     p.add_argument("--brief", action="store_true", help="short state for the chat")
@@ -243,6 +251,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             n = len(found) + (1 if stray else 0)
             print(f"Spec check: {n} problem(s)" if n else "Spec check: OK")
             return 1 if n else 0
+        if args.command == "port-stubs":
+            from framegate import ported
+            from framegate.adapters import get_adapter
+
+            return ported.port_stubs(cfg, get_adapter(cfg), args.feature, force=args.force)
         if args.command == "gates":
             from framegate.adapters import get_adapter
             from framegate.gates import run_gates

@@ -9,10 +9,14 @@ names them, and `framegate run` warns when a pinned reference moved.
 A port is a feature whose requirements.md fills `## Ported from`: a reference, the source ->
 target files, the tests to carry over and what may differ. It is no mode of its own (modes are
 grown from evidence): the tasks of the test writer (also its later runs: answers at the final
-gate, strengthening), the test reviewer, the implementer and the reviewer get added text
-(port_note), the final gates report how far each target file is from its reference file
-(fidelity, never blocking), and the file-size rule leaves the port's target files alone (they
-keep the reference's file layout: port_targets).
+gate, strengthening), the test reviewer, the implementer, the reviewer and the triage get
+added text (port_note), every step gate and the final gates report how far each target file
+is from its reference file (fidelity, never blocking), and the file-size rule leaves the
+port's target files alone (they keep the reference's file layout: port_targets). The section
+also lists the "Kept quirks": behaviours of the reference the port keeps on purpose, about
+which the reviewer writes no finding. What the reference itself should change is a line of
+the reference follow-up (followup.py; the tasks say where it goes). The stubs of the ported
+code files and the carried-tests report: ported.py.
 
 Seen live (da-argos, a runner ported from da-otto): the agents were not given the sibling
 repository, so its files were copied into the spec folder by hand; and the test writer wrote
@@ -38,6 +42,9 @@ _COMMENT = re.compile(r"<!--.*?-->", re.S)
 _REFERENCE_LINE = re.compile(r"^[ \t>*-]*Reference\**:[ \t*`]*([A-Za-z][\w-]*)", re.M | re.I)
 _COMMIT_LINE = re.compile(r"^[ \t>*-]*Commit\**:[ \t*`]*([0-9a-fA-F]{7,40})\b", re.M | re.I)
 _DIFFER_HEAD = re.compile(r"^\W*What may differ\b.*$", re.M | re.I)
+_QUIRKS_HEAD = re.compile(r"^\W*Kept quirks\b.*$", re.M | re.I)
+#: a line that ends a bullet list of the section: the next label, a table, a heading
+_LIST_END = re.compile(r"^\s*(?:\**(?:What may differ|Kept quirks)\b|\||#)", re.I)
 _BULLET = re.compile(r"^\s*[-*]\s+(.*\S)\s*$")
 _NOTHING = re.compile(r"^\W*(none|n/?a|nothing)\W*$", re.I)
 
@@ -62,6 +69,9 @@ class Port:
     differ: list[str] = field(default_factory=list)
     #: the `Commit:` line, if the spec has one (what the spec dialogue looked at)
     commit: str = ""
+    #: the "Kept quirks" bullets: behaviours of the reference the port keeps on purpose,
+    #: although a stricter reading of the spec would forbid them (no review finding)
+    quirks: list[str] = field(default_factory=list)
 
     def of_kind(self, kind: str) -> list[PortFile]:
         return [f for f in self.files if f.kind == kind]
@@ -115,13 +125,25 @@ def parse_port(text: str) -> Port | None:
                     "tests" if word.startswith("test") else "code",
                 )
             )
-    head = _DIFFER_HEAD.search(body)
-    if head:
-        for line in body[head.end() :].splitlines():
-            m = _BULLET.match(line)
-            if m and not _NOTHING.match(m.group(1)):
-                port.differ.append(m.group(1))
+    port.differ = _bullets_after(body, _DIFFER_HEAD)
+    port.quirks = _bullets_after(body, _QUIRKS_HEAD)
     return port
+
+
+def _bullets_after(body: str, head: re.Pattern[str]) -> list[str]:
+    """The bullets of the list under a label line of the section (`What may differ:`), up to
+    the next label, table or heading; "None" bullets left out."""
+    m = head.search(body)
+    out: list[str] = []
+    if not m:
+        return out
+    for line in body[m.end() :].splitlines():
+        if _LIST_END.match(line):
+            break
+        b = _BULLET.match(line)
+        if b and not _NOTHING.match(b.group(1)):
+            out.append(b.group(1))
+    return out
 
 
 def feature_port(cfg: Config, feature: str) -> Port | None:
@@ -321,11 +343,46 @@ def brief_lines(cfg: Config) -> list[str]:
         "them in the spec brief ('Project details that matter') so the user approves them.",
         "  A port (the feature copies code of a reference): fill 'Ported from' (Reference, "
         "Commit as above, every source -> target file, the reference's test files to carry "
-        "over, 'What may differ'). Then the stubs mirror the reference's public names and "
-        "signatures; the spec's IDs describe what the reference does today (read it; do not "
-        "decide it again); ask the user only about what is to differ.",
+        "over, 'What may differ', 'Kept quirks': behaviours of the reference the port keeps "
+        "on purpose although a stricter reading would forbid them). The spec's IDs describe "
+        "what the reference does today (read it; do not decide it again); ask the user only "
+        "about what is to differ. The stubs of the ported code files come from the reference: "
+        "`framegate port-stubs <feature>` writes each `code` target as the reference's text "
+        "with the function bodies replaced (python; else by hand, same names and signatures). "
+        "plan.md: one step per target file, leaf modules first.",
+        "  What the reference itself should change because of this feature (a bug it shares "
+        "that is fixed here, a deliberate improvement): one bullet under 'Reference "
+        "follow-up' in requirements.md; the reference is never changed by the feature.",
     ]
     return out
+
+
+#: the agents' line for something the reference should change (followup.REFERENCE reads it)
+FOLLOWUP_LINE = (
+    "`- REFERENCE FOLLOW-UP [<reference file>]: <what the reference should change and why>`"
+)
+#: task kind -> the notes file its agent writes
+_NOTES_FILE = {
+    "IMPLEMENT": "your step note",
+    "IMPLEMENT_STEPS": "your step note",
+    "FIX": "your step note",
+    "FIX_FINAL": "your step note",
+    "REVIEW": "review.md",
+    "TRIAGE": "triage.md",
+}
+
+
+def followup_note(cfg: Config, feature: str, kind: str) -> str:
+    """Text added to a task of a feature that uses a reference without porting it ("" else:
+    a port's note says it itself): where a needed change of the reference is noted."""
+    if kind not in _NOTES_FILE or not used(cfg, feature) or feature_port(cfg, feature):
+        return ""
+    return (
+        "The references are other projects and are never changed by this feature. If the "
+        "work shows that a reference should change because of it (a bug it shares that is "
+        f"fixed here, a deliberate improvement), add one line to {_NOTES_FILE[kind]}: "
+        f"{FOLLOWUP_LINE}. It is raised at the final gate as work for that project."
+    )
 
 
 def _pairs(files: list[PortFile]) -> str:
@@ -345,6 +402,14 @@ def port_note(cfg: Config, feature: str, kind: str) -> str:
     )
     code, tests = _pairs(port.of_kind("code")), _pairs(port.of_kind("tests"))
     out = cfg.paths.out
+    quirks = "; ".join(port.quirks)
+    # a behaviour the reference shares is still a finding when the spec promises otherwise
+    shared = (
+        "A finding about behaviour the reference at the pinned commit has too stays a "
+        "finding when the spec promises otherwise: keep it, AND add one line to {file}, "
+        f"{FOLLOWUP_LINE} (the reference is never changed by this feature; the line is "
+        "raised at the final gate)."
+    )
     notes = {
         "TESTS": f"Carry over the reference's tests, do not write your own: {tests}. Copy each "
         "reference test file to its target and keep the test names, their order, the "
@@ -355,12 +420,18 @@ def port_note(cfg: Config, feature: str, kind: str) -> str:
         f"{out}/{feature}/test_summary.md under '## New tests (not in the reference)' with the "
         "ID and the reason. A reference test you cannot carry over (it needs something this "
         "repository lacks): leave it out and list it under '## Reference tests not carried "
-        f"over' with the reason; a doubt goes to {out}/{feature}/questions.md.",
+        f"over' with the reason; a doubt goes to {out}/{feature}/questions.md. A carried-over "
+        "test that cannot fail before the implementation (a scan, a negative check) is "
+        "right only when the spec lists it under 'Green against stubs': carry it over as "
+        "it is; if it is not listed, say so in test_summary.md.",
         "TEST_REVIEW": f"The tests are carried over from the reference: {tests}. Read each "
         "reference test file next to its target. A reference test that is missing, renamed, "
         "rewritten or weakened (an assertion dropped or loosened, a case removed) is an "
         "objection, unless what may differ, or test_summary.md's '## Reference tests not "
-        "carried over' with a reason that holds, explains it. A new test is right only for a "
+        "carried over' with a reason that holds, explains it. test_checks.md, 'Reference "
+        "tests carried over', names every reference test whose name is not in the target "
+        "file: one without a reason tied to 'What may differ' or to code that is not "
+        "ported yet is an objection. A new test is right only for a "
         "spec ID that no reference test covers ('## New tests (not in the reference)').",
         "IMPLEMENT": f"Copy, do not rewrite: {code}. For each pair of your step, read the "
         "reference file and write it to its target, then change only what may differ. Same "
@@ -369,13 +440,41 @@ def port_note(cfg: Config, feature: str, kind: str) -> str:
         "checklist would ask for one: a diff between the two repositories must show only "
         "the listed deviations. A change the tests need that is not listed: make it as small "
         "as possible and log it (`- ASSUMPTION [<spec ID>]: differs from the reference: "
-        "<file>, <what>`).",
+        "<file>, <what>`). The stub of a ported file is the reference's own text with the "
+        "bodies replaced: its docstrings, comments and signatures are the reference's "
+        "already, keep them. The step gate shows each ported file you touched against the "
+        "reference: every hunk must match a 'What may differ' bullet."
+        + (
+            f" Quirks of the reference that stay as they are, on purpose: {quirks}."
+            if quirks
+            else ""
+        )
+        + " A bug of the reference that the spec or a test makes you fix here: fix it, and add "
+        f"one line to your step note, {FOLLOWUP_LINE}.",
         "REVIEW": f"Also compare each target file with its reference file: {code}. A "
         "difference that 'What may differ' does not list is a finding: when it changes "
         "behavior, a failing test as usual; otherwise a bullet under `## Structure findings` "
         "(`- <target file>: lines <n-m> differ from the reference (<what>) -> restore the "
         "reference's text`). The readability checklist of your role does not apply to "
-        "ported files: their structure is the reference's, on purpose.",
+        "ported files: their structure is the reference's, on purpose."
+        + (
+            " Kept quirks (behaviours of the reference the port keeps on purpose; the spec "
+            f"lists them under 'Kept quirks'): {quirks}. Write no finding and no test "
+            "about them."
+            if quirks
+            else ""
+        )
+        + " "
+        + shared.format(file="review.md"),
+        "TRIAGE": (
+            f"Kept quirks (behaviours of the reference the port keeps on purpose): {quirks}. "
+            "A finding about one of them is INVALID: cite its 'Kept quirks' line as the "
+            "reason. "
+            if quirks
+            else ""
+        )
+        + "'The reference does the same' is no reason to dismiss a finding. "
+        + shared.format(file="triage.md"),
         "STRUCTURE": "A finding that names a difference from the reference: restore the "
         "reference's text there. Nothing else in a ported file moves away from the "
         f"reference ({code}).",
@@ -404,7 +503,9 @@ def port_note(cfg: Config, feature: str, kind: str) -> str:
     notes["IMPLEMENT_STEPS"] = notes["IMPLEMENT"]
     notes["FIX"] = notes["FIX_FINAL"] = (
         "Fix with the smallest change, and keep the ported files as close to the reference as "
-        f"the fix allows ({code})."
+        f"the fix allows ({code}). A fix for behaviour the reference has too (the port now "
+        "differs from it on purpose): add one line to your step note, "
+        f"{FOLLOWUP_LINE}."
     )
     return head + notes[kind] if kind in notes else ""
 
@@ -416,14 +517,39 @@ def _reference_lines(
     """The lines of a reference file and where they come from: the pinned commit when the
     reference was clean at the spec approval, else the file as it is now."""
     commit = (pinned or {}).get("commit")
-    if commit and not (pinned or {}).get("dirty"):
+    data, origin = reference_bytes(folder, rel, None if (pinned or {}).get("dirty") else commit)
+    return (None, "") if data is None else (data.decode("utf-8", "replace").splitlines(), origin)
+
+
+def reference_bytes(folder: pathlib.Path, rel: str, commit: str | None) -> tuple[bytes | None, str]:
+    """A reference file as it is at `commit` ("at 1a2b3c4d5e"), else (no commit, or the
+    commit does not have the file) as it is now in the folder; (None, "") if it is not there."""
+    if commit:
         code, out = _git(folder, "show", f"{commit}:./{rel}")
         if code == 0:
-            return out.decode("utf-8", "replace").splitlines(), f"at {short(commit)}"
+            return out, f"at {short(commit)}"
     path = folder / rel
     if not path.is_file():
         return None, ""
-    return path.read_text(encoding="utf-8", errors="replace").splitlines(), "as it is now"
+    return path.read_bytes(), "as it is now"
+
+
+def pinned_commit(
+    cfg: Config, feature: str, pins: list[dict[str, Any]] | None
+) -> tuple[pathlib.Path, str | None] | None:
+    """For a port whose reference is on this machine: (its folder, the commit its files are
+    read at). The commit is the pin of the spec approval when the reference was clean then;
+    before the approval the spec's own `Commit:` line; None = the files as they are now."""
+    port = feature_port(cfg, feature)
+    if port is None or port.reference not in cfg.references:
+        return None
+    folder = cfg.reference_dir(port.reference)
+    if not folder.is_dir():
+        return None
+    pin = next((p for p in pins or [] if p.get("name") == port.reference), None)
+    if pin is not None:
+        return folder, None if pin.get("dirty") else pin.get("commit")
+    return folder, port.commit or None
 
 
 def _counts(a: list[str], b: list[str]) -> tuple[int, int, int]:
@@ -441,13 +567,23 @@ def _counts(a: list[str], b: list[str]) -> tuple[int, int, int]:
     return changed, added, removed
 
 
-def fidelity(cfg: Config, feature: str, pins: list[dict[str, Any]] | None) -> dict[str, Any]:
+def fidelity(
+    cfg: Config,
+    feature: str,
+    pins: list[dict[str, Any]] | None,
+    only: set[str] | None = None,
+) -> dict[str, Any]:
     """For a port: each target file against its reference file (changed / added / removed
     lines), the diffs written to {out}/{feature}/fidelity/. {} for a normal feature;
-    "skipped" names the reason when the reference cannot be read here."""
+    "skipped" names the reason when the reference cannot be read here. `only`: just these
+    target files (a step gate: the ones the step's run touched; none of them: {})."""
     port = feature_port(cfg, feature)
     if port is None:
         return {}
+    if only is not None:
+        port.files = [f for f in port.files if f.target in only]
+        if not port.files:
+            return {}
     rep: dict[str, Any] = {"reference": port.reference, "skipped": "", "files": []}
     if port.reference not in cfg.references:
         rep["skipped"] = f"reference '{port.reference}' is not declared in [references]"
@@ -511,6 +647,45 @@ def fidelity_lines(rep: dict[str, Any]) -> list[str]:
                 f"of {row['lines']} lines (reference {row['origin']}; diff: {row['diff']})"
             )
     return out or [f"Port fidelity (not blocking): no file pair in '{PORT_SECTION}'"]
+
+
+#: under a step gate's fidelity lines: what the implementer does with them
+STEP_FIDELITY_RULE = (
+    "Every hunk of these diffs must match a 'What may differ' bullet of the spec; restore the "
+    "reference's text everywhere else (wording, docstrings, comments, order)."
+)
+
+
+def touched_targets(cfg: Config, feature: str, since: str = "HEAD") -> set[str]:
+    """The port's target files that differ from the commit `since` (HEAD: what the run before
+    a step gate changed and did not commit yet), untracked ones included."""
+    targets = port_targets(cfg, feature)
+    if not targets:
+        return set()
+    names: set[str] = set()
+    for args in (
+        ("diff", "--name-only", "--relative", since, "--"),
+        ("ls-files", "--others", "--exclude-standard", "--"),
+    ):
+        code, out = _git(cfg.root, *args, *sorted(targets))
+        if code == 0:
+            names |= {x.strip() for x in out.decode("utf-8", "replace").splitlines()}
+    return targets & names
+
+
+def differing(rep: Any) -> int:
+    """How many files of a fidelity report differ from their reference file."""
+    rows = rep.get("files") if isinstance(rep, dict) else None
+    return len([r for r in rows or [] if r.get("diff")])
+
+
+def step_fidelity_lines(rep: dict[str, Any]) -> list[str]:
+    """A step gate's fidelity report: the files the run touched that differ from the
+    reference, with the rule ([]: nothing touched, or all identical)."""
+    if not rep or rep.get("skipped"):
+        return []
+    lines = fidelity_lines({**rep, "files": [r for r in rep.get("files") or [] if r.get("diff")]})
+    return [*lines, STEP_FIDELITY_RULE] if len(lines) > 1 else []
 
 
 def fidelity_summary(rep: dict[str, Any]) -> str:

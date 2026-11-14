@@ -65,7 +65,15 @@ Mode: bugfix
      (the final summary raises it). One bullet per change: `- <file>: <what must change>
      (<why>)`, e.g. `- platform/deploy/Dockerfile: COPY the new runner/ folder (the image
      must contain the new package)`, a new dependency the image must install, a new test
-     selection for CI. "None." when the feature needs no such change. -->
+     selection for CI. Only deploy / CI files: nothing else belongs here. "None." when the
+     feature needs no such change. -->
+None.
+
+## Reference follow-up
+<!-- A reference (another project, read-only) is never changed by this fix. If the reference
+     has the same bug, or should take over the fix, note it here so it is not lost (the final
+     summary raises it): `- <reference file>: <what should change> (<why>)`. "None." when
+     no reference shares the bug. -->
 None.
 
 ## Non-goals

@@ -74,7 +74,15 @@ Mode: refactor
      never changed by a feature, not even now: they stay locked. What must change there
      BECAUSE of this feature is a separate step after it; note it here so it is not lost
      (the final summary raises it). One bullet per change: `- <file>: <what must change>
-     (<why>)`. "None." when the feature needs no such change. -->
+     (<why>)`. Only deploy / CI files: nothing else belongs here. "None." when the feature
+     needs no such change. -->
+None.
+
+## Reference follow-up
+<!-- A reference (another project, read-only) is never changed by this refactor. What the
+     reference should change because of it (the same restructuring, so the two stay
+     comparable) is work for that project; note it here so it is not lost: `- <reference
+     file>: <what should change> (<why>)`. "None." when there is no such change. -->
 None.
 
 ## Test data and fixtures
