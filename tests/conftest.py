@@ -157,6 +157,59 @@ class DemoRepo:
         git(self.root, "commit", "-q", "-m", "config")
 
 
+#: seconds per test, recorded by `pytest -m "not slow" --record-durations` (one process, a
+#: quiet machine). A test at or over LONG_SECONDS there is marked `long` and left out of the
+#: everyday run (pyproject.toml addopts). A test not in the file (a new one) runs every time.
+DURATIONS = HERE / "durations.json"
+LONG_SECONDS = 10.0
+
+
+def recorded_durations() -> dict[str, float]:
+    try:
+        data = json.loads(DURATIONS.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--record-durations",
+        action="store_true",
+        help="write the seconds of every test that ran to tests/durations.json (kept: the others)",
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    known = recorded_durations()
+    for item in items:
+        if known.get(item.nodeid, 0.0) >= LONG_SECONDS:
+            item.add_marker(pytest.mark.long)
+
+
+_seconds: dict[str, float] = {}
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    _seconds[report.nodeid] = _seconds.get(report.nodeid, 0.0) + report.duration
+
+
+def pytest_sessionfinish(session: pytest.Session) -> None:
+    if not session.config.getoption("--record-durations") or not _seconds:
+        return
+    merged = {**recorded_durations(), **{k: round(v, 1) for k, v in _seconds.items()}}
+    text = json.dumps(dict(sorted(merged.items())), indent=1) + "\n"
+    DURATIONS.write_text(text, encoding="utf-8")
+
+
+def pytest_report_header(config: pytest.Config) -> str:
+    long = sum(1 for v in recorded_durations().values() if v >= LONG_SECONDS)
+    return (
+        f"framegate: {long} tests are marked long (>= {LONG_SECONDS:g} s in tests/durations.json);"
+        ' the default run leaves them out, `-m "not slow"` runs them (before a release)'
+    )
+
+
 @pytest.fixture(autouse=True)
 def no_toast(monkeypatch: pytest.MonkeyPatch) -> None:
     """Never show Windows toasts from the test suite (tests/test_chat.py checks the call)."""

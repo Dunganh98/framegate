@@ -37,10 +37,14 @@ packages = ["src/framegate"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# slow tests (real dotnet builds) are deselected by default; run them with -m slow,
-# everything with -m "slow or not slow"
-addopts = "-q -m 'not slow'"
-markers = ["slow: needs a real toolchain (dotnet) and takes minutes"]
+# The everyday run leaves out `long` tests (whole workflow runs with the fake claude: 10 s and
+# more each, see tests/conftest.py) and `slow` tests (real dotnet builds). Before a release:
+# -m "not slow" (all but the real toolchains); -m slow; everything: -m "slow or not slow"
+addopts = "-q -m 'not slow and not long'"
+markers = [
+    "slow: needs a real toolchain (dotnet) and takes minutes",
+    "long: 10 s or more in tests/durations.json; left out of the everyday run",
+]
 
 [tool.ruff]
 line-length = 100

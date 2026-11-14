@@ -102,7 +102,8 @@ Coming from agentflow (the old name)? [docs/migrate-from-agentflow.md](docs/migr
 
 ```
 uv sync
-uv run pytest          # unit + end-to-end tests (fake claude, no API calls), ~3 min
+uv run pytest          # everyday run: leaves out the long whole-workflow tests (tests/durations.json)
+uv run pytest -m "not slow"   # before a release: all tests with the fake claude (no API calls); 3 min to 45 min by machine
 uv run pytest -m slow  # real toolchains: .NET e2e (dotnet SDK) ~1.5 min, mutmut via WSL ~15 s
 uv run pytest -m "slow or not slow"   # everything
 uv run ruff check src tests ; uv run ruff format --check src tests ; uv run mypy
