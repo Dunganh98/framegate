@@ -313,7 +313,7 @@ def test_port_tasks_and_fidelity_report(
     assert "Copy, do not rewrite: demo/__init__.py -> src/demo/__init__.py" in prompts["IMPLEMENT"]
     assert "comments and docstrings word for word" in prompts["IMPLEMENT"]
     assert "`## Structure findings`" in prompts["REVIEW"]
-    assert "This feature is a PORT" not in prompts["PR"]
+    assert "This feature is a PORT" not in prompts["SUMMARY"]
 
     gates = (r.root / "out/demo/final_gates.md").read_text(encoding="utf-8")
     assert "Port fidelity against reference 'otto' (not blocking" in gates

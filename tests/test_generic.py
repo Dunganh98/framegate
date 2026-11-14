@@ -62,7 +62,15 @@ def test_the_whole_flow_on_the_generic_adapter(demo_repo: DemoRepo) -> None:
     assert r.af("approve-spec", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE and r.progress()["waiting"]["gate"] == "final"
     phases = [c["phase"] for c in r.calls()]
-    assert phases == ["TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "TRIAGE", "IMPLEMENT", "PR"]
+    assert phases == [
+        "TESTS",
+        "TEST_REVIEW",
+        "IMPLEMENT",
+        "REVIEW",
+        "TRIAGE",
+        "IMPLEMENT",
+        "SUMMARY",
+    ]
     checks = (r.root / "out/demo/test_checks.md").read_text(encoding="utf-8")
     assert "### Red against stubs: PASS" in checks and "### Traceability: PASS" in checks
     impl = r.calls()[2]["prompt"]

@@ -45,7 +45,7 @@ def test_a_step_whose_tests_are_wrong_keeps_its_code(
     test writer applies it, and the contested test must then pass (here: it is gone)."""
     r = demo_repo
     contested_run_to_final_gate(r, accept=True)
-    assert phases(r) == ["TESTS", "TEST_REVIEW", "IMPLEMENT", "IMPLEMENT", "REVIEW", "PR"]
+    assert phases(r) == ["TESTS", "TEST_REVIEW", "IMPLEMENT", "IMPLEMENT", "REVIEW", "SUMMARY"]
     prog = r.progress()
     assert prog["completed_steps"] == [1, 2] and prog["parked"] == []
     (rec,) = prog["provisional"]
@@ -88,7 +88,7 @@ def test_a_step_whose_tests_are_wrong_keeps_its_code(
     assert "Proposed test fixes (the code of these steps" in archive
     n = len(r.calls())
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    assert phases(r)[n:] == ["SPEC_UPDATE", "TESTS", "TEST_REVIEW", "PR"]
+    assert phases(r)[n:] == ["SPEC_UPDATE", "TESTS", "TEST_REVIEW", "SUMMARY"]
     assert "provisional step's contested tests" in r.calls()[n + 1]["prompt"]
     settled = [e for e in r.events() if e["kind"] == "provisional_settled"]
     assert [(e["label"], e["accepted"]) for e in settled] == [("step 1 - add", True)]
@@ -121,7 +121,7 @@ def test_a_contested_test_the_human_keeps_reverts_the_provisional_code(
     assert r.af("answer", "demo") == 0
     n = len(r.calls())
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    assert phases(r)[n:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "PR"]
+    assert phases(r)[n:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "SUMMARY"]
     (settled,) = [e for e in r.events() if e["kind"] == "provisional_settled"]
     assert not settled["accepted"] and settled["reverted"]
     assert [s.split("::")[-1] for s in settled["still_failing"]] == [

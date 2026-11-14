@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from conftest import DemoRepo
 from framegate.adapters import get_adapter
+from framegate.checks import check_signature
 from framegate.config import load_config
 from framegate.orchestrator import EXIT_GATE, Orchestrator
 from framegate.retro import match_answer, same_question
@@ -43,6 +44,92 @@ def test_same_question() -> None:
     # the same words about another spec ID: another question
     assert not same_question(Q1.replace("MSC-R-001", "MSC-R-002").replace("R-005", "R-007"), Q1)
     assert not same_question("", Q1) and not same_question("Yes or no?", "Yes or no, really?")
+
+
+GREEN = (
+    "RUN-R-004: `test_runner_registry_lists_builtin_steps` in tests/test_runner_registry.py is "
+    "carried over from the reference and already passes against the stubs (it only reads the "
+    "registry constant), so the red-against-stubs check fails on it. Options: (a) keep the test "
+    "as it is; (b) drop it from the port. Recommended: (a)."
+)
+GREEN_REWORDED = (
+    "test_runner_registry_lists_builtin_steps (tests/test_runner_registry.py, RUN-R-004) comes "
+    "from the reference unchanged. It is green before any implementation, since the registry "
+    "constant already exists, and 'Red against stubs' reports it. Keep the test as it is "
+    "(default), or drop it from the port?"
+)
+GREEN_OTHER = (
+    "RUN-R-004: test_runner_registry_lists_builtin_steps (tests/test_runner_registry.py) expects "
+    "the step names in registration order. Should the order be alphabetical instead? Default: no."
+)
+
+
+def test_a_reworded_question_about_the_same_test_is_the_same() -> None:
+    """Seen live (da-argos): the test writer asked about the same carried-over test in two
+    rounds, in other words (70% of the words shared, under the 80% rule): collected twice."""
+    assert same_question(GREEN_REWORDED, GREEN) and same_question(GREEN, GREEN_REWORDED)
+    # another question about the same test: its name alone does not make it the same
+    assert not same_question(GREEN_OTHER, GREEN) and not same_question(GREEN_OTHER, GREEN_REWORDED)
+    # the same words about another test, or another spec ID: another question
+    other_test = GREEN_REWORDED.replace("lists_builtin_steps", "rejects_unknown_step")
+    assert not same_question(other_test, GREEN)
+    assert not same_question(GREEN_REWORDED.replace("RUN-R-004", "RUN-R-005"), GREEN)
+
+
+def test_an_unwinnable_round_is_not_repeated(demo_repo: DemoRepo) -> None:
+    """Seen live: "Red against stubs" failed on a test the writer may not change (carried
+    over, green by design); the reviewer said OK twice, and the writer was still sent back
+    twice and asked its question twice. Now: one round for the failure; when it fails the
+    same way again and the reviewer has no objections, it goes to the gate, and the
+    reworded question is collected once."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.defer_tests_gate()
+    r.scenario(green_test=True, test_question=[GREEN, GREEN_REWORDED])
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE
+    phases = [c["phase"] for c in r.calls()]
+    assert phases[:4] == ["TESTS", "TEST_REVIEW", "TESTS", "TEST_REVIEW"]
+    assert phases[4] == "IMPLEMENT"  # no third writer round (before: two rounds back)
+    reviews = [e for e in r.events() if e["kind"] == "test_review"]
+    assert [(e["round"], e["sent_back"]) for e in reviews] == [(1, True), (2, False)]
+    assert "unchanged_checks" not in reviews[0]
+    assert reviews[1]["unchanged_checks"] == ["Red against stubs"]
+    log = (r.root / "out/demo/progress.log").read_text(encoding="utf-8")
+    assert "back to the test writer (round 1 of 2)" in log and "(round 2 of 2)" not in log
+    assert "failed exactly as in the round before" in log
+    assert "1 repeated question(s) dropped" in log
+    asked = [e for e in r.events() if e["kind"] == "questions" and e["who"] == "test writer"]
+    assert len(asked) == 1 and asked[0]["questions"].startswith("- RUN-R-004: `test_runner")
+    # today's end state: the failed check is an item for the final gate
+    deferred = [e for e in r.events() if e["kind"] == "tests_gate_deferred"]
+    assert "failed checks: Red against stubs" in deferred[0]["reasons"]
+
+
+def test_a_changed_failure_or_an_objection_still_gets_its_round(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    cfg = load_config(r.root)
+    orch = Orchestrator(cfg, get_adapter(cfg), echo=lambda s: None)
+    same = {"check_failures": {"A": "x1"}, "check_failures_before": {"A": "x1"}}
+    assert not orch.same_check_failures({**same, "round": 0}, ["A"])  # not seen by the writer
+    assert orch.same_check_failures({**same, "round": 1}, ["A"])
+    moved = {"round": 1, "check_failures": {"A": "x2"}, "check_failures_before": {"A": "x1"}}
+    assert not orch.same_check_failures(moved, ["A"])  # other tests fail now
+    new = {**same, "round": 1, "check_failures": {"A": "x1", "B": "y"}}
+    assert not orch.same_check_failures(new, ["A", "B"])  # a check that passed before
+    assert not orch.same_check_failures({"round": 1}, ["A"])
+    # the digest: the problem lines, not the count line, the order or the timings
+    one = "3 tests for feature f.\nPASSES AGAINST STUB: t::a\nERROR: t::b in 0.12s"
+    two = "4 tests for feature f.\nERROR: t::b in 1.5 s\nPASSES AGAINST STUB: t::a"
+    assert check_signature(one) == check_signature(two)
+    assert check_signature(one) != check_signature(one.replace("t::a", "t::c"))
+    # objections with the same failed check: the writer goes back (it has something to fix)
+    r.add_toml(FAST)
+    r.scenario(green_test=True, test_review_objections=2)
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE
+    reviews = [e for e in r.events() if e["kind"] == "test_review"]
+    assert [e["sent_back"] for e in reviews] == [True, True, False]
 
 
 def test_a_repeated_question_is_collected_once(demo_repo: DemoRepo) -> None:

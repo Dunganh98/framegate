@@ -193,7 +193,7 @@ def test_low_risk_passes_the_final_gate_without_a_stop_in_auto_mode(
     assert r.progress()["phase"] == "DONE"
     gate = [e for e in r.events() if e["kind"] == "human_gate"]
     assert len(gate) == 1 and gate[0]["auto"] is True and gate[0]["risk"] == "low"
-    assert [c["phase"] for c in r.calls()][-2:] == ["PR", "RETRO"]
+    assert [c["phase"] for c in r.calls()][-2:] == ["SUMMARY", "RETRO"]
     assert "approved automatically (low risk" in (r.root / "out/demo/progress.log").read_text(
         "utf-8"
     )

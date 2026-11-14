@@ -185,7 +185,7 @@ def test_every_template_has_the_section_and_the_agents_are_told() -> None:
         assert followup.parse_spec(text) == [], name  # "None." by default
     for role in ("implement", "review"):
         assert "PIPELINE FOLLOW-UP [<file>]" in package_text("roles", f"{role}.md"), role
-    assert "never a question, a decision" in package_text("roles", "pr.md")
+    assert "never a question, a decision" in package_text("roles", "summary.md")
 
 
 def test_pipeline_followup_reaches_the_final_brief_and_survives_cleanup(

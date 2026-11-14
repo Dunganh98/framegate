@@ -19,7 +19,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from framegate import references
+from framegate import references, setup_checks
 from framegate.adapters import get_adapter
 from framegate.adapters.base import LanguageAdapter
 from framegate.checks import frame_diff, spec_lint
@@ -129,6 +129,32 @@ def missing_chat_rules(cfg: Config) -> list[str]:
     ]
 
 
+def config_notes(cfg: Config, adapter: LanguageAdapter) -> list[tuple[str, str, str]]:
+    """(status, name, detail), only where there is something to say: names of an earlier
+    version that are still read, and commands an agent's task names but may not run."""
+    notes = []
+    old = setup_checks.renamed_names(cfg)
+    if old:
+        notes.append(
+            (
+                "WARN",
+                "config: renamed names (still read)",
+                "; ".join(old) + ": rename them (the old names stop working in a later version)",
+            )
+        )
+    denied = setup_checks.denied_brief_commands(cfg, adapter)
+    if denied:
+        notes.append(
+            (
+                "WARN",
+                "agents: commands their task names but their tool rules deny",
+                "; ".join(denied)
+                + "\nadd a rule for each to that phase's [phases.<P>] tools, or remove the list",
+            )
+        )
+    return notes
+
+
 def brief(items: list[Item]) -> list[str]:
     """The verdict line, then the FAILs and the WARNs that need a decision, one line each."""
     fails = [i for i in items if i.status == "FAIL"]
@@ -202,6 +228,9 @@ def run(
         add(Item("OK", "claude CLI", " ".join(cmd)))
     except WorkflowError as e:
         add(Item("FAIL", "claude CLI", str(e)))
+
+    for status, name, detail in config_notes(cfg, adapter):
+        add(Item(status, name, detail))
 
     missing_rules = missing_chat_rules(cfg)
     add(

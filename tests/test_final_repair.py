@@ -62,7 +62,15 @@ def test_weak_tests_are_strengthened_before_the_human_sees_the_gate(demo_repo: D
     rep = repairs(r)
     assert [(e["owner"], e["changed"]) for e in rep] == [("tests", True)]
     phases = [c["phase"] for c in r.calls()]
-    assert phases == ["TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "TESTS", "TEST_REVIEW", "PR"]
+    assert phases == [
+        "TESTS",
+        "TEST_REVIEW",
+        "IMPLEMENT",
+        "REVIEW",
+        "TESTS",
+        "TEST_REVIEW",
+        "SUMMARY",
+    ]
     strengthen = r.calls()[4]["prompt"]
     assert "found the tests too weak" in strengthen and "diff coverage" in strengthen
     assert "The failing final checks:" in strengthen

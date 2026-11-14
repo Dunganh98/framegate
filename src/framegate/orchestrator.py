@@ -2,7 +2,7 @@
 
 SPEC (approve-spec) -> TESTS (test writer <-> test reviewer, mechanical checks) -> TESTS gate ->
 IMPLEMENT (per plan step) -> REVIEW (adversarial reviewer -> triage by the test reviewer -> fixes
--> final gates) -> PR (final summary) -> FINAL gate -> RETRO -> DONE.
+-> final gates) -> SUMMARY (final summary, final brief, code map) -> FINAL gate -> RETRO -> DONE.
 
 Every agent run is a fresh headless `claude -p` process: no context accumulates between steps.
 `run` never blocks on input and never stops between the gates: questions of the test writer and
@@ -27,12 +27,14 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from framegate import backlog, followup, notify, procs, references, risk
+from framegate import api_error, backlog, followup, notify, procs, references, risk
 from framegate import brief as briefs
 from framegate.adapters import get_adapter
 from framegate.adapters.base import GATE_NAMES, CheckResult, LanguageAdapter, run_command
+from framegate.api_error import detect_api_error
 from framegate.checks import (
     baseline,
+    check_signature,
     existing_members,
     scope_coverage,
     spec_lint,
@@ -48,13 +50,14 @@ from framegate.checks.frame_diff import (
     setup_state,
     tests_update_tag,
 )
-from framegate.config import Config
+from framegate.config import ROLE_ALIASES, Config
 from framegate.gates import (
     BASELINE_FILE,
     GateReport,
     expected_red,
     gate_report,
     record_regression_baseline,
+    review_tests_checked,
     split_failures,
 )
 from framegate.hooks import AGENT_ENV
@@ -123,7 +126,7 @@ PROGRESS_WIDTH = 160
 STRUCTURE_WHO = "structure report"
 #: who asks whether to run the final gates again after a tool failure (always asked)
 GATES_WHO = "final gates"
-PHASES = ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "REVIEW", "PR", "FINAL", "RETRO", "DONE"]
+PHASES = ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "REVIEW", "SUMMARY", "FINAL", "RETRO", "DONE"]
 METRICS_HEADER = (
     "date,feature,human_rejections,escalations,questions,gate_failures,cost_usd,parked,assumptions"
 )
@@ -186,6 +189,15 @@ BRIEF_PHASES = {
     "REVIEW",
     "TRIAGE",
 }
+#: task kind -> the phase its agent runs in (its tool rules), where the two differ
+TASK_PHASE = {
+    "TESTS_AMEND": "TESTS",
+    "TESTS_STRENGTHEN": "TESTS",
+    "IMPLEMENT_STEPS": "IMPLEMENT",
+    "FIX": "IMPLEMENT",
+    "FIX_FINAL": "IMPLEMENT",
+    "STRUCTURE": "IMPLEMENT",
+}
 #: Only the plain command forms are pre-approved (--allowedTools); a `cd`/PATH prefix, a pipe
 #: or a `;`/`&&` chain makes the permission check deny the call (seen in live runs on Windows:
 #: `dotnet test ... | Select-String`, `...; echo`). The PreToolUse hook blocks them with this
@@ -198,7 +210,7 @@ COMMAND_FORM = (
     "verbosity, quiet flags) or read the result file it writes with the Read tool; to search "
     "files use Grep / Glob / Read."
 )
-#: roles that get the project knowledge file in their instructions (the PR summary does not
+#: roles that get the project knowledge file in their instructions (the summary agent does not
 #: need it); the spec dialogue gets it through `framegate spec-brief`
 KNOWLEDGE_ROLES = {
     "tests",
@@ -214,6 +226,8 @@ KNOWLEDGE_MAX_LINES = 300
 #: of the check's name): the implementer owns the first group, the test writer the second
 FINAL_SRC_CHECKS = (*GATE_NAMES.values(), "regression", "coverage run", "full test suite")
 FINAL_TESTS_CHECKS = ("diff coverage", "mutation score", "unreached assertions")
+#: final checks that run the whole suite: their repair run is checked with the suite too
+WHOLE_SUITE_CHECKS = ("regression", "full test suite")
 FIX_OWNER_RE = re.compile(r"^\W*Fix owner\W*:\W*(src|tests|spec)\b", re.I | re.M)
 #: a park request (or diagnosis) saying only the frozen tests are wrong, and which ones
 TESTS_WRONG_RE = re.compile(r"^\W*Park kind\W*:\W*tests[ -]wrong\b", re.I | re.M)
@@ -392,7 +406,7 @@ TASKS = {
     "TRIAGE": "Feature '{f}': triage the adversarial reviewer's findings against {specs}/{f}/. "
     "Failing review tests:\n{findings}\nReviewer notes: {out}/{f}/review.md. Delete the tests of "
     "INVALID findings from {review_tests}/ and write one line per finding to {out}/{f}/triage.md.",
-    "PR": "Feature '{f}': write the final summary ({out}/{f}/final_summary.md, the detailed "
+    "SUMMARY": "Feature '{f}': write the final summary ({out}/{f}/final_summary.md, the detailed "
     "file) and the final brief ({out}/{f}/final_brief.md, what the human reads at the final "
     "gate), and update the code map {code_map} for what this feature changed. Start with "
     "{out}/{f}/final_facts.md (generated facts, with the numbered gate items). Other inputs: "
@@ -659,7 +673,11 @@ class Orchestrator:
     def role_text(self, role: str, feature: str) -> str:
         text = package_text("roles", f"{role}.md")
         if self.cfg.roles_extra_dir:
-            extra = self.cfg.root / self.cfg.roles_extra_dir / f"{role}.md"
+            folder = self.cfg.root / self.cfg.roles_extra_dir
+            extra = folder / f"{role}.md"
+            # a project's additions under the role's earlier name (pr.md) are still read
+            old = folder / f"{ROLE_ALIASES.get(role, role)}.md"
+            extra = extra if extra.is_file() else old
             if extra.is_file():
                 text = (
                     text.rstrip()
@@ -700,7 +718,9 @@ class Orchestrator:
             task += "\n\n" + port
         task += "\n\n" + LOOK_AROUND + "\n\n" + self.orientation(feature)
         if kind in BRIEF_PHASES:
-            task += "\n\n## Conventions\n" + self.adapter.conventions_brief().strip()
+            # the brief names only the commands this run's tool rules allow
+            allowed = self.allowed_tools(TASK_PHASE.get(kind, kind))
+            task += "\n\n## Conventions\n" + self.adapter.conventions_brief(allowed).strip()
             task += "\n" + COMMAND_FORM
         return task
 
@@ -772,14 +792,57 @@ class Orchestrator:
     ) -> dict[str, Any]:
         """One fresh headless Claude Code run. The task goes via stdin and the role via
         --append-system-prompt-file (no multi-line text on the command line). A run refused by
-        the usage limit waits for the reset and runs again (never a failed attempt)."""
-        waits = 0
+        the usage limit waits for the reset and runs again; a run that did no work because the
+        API could not be reached runs again after a short wait (neither is a failed attempt:
+        the caller sees only a run that worked)."""
+        waits = retries = 0
         while True:
             res, limit = self.run_agent_once(phase, feature, task, feedback, role, step, attempt)
-            if limit is None:
+            if limit is not None:
+                waits += 1
+                self.wait_for_usage_limit(feature, phase, step, limit, waits)
+                continue
+            problem = detect_api_error(res)
+            if problem is None:
                 return res
-            waits += 1
-            self.wait_for_usage_limit(feature, phase, step, limit, waits)
+            retries += 1
+            self.wait_after_api_error(feature, phase, step, problem, retries)
+
+    def wait_after_api_error(
+        self, feature: str, phase: str, step: str | None, problem: str, retries: int
+    ) -> None:
+        """The run did no work because the API could not be reached (api_error.py): wait
+        (RETRY_WAITS_S: 30 s, 2 min, 5 min), then the caller starts the same run again. No
+        gate ran and no attempt is counted. Still unreachable after the last wait: the run
+        stops like Ctrl+C (state kept, `framegate run` resumes it), never a park."""
+        waits = api_error.RETRY_WAITS_S
+        wait = waits[retries - 1] if retries <= len(waits) else None
+        label = step or phase
+        log_event(
+            self.cfg,
+            feature,
+            "api_error",
+            phase=phase,
+            step=step,
+            message=problem,
+            retry=retries,
+            wait_s=wait,
+        )
+        if wait is None:
+            self.notify(
+                f"framegate: {feature} stopped, the API cannot be reached",
+                f"{problem[:120]}. When it works again: framegate run {feature}",
+            )
+            # (short: the progress line ends with how to resume; the message is in the event)
+            raise procs.Interrupted(f"API not reachable after {len(waits)} retries")
+        after = f"{wait // 60} min" if wait >= 60 else f"{wait} s"
+        self.progress(
+            feature,
+            # (what matters first: a progress line is cut at PROGRESS_WIDTH)
+            f"[{label}] API error, no work done; the same run again in {after} (retry "
+            f"{retries} of {len(waits)}, not a failed attempt): {problem}",
+        )
+        sleep_until(now_utc() + datetime.timedelta(seconds=wait))
 
     def wait_for_usage_limit(
         self, feature: str, phase: str, step: str | None, limit: UsageLimit, waits: int
@@ -911,8 +974,9 @@ class Orchestrator:
             session=res.get("session_id"),
             **token_usage(res),
             **({"usage_limit": True} if limit else {}),
+            **({"api_error": True} if not limit and detect_api_error(res) else {}),
         )
-        if limit:
+        if limit or detect_api_error(res):  # run_agent waits and starts the same run again
             return res, limit
         if denials:
             log_event(
@@ -1222,7 +1286,10 @@ class Orchestrator:
                 self.take_step_notes(feature)
                 self.report_new_assumptions(feature, prog)
                 t0 = time.time()
-                rep = None if question else gate_report(self.adapter, feature, "step")
+                # a plan step: its tests and the whole suite; a run after the review ("fix"):
+                # the feature's tests, the final gates run the suite right after
+                scope = str(item.get("gate") or "step")
+                rep = None if question else gate_report(self.adapter, feature, scope)
                 if rep is not None and rep.ok and self.idle_refactor_step(feature, item):
                     # green tests prove nothing here: they were green before the step
                     text = (
@@ -1257,6 +1324,7 @@ class Orchestrator:
                 phase=prog["phase"],
                 step=label,
                 steps=item.get("steps"),
+                scope=scope,
                 attempt=attempt,
                 passed=rep.ok,
                 failed=rep.failed,
@@ -1740,7 +1808,11 @@ class Orchestrator:
                 self.collect_questions(feature, "TEST_REVIEW", "test reviewer")
                 review = self.read_test_review(feature, keep_round=rnd + 1)
                 failed = [n for n, s in (prog.get("test_checks") or {}).items() if s != "PASS"]
-                back = (not review.clean or bool(failed)) and rnd < self.cfg.test_review_rounds
+                # a round nobody can win: the writer was sent back for these checks already,
+                # they fail exactly as before, and the reviewer has nothing to object to
+                stuck = bool(failed) and review.clean and self.same_check_failures(prog, failed)
+                again = not review.clean or (bool(failed) and not stuck)
+                back = again and rnd < self.cfg.test_review_rounds
                 log_event(
                     self.cfg,
                     feature,
@@ -1750,7 +1822,15 @@ class Orchestrator:
                     objections=review.objections,
                     failed_checks=failed,
                     sent_back=back,
+                    **({"unchanged_checks": failed} if stuck else {}),
                 )
+                if stuck:
+                    self.progress(
+                        feature,
+                        f"[TESTS] {', '.join(failed)}: failed exactly as in the round before, "
+                        "and the test reviewer has no objections: no further round for the "
+                        "test writer; left for the gate.",
+                    )
                 if back:
                     prog["round"] = rnd + 1
                     prog["feedback"] = self.objection_feedback(feature, review, failed)
@@ -1793,7 +1873,7 @@ class Orchestrator:
         )
         if changed:
             prog["tests_amended"] = True  # the review fixes make the changed tests pass
-            if nxt.get("phase") == "PR":  # nothing else to redo
+            if nxt.get("phase") == "SUMMARY":  # nothing else to redo
                 nxt = {"phase": "REVIEW", "sub": "fix"}
         log_event(self.cfg, feature, "tests_amended", ref=ref, files=changed)
         self.progress(
@@ -1804,7 +1884,7 @@ class Orchestrator:
         prog.update(phase=nxt.get("phase"), sub=nxt.get("sub"), amend=None, attempt=0)
         save_progress(self.cfg, feature, prog)
         quiet = prog.pop("quiet_answers", None)
-        if nxt.get("phase") == "PR" and self.answers_changed_nothing(feature, prog, quiet):
+        if nxt.get("phase") == "SUMMARY" and self.answers_changed_nothing(feature, prog, quiet):
             self.approve_unchanged(feature, prog, str(quiet["ref"]))
 
     def answers_changed_nothing(
@@ -1877,6 +1957,7 @@ class Orchestrator:
     def run_test_checks(self, feature: str, prog: dict[str, Any]) -> None:
         sections = []
         status: dict[str, str] = {}
+        outputs: dict[str, str] = {}
         mode = feature_mode(self.cfg, feature)
         for name, mod in [
             (baseline.name(mode), baseline),
@@ -1885,6 +1966,7 @@ class Orchestrator:
         ]:
             res = mod.check(self.adapter, feature)
             status[name] = res.status
+            outputs[name] = res.output
             sections.append(f"### {name}: {res.status}\n~~~\n{res.output}\n~~~")
         # a note for the test reviewer, never blocking (not in `status`: that sends tests back)
         try:
@@ -1924,7 +2006,23 @@ class Orchestrator:
             + (f"; scope coverage: {uncovered}" if uncovered else ""),
         )
         prog["test_checks"] = status
+        # what failed and how, this run and the one before it (same_check_failures)
+        prog["check_failures_before"] = prog.get("check_failures") or {}
+        prog["check_failures"] = {
+            name: check_signature(outputs[name]) for name, s in status.items() if s != "PASS"
+        }
         save_progress(self.cfg, feature, prog)
+
+    def same_check_failures(self, prog: dict[str, Any], failed: list[str]) -> bool:
+        """Did the test writer already get a round for these failed test checks, and do they
+        fail exactly as before it (the same checks with the same output, e.g. the same tests
+        named)? Seen live: "red against stubs" failed on a carried-over test the writer
+        may not change; the reviewer said OK twice, and the writer was still sent back
+        twice for a failure it could not fix. Then the failure goes to the gate at once."""
+        if not int(prog.get("round") or 0):
+            return False  # the writer has not seen this failure yet
+        now, before = prog.get("check_failures") or {}, prog.get("check_failures_before") or {}
+        return all(now.get(name) and now.get(name) == before.get(name) for name in failed)
 
     def read_test_review(self, feature: str, keep_round: int | None = None) -> TestReview:
         p = self.fdir(feature) / "test_review.md"
@@ -2402,7 +2500,7 @@ class Orchestrator:
         # at most one repair per owner (code, then tests) before the human sees a failure
         while not rep.ok and self.repair_final(feature, prog, rep):
             rep = self.run_final_gates(feature, prog)
-        self.advance(feature, prog, "PR")
+        self.advance(feature, prog, "SUMMARY")
 
     def triage(self, feature: str, prog: dict[str, Any]) -> bool:
         """The test reviewer decides per finding against the spec: VALID stays (fix loop),
@@ -2479,20 +2577,35 @@ class Orchestrator:
             log_event(self.cfg, feature, "findings_deferred", tests=deferred, ids=sorted(parked))
         return deferred
 
+    def fix_ids(self, feature: str, prog: dict[str, Any]) -> list[str] | None:
+        """The spec IDs whose tests the gate of a run after the review checks (gates.py,
+        scope "fix"): the feature's own, not the whole suite, which the final gates run right
+        after. With parked steps only the done steps' IDs (the parked steps' tests are red by
+        design). None = no ID known: the whole suite."""
+        if self.parked_steps(prog):
+            return self.done_ids(prog, plan_steps(self.cfg, feature))
+        return sorted(feature_ids(self.cfg, feature)) or None
+
+    def fix_check(self, feature: str, reqs: list[str] | None) -> str:
+        """The check command of a run after the review, for its task."""
+        check = self.adapter.test_command(reqs)
+        if reqs and review_tests_checked(self.adapter, feature):
+            check += f" (the gate also runs every test in {self.cfg.paths.review_tests}/)"
+        return check
+
     def fix_findings(self, feature: str, prog: dict[str, Any]) -> None:
         steps = plan_steps(self.cfg, feature)
         redo = [r for r in prog.get("redo") or [] if r.get("kind") == "finding"]
         tests = list(prog.get("valid_findings") or [])
         for r in redo:
             tests += [t for t in r.get("tests") or [] if t not in tests]
-        # with parked steps, their tests are red by design: check only the done steps' IDs
-        reqs = self.done_ids(prog, steps) if self.parked_steps(prog) else None
+        reqs = self.fix_ids(feature, prog)
         amended = bool(prog.pop("tests_amended", False))
         save_progress(self.cfg, feature, prog)
         if amended and not tests and not redo:
             # only tests changed from answers: no fix run if they pass already
             self.set_check_scope(prog, reqs)
-            rep = gate_report(self.adapter, feature, "step")
+            rep = gate_report(self.adapter, feature, "fix")
             clear_reqs(self.cfg)
             if rep.ok:
                 self.progress(feature, "[review fixes] the changed tests pass; no fix needed")
@@ -2500,7 +2613,7 @@ class Orchestrator:
         task = self.task_text(
             "FIX",
             feature,
-            check=self.adapter.test_command(reqs),
+            check=self.fix_check(feature, reqs),
             note=self.note_path(feature, "review-fixes"),
         )
         task += self.parked_context(prog, steps) + self.provisional_context(prog)
@@ -2513,7 +2626,13 @@ class Orchestrator:
             )
         if redo:
             task += REDO_NOTE.format(**self.placeholders(feature))
-        item = {"kind": "finding", "step": None, "label": "review fixes", "tests": tests}
+        item = {
+            "kind": "finding",
+            "step": None,
+            "label": "review fixes",
+            "tests": tests,
+            "gate": "fix",
+        }
         ok = self.implement_loop(feature, prog, task, reqs, item)
         clear_reqs(self.cfg)
         if ok:
@@ -2614,13 +2733,18 @@ class Orchestrator:
         return changed
 
     def repair_final_src(self, feature: str, prog: dict[str, Any], failed: list[str]) -> bool:
-        """The implementer fixes what the final gates found in the code (whole dev-loop suite
-        as its step check). True = fixed and committed; False = parked like a review fix."""
+        """The implementer fixes what the final gates found in the code. Its gate checks with
+        the feature's tests (the final gates run again right after), unless a whole-suite
+        check is what failed (regression, full test suite): then the suite is the check, or
+        the gate would pass a fix it never ran against the broken test. True = fixed and
+        committed; False = parked like a review fix."""
+        suite = any(n.startswith(WHOLE_SUITE_CHECKS) for n in failed)
+        reqs = None if suite else self.fix_ids(feature, prog)
         task = self.task_text(
             "FIX_FINAL",
             feature,
             failed=", ".join(failed),
-            check=self.adapter.test_command([]),
+            check=self.fix_check(feature, reqs),
             note=self.note_path(feature, "final-gate-fixes"),
         )
         item: dict[str, Any] = {
@@ -2628,9 +2752,10 @@ class Orchestrator:
             "step": None,
             "label": "final gate fixes",
             "tests": [],
+            "gate": "fix",  # (without IDs it runs everything)
         }
         head = git(self.cfg, "rev-parse", "HEAD").strip()
-        ok = self.implement_loop(feature, prog, task, None, item)
+        ok = self.implement_loop(feature, prog, task, reqs, item)
         clear_reqs(self.cfg)
         # green step gates without a commit: nothing changed, the same final result would come
         return ok and git(self.cfg, "rev-parse", "HEAD").strip() != head
@@ -2654,8 +2779,8 @@ class Orchestrator:
         self.progress(feature, f"[final gates] {len(changed)} test file(s) strengthened, committed")
         # a new test that follows from the spec and fails: the code is wrong, the implementer
         # fixes it (or parks it); green: nothing more to do before the gates run again
-        self.set_check_scope(prog, None)
-        step = gate_report(self.adapter, feature, "step")
+        self.set_check_scope(prog, self.fix_ids(feature, prog))
+        step = gate_report(self.adapter, feature, "fix")
         clear_reqs(self.cfg)
         if not step.ok:
             prog["feedback"] = "The strengthened tests fail:\n" + step.report[-6000:]
@@ -2683,16 +2808,15 @@ class Orchestrator:
         if not findings:
             return
         steps = plan_steps(self.cfg, feature)
-        reqs = self.done_ids(prog, steps) if self.parked_steps(prog) else None
-        if reqs is None and feature_mode(self.cfg, feature) == "refactor":
-            # like a refactor step: all the characterization tests. The whole suite runs
-            # once, in the final gates (live: a helper extraction ran it three times)
-            reqs = sorted(feature_ids(self.cfg, feature)) or None
+        # the feature's tests in every mode; the whole suite runs once, in the final gates
+        # that follow at once (live: a helper extraction ran it three times, FCSim; two
+        # small fix runs cost 9 minutes of suite runs, da-argos)
+        reqs = self.fix_ids(feature, prog)
         task = self.task_text(
             "STRUCTURE",
             feature,
             findings="\n".join(f"- {x}" for x in findings),
-            check=self.adapter.test_command(reqs),
+            check=self.fix_check(feature, reqs),
             note=self.note_path(feature, "structure-fixes"),
         )
         task += self.parked_context(prog, steps) + self.provisional_context(prog)
@@ -2702,6 +2826,7 @@ class Orchestrator:
             "label": "structure fixes",
             "tests": [],
             "structure": findings,
+            "gate": "fix",
         }
         self.progress(feature, f"[structure fixes] {len(findings)} finding(s) to apply")
         ok = self.implement_loop(feature, prog, task, reqs, item)
@@ -2748,7 +2873,9 @@ class Orchestrator:
             for q in lines:
                 fh.write(f"- [{STRUCTURE_WHO}] {q}\n")
         text = "\n".join(lines)
-        log_event(self.cfg, feature, "questions", phase="PR", who=STRUCTURE_WHO, questions=text)
+        log_event(
+            self.cfg, feature, "questions", phase="SUMMARY", who=STRUCTURE_WHO, questions=text
+        )
 
     def tool_failure_questions(self, feature: str) -> None:
         """A question at the final gate (always asked) for every final check whose tool gave
@@ -2772,7 +2899,7 @@ class Orchestrator:
             for q in lines:
                 fh.write(f"- [{GATES_WHO}] {q}\n")
         text = "\n".join(lines)
-        log_event(self.cfg, feature, "questions", phase="PR", who=GATES_WHO, questions=text)
+        log_event(self.cfg, feature, "questions", phase="SUMMARY", who=GATES_WHO, questions=text)
 
     def commit_code_map(self, feature: str) -> bool:
         """Commit the summary agent's code map update (its only file outside the out folder)."""
@@ -2786,22 +2913,22 @@ class Orchestrator:
         return True
 
     def code_map_state(self, feature: str, updated: bool) -> dict[str, Any]:
-        """Is there a code map, did this PR phase update it, which new public types it lacks."""
+        """Is there a code map, did this run update it, which new public types it lacks."""
         exists, missing = structure_check.missing_from_code_map(self.adapter, feature)
         state = {"exists": exists, "updated": updated, "missing": missing}
         log_event(self.cfg, feature, "code_map", **state)
         return state
 
-    # ---------- PR: final summary -> FINAL gate ----------
-    def phase_pr(self, feature: str, prog: dict[str, Any]) -> None:
+    # ---------- SUMMARY: final summary, final brief, code map -> FINAL gate ----------
+    def phase_summary(self, feature: str, prog: dict[str, Any]) -> None:
         d = self.fdir(feature)
         self.file_size_questions(feature, prog)
         self.tool_failure_questions(feature)
         self.write_final_facts(feature, prog)
         (d / "final_summary.md").unlink(missing_ok=True)
         (d / "final_brief.md").unlink(missing_ok=True)
-        self.agent("PR", feature, prog, self.task_text("PR", feature))
-        self.collect_questions(feature, "PR", "summary agent")
+        self.agent("SUMMARY", feature, prog, self.task_text("SUMMARY", feature))
+        self.collect_questions(feature, "SUMMARY", "summary agent")
         self.check_final_brief(feature, prog)
         prog["code_map"] = self.code_map_state(feature, self.commit_code_map(feature))
         summary = d / "final_summary.md"
@@ -2880,7 +3007,7 @@ class Orchestrator:
 
     def final_brief_plan(self, feature: str, prog: dict[str, Any]) -> briefs.BriefPlan:
         """The final gate's questions as the brief shows them (numbered 1..k), mapped to the
-        gate items; the items the PR agent decided or left out."""
+        gate items; the items the summary agent decided or left out."""
         return briefs.plan(
             self.final_brief_sections(feature),
             self.final_items(feature, prog),
@@ -2889,7 +3016,7 @@ class Orchestrator:
 
     def check_final_brief(self, feature: str, prog: dict[str, Any]) -> None:
         """Not blocking: duplicates, closed items or notes asked as questions, questions with
-        one option, gate items placed nowhere -> the PR agent rewrites final_brief.md once."""
+        one option, gate items placed nowhere -> the summary agent rewrites final_brief.md once."""
         if not (self.fdir(feature) / "final_brief.md").is_file():
             return  # the gate brief falls back to generated lines
         n_items = len(self.final_items(feature, prog))
@@ -2899,10 +3026,10 @@ class Orchestrator:
         log_event(self.cfg, feature, "brief_check", problems=problems, rewrite=bool(problems))
         if not problems:
             return
-        self.progress(feature, f"[PR] final brief: {len(problems)} problem(s), rewriting once")
+        self.progress(feature, f"[SUMMARY] final brief: {len(problems)} problem(s), rewriting once")
         out = self.cfg.paths.out
         task = (
-            f"Feature '{feature}': rewrite {out}/{feature}/final_brief.md only (the PR role's "
+            f"Feature '{feature}': rewrite {out}/{feature}/final_brief.md only (the summary role's "
             "brief rules; the gate items: the end of "
             f"{out}/{feature}/final_facts.md, plus any you added to questions.md, numbered "
             f"after them). A check of the brief found:\n"
@@ -2910,15 +3037,17 @@ class Orchestrator:
             + "\nFix these; keep the rest of the brief. Do not change final_summary.md or the "
             "code map."
         )
-        self.agent("PR", feature, prog, task)
-        self.collect_questions(feature, "PR", "summary agent")
+        self.agent("SUMMARY", feature, prog, task)
+        self.collect_questions(feature, "SUMMARY", "summary agent")
         n_items = len(self.final_items(feature, prog))
         left = briefs.check_brief(
             self.final_brief_sections(feature), n_items, self.must_ask(feature, prog)
         )
         log_event(self.cfg, feature, "brief_check", problems=left, rewrite=False)
         if left:
-            self.progress(feature, f"[PR] final brief: {len(left)} problem(s) left (not blocking)")
+            self.progress(
+                feature, f"[SUMMARY] final brief: {len(left)} problem(s) left (not blocking)"
+            )
 
     def map_brief_answers(self, feature: str, prog: dict[str, Any], text: str) -> str:
         """answers.md as the chat wrote it (numbered as the brief showed the questions) ->
@@ -3023,7 +3152,7 @@ class Orchestrator:
 
     def auto_approve_final(self, feature: str, prog: dict[str, Any]) -> None:
         """[gates] final = "auto" and the engine rates the feature low risk: the final gate is
-        passed without a stop (retro, then DONE). Nothing is pushed; the PR stays the human's."""
+        passed without a stop (retro, then DONE). Nothing is pushed."""
         log_event(
             self.cfg,
             feature,
@@ -3631,7 +3760,7 @@ class Orchestrator:
             "TESTS": self.phase_tests,
             "IMPLEMENT": self.phase_implement,
             "REVIEW": self.phase_review,
-            "PR": self.phase_pr,
+            "SUMMARY": self.phase_summary,
             "FINAL": self.phase_final,
             "RETRO": self.phase_retro,
         }
@@ -3981,7 +4110,7 @@ class Orchestrator:
                         # a file-size answer needs the structure run even without a spec change
                         "unchanged": {"phase": "REVIEW", "sub": "final"}
                         if prog.get("structure_findings")
-                        else {"phase": "PR", "sub": None},
+                        else {"phase": "SUMMARY", "sub": None},
                         "feedback": "",
                         "amend": True,
                     },

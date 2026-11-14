@@ -22,7 +22,7 @@ def test_no_stop_between_gates_in_roles() -> None:
     review = package_text("roles", "test_review.md")
     for needle in ("Verdict: OK", "## Objections", "VALID", "INVALID", "triage.md"):
         assert needle in review
-    assert "final_facts.md" in package_text("roles", "pr.md")
+    assert "final_facts.md" in package_text("roles", "summary.md")
     snippet = package_text("templates", "claude_md_snippet.md")
     assert "park.md" in snippet and "questions.md and stop" not in snippet
 

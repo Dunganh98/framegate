@@ -505,6 +505,58 @@ def test_step_gate_runs_the_whole_suite(framed: pathlib.Path) -> None:
         clear_reqs(a.cfg)
 
 
+def test_fix_gate_runs_the_features_tests_not_the_suite(framed: pathlib.Path) -> None:
+    """The gate of a run after the review (scope "fix"): the feature's tests and the review
+    tests. Another feature's broken test does not fail it (the final regression finds that,
+    right after); a failing review test, tagged or not, does."""
+    from framegate.gates import FIX_TESTS, REVIEW_TESTS, STEP_SUITE, gate_report
+    from framegate.state import clear_reqs, set_reqs
+
+    write(framed, "specs/f/requirements.md", "FT-R-001\nFT-R-002\n")
+    write(
+        framed,
+        "pyproject.toml",
+        "[project]\nname = 'x'\n[tool.pytest.ini_options]\npythonpath = ['src']\n",
+    )
+    write(framed, ".gitignore", "out/\n.phase\n.reqs\n__pycache__/\n")
+    write(
+        framed,
+        "src/pkg/a.py",
+        STEP_SRC.format(f=1, old=8).replace("raise NotImplementedError", "return 2"),
+    )
+    write(framed, "tests/test_feat.py", STEP_TESTS)
+    other = "from pkg.a import old\n\n\ndef test_two() -> None:\n    assert old() == 7\n"
+    write(framed, "tests/test_other.py", other)  # red: old() is 8
+    git(framed, "add", "-A")
+    git(framed, "commit", "-q", "-m", "tests")
+    git(framed, "tag", "-f", "tests-approved/f")
+    off = {"commands": {"lint": [], "format": [], "typecheck": []}}
+    a = adapter_for(framed, {"gates": off})
+    set_reqs(a.cfg, ["FT-R-001", "FT-R-002"])
+    try:
+        rep = gate_report(a, "f", "fix")
+        assert rep.ok and f"[PASS] {FIX_TESTS}" in rep.report, rep.report
+        assert STEP_SUITE not in rep.report and REVIEW_TESTS not in rep.report  # no folder
+        assert not gate_report(a, "f", "step").ok  # a plan step still runs the suite
+        # an untagged review test is run too
+        review = "from pkg.a import f\n\n\ndef test_r() -> None:\n    assert f() in {n}\n"
+        write(framed, "tests/review/test_r.py", review.format(n="(1, 3)"))
+        rep = gate_report(a, "f", "fix")
+        assert rep.ok and f"[PASS] {REVIEW_TESTS}" in rep.report
+        write(framed, "tests/review/test_r.py", review.format(n="(5,)"))
+        rep = gate_report(a, "f", "fix")
+        assert rep.failed == [REVIEW_TESTS] and "test_r" in rep.outputs[REVIEW_TESTS]
+        # the feature's own test red: that check fails
+        write(framed, "tests/review/test_r.py", review.format(n="(1, 3)"))
+        write(framed, "src/pkg/a.py", STEP_SRC.format(f=3, old=7))
+        assert gate_report(a, "f", "fix").failed == [FIX_TESTS]
+    finally:
+        clear_reqs(a.cfg)
+    # without IDs the scope runs everything, as a step gate does
+    rep = gate_report(a, "f", "fix")
+    assert "tests (current + earlier steps)" in rep.report and REVIEW_TESTS not in rep.report
+
+
 def test_gate_runner_final_scope_and_skips(framed: pathlib.Path) -> None:
     a = adapter_for(
         framed,

@@ -336,7 +336,7 @@ def test_final_gate_questions_filtered_by_the_brief(
     r = demo_repo
     r.add_toml(FAST)
     r.two_steps()
-    r.scenario(park_steps=[2], questions_in=["REVIEW", "PR"], brief="filtered")
+    r.scenario(park_steps=[2], questions_in=["REVIEW", "SUMMARY"], brief="filtered")
     to_final_gate(r)
     capsys.readouterr()
     assert r.af("gate-summary", "demo") == 0
@@ -359,7 +359,7 @@ def test_final_gate_questions_filtered_by_the_brief(
     assert mapped.startswith("# Answers (final gate, numbered by gate item)")
     assert "1. Q: Should neg(0) give 0 or -0?\n   A: Default: 0\n" in mapped
     assert "2. Q: Should add() accept floats?\n   A: yes, floats too\n" in mapped
-    assert "3. Q: [summary agent] [PR] Should add() accept floats?\n" in mapped
+    assert "3. Q: [summary agent] [SUMMARY] Should add() accept floats?\n" in mapped
     assert "   A: Same as item 2: yes, floats too" in mapped
     ev = [e for e in r.events() if e["kind"] == "answer"][-1]
     assert ev["as_given"].startswith("# Answers (final gate)\n")
@@ -379,7 +379,7 @@ def test_final_brief_check_asks_for_one_rewrite(demo_repo: DemoRepo) -> None:
     assert "name the gate item it answers as [N]" in first and "has one option" in first
     assert "gate items [1] are in none of" in first
     assert checks[1]["problems"] == []
-    prompts = [c for c in r.calls() if c["phase"] == "PR"]
+    prompts = [c for c in r.calls() if c["phase"] == "SUMMARY"]
     assert len(prompts) == 2 and "rewrite out/demo/final_brief.md only" in prompts[1]["prompt"]
     assert any("final brief: 3 problem(s), rewriting once" in x for x in log_lines(r))
 

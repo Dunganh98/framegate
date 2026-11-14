@@ -101,7 +101,7 @@ def test_build_all_kinds() -> None:
         {"kind": "review_findings", "tests": ["t::a", "t::b"]},
         {"kind": "human_gate", "gate": "review", "approved": False, "reason": "invalid"},
         {"kind": "final_gates", "passed": False, "failed": ["mutation score"], "excerpt": "low"},
-        {"kind": "agent_run", "phase": "PR"},
+        {"kind": "agent_run", "phase": "SUMMARY"},
         {
             "kind": "permission_denials",
             "phase": "IMPLEMENT",

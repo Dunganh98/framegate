@@ -1,6 +1,6 @@
 """The final brief's questions: which gate items are asked, decided or left out (and always
 asked: parked work), the mapping of the human's answers back to the gate items, the check that
-sends a brief back to the PR agent once."""
+sends a brief back to the summary agent once."""
 
 from __future__ import annotations
 

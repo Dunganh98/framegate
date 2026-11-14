@@ -19,6 +19,13 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 
 from framegate import procs
+from framegate.agent_commands import (
+    FILES_ARG,
+    command_rules,
+    command_text,
+    lint_line,
+    rule_allows,
+)
 from framegate.config import GATE_COMMAND_KEYS, Config
 
 READ_TOOLS = ["Read", "Glob", "Grep"]
@@ -648,9 +655,69 @@ class LanguageAdapter(abc.ABC):
     def test_tools(self) -> list[str]:
         """--allowedTools rules that let an agent run the tests."""
 
-    @abc.abstractmethod
+    def agent_form(self, cmd: Sequence[str]) -> list[str]:
+        """A gate command as an agent types it: placeholders expanded (`{src}` = every
+        source folder), `{files}` / `{changed}` = `<files>`, the tool by its name instead
+        of the path framegate found it at."""
+        out = self.resolve_command([FILES_ARG if a in ("{files}", "{changed}") else a for a in cmd])
+        if out and os.path.isabs(out[0]):
+            out[0] = pathlib.Path(out[0]).stem
+        return out
+
+    def agent_format_fix(self) -> list[list[str]]:
+        """The format command(s) an agent may run, on `<files>`: the project's own
+        ([gates.commands] format_fix), else the adapter's while the format check is the
+        adapter's too; [] = none (the project's check command is named instead)."""
+        if self.cfg.format_fix_command:
+            return self.configured_format_fix([FILES_ARG])
+        if "format" in self.cfg.gate_commands:
+            return []
+        return self.format_fix_commands([FILES_ARG])
+
+    def agent_commands(self) -> list[list[str]]:
+        """The lint / format / typecheck / imports commands an agent may run, as it types
+        them: the effective gate commands ([gates.commands], else the adapter's defaults; a
+        disabled one, `[]`, is left out), the format one in its fix form where there is one.
+        The conventions brief names exactly these, and lint_tools allows exactly these."""
+        defaults = self.default_gate_commands()
+        fix = self.agent_format_fix()
+        out: list[list[str]] = []
+        for key in GATE_COMMAND_KEYS:
+            cmd = self.cfg.gate_commands.get(key, defaults.get(key))
+            if key == "format" and fix:
+                out += [self.agent_form(c) for c in fix]
+            elif cmd:
+                out.append(self.agent_form(cmd))
+        return out
+
+    def command_paths(self) -> list[str]:
+        """The folders and files a command is run on (where an allow rule's prefix ends)."""
+        p = self.cfg.paths
+        return [*self.cfg.src_roots, p.tests, p.review_tests, p.out]
+
     def lint_tools(self) -> list[str]:
-        """--allowedTools rules that let an agent run lint/format/typecheck."""
+        """--allowedTools rules that let an agent run lint/format/typecheck: one per command
+        of agent_commands (the brief names no command these do not allow)."""
+        paths = self.command_paths()
+        rules = [r for cmd in self.agent_commands() for r in command_rules(cmd, paths)]
+        return list(dict.fromkeys(rules))
+
+    def lint_brief(self, allowed: Sequence[str] | None = None) -> str:
+        """The conventions brief's line with the lint / format / type commands (`allowed`:
+        the tool rules of the run that reads the brief; None = all of them). "" = the
+        project has none."""
+        return lint_line([command_text(c) for c in self.agent_commands()], allowed)
+
+    def brief_commands(self, allowed: Sequence[str] | None = None) -> list[str]:
+        """Every shell command the conventions brief names for a run with these tool rules
+        (the test commands, then the lint / format / type commands it may use). Each must be
+        allowed by those rules: tests/test_agent_commands.py and `framegate doctor` check it."""
+        lint = [command_text(c) for c in self.agent_commands()]
+        return [
+            self.test_command(),
+            self.test_command(["ID1", "ID2"]),
+            *(c for c in lint if allowed is None or rule_allows(allowed, c)),
+        ]
 
     def allowed_tools(self, phase: str) -> list[str]:
         """--allowedTools rules per phase (core tools + this adapter's commands)."""
@@ -662,16 +729,19 @@ class LanguageAdapter(abc.ABC):
             "REVIEW": READ_TOOLS + WRITE_TOOLS + tests + GIT_READ_TOOLS,
             "TRIAGE": READ_TOOLS + WRITE_TOOLS + tests + GIT_READ_TOOLS,
             "DIAGNOSIS": READ_TOOLS + ["Write"] + tests + GIT_READ_TOOLS,
-            "PR": READ_TOOLS + WRITE_TOOLS + GIT_READ_TOOLS,  # WRITE_TOOLS: the code map
+            "SUMMARY": READ_TOOLS + WRITE_TOOLS + GIT_READ_TOOLS,  # WRITE_TOOLS: the code map
             "RETRO": READ_TOOLS + ["Write"],
             "SPEC_UPDATE": READ_TOOLS + WRITE_TOOLS,
         }
         return with_powershell(table.get(phase, READ_TOOLS))
 
     @abc.abstractmethod
-    def conventions_brief(self) -> str:
+    def conventions_brief(self, allowed: Sequence[str] | None = None) -> str:
         """Short text (< ~1.5 KB): how stubs look, how tests are tagged with spec IDs, how to
-        run tests/lint, what is forbidden. Injected into TESTS/IMPLEMENT/REVIEW tasks."""
+        run tests/lint, what is forbidden. Injected into TESTS/IMPLEMENT/REVIEW tasks.
+        `allowed`: the tool rules of the run that gets it (None = no run: the chat's spec
+        brief); the lint / format / type commands come from lint_brief(allowed), so the text
+        names only commands that run may use."""
 
     def ci_setup(self) -> str:
         """GitHub Actions steps (YAML, indented 6 spaces) that install the toolchain."""

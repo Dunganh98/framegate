@@ -230,7 +230,7 @@ def test_dotnet_full_flow(dotnet_repo: DemoRepo) -> None:
         "REVIEW",
         "TRIAGE",
         "IMPLEMENT",
-        "PR",
+        "SUMMARY",
         "RETRO",
     ]
     tracked = git(r.root, "ls-files").splitlines()

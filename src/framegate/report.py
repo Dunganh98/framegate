@@ -27,7 +27,7 @@ PHASE_ORDER = [
     "DIAGNOSIS",
     "REVIEW",
     "TRIAGE",
-    "PR",
+    "SUMMARY",
     "RETRO",
 ]
 
@@ -341,7 +341,7 @@ def final_facts(
     out += [
         "",
         "Put each one in final_brief.md under `## Questions`, `## Decisions I made` or "
-        "`## Left out`, named by its number in brackets (`[3]`; the PR role says which). "
+        "`## Left out`, named by its number in brackets (`[3]`; the summary role says which). "
         f"Questions you add (questions.md) are numbered after these ({len(items)} + 1, ...).",
     ]
     if code_map:

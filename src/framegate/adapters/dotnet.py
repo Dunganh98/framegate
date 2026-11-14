@@ -80,8 +80,8 @@ Language: C# / .NET; tests: xUnit via `dotnet test` ({configuration}).
 - Invariants (I-IDs): {property}
 - Every test asserts something concrete. No `Skip =`, `return;`-only bodies, `Assert.True(true)`.
 - Run tests: `{run_all}`; only some IDs: `{run_ids}`.
-- Build `dotnet build {target} -c {configuration}` (no new warnings); format
-  `dotnet format whitespace|style {target} --include <files>`.
+- Build `{build}` (no new warnings).
+{lint}
 - Forbidden in source: `#pragma warning disable`, `SuppressMessage`, `ExcludeFromCodeCoverage`,
   `Skip =`, swallowing `catch (Exception)` / `catch {{`. Don't edit *.csproj, *.sln(x),
   Directory.*, global.json, NuGet.config, .editorconfig; no `dotnet add` / `dotnet new`.
@@ -1529,24 +1529,59 @@ class DotnetAdapter(LanguageAdapter):
     def test_tools(self) -> list[str]:
         return ["Bash(dotnet test *)", "Bash(dotnet build *)"]
 
-    def lint_tools(self) -> list[str]:
-        return ["Bash(dotnet format *)"]
-
-    def conventions_brief(self) -> str:
-        p = self.cfg.paths
+    def _target(self) -> str:
         try:
-            target = self.build_target()
+            return self.build_target()
         except ConfigError:
-            target = "<solution>"
-        return BRIEF.format(
+            return "<solution>"
+
+    def build_command(self) -> str:
+        """The build an agent runs (allowed by test_tools); the gate's typecheck is this
+        build, or the project's own [gates.commands] typecheck (named with the lint ones)."""
+        return f"dotnet build {self._target()} -c {self.settings.configuration}"
+
+    def command_paths(self) -> list[str]:
+        return [*super().command_paths(), self._target()]
+
+    def agent_commands(self) -> list[list[str]]:
+        """The effective commands, as the base gives them, without two defaults: the build
+        (build_command, its own line in the brief) and the style check while `dotnet format
+        style --include <files>` is among the fix commands (the same rules, applied)."""
+        configured = self.cfg.gate_commands
+        own_fix = bool(self.cfg.format_fix_command) or "format" in configured
+        try:
+            commands = super().agent_commands()
+        except ConfigError:  # no solution or project to run them on (doctor reports it)
+            return []
+        out = []
+        for cmd in commands:
+            build = cmd[:2] == ["dotnet", "build"] and "typecheck" not in configured
+            style = cmd[:3] == ["dotnet", "format", "style"] and "--verify-no-changes" in cmd
+            if build or (style and "lint" not in configured and not own_fix):
+                continue
+            out.append(cmd)
+        return out
+
+    def lint_tools(self) -> list[str]:
+        own = [r for r in super().lint_tools() if not r.startswith("Bash(dotnet format ")]
+        return ["Bash(dotnet format *)", *own]
+
+    def brief_commands(self, allowed: Sequence[str] | None = None) -> list[str]:
+        return [*super().brief_commands(allowed), self.build_command()]
+
+    def conventions_brief(self, allowed: Sequence[str] | None = None) -> str:
+        p = self.cfg.paths
+        text = BRIEF.format(
             configuration=self.settings.configuration,
             property=PROPERTY_FSCHECK if self.references("FsCheck") else PROPERTY_THEORY,
             run_all=self.test_command(),
             run_ids=self.test_command(["ID1", "ID2"]),
-            target=target,
+            build=self.build_command(),
+            lint=self.lint_brief(allowed),
             tests=p.tests,
             review_tests=p.review_tests,
         )
+        return "\n".join(line for line in text.splitlines() if line.strip()) + "\n"
 
     def ci_setup(self) -> str:
         sdk = (
