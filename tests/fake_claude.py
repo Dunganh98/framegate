@@ -64,6 +64,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -295,6 +296,13 @@ def main() -> int:
         call = {
             "phase": phase,
             "agent_env": os.environ.get("FRAMEGATE_AGENT"),
+            # what an agent's shell would see (framegate.agent_env)
+            "env": {
+                "python": shutil.which("python"),
+                "path0": os.environ.get("PATH", "").split(os.pathsep)[0],
+                "virtual_env": os.environ.get("VIRTUAL_ENV"),
+                "no_memory": os.environ.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY"),
+            },
             "argv": sys.argv[1:],
             "prompt": prompt,
             "role": pathlib.Path(role_file).read_text(encoding="utf-8"),

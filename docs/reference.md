@@ -17,7 +17,8 @@ a terminal.
 | `/framegate:resume [f]` | reattach the chat to a running or waiting feature | after a restart |
 | `/framegate:status [f]` | where features stand; tag cleanup after the PR is merged | any time |
 | `framegate init` | write the starter files (config, spec templates, project facts, .gitignore lines) | once per repo |
-| `framegate install-tools [--dry-run]` | install what the workflow needs into the project's environment (python: the framegate pytest plugin, pytest, pytest-cov, hypothesis, diff-cover, and with a framegate.toml the lint / format / type tools its gate commands name); reports versions it changed; works before `init` | first step of `/framegate:setup`, after config changes |
+| `framegate install-tools [--dry-run] [--update]` | install what the workflow needs into the project's environment (python: the framegate pytest plugin, pytest, pytest-cov, hypothesis, diff-cover, and with a framegate.toml the lint / format / type tools its gate commands name); `--update` also brings the framegate pytest plugin there to the command-line tool's version; reports versions it changed; works before `init` | first step of `/framegate:setup`, after config changes |
+| `framegate preflight [<f>] [--plugin-version X] [--check]` | the start check: the command-line tool at the plugin's version (prints the install command for the chat), the project environment's workflow tools at the tool's version (updated here, unless the feature's spec is approved, `--check` is given or no feature is named), a session with outdated skills told to restart, a short setup check; one line when all is in line; always exit 0 | first step of `/framegate:feature`, `:bugfix`, `:refactor`; `:resume` with `--check` |
 | `framegate doctor [--full] [--brief]` | check the setup without agents; ends with a verdict and only what needs action (`--brief`: only that); `--full` also runs the whole test suite | after setup or config changes |
 | `framegate spec <f> [--mode feature\|bugfix\|refactor]` | create the branch `feat/<f>` and open the spec phase with the mode's templates | start of a feature |
 | `framegate spec-check <f>` | mechanical checks of the spec tables and the stubs (below); lists the setup files the approval commits; exit 1 on a problem | internal |
@@ -367,6 +368,11 @@ framegate init [--language python|dotnet|generic]  # framegate.toml, specs/_temp
                                             # .framegate/project.md, .gitignore lines
 framegate doctor [--full] [--brief]         # check the setup without agents; ends with a
                                             # verdict + what needs action (--brief: only that)
+framegate preflight [<f>] [--plugin-version X] [--check]
+                                            # the skills' start check: tool at the plugin's
+                                            # version (prints the install command), project
+                                            # tools at the tool's version (updates them unless
+                                            # <f> is in progress / --check), restart notice
 framegate spec <f> [--mode feature|bugfix|refactor]
                                             # branch feat/<f> from [git] base + SPEC phase,
                                             # with the mode's spec templates
@@ -812,6 +818,19 @@ be denied by the permission check without a reason. During a run (any phase but 
 blocks them first and tells the agent why and what to do instead: one command per call, and the
 command's own options (`--filter`, `--logger "console;verbosity=minimal"`, `-k`, `-q`) or the
 result file it writes to see less output. The task text says the same (`COMMAND_FORM`).
+
+The environment of an agent run (`src/framegate/agent_env.py`; the `claude -p` process and
+every shell it starts): `FRAMEGATE_AGENT=<role>`; the adapter's `agent_env()`: for Python
+the project interpreter's folder first on `PATH` (plus `VIRTUAL_ENV` for a venv), so the
+`python -m pytest -q --req <IDs>` an agent is told to run uses the interpreter the gates use
+(on a real run `python` was the machine's global one, without the framegate pytest plugin:
+`unrecognized arguments: --req`); and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, so an agent does
+not load or write Claude Code's per-project auto-memory of the user's chats (a retro agent had
+quoted notes of an earlier chat). The agents work from the spec, the code and the run files.
+The project's `CLAUDE.md` is still loaded, and so is the user's global `~/.claude/CLAUDE.md`
+(no switch was found that drops it and keeps a user-scope plugin's hooks;
+docs/claude-cli-notes.md). `framegate doctor` checks the agents' `python` (`tool: agents'
+python`: `--req` in its `pytest --help`).
 
 Configuration: `framegate.toml` (all keys optional; see the commented template written by
 `init`). `[agents] claude` or env `FRAMEGATE_CLAUDE` selects the claude executable;

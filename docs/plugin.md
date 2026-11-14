@@ -68,13 +68,42 @@ How a machine gets the new version:
   `scripts/session-start.js`, the line from `whats-new.json`; the version last seen is kept
   in `CLAUDE_PLUGIN_DATA`). Checked 2026-11-13 in a headless session: the hook runs and its
   `systemMessage` is accepted; how the interactive terminal shows it is not yet seen.
-- The CLI: Claude Code does not update it. `/framegate:feature`, `:bugfix` and `:refactor`
-  compare `framegate --version` with the plugin's version when they load and, when no work
-  is in progress for that slug (the spec is not approved yet), install the CLI from the
-  plugin's tag (`uv tool install --force ...@v<version>`), without a message unless it fails.
-  Work in progress keeps the CLI it was started with; `/framegate:resume` never updates.
-  `/framegate:setup` does the same install. An editable install from a clone is replaced by
-  the tagged version too: on a development machine keep the clone at the plugin's version.
+- The CLI and the project's tools: Claude Code updates neither. `/framegate:feature`,
+  `:bugfix` and `:refactor` begin with the **start check**, one command the skill runs as
+  its first step: `framegate preflight <f> --plugin-version <the skill's version>`
+  (`src/framegate/preflight.py`). It brings three pieces to one version or says what is left:
+  - the command-line tool at the plugin's version: it prints `RUN: uv tool install --force
+    ...@v<version>`, the skill runs it and the check again. The tool cannot do this itself:
+    on Windows `uv tool install --force` fails on the running `framegate.exe` ("Failed to
+    install entrypoint ... os error 32") after it replaced the package, which then broke the
+    running process (checked 2026-11-14 in a temporary tool folder);
+  - the project environment's workflow tools at the tool's version (python: the framegate
+    pytest plugin in the project interpreter; before, a project kept the version of its
+    first `install-tools` for ever): it runs `install-tools --update` itself and prints
+    `UPDATED: ...` (with a `CHANGED versions` line, if pinned packages moved);
+  - a session whose skills are older than the plugin on disk (Claude Code updated it in the
+    background; `~/.claude/plugins/installed_plugins.json` has the newer version): `TELL THE
+    USER: ... Restart Claude Code`, and nothing is updated for the outdated skills. This is
+    the only place a mid-session plugin update can be seen: the SessionStart hook runs
+    before it, and no hook fires when it lands.
+  Plus a short setup check (`PROBLEM:` lines: no framegate.toml, a config error, the claude
+  CLI not found, no framegate part in the project environment). Everything in line prints
+  one line (`Start check: ok ...`) and the skill says nothing.
+  Work in progress (the spec is approved) keeps the tool **and** the project's tools it was
+  started with (`KEPT:` lines; by hand: `framegate install-tools --update`).
+  `/framegate:resume` runs the check with `--check` (reports only, never updates);
+  `/framegate:status` does not run it (a glance, and its permission stays `framegate status`).
+  `/framegate:setup` installs the tool the same way and runs `install-tools --update`.
+  An editable install from a clone is replaced by the tagged version too: on a development
+  machine keep the clone at the plugin's version.
+- Why the skills do not inject the check at load (`` !`framegate preflight ...` ``): a load
+  command that exits non-zero aborts the whole skill ("Shell command failed for pattern
+  ..."; seen 2026-11-14, claude 2.1.325, with the 0.9.0 tool, which has no `preflight`), and
+  a new plugin must work with the previous tool while a feature is in progress. Run as a
+  tool call, the unknown command is an ordinary error the skill reads (`invalid choice:
+  'preflight'` -> the old rule: install the plugin's version unless work is in progress).
+  Both paths were run live with `/framegate:resume` in a headless session (old tool: went
+  on without a word; new tool: `Start check: ok`). `preflight` itself always exits 0.
 
 Requirements: `node` on PATH (any LTS; an npm-installed Claude Code already has it) and, in
 framegate repos, the `framegate` CLI (`uv tool install ...`, which creates a real `framegate.exe`

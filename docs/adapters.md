@@ -61,6 +61,9 @@ pytest `--junitxml` and the .NET `JunitXml.TestLogger`), `tool_path(name, near)`
 | `conventions_brief()` | abstract | < ~1.5 KB text: how stubs look, how tests are tagged, how to run tests/lint, what is forbidden. Appended to the TESTS / IMPLEMENT / FIX / REVIEW task prompts and printed by `framegate spec-brief <feature>` (used by the plugin skill `/framegate:feature`) |
 | `ci_setup()` | default | GitHub Actions steps (YAML, 6-space indent) that install the toolchain; inserted into the CI snippet `framegate init` prints |
 | `config_template()` | default | Commented `framegate.toml` section(s) for the language, appended by `framegate init` (default: none) |
+| `agent_env()` | `{}` | Environment variables set for every agent run on top of framegate's own (whole values, e.g. a full `PATH`), so the commands an agent types mean the tools the gates use. python: the project interpreter's folder first on `PATH`, `VIRTUAL_ENV` for a venv (`pytools.interpreter_env`) |
+| `tools_version()` | `None` | The version of framegate's own part in the project's environment (python: the `framegate` package with the pytest plugin in the project interpreter; `""` = missing); `None` = the language has none. `framegate preflight` keeps it at the command-line tool's version |
+| `install_tools(dry_run, echo, update=False)` | default | `framegate install-tools`: install what the workflow needs into the project's environment; `update` also brings framegate's own part there to this version. Default: nothing to install |
 | `format_fix_commands(files)` | default | Commands that format `files` in place for the gates' format fix. `[gates.commands] format_fix` (with `{files}`) replaces them and keeps the fix on when `[gates.commands] format` is the project's own check (e.g. black) |
 | `gitignore_entries()` | default | Extra `.gitignore` lines `init` adds: build outputs the orchestrator must never commit (it stages whole source and test folders) |
 | `init_note()` | default | Setup advice printed at the end of `init` |
@@ -101,6 +104,7 @@ locations are `file:line`. A project can start here and get a dedicated adapter 
 | Concern | Implementation |
 |---|---|
 | Interpreter | `[env] python`, else `<root>/.venv` interpreter, else the current one. framegate must be installed in the project env (pinned dev dependency) for the pytest plugin |
+| Agents' shell | `agent_env()`: the folder of that interpreter first on `PATH` (plus `Scripts` next to a Windows interpreter outside a venv) and `VIRTUAL_ENV` for a venv, so `python`, `pytest`, `ruff`, `black` typed by an agent are the project's. `framegate doctor`: `tool: agents' python` (its `pytest --help` has `--req`) |
 | Tag + select | `@pytest.mark.req("ID", ...)` + `--req ID,ID` from the `framegate.pytest_plugin` (entry point `pytest11`; no conftest edits) |
 | Tests | `python -m pytest -q --no-header -p no:cacheprovider [--req ...] [-x] [--junitxml=...]`; exit 0/1/5 -> passed/failed/no_tests, else error |
 | Traceability / smells | AST scan of `tests/**/test_*.py` and `*_test.py` (the guide's code) |

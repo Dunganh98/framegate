@@ -56,6 +56,51 @@ What follows:
   follows the documented rule syntax, **not verified live**); a real framegate agent run with
   these arguments (the tests use the fake claude).
 
+## Agents without the chat's memory, with the project's Python (probes 2026-11-14, claude 2.1.325, Windows 11, `--model haiku`)
+
+Why: on a real run the headless RETRO agent quoted Claude Code's per-project auto-memory
+(`~/.claude/projects/<repo>/memory/MEMORY.md`, notes of earlier chats) and tried to write
+there, and the agents' `python` was the machine's global interpreter, not the project's.
+
+Setup: a temp project (framegate.toml, a `CLAUDE.md` with a "project codeword"), a planted
+`MEMORY.md` with a "memory codeword" in that project's memory folder; the user's global
+`~/.claude/CLAUDE.md` names an MCP server. Each run (`claude -p --permission-mode acceptEdits
+--allowedTools Read --output-format json`, without the parent session's `CLAUDE*` variables)
+was asked for both codewords and whether its instructions name that server. The framegate
+plugin was installed at **user** scope. About 3 cents in total.
+
+| Switch | Auto-memory | Project CLAUDE.md | Global CLAUDE.md | Plugin hooks |
+|---|---|---|---|---|
+| none | **loaded** (codeword quoted) | loaded | loaded | fire |
+| env `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` | **not loaded** (2 runs) | loaded | loaded | **fire**: a Write to `tests/` in phase IMPLEMENT with `FRAMEGATE_AGENT` set was blocked by the PreToolUse guard, and the Stop hook ran |
+| `--settings '{"autoMemoryEnabled": false}'` | not loaded | loaded | loaded | not probed |
+| the same + `"claudeMdExcludes": ["<abs path>"]` or `["**/.claude/CLAUDE.md"]` (settings file) | not loaded | loaded | **still loaded** | not probed |
+| `--setting-sources project,local` | **still loaded** | loaded | not loaded | **gone**: the same Write was written (the user-scope plugin is enabled in the user settings) |
+| `--bare` | (help text: skips auto-memory, CLAUDE.md, **hooks and plugins**) | | | not usable |
+
+What follows:
+
+- framegate starts every agent with `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`
+  (`src/framegate/agent_env.py`). With it `--allowedTools` still decides: with only `Read`
+  allowed, a PowerShell call landed in `permission_denials` and the Read ran; with
+  `PowerShell(python *)` allowed, the `python` call ran.
+- `--setting-sources` is **never** passed: it drops the user settings and with them a
+  user-scope plugin, so the write guard and the Stop hook would be gone, and the memory
+  would still be there.
+- The user's global `~/.claude/CLAUDE.md` still reaches the agents: no switch was found that
+  drops it and keeps the hooks. Not mitigated (the role prompts are unchanged).
+- `PATH`: a run started with a venv's `Scripts` folder first on `PATH` (and `VIRTUAL_ENV`)
+  printed that venv's interpreter for `python -c "import sys; print(sys.executable)"` in
+  the PowerShell tool; without it `python` is the first one on the user's PATH (here the
+  global Python 3.11). So the environment framegate passes to `claude` reaches the agent's
+  shells. The probe session had no Bash tool ("Git Bash wasn't found" without the parent
+  session's variables), so Git Bash was **not probed**; it inherits the process environment
+  too, but a profile script that rewrites PATH could come first there.
+- A skill's load command (`` !`cmd` ``) that exits non-zero aborts the skill: "Shell command
+  failed for pattern ...", 0 turns. Seen with `` !`framegate preflight ...` `` against the
+  0.9.0 tool; the skills therefore run the start check as their first tool call
+  (docs/plugin.md).
+
 ## Orchestrator invocation
 
 ```
@@ -65,6 +110,10 @@ What follows:
          [--max-budget-usd <cap of the phase>]   (task on stdin)
          [--add-dir <reference>... --disallowedTools "Edit(//<reference>/**)"...]
 ```
+
+Environment: framegate's own plus `FRAMEGATE_AGENT=<role>`, the adapter's `agent_env()`
+(python: the project interpreter's folder first on `PATH`, `VIRTUAL_ENV`) and
+`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` (`src/framegate/agent_env.py`).
 
 `<claude>` = `[agents] claude` (default `claude`) or env `FRAMEGATE_CLAUDE`; a `.py` path is run
 with the current interpreter (used by the tests' fake claude). Each run's task prompt and raw

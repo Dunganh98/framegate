@@ -31,11 +31,12 @@ a new plugin version in the background, the next session uses it and shows one l
 what changed, and the next new feature brings the command-line tool to the same version.
 The file is missing or has no `framegate` entry (a local install): skip this without a word.
 
-Then run `framegate install-tools --dry-run`: it names the project's
+Then run `framegate install-tools --update --dry-run`: it names the project's
 interpreter and what the workflow needs there and is missing (for Python: the framegate pytest
-plugin, pytest, pytest-cov, hypothesis, diff-cover). Nothing missing: go on without a word. Else
-tell the user in one line what goes into which interpreter ("Installing framegate, diff-cover,
-hypothesis into .venv") and run `framegate install-tools`. Report its result in one line; if it
+plugin, pytest, pytest-cov, hypothesis, diff-cover) or is of another version than the
+command-line tool (`[update ]`: the framegate pytest plugin). Nothing to install: go on without
+a word. Else tell the user in one line what goes into which interpreter ("Installing framegate,
+diff-cover, hypothesis into .venv") and run `framegate install-tools --update`. Report its result in one line; if it
 prints `CHANGED versions`, show that line as it is (a pinned package moved: the user decides
 whether to keep it). If the install fails, show the error and stop: the setup cannot be
 checked without the tools. A language framegate installs nothing for says so; go on.

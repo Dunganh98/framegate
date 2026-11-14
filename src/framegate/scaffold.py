@@ -151,9 +151,11 @@ def install_tools(
     dry_run: bool = False,
     start: pathlib.Path | None = None,
     echo: Callable[[str], None] = print,
+    update: bool = False,
 ) -> int:
     """`framegate install-tools`: the tools the workflow needs, into the project's environment.
-    Works before `framegate init` (the language is detected, the defaults apply)."""
+    Works before `framegate init` (the language is detected, the defaults apply). `update`:
+    also bring framegate's own part there (the pytest plugin) to this version."""
     here = (start or pathlib.Path(os.getcwd())).resolve()
     root = find_root(here)
     if root is not None:
@@ -172,7 +174,7 @@ def install_tools(
     except ConfigError as e:  # e.g. generic without its section yet
         echo(f"Nothing to install yet: {e}")
         return 0
-    return adapter.install_tools(dry_run, echo)
+    return adapter.install_tools(dry_run, echo, update=update)
 
 
 def spec_brief(cfg: Config, feature: str) -> str:
