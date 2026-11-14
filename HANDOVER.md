@@ -462,6 +462,96 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
   `uv run pytest -m "not slow"` is the run before a release. progress.json's move is tried
   again on PermissionError (seen once in the suite).
 
+- **Port fixes (2026-11-14, branch feat/port-fixes; from the first real port, da-argos
+  `runner-skeleton` from da-otto `platform/runner`, and its retro).**
+  - **Green against stubs:** requirements.md `## Green against stubs` (feature template,
+    any feature): `- <test or node ID>: <reason>` for tests that cannot fail before the
+    implementation (a scan, a negative check; in a port a carried-over one). "Red against
+    stubs" accepts exactly those ("passes by design"); a listed test that is red fails, any
+    other passing test fails as before, and so does a spec ID that only such tests prove
+    (tag scan; a class-level tag counts as another test). spec-check validates the bullets.
+  - **Stubs of a port:** `framegate port-stubs <f> [--force]` (ported.py,
+    adapters/python_port.py) writes every `code` target as the reference's text at the
+    spec's commit with function bodies replaced by `raise NotImplementedError`; docstrings,
+    signatures, constants, imports and module-level code byte for byte, no spec IDs. Kept
+    whole and said so: functions that run at import time, bodies that already do nothing.
+    Imports are not rewritten: each one that will not resolve here is an `IMPORT:` line
+    (the one hand edit). Non-.py code rows are copied. Other languages: `NOT SUPPORTED`,
+    stubs by hand. Ticket / ADR numbers and repository names in the reference's
+    docstrings stay the reference's.
+  - **Fidelity at every step and fix gate** (not blocking): the ported files the run
+    touched against the reference, with the rule "every hunk must match a 'What may
+    differ' bullet"; in a failed attempt's feedback, in the `gate` event, and the next
+    implementer / fix task lists what earlier steps left different.
+  - **Kept quirks:** `Kept quirks:` list in "Ported from": the reviewer writes no finding,
+    the triage dismisses by citing the line. doctor now also reports a label line missing
+    from a project template copy.
+  - **Reference follow-up:** followup.py holds two lists with one life cycle. `## Reference
+    follow-up` (all three templates), `- REFERENCE FOLLOW-UP [<reference file>]: ...` in
+    step notes / review.md / triage.md, final facts / summary / brief ("Reference
+    follow-up (for <name>; not part of this feature): N"), `specs/<f>/reference_followup.md`
+    and a `reference_followup` event at DONE. For a port: a finding the reference shares
+    stays valid when the spec promises otherwise, plus that line. The pipeline follow-up
+    is for deploy / CI files only (agents are told).
+  - **Plan of a port:** one step per target file, leaf modules first (template + skill).
+    **Idle step:** a plan step (feature, bug fix) whose run changed nothing since the last
+    green step gate (same HEAD, clean workflow paths) runs only its own tests (gate scope
+    "idle"); lint, frame check and suite are that gate's results; "nothing to commit". A
+    refactor's idle step still fails.
+  - **Carried-tests report:** test_checks.md "Reference tests carried over: N of M" with
+    the names not carried (python; else SKIPPED), one line in the final brief; a test left
+    out without a reason is a test-reviewer objection.
+  - **Not yet seen live:** all of it (fake claude only). First check: the next da-argos port
+    with `port-stubs`, a "Green against stubs" line, "Kept quirks", a "Reference follow-up"
+    line and a plan cut by file. Look at: the `IMPORT:` lines for otto's package names,
+    whether the implementer restores hunks named at the step gate, the carried count.
+
+- **Product branch and state branch (2026-11-14, branch feat/product-branch; user decisions
+  the same day: framegate works fully, the team's code is not affected; the work branch has
+  its own name and a push guard):** `[git] state_branch = "framegate/{base}"` (off by
+  default; FCSim unchanged). framegate's files (`publish.workflow_paths`: framegate.toml,
+  .framegate/, specs, metrics, knowledge file, roles extra_dir, code map unless `[git]
+  publish_code_map`) live on the state branch: a tree with only those files, no shared
+  history with the base (cannot be merged into it), pushed. `framegate spec` creates the
+  local work branch `<work_prefix><f>` (`[git] work_prefix`, default `framegate-work/`)
+  from the base and merges the state branch in (fetched first; also from a checkout without
+  framegate.toml: config read from the state branch); run files are ignored through
+  `.git/info/exclude`, not `.gitignore`. `framegate publish <f> [--dry-run] [--pr]
+  [--title]` after DONE: the feature's framegate files -> one commit on the state branch;
+  the product -> one commit on the base commit the feature started from (merge-base, not
+  the tip: the PR merges a moved base), checked on the commit itself (no framegate path;
+  differs from the work branch only in framegate paths), pushed as `<branch_prefix><f>`
+  from the private ref `refs/framegate/product/<f>`. More work later = a commit on top
+  (fast-forward). Refuses: dirty tree, not DONE, base holding framegate paths, diverged
+  state branch, foreign files on it, a remote product branch with other content
+  (`--force-with-lease` by flag only). Two safeguards against pushing framegate's files:
+  the work branch never has the product branch's name (a local `<branch_prefix><f>` that
+  holds framegate.toml is renamed by `state init` / `spec` / `publish`, refused when the
+  remote has that name with other content), and a `pre-push` hook (plain sh + git, paths
+  and state ref written into it; installed by `state init`, `spec`, `state save`,
+  `publish`, `framegate state guard`; doctor checks present and current) refuses any push
+  of a commit holding a framegate path to any ref but the state branch; the user's own
+  pre-push hook is kept as `pre-push.user` and run first; not installed with
+  `core.hooksPath` (NOTE + doctor WARN). `--no-verify` bypasses it; publish's refusal +
+  `--force-with-lease` is the second line. PR: `hosts.py` (GitHub `gh pr create`, Azure
+  DevOps `az repos pr create --description @file`, else the page to open it by hand).
+  `framegate state [init|save|guard] [--push]`: init = first use and the migration of an
+  old-style feature branch; save = a framegate-file change outside a publish. Doctor: state
+  branch, push guard, base holding framegate paths, `team: pytest without framegate knows
+  the req marker` (the project registers `req` in its own pytest config once, a setup file;
+  dotnet needs nothing). Chat wrap-up: `publish --dry-run` decides the offer. Setup skill:
+  asks the shared-repository question, `state init` as its last step, stops early on a
+  repository that has a state branch. docs/reference.md "Product branch and state branch".
+  **Not yet seen live:** all of it (temp repos with a bare origin; gh / az never called;
+  az's `@file` description not verified; the hook only under Git for Windows). Known
+  limits: no guard with `core.hooksPath`; the hook goes out of date when framegate's paths
+  change (doctor says so); parallel features conflict in retro_backlog.md (metrics CSV
+  merges by union); learn / keep / backlog after a publish need `framegate state save`; no
+  CI gate job on the product branch; without framegate.toml only spec / state / status
+  work; a test importing an undeclared package (hypothesis) is not checked. Next: da-argos
+  `runner-skeleton`: state_branch in framegate.toml, `framegate state init` (renames the
+  branch, installs the guard), `publish --dry-run`, `publish`.
+
 ## User decisions so far
 1. Two human gates, forward only: spec and final (2026-11-10, after the first FCSim feature;
    was three). The test reviewer checks the tests against the spec; its questions, objections
@@ -517,6 +607,10 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
 17. Deploy and CI files are never changed by a feature, not even at spec time; the need is
     noted as a pipeline follow-up in the spec and the final summary and done as a separate
     step (2026-11-13).
+18. Shared target repositories (2026-11-14): framegate's own files live on a state branch
+    `framegate/<base>` that is pushed and never merged; the pull request carries only the
+    product. The local work branch always has another name than the pushed product branch,
+    and a push guard refuses framegate's files anywhere but the state branch.
 
 ## FCSim integration
 - Worktree `D:\Me\Projects\FCSim-agentflow`, branch `feat/agentflow-setup` (framegate.toml,

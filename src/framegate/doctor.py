@@ -20,7 +20,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from framegate import references, setup_checks
+from framegate import publish, references, setup_checks
 from framegate.adapters import get_adapter
 from framegate.adapters.base import LanguageAdapter
 from framegate.checks import frame_diff, spec_lint
@@ -124,6 +124,54 @@ def on_base(cfg: Config, rel: str) -> bool:
         return False
 
 
+def state_branch_items(cfg: Config, adapter: LanguageAdapter) -> list[Item]:
+    """`[git] state_branch`: the branch exists, the base holds none of framegate's files,
+    and the feature's tests run without framegate (adapter.team_checks)."""
+    items = []
+    try:
+        n = publish.names(cfg)
+        tip = publish.state_tip(cfg, n, lambda s: None, fetch=False, write=False)
+        items.append(
+            Item(
+                "OK" if tip else "WARN",
+                f"git: state branch '{n.state}'",
+                f"framegate's files: {', '.join(publish.workflow_paths(cfg))}"
+                if tip
+                else "missing here (not fetched, or not created yet): `framegate state init` "
+                "creates it once per repository; `framegate spec <f>` fetches it",
+            )
+        )
+        guarded, detail = publish.guard_state(cfg, n)
+        items.append(
+            Item(
+                "OK" if guarded else "WARN",
+                "git: push guard (pre-push hook)",
+                "refuses a push of framegate's files to any branch but the state branch"
+                if guarded
+                else detail,
+            )
+        )
+        listed = git(cfg, "ls-tree", "-r", "--name-only", cfg.git_base, "--")
+        on_base_files = [f for f in listed.splitlines() if publish.is_workflow(cfg, f)]
+        if on_base_files:
+            items.append(
+                Item(
+                    "WARN",
+                    f"git: '{cfg.git_base}' holds files under framegate's paths",
+                    f"{', '.join(on_base_files[:5])}"
+                    + (f", and {len(on_base_files) - 5} more" if len(on_base_files) > 5 else "")
+                    + "\n`framegate publish` refuses while they are there: remove them from "
+                    "the base, or point framegate's path elsewhere (e.g. [paths] metrics = "
+                    '".framegate/metrics")',
+                )
+            )
+    except GitError as e:
+        items.append(Item("WARN", "git: state branch", str(e)))
+    for name, ok, detail in adapter.team_checks():
+        items.append(Item("OK" if ok else "WARN", f"team: {name}", detail))
+    return items
+
+
 def settings_files(cfg: Config) -> list[pathlib.Path]:
     """Claude Code settings that can allow the chat's framegate commands: the project's and
     the user's."""
@@ -225,7 +273,10 @@ def run(
         try:
             git(cfg, "rev-parse", "--verify", "--quiet", cfg.git_base)
             add(Item("OK", f"git: base branch '{cfg.git_base}'"))
-            if cfg.git_branch and not on_base(cfg, CONFIG_FILE):
+            if publish.enabled(cfg):
+                for item in state_branch_items(cfg, adapter):
+                    add(item)
+            elif cfg.git_branch and not on_base(cfg, CONFIG_FILE):
                 add(
                     Item(
                         "WARN",
@@ -344,7 +395,17 @@ def run(
         Item(
             "WARN" if absent else "OK",
             ".gitignore",
-            f"add: {', '.join(absent)} (the workflow commits with `git add -A`)" if absent else "",
+            (
+                f"add: {', '.join(absent)}"
+                + (
+                    " to .git/info/exclude (`framegate state init` and `framegate spec` do "
+                    "it; .gitignore is a product file)"
+                    if publish.enabled(cfg)
+                    else " (the workflow commits with `git add -A`)"
+                )
+            )
+            if absent
+            else "",
         )
     )
 

@@ -68,6 +68,19 @@ commands:
   cleanup <feature> [--tags] [--force]   delete out/<feature>/ and its run logs (DONE only);
                           --tags: also the feature's tags (spec-approved, tests-approved,
                           spec-update, tests-update, knowledge-update)
+  publish <feature> [--dry-run] [--pr] [--title TEXT] [--force-with-lease] [--unfinished]
+                          with [git] state_branch, after DONE: framegate's files of the
+                          feature -> the state branch (one commit, pushed); the product
+                          (source, tests, the project's setup files) -> one commit on the
+                          base, pushed as the branch feat/<feature> (the local work
+                          branch is framegate-work/<feature>); --pr: also the pull
+                          request (GitHub: gh, Azure DevOps: az), else where to open it;
+                          --dry-run: only say what would go where
+  state [status|init|save|guard] [--push]   the state branch (framegate/<base>): where
+                          it is; init: create it from this checkout's framegate files (once
+                          per repository); save: this work branch's framegate files -> the
+                          state branch; guard: (re)install the pre-push hook that refuses a
+                          push of framegate's files to any branch but the state branch
   unlock [--force]        clear a stale phase lock (.phase/.reqs) left by a killed run
   protocol                the chat run protocol the plugin skills follow (printed)
   hook pre-tool-use|stop  Claude Code hooks (stdin = hook JSON; exit 2 = block)
@@ -161,6 +174,22 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("doctor", help="check the project setup (no agents)")
     p.add_argument("--full", action="store_true", help="also run the whole test suite")
     p.add_argument("--brief", action="store_true", help="only the verdict and what needs action")
+    p = sub.add_parser("publish", help="state branch + product branch of a finished feature")
+    p.add_argument("feature")
+    p.add_argument("--dry-run", action="store_true", help="only say what would go where")
+    p.add_argument("--pr", action="store_true", help="also create the pull request")
+    p.add_argument("--title", default="", help="commit and pull request title (default: name)")
+    p.add_argument(
+        "--force-with-lease",
+        action="store_true",
+        help="replace a remote product branch that has other content",
+    )
+    p.add_argument("--unfinished", action="store_true", help="even if the feature is not DONE")
+    p = sub.add_parser("state", help="the state branch that holds framegate's files")
+    p.add_argument(
+        "action", nargs="?", default="status", choices=["status", "init", "save", "guard"]
+    )
+    p.add_argument("--push", action="store_true", help="init / save: also push the state branch")
     p = sub.add_parser("unlock", help="clear a stale phase lock left by a killed run")
     p.add_argument("--force", action="store_true", help="even if a run looks active")
     sub.add_parser("protocol", help="print the chat run protocol (used by the plugin skills)")
@@ -195,6 +224,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(package_text("templates", "chat_protocol.md").rstrip())
         return 0
 
+    from framegate import publish
     from framegate.config import ConfigError, find_root, load_config
     from framegate.orchestrator import Orchestrator, WorkflowError
     from framegate.state import GitError
@@ -213,14 +243,47 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             return preflight.run(args.feature, args.plugin_version, check_only=args.check)
         root = find_root()
-        if root is None:
-            print(
-                "error: no framegate.toml found here or in a parent directory. "
-                "Run `framegate init` in the repository root.",
-                file=sys.stderr,
+        if root is not None:
+            cfg = load_config(root)
+        else:
+            # [git] state_branch: the base branch holds no framegate.toml; a feature starts
+            # from there with the config of the state branch
+            wanted = args.command in ("spec", "state")
+            from_state = publish.config_from_state() if wanted else None
+            if from_state is None:
+                hint = publish.missing_config_hint()
+                if hint and args.command == "status":
+                    # the skills inject this output (a non-zero exit aborts a skill)
+                    print(f"No framegate.toml in this checkout. {hint}")
+                    return 0
+                print(
+                    "error: no framegate.toml found here or in a parent directory. "
+                    + (hint or "Run `framegate init` in the repository root."),
+                    file=sys.stderr,
+                )
+                return 1
+            cfg = from_state
+        if args.command == "state":
+            from framegate.adapters import get_adapter
+
+            if args.action == "init":
+                ignores = get_adapter(cfg).gitignore_entries()
+                return publish.state_init(cfg, push=args.push, extra_ignores=ignores)
+            if args.action == "save":
+                return publish.state_save(cfg, push=args.push)
+            if args.action == "guard":
+                return publish.state_guard(cfg)
+            return publish.state_status(cfg)
+        if args.command == "publish":
+            return publish.publish(
+                cfg,
+                args.feature,
+                dry_run=args.dry_run,
+                pr=args.pr,
+                title=args.title,
+                force_with_lease=args.force_with_lease,
+                unfinished=args.unfinished,
             )
-            return 1
-        cfg = load_config(root)
         if args.command == "doctor":
             from framegate import doctor
 

@@ -122,6 +122,15 @@ def commit(cfg: Config, msg: str, extra: list[str] | None = None) -> bool:
     return False
 
 
+def feature_finished(cfg: Config, feature: str) -> bool:
+    """The feature has a row in the metrics file (written at DONE)."""
+    mfile = cfg.root / cfg.paths.metrics / "workflow_metrics.csv"
+    if not mfile.is_file():
+        return False
+    rows = mfile.read_text(encoding="utf-8").splitlines()[1:]
+    return any(r.split(",")[1:2] == [feature] for r in rows)
+
+
 # ---------- phase lock ----------
 def set_phase(cfg: Config, phase: str) -> None:
     cfg.phase_path.write_text(phase, encoding="utf-8")

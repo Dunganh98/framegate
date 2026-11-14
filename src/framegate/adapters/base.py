@@ -777,6 +777,14 @@ class LanguageAdapter(abc.ABC):
         beyond the configured commands (coverage, diff coverage, mutation)."""
         return []
 
+    def team_checks(self) -> list[tuple[str, bool, str]]:
+        """`framegate doctor` with `[git] state_branch`: (what, ok, detail or fix) for what
+        the feature's tests need in an environment WITHOUT framegate (the team's CI, a
+        colleague's checkout), because the pull request carries the tests and nothing of
+        framegate. python: the `req` marker registered in the project's own pytest config.
+        dotnet: nothing (`[Trait("Req", ...)]` is xUnit's own attribute)."""
+        return []
+
     def tools_version(self) -> str | None:
         """The version of framegate's own part in the project's environment (python: the
         pytest plugin), "" when it is missing there; None = this language has no such part.

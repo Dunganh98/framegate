@@ -12,7 +12,7 @@ import time
 from typing import Any
 
 from framegate import brief as briefs
-from framegate import followup, ported, procs, references, risk
+from framegate import followup, ported, procs, publish, references, risk
 from framegate.orchestrator import (
     PROGRESS_CURSOR,
     PROGRESS_LOG,
@@ -24,6 +24,7 @@ from framegate.specs import feature_ids, plan_steps
 from framegate.state import (
     GitError,
     delete_marker,
+    feature_finished,
     git,
     load_progress,
     read_events,
@@ -143,11 +144,7 @@ def run_state(orch: Orchestrator, feature: str) -> str:
 
 def finished(orch: Orchestrator, feature: str) -> bool:
     """The feature has a row in the metrics file (written at DONE)."""
-    mfile = orch.cfg.root / orch.cfg.paths.metrics / "workflow_metrics.csv"
-    if not mfile.is_file():
-        return False
-    rows = mfile.read_text(encoding="utf-8").splitlines()[1:]
-    return any(r.split(",")[1:2] == [feature] for r in rows)
+    return feature_finished(orch.cfg, feature)
 
 
 def feature_tags(orch: Orchestrator, feature: str) -> list[str]:
@@ -209,7 +206,7 @@ def brief(orch: Orchestrator, feature: str) -> int:
         branch = git(orch.cfg, "rev-parse", "--abbrev-ref", "HEAD").strip()
     except GitError:
         branch = "?"
-    want = orch.cfg.branch_prefix + feature
+    want = orch.cfg.work_branch(feature)
     print(f"{feature}: {run_state(orch, feature)}")
     note = "" if not orch.cfg.git_branch or branch == want else f" (feature branch: {want})"
     print(f"Branch: {branch}{note}; cost so far {_money(orch.cost_so_far(feature))}")
@@ -628,6 +625,8 @@ def cleanup(orch: Orchestrator, feature: str, tags: bool = False, force: bool = 
         for name in names:
             delete_marker(orch.cfg, name)
         print("Tags deleted (local): " + (", ".join(names) or "none"))
+        if publish.forget(orch.cfg, feature):
+            print(f"Product ref deleted (local): {publish.product_ref(feature)}")
         if names and orch.cfg.git_markers == "tags":
             print("On the remote (if pushed): git push origin --delete " + " ".join(names))
     else:

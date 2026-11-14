@@ -37,6 +37,8 @@ a terminal.
 | `framegate backlog [show B3 \| done\|drop\|reopen B3 ...] [--all] [--scope ...]` | the open proposals; one in full; mark it applied / dropped / open again | any time |
 | `framegate stats [f] [--json]` | cost, agent and check time, final-gate runs per feature; with `<f>`: per phase and per final run | any time |
 | `framegate cleanup <f> [--tags]` | delete the run files; `--tags` also the feature's git tags (after the merge) | after DONE |
+| `framegate publish <f> [--dry-run] [--pr] [--title "..."]` | with `[git] state_branch`: framegate's files -> the state branch, the product -> the branch for the pull request, both pushed; `--pr` also creates the pull request; `--dry-run` only says what would go where ("Product branch and state branch" below) | after DONE, on your yes |
+| `framegate state [init\|save\|guard] [--push]` | the state branch: where it is; `init` creates it from this checkout's framegate files; `save` sends a work branch's framegate files to it; `guard` (re)installs the pre-push hook that keeps framegate's files off every other branch | once per repo; a change outside a feature |
 | `framegate gates <f> --scope step\|final` | run the checks by hand (also used in CI) | debugging, CI |
 | `framegate spec-brief <f>` | the project's spec conventions (the feature skill reads it) | internal |
 | `framegate protocol` | the chat run protocol (the skills read it) | internal |
@@ -109,7 +111,8 @@ A bug fix starts with `/framegate:bugfix <name>` and a refactor with `/framegate
    only). The skill runs the matching command and continues the run in the background.
 4. DONE: the skill shows the retro's numbered proposals (problem -> fix, with a recommendation)
    and its knowledge facts, you answer with numbers; it offers the final summary as the PR
-   description (`gh pr create`, only on your yes; nothing is pushed without it) and cleans up the
+   description (`gh pr create`; with `[git] state_branch`: `framegate publish --pr`, which
+   pushes a branch with the product only; only on your yes, nothing is pushed without it) and cleans up the
    run files (`framegate cleanup`; `specs/<name>/` and the metrics row stay). After the PR is
    merged, `/framegate:status <name>` offers removing the feature's tags.
 
@@ -420,6 +423,165 @@ chat shows them and `framegate learn <f> K1 K3` (or `all`) appends the ones you 
 their section, commits and tags `knowledge-update/<f>` (the frame diff allows that
 change). The engine stays generic; each project's knowledge grows with its runs.
 
+## Product branch and state branch
+
+For a repository a team shares: a pull request must carry the product and nothing of
+framegate. Off by default (`[git] state_branch = ""`: framegate's files are committed on the
+feature branch and come along in its pull request, as in a repository of your own). On:
+
+```toml
+[git]
+base = "dev"                         # or "origin/dev"
+branch_prefix = "feature/"
+state_branch = "framegate/{base}"    # -> framegate/dev
+```
+
+**Three branches, two kinds of files.**
+
+| | holds | pushed | merged into the base |
+|---|---|---|---|
+| state branch `framegate/<base>` | only framegate's files | yes (`publish`, `state save --push`) | never: its history shares no commit with the base, so git and the hosts refuse |
+| work branch `<work_prefix><f>` (`framegate-work/<f>`), local | the base + the state branch merged in + the feature's commits: one working tree with both kinds of files, as the agents and the gates need it | never | no |
+| product branch `<branch_prefix><f>` on the remote | the base commit the feature started from + one commit with the feature's product files | yes (`publish`) | yes, by the pull request |
+
+*framegate's files* (one function, `publish.workflow_paths`, used everywhere): `framegate.toml`,
+`.framegate/`, `[paths] specs` (templates and every `specs/<f>/`, the pipeline follow-up
+included), `[paths] metrics` (metrics rows, the retro backlog), the knowledge file, `[roles]
+extra_dir`, and the code map (`[docs] code_map`; `[git] publish_code_map = true` makes it
+product documentation that goes to the pull request). *The product* is everything else the
+feature changed: source, tests (review tests included), the project's own setup and packaging
+files. `out/` and the lock files are ignored as ever, but through this clone's
+`.git/info/exclude` (`state init` and `spec` write it): `.gitignore` is a product file, and
+the lines `framegate init` adds to it are not needed (`git checkout -- .gitignore`).
+
+**Life cycle.**
+
+1. *Once per repository:* `/framegate:setup` writes framegate's files into the checkout, then
+   `framegate state init` creates the state branch from them (committed or not; nothing is
+   pushed without `--push`). The base never gets a framegate file; `framegate doctor` warns
+   when it holds one under framegate's paths (a project with its own `metrics/` folder sets
+   `[paths] metrics = ".framegate/metrics"`).
+2. *A feature starts:* `framegate spec <f>` fetches the state branch (creates the local one
+   from the remote's, moves a local one that is behind forward), creates the work branch from
+   `[git] base` and merges the state branch into it. The trees do not overlap, so this merge
+   cannot conflict, however far the base has moved. Untracked copies of framegate's files in
+   the checkout (left by the setup) are removed when they equal the state branch's; one that
+   differs refuses. The command works in a checkout without `framegate.toml` (the base branch,
+   a fresh clone): the config is read from the state branch (found by its default name,
+   `framegate/<current branch>`, else the only `framegate/*` branch; a state branch under
+   another name is found only from a branch that has `framegate.toml`).
+3. *During the run* nothing differs: one working tree, the same commits (they stage the
+   source and test folders and framegate's paths), the same private refs.
+4. *After DONE, on your OK:* `framegate publish <f> [--pr] [--title "..."]`, or first
+   `--dry-run`, which prints what would go where and changes nothing.
+   - *State:* the work branch's framegate files become one commit on top of the state
+     branch's newest commit, and the branch is pushed. If the state branch moved meanwhile
+     (another feature was published), it is merged into the work branch first, by git, with
+     the right base; a real conflict (two features changed the same framegate file) is undone
+     and reported with the command to resolve it by hand. The metrics file merges by union
+     (each feature adds a row).
+   - *Product:* one commit whose tree is the work branch's tree without framegate's files and
+     whose parent is the base commit the feature started from (`git merge-base` with `[git]
+     base`): a normal feature branch, which the pull request merges, with the conflicts a
+     moved base may bring, on the host as for any branch. Two checks on the commit itself,
+     apart from how it was built, refuse the publish: it holds no file under framegate's
+     paths, and it differs from the work branch in nothing but those. It is pushed as
+     `<branch_prefix><f>`: the team sees the usual branch name. What is lost: the feature's
+     single commits (tests approved, steps, review fixes) stay on the local work branch.
+   - *Again:* a second `publish` finds nothing to do. After more work (review feedback), the
+     new product commit goes on top of the published one: a fast-forward, never a rewrite.
+   - *Pull request (`--pr`, only on your yes):* GitHub: `gh pr create`; Azure DevOps
+     (`dev.azure.com`, `*.visualstudio.com`, their ssh forms): `az repos pr create`, when
+     `az` and its `azure-devops` extension are there; the description is
+     `out/<f>/final_summary.md` (Azure DevOps: cut at 4000 characters). Without the tool, on
+     another host or without `--pr`: the address that opens the pull request by hand and
+     where its description is.
+5. *After the merge:* `framegate cleanup <f> --tags` removes the feature's private refs and
+   the product ref; delete the local work branch yourself. The next feature starts from the
+   base again.
+
+**What it refuses, and never does.** It never force-pushes, never commits on or pushes the
+base, never rewrites the work branch (the private refs `spec-approved/<f>`, ... keep pointing
+into it, and the frame check reads them there as before). It refuses: uncommitted changes,
+and untracked files in the source, test or framegate folders (they would stay out without a
+word); a feature that is not DONE (`--unfinished` overrides); a base commit that holds files
+under framegate's paths; a state branch that has diverged (this clone and the remote both have
+commits the other lacks: it prints the three git commands); a state branch that holds foreign
+files; a remote branch `<branch_prefix><f>` with other content (someone pushed there):
+`--force-with-lease` replaces it, and only if it still is what was seen.
+
+**The work branch is never pushed: two safeguards.**
+
+- *Its own name.* The work branch is `<work_prefix><f>` (`[git] work_prefix`, default
+  `framegate-work/`), never the name the team sees: a `git push` out of habit cannot land on
+  `<branch_prefix><f>`. `spec`, `status`, resume, `cleanup` and the chat use the work name; the
+  product commit is the only thing ever pushed as `<branch_prefix><f>`. A local branch still
+  under the product branch's name that holds `framegate.toml` (a feature started the old way,
+  or before this) is renamed to the work name by `state init`, `spec` and `publish` (not by a
+  dry run); not when the remote has a branch of that name that is neither this commit nor the
+  product this clone published: then it refuses and prints the `git branch -m` line.
+- *A push guard.* `state init`, `spec`, `state save` and `publish` install a `pre-push` hook
+  in this clone (`framegate state guard` does only that; `framegate doctor` checks it is in
+  place and current). It refuses every push whose commit holds a file under framegate's
+  paths unless the remote ref is the state branch: the work branch under its own name, under
+  any other name, by `HEAD:...`, within `--all`. `publish`'s own pushes pass (the product
+  commit holds none; the state branch is the exception). It is plain sh and git with the
+  paths and the state branch written into it, so it needs no `framegate` on `PATH` and runs
+  under Git for Windows; after a change of framegate's paths doctor reports it out of date
+  until `framegate state guard` rewrites it. An existing `pre-push` hook of yours is kept: it
+  is moved to `pre-push.user`, and the guard runs it first, with the same arguments and
+  input, and stops if it fails. Nothing is installed, and it says so (doctor WARNs), when
+  `core.hooksPath` is set (hooks the repository manages itself, e.g. husky: add the check
+  there if you want it) or when `pre-push` and `pre-push.user` are both hooks of yours.
+
+`git push --no-verify` skips every hook, this one included. The second line stays: a
+remote `<branch_prefix><f>` that holds anything but the product makes `publish` refuse
+(other content), and `publish --force-with-lease` replaces it with the product.
+
+**The tests in the pull request and framegate's marker.** Python tests carry
+`@pytest.mark.req("XXX-R-001")`. The marker comes from framegate's pytest plugin; in the
+team's CI or a colleague's environment without it, pytest warns about an unknown marker and
+fails with `--strict-markers`. So the project registers the marker itself, once: `req(*ids):
+spec IDs this test proves` under `markers` in its pytest config (`pytest.ini`, or
+`[tool.pytest.ini_options]` in `pyproject.toml`). `framegate doctor` checks it by asking
+pytest with the plugin switched off (`team: pytest without framegate knows the req marker`);
+`/framegate:setup` adds the line. It is a setup file: the first approved spec commits it,
+and it reaches the base with that feature's pull request. `--req` (the selection by spec ID)
+stays framegate's: the team's runs do not need it. .NET needs nothing: `[Trait("Req", ...)]`
+is xUnit's own attribute. A test that imports a package the project does not declare (e.g.
+`hypothesis`) fails in the team's CI like any missing dependency: declare it at spec time.
+
+**A second machine, a colleague.** With the plugin installed there: `git clone <url>` (or
+`git fetch`), then `/framegate:feature <name>` (= `framegate spec <name>`): it fetches the
+state branch, creates the work branch with framegate's files, and the start check installs
+the workflow tools into the project's environment. `/framegate:setup` on a repository that
+has a state branch only installs the tools.
+
+**A change outside a feature** (a config edit, kept retro proposals, a knowledge fact):
+commit it on a work branch, then `framegate state save [--push]` (the state half of
+`publish`). `framegate state` shows where the state branch is and whether the push guard is
+in place.
+
+**Moving a project that was set up the old way** (framegate's files committed on the feature
+branch `<branch_prefix><f>`, nothing pushed), on that branch:
+
+```
+# framegate.toml, [git]: state_branch = "framegate/{base}"
+git commit -m "framegate: state branch" framegate.toml
+framegate state init                 # renames the branch to framegate-work/<f>, creates the
+                                     # state branch from its framegate files, installs the guard
+framegate publish <f> --dry-run      # what would go where; look at the product file list
+framegate publish <f> --pr --title "<f>: <one line>"
+```
+
+Product files the old setup changed (the lines `framegate init` added to `.gitignore`) are in
+the dry run's list; to keep one out of the pull request, put the base's version back on the
+work branch first (`git checkout <base> -- .gitignore`, commit). From then on features
+start from the base (`git switch <base>`, `/framegate:feature <name>`).
+
+Not possible together: a CI job that runs `framegate gates` on the pull request (`[git]
+markers = "tags"`): the product branch has no `framegate.toml` and no specs.
+
 ## CLI (the engine; manual fallback)
 
 The skills only call these commands; everything works the same from a terminal.
@@ -470,6 +632,16 @@ framegate stats [<f>] [--json]              # cost, agent / check / waiting time
 framegate cleanup <f> [--tags] [--force]    # DONE: delete out/<f>/ + its run logs; --tags: also
                                             # spec-approved/tests-approved/spec-update/
                                             # tests-update tags
+framegate publish <f> [--dry-run] [--pr] [--title TEXT] [--force-with-lease] [--unfinished]
+                                            # [git] state_branch: framegate's files -> the
+                                            # state branch, the product -> one commit on the
+                                            # base, pushed as <branch_prefix><f>; --pr: the
+                                            # pull request (gh / az), else where to open it
+framegate state [status|init|save|guard] [--push]
+                                            # the state branch: where it is / create it from
+                                            # this checkout's framegate files / this work
+                                            # branch's framegate files -> the state branch /
+                                            # (re)install the pre-push guard
 framegate gates <f> --scope step|final      # the frame checks (also used in CI)
 framegate spec-brief <f>                    # conventions for the spec dialogue (skill injects it)
 framegate protocol                          # the chat run protocol (skills inject it)
@@ -481,7 +653,9 @@ and marks it (`git config branch.<b>.framegateFeature`); it switches to an exist
 if it carries that mark or the feature's spec folder, refuses with uncommitted changes to tracked
 files (untracked files are fine) and while a run is active, and only notes an already approved
 spec (no SPEC phase). `[git] branch = false` stays on the current branch. A checkout whose
-framegate.toml is not on `main` yet sets `base` to the branch that has it.
+framegate.toml is not on `main` yet sets `base` to the branch that has it. In a repository a
+team shares, `[git] state_branch` keeps framegate's files off the base and out of the pull
+request: "Product branch and state branch" above.
 
 Progress lines (`HH:MM:SS <what> [$cost since the spec approval]`, max 160 chars) go to stdout
 and `out/<f>/progress.log`; `watch` prints the new ones (it remembers its position in

@@ -84,6 +84,7 @@ In a terminal (the chat runs these for you):
 | `framegate status <name>` | show its state |
 | `framegate approve <name>` | accept the waiting gate |
 | `framegate answer <name>` | apply your answers from `out/<name>/answers.md` |
+| `framegate publish <name>` | a repository a team shares (`[git] state_branch`): push a branch with the product only for the pull request, and framegate's own files to their state branch |
 | `framegate cleanup <name>` | delete the run files after DONE |
 | `framegate stats [name]` | what the features cost: money, agent and check time, final-gate runs |
 | `framegate backlog` | the retro proposals you accepted and what became of them |

@@ -61,7 +61,7 @@ from framegate.checks.frame_diff import (
     setup_state,
     tests_update_tag,
 )
-from framegate.config import ROLE_ALIASES, Config
+from framegate.config import CONFIG_FILE, ROLE_ALIASES, Config, load_config
 from framegate.gates import (
     BASELINE_FILE,
     GateReport,
@@ -3592,7 +3592,13 @@ class Orchestrator:
         create for this feature. None = `[git] branch = false`."""
         if not self.cfg.git_branch:
             return None
-        name = self.cfg.branch_prefix + feature
+        name = self.cfg.work_branch(feature)
+        if self.cfg.state_branch:
+            # a branch of an earlier setup under the product branch's name becomes the
+            # work branch (framegate's files are on it: it must never be pushed)
+            from framegate import publish
+
+            publish.adopt_work_branch(self.cfg, feature, self.echo)
         try:
             current = git(self.cfg, "rev-parse", "--abbrev-ref", "HEAD").strip()
         except GitError as e:
@@ -3624,9 +3630,26 @@ class Orchestrator:
                 f"Base branch '{base}' not found; set [git] base in framegate.toml "
                 "(or [git] branch = false to stay on the current branch)."
             ) from e
-        git(self.cfg, "checkout", "-q", "-b", name, base)
+        if not self.cfg.state_branch:
+            git(self.cfg, "checkout", "-q", "-b", name, base)
+            git(self.cfg, "config", f"branch.{name}.framegateFeature", feature)
+            self.echo(f"Created the feature branch {name} from {base}.")
+            return name
+        # [git] state_branch: the base holds no framegate file; the new branch gets them
+        # from the state branch (fetched first: without it the branch would have no config)
+        publish.require_state(self.cfg, self.echo)
+        git(self.cfg, "checkout", "-q", "--no-track", "-b", name, base)
+        try:
+            publish.join_state(self.cfg, self.echo, self.adapter.gitignore_entries())
+        except GitError:
+            git(self.cfg, "checkout", "-q", "-")  # back to where the command started
+            git(self.cfg, "branch", "-q", "-D", name)
+            raise
         git(self.cfg, "config", f"branch.{name}.framegateFeature", feature)
-        self.echo(f"Created the feature branch {name} from {base}.")
+        self.echo(
+            f"Created the feature branch {name} from {base} (local only; `framegate publish` "
+            f"pushes the product as {publish.product_branch(self.cfg, feature)})."
+        )
         return name
 
     def is_feature_branch(self, branch: str, feature: str) -> bool:
@@ -3653,6 +3676,11 @@ class Orchestrator:
                 "it. Reattach with /framegate:resume, or wait until it stops."
             )
         self.feature_branch(feature)
+        if self.cfg.state_branch and (self.cfg.root / CONFIG_FILE).is_file():
+            # the branch's own framegate.toml (from the state branch) is what counts from
+            # here on, not the one this command started with
+            self.cfg = load_config(self.cfg.root)
+            self.adapter = get_adapter(self.cfg)
         if tag_exists(self.cfg, f"spec-approved/{feature}"):
             self.echo(
                 f"NOTE: the spec of {feature} is already approved (SPEC phase not set). Continue "
