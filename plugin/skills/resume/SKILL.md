@@ -13,8 +13,8 @@ Reattach to the framegate feature `$ARGUMENTS` (none given: pick from the list b
 
 ## What to do
 
-0. Start check: run `framegate preflight $ARGUMENTS --check --plugin-version 0.10.0` (this
-   plugin is version 0.10.0; from here it only reports, it updates nothing). `Start check: ok`
+0. Start check: run `framegate preflight $ARGUMENTS --check --plugin-version 0.11.0` (this
+   plugin is version 0.11.0; from here it only reports, it updates nothing). `Start check: ok`
    and `KEPT:` lines: nothing to say. A `TELL THE USER:` line (the plugin was updated while
    this session ran: restart Claude Code) and every `PROBLEM:` line: pass it on in one line,
    then go on. The command fails with `invalid choice: 'preflight'` (an older command-line
