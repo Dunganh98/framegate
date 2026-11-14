@@ -187,8 +187,8 @@ language):
     step. No other code changes.
 
 and to remove it afterwards: `framegate cleanup smoke --tags --force`, then switch back to the
-base branch and delete the branch `feat/smoke` (with a state branch: the smoke feature is
-never published).
+base branch and delete the branch `feat/smoke` (with a state branch: the branch is
+`framegate-work/smoke`, and the smoke feature is never published).
 
 ## 7. Finish
 

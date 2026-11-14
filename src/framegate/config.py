@@ -111,6 +111,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "branch": (bool,),
         "markers": (str,),
         "state_branch": (str,),
+        "work_prefix": (str,),
         "publish_code_map": (bool,),
     },
     "notify": {"toast": (bool,)},
@@ -396,6 +397,10 @@ class Config:
     #: `framegate publish` builds the branch for the pull request from the product files
     #: only (publish.py)
     state_branch: str = ""
+    #: [git] work_prefix: with state_branch, the local branch a feature is built on is
+    #: work_prefix + f (never pushed: it holds framegate's files); branch_prefix + f is then
+    #: only the name of the product branch `framegate publish` pushes
+    work_prefix: str = "framegate-work/"
     #: [git] publish_code_map: the code map ([docs] code_map) is product documentation and
     #: goes to the pull request (default: it is one of framegate's files)
     publish_code_map: bool = False
@@ -422,6 +427,12 @@ class Config:
 
     def path(self, rel: str) -> pathlib.Path:
         return self.root / rel
+
+    def work_branch(self, feature: str) -> str:
+        """The local branch the feature is built on: `[git] branch_prefix` + feature, or
+        with `[git] state_branch` `[git] work_prefix` + feature (the other name is then the
+        product branch on the remote)."""
+        return (self.work_prefix if self.state_branch else self.branch_prefix) + feature
 
     @property
     def out_dir(self) -> pathlib.Path:
@@ -750,6 +761,12 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
             '"framegate/{base}")'
         )
     cfg.publish_code_map = git_cfg.get("publish_code_map", cfg.publish_code_map)
+    cfg.work_prefix = git_cfg.get("work_prefix", cfg.work_prefix).strip()
+    if cfg.state_branch and (not cfg.work_prefix or cfg.work_prefix == cfg.branch_prefix):
+        raise ConfigError(
+            "[git] work_prefix must not be empty or equal to branch_prefix: with state_branch "
+            "the local work branch and the pushed product branch have different names"
+        )
     cfg.toast = data.get("notify", {}).get("toast", cfg.toast)
     cfg.references = parse_references(data.get("references", {}))
     for section in LANGUAGE_SECTIONS:

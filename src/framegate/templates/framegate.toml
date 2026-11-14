@@ -176,7 +176,11 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 #                                  # only for the pull request. First use: `framegate state
 #                                  # init`. "" = framegate's files are committed on the
 #                                  # feature branch and go into its pull request
-# publish_code_map = false         # with state_branch: true = the code map is product
+# work_prefix = "framegate-work/"  # with state_branch: the local branch a feature is built on
+#                                  # is <work_prefix><f>, never pushed (it holds framegate's
+#                                  # files; a pre-push hook framegate installs refuses it);
+#                                  # <branch_prefix><f> is the product branch `publish` pushes
+# publish_code_map = false        # with state_branch: true = the code map is product
 #                                  # documentation and goes to the pull request
 
 [notify]

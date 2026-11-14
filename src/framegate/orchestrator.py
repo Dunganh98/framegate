@@ -3516,7 +3516,13 @@ class Orchestrator:
         create for this feature. None = `[git] branch = false`."""
         if not self.cfg.git_branch:
             return None
-        name = self.cfg.branch_prefix + feature
+        name = self.cfg.work_branch(feature)
+        if self.cfg.state_branch:
+            # a branch of an earlier setup under the product branch's name becomes the
+            # work branch (framegate's files are on it: it must never be pushed)
+            from framegate import publish
+
+            publish.adopt_work_branch(self.cfg, feature, self.echo)
         try:
             current = git(self.cfg, "rev-parse", "--abbrev-ref", "HEAD").strip()
         except GitError as e:
@@ -3555,8 +3561,6 @@ class Orchestrator:
             return name
         # [git] state_branch: the base holds no framegate file; the new branch gets them
         # from the state branch (fetched first: without it the branch would have no config)
-        from framegate import publish
-
         publish.require_state(self.cfg, self.echo)
         git(self.cfg, "checkout", "-q", "--no-track", "-b", name, base)
         try:
@@ -3566,7 +3570,10 @@ class Orchestrator:
             git(self.cfg, "branch", "-q", "-D", name)
             raise
         git(self.cfg, "config", f"branch.{name}.framegateFeature", feature)
-        self.echo(f"Created the feature branch {name} from {base}.")
+        self.echo(
+            f"Created the feature branch {name} from {base} (local only; `framegate publish` "
+            f"pushes the product as {publish.product_branch(self.cfg, feature)})."
+        )
         return name
 
     def is_feature_branch(self, branch: str, feature: str) -> bool:

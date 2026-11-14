@@ -7,9 +7,11 @@ the project's own setup files) and nothing of framegate. With `[git] state_branc
   the knowledge file, the roles' extra folder, the code map) live on the **state branch**
   (`framegate/<base>`). Its tree holds only those files and its history shares no commit
   with the base, so it cannot be merged into the base by accident. It is pushed.
-- The **work branch** (`<branch_prefix><f>`, local only, never pushed) is the base plus a
+- The **work branch** (`<work_prefix><f>`, local only, never pushed) is the base plus a
   merge of the state branch: one working tree with both kinds of files, as the agents and
-  the gates have always seen it. `framegate spec` creates it (join_state).
+  the gates have always seen it. `framegate spec` creates it (join_state). It never has
+  the product branch's name (adopt_work_branch), and a pre-push hook refuses a push of
+  framegate's files to any branch but the state branch (install_guard).
 - `framegate publish <f>` (after DONE, on the user's OK) writes the feature's framegate files
   to the state branch as one commit, and builds the **product branch**: one commit on the
   base commit the feature started from, holding the work branch's tree without framegate's
@@ -443,6 +445,7 @@ def join_state(cfg: Config, echo: Echo, extra_ignores: Sequence[str] = ()) -> No
         raise PublishError(missing_text(n))
     merge_state(cfg, n, tip, echo)
     ensure_excludes(cfg, extra_ignores)
+    install_guard(cfg, n, echo)
     echo(f"Brought in framegate's files from the state branch {n.state}.")
 
 
@@ -504,6 +507,10 @@ def state_init(
             "(framegate spec <f>); changes made on a feature branch reach it with `framegate "
             "publish <f>` or `framegate state save`."
         )
+    branch = _current_branch(cfg.root)
+    if cfg.git_branch and branch.startswith(cfg.branch_prefix) and branch != n.base:
+        # an old-style feature branch: it gets the work branch's name before anything else
+        adopt_work_branch(cfg, branch[len(cfg.branch_prefix) :], echo)
     tree = checkout_workflow_tree(cfg)
     files = _files(cfg.root, tree)
     if CONFIG_FILE not in files:
@@ -511,6 +518,7 @@ def state_init(
     sha = _commit_tree(cfg.root, tree, [], f"framegate: workflow files ({n.state} created)")
     _git(cfg.root, "update-ref", n.state_ref, sha, "")
     added = ensure_excludes(cfg, extra_ignores)
+    install_guard(cfg, n, echo)
     _record(cfg, n, sha)
     echo(f"Created the state branch {n.state} with {len(files)} file(s): {_listed(files, 12)}")
     if added:
@@ -591,6 +599,7 @@ def state_save(cfg: Config, echo: Echo = print, *, push: bool = False) -> int:
             "files are changed and committed there."
         )
     _refuse_dirty(cfg)
+    install_guard(cfg, n, echo)
     tip, changed = save_state(cfg, n, echo, f"framegate: workflow files from {branch}")
     echo(
         f"State branch {n.state}: "
@@ -617,7 +626,149 @@ def state_status(cfg: Config, echo: Echo = print) -> int:
             where.append(f"{n.remote} {there[:8]}" if there else f"not on {n.remote} yet")
         echo(f"State branch: {n.state} ({', '.join(where)})")
     echo(f"framegate's files: {', '.join(workflow_paths(cfg))}")
+    ok, detail = guard_state(cfg, n)
+    echo("Push guard (pre-push hook): " + ("in place" if ok else detail))
+    echo(f"Work branches: {cfg.work_prefix}<feature>, local only.")
     echo(f"Product: everything else; pull requests go to {n.base}.")
+    return 0
+
+
+# ---------- the work branch's name, the push guard ----------
+def adopt_work_branch(cfg: Config, feature: str, echo: Echo) -> bool:
+    """A local branch under the product branch's name that holds framegate's files (built
+    before `[git] state_branch`, or before the work branch had its own name) is renamed to
+    the work branch's name: what is pushed as `<branch_prefix><f>` is only ever the product.
+    Not renamed, and refused, when the remote has a branch of that name that is neither
+    this commit nor the product this clone published: then it is someone's branch."""
+    root = cfg.root
+    old, new = product_branch(cfg, feature), cfg.work_branch(feature)
+    mine = _rev(root, f"refs/heads/{old}")
+    if old == new or not mine or _rev(root, f"refs/heads/{new}"):
+        return False
+    if _run(root, "cat-file", "-e", f"{mine}:{CONFIG_FILE}").returncode != 0:
+        return False  # no framegate file on it: not a work branch
+    how = f"rename it yourself if it is this feature's work: git branch -m {old} {new}"
+    n = names(cfg)
+    try:
+        there = _remote_tip(cfg, n, old)
+    except PublishError as e:
+        raise PublishError(f"{e} The local branch {old} holds framegate's files; {how}") from e
+    if there and there not in (mine, _rev(root, product_ref(feature))):
+        raise PublishError(
+            f"The local branch {old} holds framegate's files, and {n.remote} has a branch "
+            f"{old} with other content ({there[:8]}): not renamed. Look at both; {how}"
+        )
+    _git(root, "branch", "-m", old, new)
+    echo(
+        f"Renamed the local branch {old} to {new}: it holds framegate's files and stays "
+        f"local; `framegate publish` pushes the product as {old}."
+    )
+    return True
+
+
+GUARD_MARK = "# framegate pre-push guard"
+GUARD_VERSION = 1
+#: an existing pre-push hook of the user's is moved here and run first by the guard
+GUARD_USER_HOOK = "pre-push.user"
+
+
+def _sh(text: str) -> str:
+    return "'" + text.replace("'", "'\\''") + "'"
+
+
+def guard_text(cfg: Config, n: Names) -> str:
+    """The pre-push hook: plain sh and git, no framegate on PATH needed (git runs it with
+    its own sh, on Windows too). It refuses a push whose commit holds one of framegate's
+    files unless the remote ref is the state branch. The paths and the state branch are
+    written into it: `framegate doctor` says when the config has moved on."""
+    paths = " ".join(_sh(p) for p in workflow_paths(cfg))
+    return f"""#!/bin/sh
+{GUARD_MARK} v{GUARD_VERSION}. Written by framegate ([git] state_branch); do not edit:
+# `framegate state guard` rewrites it. It refuses a push that would send framegate's own
+# files anywhere but to the state branch. Your own hook, if you had one, is
+# {GUARD_USER_HOOK} next to this file and runs first.
+state_ref={_sh(n.state_ref)}
+input=$(cat)
+user_hook="$(dirname "$0")/{GUARD_USER_HOOK}"
+if [ -f "$user_hook" ]; then
+    printf '%s\\n' "$input" | "$user_hook" "$@" || exit $?
+fi
+printf '%s\\n' "$input" | while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -n "$local_sha" ] || continue
+    case "$local_sha" in *[!0]*) ;; *) continue ;; esac
+    [ "$remote_ref" = "$state_ref" ] && continue
+    found=$(git ls-tree -r --name-only --full-tree "$local_sha" -- {paths} | head -n 3)
+    if [ -n "$found" ]; then
+        echo "framegate: push refused: $local_ref holds framegate's files (e.g. $found)" >&2
+        echo "and would send them to $remote_ref. Only the state branch carries them;" >&2
+        echo "the team's branch is pushed by: framegate publish <feature>" >&2
+        exit 1
+    fi
+done || exit 1
+exit 0
+"""
+
+
+def _guard_path(cfg: Config) -> pathlib.Path:
+    rel = _git(cfg.root, "rev-parse", "--git-path", "hooks").strip()
+    return cfg.root / rel / "pre-push"
+
+
+def guard_state(cfg: Config, n: Names) -> tuple[bool, str]:
+    """(in place and current, where it is / what to do otherwise)."""
+    custom = _run(cfg.root, "config", "--get", "core.hooksPath").stdout.strip()
+    if custom:
+        return False, (
+            f"core.hooksPath is set ({custom}): framegate does not write into hooks it does "
+            "not own, so no push guard is installed. Never push a work branch yourself; "
+            "`framegate publish` refuses and repairs a branch that got framegate's files"
+        )
+    path = _guard_path(cfg)
+    if not path.is_file():
+        return False, "not installed: framegate state guard"
+    text = path.read_bytes().decode("utf-8", "replace")
+    if GUARD_MARK not in text:
+        return False, "another pre-push hook is in its place: framegate state guard"
+    if text != guard_text(cfg, n):
+        return False, "out of date (the config or framegate changed): framegate state guard"
+    return True, str(path)
+
+
+def install_guard(cfg: Config, n: Names, echo: Echo) -> bool:
+    """Write the pre-push guard into this clone's hooks (idempotent). A pre-push hook of
+    the user's is kept: moved to `pre-push.user`, which the guard runs first. Not installed
+    (said, never an error) with `core.hooksPath`, or when both file names are taken."""
+    ok, detail = guard_state(cfg, n)
+    if ok:
+        return True
+    if detail.startswith("core.hooksPath"):
+        echo(f"NOTE: push guard: {detail}.")
+        return False
+    path = _guard_path(cfg)
+    if path.is_file() and GUARD_MARK not in path.read_bytes().decode("utf-8", "replace"):
+        keep = path.with_name(GUARD_USER_HOOK)
+        if keep.exists():
+            echo(
+                f"NOTE: push guard not installed: {path} is a hook of yours and {keep.name} "
+                "exists too. Merge the two by hand, then: framegate state guard"
+            )
+            return False
+        path.rename(keep)
+        echo(f"Your pre-push hook was kept as {keep.name}; the push guard runs it first.")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(guard_text(cfg, n).encode("utf-8"))
+    path.chmod(0o755)
+    echo(f"Push guard installed (pre-push hook): framegate's files only go to {n.state}.")
+    return True
+
+
+def state_guard(cfg: Config, echo: Echo = print) -> int:
+    """`framegate state guard`: (re)install the pre-push guard; 1 = it could not be."""
+    _require(cfg)
+    n = names(cfg)
+    if not install_guard(cfg, n, echo):
+        return 1
+    echo(f"Push guard in place: {guard_state(cfg, n)[1]}")
     return 0
 
 
@@ -850,9 +1001,15 @@ def publish(
     root = cfg.root
     n = names(cfg)
     branch = product_branch(cfg, feature)
+    if cfg.git_branch and not dry_run:
+        adopt_work_branch(cfg, feature, echo)
     work = _current_branch(root)
-    if cfg.git_branch and work != branch:
-        raise PublishError(f"{feature} is published from its branch: git switch {branch}")
+    # a dry run changes nothing: an old-style branch is read under its old name
+    allowed = (cfg.work_branch(feature), *([branch] if dry_run else []))
+    if cfg.git_branch and work not in allowed:
+        raise PublishError(
+            f"{feature} is published from its work branch: git switch {cfg.work_branch(feature)}"
+        )
     if not cfg.spec_dir(feature).is_dir():
         raise PublishError(f"No feature '{feature}' here ({cfg.paths.specs}/{feature}/ missing).")
     if not unfinished and not feature_finished(cfg, feature):
@@ -922,6 +1079,7 @@ def publish(
             echo("No remote: nothing would be pushed.")
         return 0
 
+    install_guard(cfg, n, echo)
     # --- push: the state first (a failed product push leaves nothing half-told) ---
     push_state(cfg, n, tip, echo)
     if not n.remote:

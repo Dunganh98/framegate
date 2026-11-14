@@ -206,7 +206,7 @@ def brief(orch: Orchestrator, feature: str) -> int:
         branch = git(orch.cfg, "rev-parse", "--abbrev-ref", "HEAD").strip()
     except GitError:
         branch = "?"
-    want = orch.cfg.branch_prefix + feature
+    want = orch.cfg.work_branch(feature)
     print(f"{feature}: {run_state(orch, feature)}")
     note = "" if not orch.cfg.git_branch or branch == want else f" (feature branch: {want})"
     print(f"Branch: {branch}{note}; cost so far {_money(orch.cost_so_far(feature))}")

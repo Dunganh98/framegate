@@ -67,13 +67,15 @@ commands:
                           with [git] state_branch, after DONE: framegate's files of the
                           feature -> the state branch (one commit, pushed); the product
                           (source, tests, the project's setup files) -> one commit on the
-                          base, pushed as the branch feat/<feature>; --pr: also the pull
+                          base, pushed as the branch feat/<feature> (the local work
+                          branch is framegate-work/<feature>); --pr: also the pull
                           request (GitHub: gh, Azure DevOps: az), else where to open it;
                           --dry-run: only say what would go where
-  state [status|init|save] [--push]   the state branch (framegate/<base>): where it is;
-                          init: create it from this checkout's framegate files (once per
-                          repository); save: this feature branch's framegate files -> the
-                          state branch
+  state [status|init|save|guard] [--push]   the state branch (framegate/<base>): where
+                          it is; init: create it from this checkout's framegate files (once
+                          per repository); save: this work branch's framegate files -> the
+                          state branch; guard: (re)install the pre-push hook that refuses a
+                          push of framegate's files to any branch but the state branch
   unlock [--force]        clear a stale phase lock (.phase/.reqs) left by a killed run
   protocol                the chat run protocol the plugin skills follow (printed)
   hook pre-tool-use|stop  Claude Code hooks (stdin = hook JSON; exit 2 = block)
@@ -176,7 +178,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--unfinished", action="store_true", help="even if the feature is not DONE")
     p = sub.add_parser("state", help="the state branch that holds framegate's files")
-    p.add_argument("action", nargs="?", default="status", choices=["status", "init", "save"])
+    p.add_argument(
+        "action", nargs="?", default="status", choices=["status", "init", "save", "guard"]
+    )
     p.add_argument("--push", action="store_true", help="init / save: also push the state branch")
     p = sub.add_parser("unlock", help="clear a stale phase lock left by a killed run")
     p.add_argument("--force", action="store_true", help="even if a run looks active")
@@ -259,6 +263,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return publish.state_init(cfg, push=args.push, extra_ignores=ignores)
             if args.action == "save":
                 return publish.state_save(cfg, push=args.push)
+            if args.action == "guard":
+                return publish.state_guard(cfg)
             return publish.state_status(cfg)
         if args.command == "publish":
             return publish.publish(

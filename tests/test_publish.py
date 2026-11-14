@@ -205,7 +205,7 @@ def team_template(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
 def team(
     team_template: pathlib.Path, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> Team:
-    """A fresh copy of the template: `demo` is DONE on feature/demo, nothing is published."""
+    """A fresh copy of the template: `demo` is DONE on framegate-work/demo, nothing is published."""
     monkeypatch.setenv("FRAMEGATE_CLAUDE", str(FAKE_CLAUDE))
     shutil.copytree(team_template, tmp_path / "team")
     return Team(tmp_path / "team")
@@ -242,6 +242,15 @@ def test_workflow_paths_follow_the_config(tmp_path: pathlib.Path) -> None:
         *("framegate.toml", ".framegate", "docs/specs", "docs/agents/facts.md", "tools/roles")
     ]
     assert not publish.is_workflow(custom, "docs/code-map.md")  # published with the product
+    # the local work branch never has the pushed product branch's name
+    assert (custom.work_branch("x"), publish.product_branch(custom, "x")) == (
+        *("framegate-work/x", "feat/x"),
+    )
+    assert cfg.work_branch("x") == "feat/x"  # off: one branch, as ever
+    with pytest.raises(ConfigError, match="work_prefix"):
+        parse_config(
+            tmp_path, {"git": {"state_branch": "framegate/{base}", "work_prefix": "feat/"}}
+        )
     for bad in ("framegate/{branch}", "framegate/{base", "frame gate"):
         with pytest.raises(ConfigError, match="state_branch"):
             parse_config(tmp_path, {"git": {"state_branch": bad}})
@@ -260,7 +269,8 @@ def test_names_drop_the_remote_from_the_base(team: Team) -> None:
 # ---------- start of a feature ----------
 def test_a_feature_starts_from_the_base_with_the_state_branch_merged_in(team: Team) -> None:
     r = team.root
-    assert git(r, "rev-parse", "--abbrev-ref", "HEAD").strip() == "feature/demo"
+    assert git(r, "rev-parse", "--abbrev-ref", "HEAD").strip() == "framegate-work/demo"
+    assert not ok(r, "rev-parse", "--verify", "-q", "refs/heads/feature/demo")  # the team's name
     # the base: untouched, no framegate file; the state branch: nothing else, no shared history
     assert sha(r, "dev") == sha(team.origin, "dev")
     assert not top_level(r, "dev") & WORKFLOW_TOP
@@ -276,7 +286,7 @@ def test_a_feature_starts_from_the_base_with_the_state_branch_merged_in(team: Te
     assert {"out/", ".phase", ".reqs", "mutants/"} <= set(exclude)
     assert (r / ".gitignore").read_text(encoding="utf-8") == GITIGNORE
     assert not git(r, "status", "--porcelain").strip()
-    assert not ok(r, "config", "--get", "branch.feature/demo.remote")  # tracks nothing
+    assert not ok(r, "config", "--get", "branch.framegate-work/demo.remote")  # tracks nothing
 
 
 def test_spec_refuses_without_a_state_branch_and_with_changed_copies(
@@ -291,7 +301,7 @@ def test_spec_refuses_without_a_state_branch_and_with_changed_copies(
     assert "The state branch framegate/dev does not exist yet" in err
     assert "framegate state init" in err
     assert git(root, "rev-parse", "--abbrev-ref", "HEAD").strip() == "dev"
-    assert not git(root, "branch", "--list", "feature/demo").strip()
+    assert not git(root, "branch", "--list", "framegate-work/demo").strip()
 
     assert af(root, "state", "init") == 0
     out = capsys.readouterr().out
@@ -304,7 +314,7 @@ def test_spec_refuses_without_a_state_branch_and_with_changed_copies(
     err = capsys.readouterr().err
     assert "untracked files differ from the state branch" in err and "project.md" in err
     assert git(root, "rev-parse", "--abbrev-ref", "HEAD").strip() == "dev"
-    assert not git(root, "branch", "--list", "feature/demo").strip()
+    assert not git(root, "branch", "--list", "framegate-work/demo").strip()
     assert (root / ".framegate" / "project.md").read_text(encoding="utf-8").startswith("# my")
 
 
@@ -469,7 +479,7 @@ def test_publish_refuses_what_is_not_ready(team: Team, capsys: pytest.CaptureFix
         assert refs(o) == there  # nothing reached the remote
         return capsys.readouterr().err
 
-    assert "git switch feature/other" in refused("other")
+    assert "git switch framegate-work/other" in refused("other")
     (r / "src" / "demo" / "__init__.py").write_text(IMPL + "# wip\n", encoding="utf-8")
     assert "Uncommitted changes" in refused("demo")
     git(r, "checkout", "--", "src/demo/__init__.py")
@@ -491,7 +501,7 @@ def test_publish_refuses_what_is_not_ready(team: Team, capsys: pytest.CaptureFix
     assert af(r, "publish", "demo") == 1  # the base has no framegate.toml
     err = capsys.readouterr().err
     assert "framegate's files are on the state branch framegate/dev" in err
-    git(r, "checkout", "-q", "feature/demo")
+    git(r, "checkout", "-q", "framegate-work/demo")
     assert team.af("publish", "demo") == 0
     assert (r / "notes.md").is_file()
 
@@ -506,7 +516,7 @@ def test_publish_refuses_a_base_that_holds_framegate_files(
     (r / "metrics" / "model_scores.csv").write_text("auc\n0.9\n", encoding="utf-8")
     git(r, "add", "metrics")
     git(r, "commit", "-q", "-m", "the project's own metrics folder")
-    git(r, "checkout", "-q", "feature/demo")
+    git(r, "checkout", "-q", "framegate-work/demo")
     git(r, "merge", "-q", "--no-edit", "dev")
     capsys.readouterr()
     assert team.af("publish", "demo") == 1
@@ -592,8 +602,9 @@ def test_a_second_machine_starts_from_a_clone_of_the_base(
     assert af(second, "spec", "other") == 0
     out = capsys.readouterr().out
     assert "Fetched the state branch framegate/dev from origin." in out
-    assert "Created the feature branch feature/other from dev." in out
-    assert git(second, "rev-parse", "--abbrev-ref", "HEAD").strip() == "feature/other"
+    assert "Created the feature branch framegate-work/other from dev (local only;" in out
+    assert "pushes the product as feature/other)." in out
+    assert git(second, "rev-parse", "--abbrev-ref", "HEAD").strip() == "framegate-work/other"
     assert (second / "specs" / "demo" / "requirements.md").is_file()  # the first feature's spec
     assert (second / "specs" / "other" / "plan.md").is_file()
     assert (second / ".phase").read_text(encoding="utf-8") == "SPEC"
@@ -618,7 +629,7 @@ def test_two_features_side_by_side_meet_on_the_state_branch(
     assert team.af("publish", "demo") == 0
     capsys.readouterr()
     assert af(second, "publish", "other") == 0
-    assert "Merged the newer framegate/dev into feature/other." in capsys.readouterr().out
+    assert "Merged the newer framegate/dev into framegate-work/other." in capsys.readouterr().out
     state = files(o, "framegate/dev")
     assert {"specs/demo/plan.md", "specs/other/plan.md"} <= state
     rows = show(o, "framegate/dev", "metrics/workflow_metrics.csv")
@@ -633,6 +644,141 @@ def test_two_features_side_by_side_meet_on_the_state_branch(
     git(r, "checkout", "-q", "dev")
     assert af(r, "spec", "third") == 0
     assert (r / "specs" / "other" / "plan.md").is_file()
+
+
+# ---------- the work branch's own name, the push guard ----------
+def push(root: pathlib.Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["git", "push", *args], cwd=root, capture_output=True, text=True)
+
+
+def test_a_push_of_framegate_files_is_refused_by_the_guard(
+    team: Team, capsys: pytest.CaptureFixture[str]
+) -> None:
+    r, o = team.root, team.origin
+    there = refs(o)
+    hook = r / ".git" / "hooks" / "pre-push"
+    assert hook.read_bytes().startswith(b"#!/bin/sh\n# framegate pre-push guard v1")
+    assert b"\r" not in hook.read_bytes()  # git's sh runs it, on Windows too
+    # by hand, under its own name, under the team's name, by HEAD, with everything else
+    for args in (
+        ("origin", "framegate-work/demo"),
+        ("origin", "framegate-work/demo:feature/demo"),
+        ("origin", "HEAD:refs/heads/feature/demo"),
+        ("-u", "origin", "framegate-work/demo"),
+        ("origin", "--all"),
+    ):
+        res = push(r, *args)
+        assert res.returncode != 0, args
+        assert "framegate: push refused" in res.stderr and "framegate.toml" in res.stderr, args
+        assert refs(o) == there, args
+    # what may go out goes out: the state branch, a branch without framegate's files
+    assert push(r, "origin", "framegate/dev").returncode == 0
+    assert push(r, "origin", "dev:refs/heads/copy-of-dev").returncode == 0
+    assert push(r, "origin", "--delete", "copy-of-dev").returncode == 0
+    assert team.af("publish", "demo") == 0  # its own two pushes pass the guard
+    assert not top_level(o, "feature/demo") & WORKFLOW_TOP
+
+    # --no-verify skips every hook; publish is the second line: it refuses, then repairs
+    forced = push(r, "--no-verify", "-f", "origin", "framegate-work/demo:feature/demo")
+    assert forced.returncode == 0
+    assert "framegate.toml" in files(o, "feature/demo")
+    capsys.readouterr()
+    assert team.af("publish", "demo") == 1
+    assert "already has a branch feature/demo with other content" in capsys.readouterr().err
+    assert team.af("publish", "demo", "--force-with-lease") == 0
+    assert not top_level(o, "feature/demo") & WORKFLOW_TOP
+
+
+def test_the_guard_keeps_a_hook_of_the_users_and_respects_hooks_path(
+    team: Team, capsys: pytest.CaptureFixture[str]
+) -> None:
+    r, o = team.root, team.origin
+    cfg = load_config(r)
+    hooks = r / ".git" / "hooks"
+    seen = r.parent / "user-hook-ran.txt"
+    mine = '#!/bin/sh\necho "$1" >> "{}"\ncat > /dev/null\n[ ! -f "{}" ]\n'.format(
+        seen.as_posix(), (r.parent / "block").as_posix()
+    )
+    (hooks / "pre-push").write_bytes(mine.encode())  # the user's own hook, in the guard's place
+    capsys.readouterr()
+    assert team.af("state", "guard") == 0
+    out = capsys.readouterr().out
+    assert "Your pre-push hook was kept as pre-push.user; the push guard runs it first." in out
+    assert (hooks / "pre-push.user").read_bytes() == mine.encode()
+    assert push(r, "origin", "framegate/dev").returncode == 0
+    assert seen.read_text(encoding="utf-8").split() == ["origin"]  # it ran, with its arguments
+    assert push(r, "origin", "framegate-work/demo").returncode != 0  # the guard after it
+    (r.parent / "block").write_text("x", encoding="utf-8")  # the user's hook says no: no push
+    assert push(r, "origin", "dev:refs/heads/copy").returncode != 0
+    assert "refs/heads/copy" not in refs(o)
+    assert team.af("state", "guard") == 0  # again: nothing to do, nothing moved
+    assert (hooks / "pre-push.user").read_bytes() == mine.encode()
+
+    # both names taken by hooks that are not framegate's: nothing is overwritten
+    (hooks / "pre-push").write_bytes(b"#!/bin/sh\nexit 0\n")
+    capsys.readouterr()
+    assert team.af("state", "guard") == 1
+    assert "Merge the two by hand" in capsys.readouterr().out
+    assert (hooks / "pre-push").read_bytes() == b"#!/bin/sh\nexit 0\n"
+    items = {i.name: i for i in doctor.state_branch_items(cfg, get_adapter(cfg))}
+    guard = items["git: push guard (pre-push hook)"]
+    assert guard.status == "WARN" and "another pre-push hook is in its place" in guard.detail
+
+    # hooks the repository manages elsewhere (husky, a shared folder): never written into
+    (hooks / "pre-push").unlink()
+    shared = r.parent / "shared-hooks"
+    shared.mkdir()
+    git(r, "config", "core.hooksPath", str(shared))
+    assert team.af("state", "guard") == 1
+    assert "core.hooksPath is set" in capsys.readouterr().out
+    assert not list(shared.iterdir()) and not (hooks / "pre-push").exists()
+    items = {i.name: i for i in doctor.state_branch_items(cfg, get_adapter(cfg))}
+    assert "core.hooksPath is set" in items["git: push guard (pre-push hook)"].detail
+    assert team.af("publish", "demo") == 0  # publish itself does not depend on the guard
+    git(r, "config", "--unset", "core.hooksPath")
+
+    # a config change moves what counts as framegate's: the guard is out of date until rewritten
+    cfg.paths.metrics = ".framegate/metrics"
+    state = publish.guard_state(cfg, publish.names(cfg))
+    assert state == (False, "not installed: framegate state guard")
+    assert team.af("state", "guard") == 0
+    assert publish.guard_state(cfg, publish.names(cfg))[1].startswith("out of date")
+
+
+def test_a_branch_under_the_teams_name_that_holds_framegate_files_is_renamed(
+    team: Team, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A feature started before the work branch had its own name: `spec` (resume) and
+    `publish` find it under the product branch's name and rename it; never when the remote
+    has a branch of that name with other content."""
+    r, o = team.root, team.origin
+    git(r, "branch", "-m", "framegate-work/demo", "feature/demo")
+    head = sha(r, "HEAD")
+    capsys.readouterr()
+    assert team.af("spec", "demo") == 0
+    out = capsys.readouterr().out
+    assert "Renamed the local branch feature/demo to framegate-work/demo" in out
+    assert git(r, "rev-parse", "--abbrev-ref", "HEAD").strip() == "framegate-work/demo"
+    assert sha(r, "HEAD") == head and not ok(r, "rev-parse", "-q", "--verify", "feature/demo")
+    assert git(r, "config", "branch.framegate-work/demo.framegateFeature").strip() == "demo"
+
+    git(r, "branch", "-m", "framegate-work/demo", "feature/demo")
+    assert team.af("publish", "demo", "--dry-run") == 0  # reads it, renames nothing
+    assert git(r, "rev-parse", "--abbrev-ref", "HEAD").strip() == "feature/demo"
+    other = team.clone()
+    git(other, "checkout", "-q", "-b", "feature/demo")
+    git(other, "commit", "-q", "--allow-empty", "-m", "a colleague's branch of that name")
+    git(other, "push", "-q", "origin", "feature/demo")
+    theirs = sha(o, "feature/demo")
+    capsys.readouterr()
+    assert team.af("publish", "demo") == 1
+    err = capsys.readouterr().err
+    assert "origin has a branch feature/demo with other content" in err and "not renamed" in err
+    assert "git branch -m feature/demo framegate-work/demo" in err
+    assert git(r, "rev-parse", "--abbrev-ref", "HEAD").strip() == "feature/demo"
+    assert sha(o, "feature/demo") == theirs
+    assert team.af("spec", "demo") == 1  # the same refusal: no second branch is started
+    assert not ok(r, "rev-parse", "-q", "--verify", "refs/heads/framegate-work/demo")
 
 
 # ---------- a project set up the old way ----------
@@ -665,7 +811,13 @@ def test_migration_of_a_feature_branch_that_holds_framegate_files(
     git(root, "commit", "-q", "-m", "framegate: state branch", "framegate.toml")
     capsys.readouterr()
     assert af(root, "state", "init") == 0
-    assert "Created the state branch framegate/dev" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Created the state branch framegate/dev" in out
+    # the branch held framegate's files under the name the team will see: renamed, local
+    assert "Renamed the local branch feature/skel to framegate-work/skel" in out
+    assert git(root, "rev-parse", "--abbrev-ref", "HEAD").strip() == "framegate-work/skel"
+    assert not ok(root, "rev-parse", "--verify", "-q", "refs/heads/feature/skel")
+    assert "Push guard installed" in out
     assert top_level(root, "framegate/dev") <= WORKFLOW_TOP
     assert "specs/skel/requirements.md" in files(root, "framegate/dev")
     assert af(root, "publish", "skel", "--dry-run") == 0
@@ -681,14 +833,15 @@ def test_migration_of_a_feature_branch_that_holds_framegate_files(
     assert not top_level(origin, "feature/skel") & WORKFLOW_TOP
     assert files(origin, "feature/skel") == files(origin, "dev") | {"tests/test_skel.py"}
     assert ",skel," in show(origin, "framegate/dev", "metrics/workflow_metrics.csv")
-    # the old work branch is all still there
+    # the old work branch is all still there, under its new name only
     assert ok(root, "merge-base", "--is-ancestor", old_head, "HEAD")
+    assert not ok(root, "rev-parse", "--verify", "-q", "refs/heads/feature/skel")
 
     # the next feature starts from the clean base and gets the files from the state branch
     git(root, "checkout", "-q", "dev")
     assert not (root / "framegate.toml").exists()
     assert af(root, "spec", "next") == 0
-    assert git(root, "rev-parse", "--abbrev-ref", "HEAD").strip() == "feature/next"
+    assert git(root, "rev-parse", "--abbrev-ref", "HEAD").strip() == "framegate-work/next"
     assert git(root, "merge-base", "HEAD", "origin/dev").strip() == dev
     assert (root / "specs" / "skel" / "requirements.md").is_file()
     assert "state_branch" in (root / "framegate.toml").read_text(encoding="utf-8")
@@ -818,6 +971,7 @@ def test_doctor_items_with_a_state_branch(team: Team) -> None:
     adapter = get_adapter(cfg)
     items = {i.name: i for i in doctor.state_branch_items(cfg, adapter)}
     assert items["git: state branch 'framegate/dev'"].status == "OK"
+    assert items["git: push guard (pre-push hook)"].status == "OK"
     assert not any("holds files under" in name for name in items)
     # the tests go to people without framegate: its marker must be the project's own
     marker = items["team: pytest without framegate knows the `req` marker"]

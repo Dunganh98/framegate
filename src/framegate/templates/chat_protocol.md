@@ -140,7 +140,8 @@ fail for no reason. Reading files and git log/diff/status are fine.
      Any other host (Azure DevOps, GitLab, ...): "Push <branch>, so you can open the pull
      request there?", default no.
    - 2b. Say in two or three lines what the dry run found: how many product files go to the
-     branch `<branch>` for the team (name the ones that are not source or tests, e.g.
+     branch for the team (the dry run's `Product branch <name>`; it is not the branch of
+     this checkout, which is the local work branch `framegate-work/<f>`; name the ones that are not source or tests, e.g.
      `.gitignore` or a packaging file, so the user can say no), that framegate's own files
      go to the state branch and never to the pull request, and where the pull request would
      go. Ask: "Publish it and create the pull request?", default no ("publish without a
@@ -155,9 +156,10 @@ fail for no reason. Reading files and git log/diff/status are fine.
      request: print the branch name and say that `<out>/<f>/final_summary.md` is the text for
      its description (copy it before the cleanup).
    - 3b. `framegate publish <f> --pr --title "<f>: <one line>"` (without `--pr` when the
-     user wants no pull request). Never `git push` yourself here: the feature branch in this
-     checkout holds framegate's files and stays local; `publish` builds and pushes the
-     product branch and the state branch. Relay its result in two lines: what was pushed,
+     user wants no pull request). Never `git push` yourself here: the work branch in this
+     checkout (`framegate-work/<f>`) holds framegate's files and stays local (a pre-push
+     guard refuses it; never use `--no-verify`); `publish` builds and pushes the product
+     branch and the state branch. Relay its result in two lines: what was pushed,
      and the pull request's address, or (no `gh` / `az` on this machine, another host) the
      address to open it by hand and that `<out>/<f>/final_summary.md` is its description
      (copy it before the cleanup). If it refuses (uncommitted changes, a remote branch of

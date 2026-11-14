@@ -116,6 +116,16 @@ def state_branch_items(cfg: Config, adapter: LanguageAdapter) -> list[Item]:
                 "creates it once per repository; `framegate spec <f>` fetches it",
             )
         )
+        guarded, detail = publish.guard_state(cfg, n)
+        items.append(
+            Item(
+                "OK" if guarded else "WARN",
+                "git: push guard (pre-push hook)",
+                "refuses a push of framegate's files to any branch but the state branch"
+                if guarded
+                else detail,
+            )
+        )
         listed = git(cfg, "ls-tree", "-r", "--name-only", cfg.git_base, "--")
         on_base_files = [f for f in listed.splitlines() if publish.is_workflow(cfg, f)]
         if on_base_files:
