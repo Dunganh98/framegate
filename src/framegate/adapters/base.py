@@ -455,6 +455,12 @@ class LanguageAdapter(abc.ABC):
         """Environment for the adapter's tool commands (None = inherit)."""
         return None
 
+    def agent_env(self) -> dict[str, str]:
+        """Environment variables set for every agent run on top of framegate's own (whole
+        values, e.g. a full PATH), so the commands an agent types mean the tools the gates
+        use. Default: nothing."""
+        return {}
+
     def format_fix_commands(self, files: list[str]) -> list[list[str]]:
         """Commands that format `files` (changed source files) in place; [] = none."""
         return []
@@ -753,9 +759,18 @@ class LanguageAdapter(abc.ABC):
         beyond the configured commands (coverage, diff coverage, mutation)."""
         return []
 
-    def install_tools(self, dry_run: bool, echo: Callable[[str], None]) -> int:
+    def tools_version(self) -> str | None:
+        """The version of framegate's own part in the project's environment (python: the
+        pytest plugin), "" when it is missing there; None = this language has no such part.
+        The start step (`framegate preflight`) keeps it at the command-line tool's version."""
+        return None
+
+    def install_tools(
+        self, dry_run: bool, echo: Callable[[str], None], update: bool = False
+    ) -> int:
         """`framegate install-tools`: install what the workflow needs into the project's
-        environment (0 = fine). Default: nothing framegate can install for this language."""
+        environment (0 = fine); `update`: also bring framegate's own part there to this
+        version. Default: nothing framegate can install for this language."""
         echo(
             f"Nothing framegate installs for a {self.name} project: `framegate doctor` lists "
             "the tools it looks for and how to get them."

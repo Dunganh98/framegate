@@ -11,7 +11,9 @@
 // - The version last seen is kept outside the plugin folder (an update replaces that folder):
 //   CLAUDE_PLUGIN_DATA when Claude Code sets it, else ~/.claude/framegate.
 // - Never blocks and never fails a session: any error exits 0 silently.
-// The CLI is brought to the plugin's version by the skills (their "Version" step), not here.
+// The CLI and the project's tools are brought to the plugin's version by the skills (their
+// start check, `framegate preflight`), not here. That check also tells a session to restart
+// when the plugin was updated while it ran: this hook cannot (it runs before the update lands).
 'use strict';
 
 const fs = require('fs');

@@ -10,6 +10,7 @@ import re
 import pytest
 
 import framegate
+from framegate import preflight
 from framegate.adapters import get_adapter
 from framegate.adapters import python as python_adapter
 from framegate.config import parse_config
@@ -29,17 +30,28 @@ def test_one_version_everywhere() -> None:
 
 
 def test_the_skills_bring_the_cli_to_the_plugin_version() -> None:
-    """Claude Code updates the plugin only; the skills that start work install the CLI of the
-    plugin's own version, and the session-start notice has a line for it."""
+    """Claude Code updates the plugin only; the skills that start work begin with the start
+    check (`framegate preflight`), which names the install of the plugin's own version and
+    brings the project's tools in line, and the session-start notice has a line for it."""
     version = framegate.__version__
     install = f'uv tool install --force "git+{framegate.SOURCE_URL}@v{version}"'
+    check = f"framegate preflight $ARGUMENTS --plugin-version {version}"
     for name in ("feature", "bugfix", "refactor"):
         skill = (ROOT / f"plugin/skills/{name}/SKILL.md").read_text(encoding="utf-8")
         assert f"This plugin is version {version}." in skill, name
-        assert install in skill and "!`framegate --version`" in skill, name
+        # the fallback for a tool that has no start check yet, and the check itself
+        assert install in skill and check in skill, name
+        assert "invalid choice: 'preflight'" in skill, name
         assert "Bash(uv tool install *)" in skill and "PowerShell(uv tool install *)" in skill
-        # checked before the conventions are read: they are printed again after an update
-        assert skill.index("## Version") < skill.index("## Project conventions"), name
+        # done before the conventions are used: they are printed again after an update
+        assert skill.index("## Start check") < skill.index("## Project conventions"), name
+        assert preflight.install_command(version) == install
+    resume = (ROOT / "plugin/skills/resume/SKILL.md").read_text(encoding="utf-8")
+    assert f"framegate preflight $ARGUMENTS --check --plugin-version {version}" in resume
+    # a skill command that fails at load aborts the whole skill (docs/plugin.md), and the
+    # previous tool has no `preflight`: no skill runs it at load
+    for path in (ROOT / "plugin/skills").glob("*/SKILL.md"):
+        assert "!`framegate preflight" not in path.read_text(encoding="utf-8"), path
     notes = json.loads((ROOT / "plugin/whats-new.json").read_text(encoding="utf-8"))
     assert len(notes.get(version, "")) > 20 and "\n" not in notes[version]
     hooks = json.loads((ROOT / "plugin/hooks/hooks.json").read_text(encoding="utf-8"))["hooks"]

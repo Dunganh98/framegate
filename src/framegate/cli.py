@@ -46,10 +46,17 @@ commands:
   spec-brief <feature>    print the conventions brief for the SPEC session
   stats [<feature>] [--json]  what the features cost, from the events: cost, agent / check
                           time, final-gate runs; with a feature: per phase and per final run
-  install-tools [--dry-run]  install what the workflow needs into the project's
-                          environment (python: the framegate pytest plugin, pytest,
+  install-tools [--dry-run] [--update]  install what the workflow needs into the
+                          project's environment (python: the framegate pytest plugin, pytest,
                           pytest-cov, hypothesis, diff-cover, the gate commands' tools);
-                          works before `init`; --dry-run: only list what is missing
+                          works before `init`; --dry-run: only list what is missing;
+                          --update: also bring the framegate pytest plugin there to this
+                          version
+  preflight [<feature>] [--plugin-version X] [--check]   the start step of the chat
+                          skills: the command-line tool at the plugin's version, the
+                          project environment's workflow tools at the tool's version
+                          (updated unless the feature's spec is approved or --check), a
+                          short setup check; prints what it did and what is left to do
   doctor [--full] [--brief]  check the setup without agents: config, git, claude CLI,
                           tools, gate commands, test selection by spec ID; --full: the whole
                           suite; --brief: only the verdict and what needs action
@@ -134,6 +141,15 @@ def build_parser() -> argparse.ArgumentParser:
         "install-tools", help="install the tools the workflow needs into the project env"
     )
     p.add_argument("--dry-run", action="store_true", help="only list what is missing")
+    p.add_argument(
+        "--update",
+        action="store_true",
+        help="also bring framegate's own part there (the pytest plugin) to this version",
+    )
+    p = sub.add_parser("preflight", help="the start step of the chat skills: versions, tools")
+    p.add_argument("feature", nargs="?")
+    p.add_argument("--plugin-version", default="", help="the version of the skill that asks")
+    p.add_argument("--check", action="store_true", help="report only, update nothing")
     p = sub.add_parser("doctor", help="check the project setup (no agents)")
     p.add_argument("--full", action="store_true", help="also run the whole test suite")
     p.add_argument("--brief", action="store_true", help="only the verdict and what needs action")
@@ -183,7 +199,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "install-tools":
             from framegate.scaffold import install_tools
 
-            return install_tools(dry_run=args.dry_run)
+            return install_tools(dry_run=args.dry_run, update=args.update)
+        if args.command == "preflight":
+            from framegate import preflight
+
+            return preflight.run(args.feature, args.plugin_version, check_only=args.check)
         root = find_root()
         if root is None:
             print(

@@ -4,6 +4,7 @@ and the lint / format / type tools the gate commands name), and say what that ch
 
 from __future__ import annotations
 
+import os
 import pathlib
 import re
 import shutil
@@ -41,6 +42,32 @@ def gate_tools(commands: Sequence[Sequence[str]]) -> list[ToolReq]:
     return found
 
 
+def path_with(first: Sequence[str], base: str | None = None) -> str:
+    """PATH with the folders `first` in front (each once; `base` = the current PATH)."""
+    current = os.environ.get("PATH", "") if base is None else base
+    seen = {os.path.normcase(f) for f in first}
+    rest = [p for p in current.split(os.pathsep) if p and os.path.normcase(p) not in seen]
+    return os.pathsep.join([*first, *rest])
+
+
+def interpreter_env(python: str) -> dict[str, str]:
+    """What makes `python`, `pytest`, `ruff`, ... in a shell mean this interpreter and its
+    tools: its folder first on PATH (plus `Scripts` next to a Windows interpreter that is not
+    in a venv), and VIRTUAL_ENV when it is a venv's. {} when the interpreter is not found."""
+    found = python if os.path.isabs(python) else shutil.which(python)
+    if not found or not os.path.isfile(found):
+        return {}
+    folder = pathlib.Path(found).parent  # as named: a venv's python may be a link
+    front = [str(folder)]
+    scripts = folder / "Scripts"
+    if scripts.is_dir():
+        front.append(str(scripts))
+    env = {"PATH": path_with(front)}
+    if (folder.parent / "pyvenv.cfg").is_file():
+        env["VIRTUAL_ENV"] = str(folder.parent)
+    return env
+
+
 def _freeze(python: str, installer: list[str], cwd: pathlib.Path) -> dict[str, str]:
     """Installed distributions of the interpreter: name (lower case) -> version."""
     cmd = [*installer, "freeze"] + (["--python", python] if installer[0] != python else [])
@@ -67,13 +94,16 @@ def install(
     has_module: Callable[[str], bool],
     dry_run: bool,
     echo: Callable[[str], None],
+    update: Sequence[str] = (),
 ) -> int:
-    """Install the missing ones of `reqs` into `python`. 0 = everything is there (or, with
-    dry_run, was listed); 1 = an install failed or no installer was found."""
-    missing = [r for r in reqs if not has_module(r.module)]
+    """Install the missing ones of `reqs` into `python`, and those of the modules `update`
+    again though they are there (another version than this framegate's). 0 = everything is
+    there (or, with dry_run, was listed); 1 = an install failed or no installer was found."""
+    absent = [r for r in reqs if not has_module(r.module)]
+    missing = [r for r in reqs if r in absent or r.module in update]
     echo(f"Project interpreter: {python}")
     for r in reqs:
-        state = "missing" if r in missing else "ok"
+        state = "missing" if r in absent else "update" if r in missing else "ok"
         echo(f"  [{state:7}] {r.module} ({r.why})")
     if not missing:
         echo("Nothing to install: every tool the workflow needs is there.")

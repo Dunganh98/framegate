@@ -382,6 +382,86 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
     checked (the agents' shell rules allow only the test and lint commands). The first
     check is the rerun of `runner-skeleton` (Next steps).
 
+- **Start check, agents' environment (2026-11-14, branch feat/start-step-agent-env; from the
+  second da-argos run, `runner-skeleton`).** What went wrong there: plugin 0.9.0 and CLI 0.9.0
+  but the project's .venv still had the framegate pytest plugin 0.8.0 (nothing re-ran
+  install-tools); the agents' `python` was the global interpreter (`unrecognized arguments:
+  --req`), not the gates' .venv; the RETRO agent read and tried to write the chat's
+  auto-memory.
+  - **Start check:** `framegate preflight [<f>] [--plugin-version X] [--check]`
+    (`src/framegate/preflight.py`), the first step of /framegate:feature, :bugfix, :refactor
+    (a tool call, not a load command); :resume runs it with `--check`; :status does not.
+    Lines: `Start check: ok ...` (one line, the skill says nothing), `UPDATED:` (project
+    tools brought to the CLI's version via `install-tools --update`, new), `RUN:` (the
+    `uv tool install --force ...@v<plugin>` command; the skill runs it, then the check
+    again), `TELL THE USER:` (restart Claude Code: the plugin in
+    `~/.claude/plugins/installed_plugins.json` is newer than the session's skills; nothing
+    is updated then), `KEPT:`, `PROBLEM:` (no framegate.toml, config error, claude CLI not
+    found, no framegate part in the project environment). Always exit 0.
+  - **Rules:** work in progress (spec approved) keeps its CLI and its project tools (by
+    hand: `framegate install-tools --update`); `--check` / no feature update nothing. The
+    CLI never updates itself: on Windows `uv tool install --force` fails on the running exe
+    (os error 32) after replacing the package (checked). A skill load command that exits
+    non-zero aborts the skill, and the previous CLI has no `preflight`: hence the tool call
+    and the `invalid choice: 'preflight'` fallback in the skills (both paths run live with
+    /framegate:resume, headless).
+  - **Agents' environment** (`src/framegate/agent_env.py`, adapter `agent_env()`): every
+    `claude -p` run gets the project interpreter's folder first on PATH (+ VIRTUAL_ENV for
+    a venv; python adapter, others nothing) and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`.
+    doctor: `tool: agents' python` (`--req` in its `pytest --help`).
+  - **Live probes (docs/claude-cli-notes.md, haiku, ~4 cents):** the env var switches the
+    auto-memory off and the plugin's hooks and --allowedTools still work;
+    `--setting-sources project,local` drops a user-scope plugin (write guard gone) and
+    keeps the memory: never pass it; `claudeMdExcludes` does not drop the user's global
+    CLAUDE.md, which the agents still load (open). PATH given to `claude` reaches the
+    PowerShell tool.
+  - **Not yet seen live:** a real update of an older pytest plugin in a project .venv (the
+    first is da-argos 0.8.0), the restart notice after a real background plugin update, the
+    PATH in an agent's Git Bash, a full agent run with the new environment.
+
+- **Run fixes from the second da-argos run (runner-skeleton, 2026-11-14: $7.49, 37 min
+  agents, 26 min checks; branch fix/run-fixes):**
+  - Agent commands: the conventions brief names the project's own lint / format / type
+    commands (`[gates.commands]`, every source folder, `[]` left out, the format one as
+    its fix form on `<files>`), and the tool rules are built from the same list
+    (`adapters/base.py: agent_commands`, `agent_commands.py`). A run without lint rules
+    (reviewer, triage, test reviewer, diagnosis) is told the gates check them. Before: the
+    brief said `ruff check orchestrator tests` / `ruff format` on a project that lints with
+    `python -m ruff` over five folders and formats with black; two runs were denied.
+    Invariant test (tests/test_agent_commands.py); doctor WARNs when `[phases.<P>] tools`
+    denies a command the task names.
+  - API error: a run that did no work because the API could not be reached (error result
+    "API Error: ...", or no cost and at most one turn) runs again after 30 s / 2 min /
+    5 min, no gate, no attempt; then the run stops like the usage-limit stop (exit 130,
+    `api_error` event; `api_error.py`). Any phase.
+  - Fix gates: review fixes, structure fixes and final repairs are checked with the
+    feature's tests + the review tests (gate scope "fix"), not the suite: the final gates
+    run it right after (da-argos: 4.5 min per gate). **This reverses** the reversal of
+    feat/retro-keeper-reach for the structure fix; plan steps keep the suite. A break
+    elsewhere fails the final regression and goes to the repair run, whose gate is the
+    whole suite when a whole-suite check is what failed.
+  - The phase "PR" is now SUMMARY (it writes the summary, the brief and the code map; the
+    user read "PR start" and expected a pull request): `[phases.SUMMARY]`,
+    roles/summary.md, events, progress lines. Still read, with a doctor WARN:
+    `[phases.PR]`, `<extra_dir>/pr.md`; a progress.json saying "PR" resumes; old events
+    count as SUMMARY. The wrap-up's PR offer applies to a GitHub remote, else: push the
+    branch and print its name (host support and a product-only PR branch: later work).
+  - Test rounds: a test check that fails exactly as in the round before while the reviewer
+    has no objections ends the writer loop (was: two more rounds, ~$2, 8 min, for a
+    carried-over test that passes by design). A reworded question about the same tests and
+    spec IDs is dropped at collection (`retro.same_question`: same references, half of
+    the other words). The port's "green by design" list is not built.
+  - **Not yet seen live:** all of it (fake claude only). The API-error result shape is
+    from one live result; the reworded-question rule from constructed texts.
+
+- **Test suite speed (2026-11-14):** on the work laptop a process start costs about ten
+  times the usual (python -c pass: 320 ms), and the whole-workflow tests are mostly process
+  starts: the "3 minute" suite takes 44 min and more there (8 workers: 26 min, the delay is
+  shared). `tests/durations.json` (`pytest -m "not slow" --record-durations`) marks tests of
+  10 s and more as `long`; `uv run pytest` leaves them out (about 9 min there),
+  `uv run pytest -m "not slow"` is the run before a release. progress.json's move is tried
+  again on PermissionError (seen once in the suite).
+
 ## User decisions so far
 1. Two human gates, forward only: spec and final (2026-11-10, after the first FCSim feature;
    was three). The test reviewer checks the tests against the spec; its questions, objections

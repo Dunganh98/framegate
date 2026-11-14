@@ -27,7 +27,16 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from framegate import api_error, backlog, followup, notify, procs, references, risk
+from framegate import (
+    agent_env,
+    api_error,
+    backlog,
+    followup,
+    notify,
+    procs,
+    references,
+    risk,
+)
 from framegate import brief as briefs
 from framegate.adapters import get_adapter
 from framegate.adapters.base import GATE_NAMES, CheckResult, LanguageAdapter, run_command
@@ -60,7 +69,6 @@ from framegate.gates import (
     review_tests_checked,
     split_failures,
 )
-from framegate.hooks import AGENT_ENV
 from framegate.report import (
     TestReview,
     final_facts,
@@ -940,8 +948,8 @@ class Orchestrator:
         try:
             # own process group + kill-on-close job: Ctrl+C / SIGTERM / a killed framegate
             # take the whole agent tree (claude, node, shells, dotnet) down with it
-            # FRAMEGATE_AGENT marks the agent's hooks as part of this run (hooks/__init__.py)
-            env = {**os.environ, AGENT_ENV: role_name}
+            # FRAMEGATE_AGENT, the project's tools first on PATH, no chat memory (agent_env.py)
+            env = agent_env.build(self.adapter, role_name)
             _, stdout, stderr = procs.run(args, input=prompt, cwd=self.cfg.root, job=True, env=env)
         except OSError as e:
             stdout, stderr = "", f"could not start claude: {e}"

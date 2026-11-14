@@ -10,6 +10,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -204,6 +205,11 @@ class PythonAdapter(LanguageAdapter):
             out[0] = self.python
         return out
 
+    def agent_env(self) -> dict[str, str]:
+        """The project interpreter's folder first on PATH (VIRTUAL_ENV for a venv): `python`,
+        `pytest`, `ruff`, `black` in an agent's shell are the gates' ones."""
+        return pytools.interpreter_env(self.python)
+
     def tool_requirements(self) -> list[pytools.ToolReq]:
         """What the workflow needs in the project interpreter. Always: the framegate pytest
         plugin (the `req` marker, `--req`), pytest, pytest-cov, hypothesis, diff-cover. With
@@ -225,16 +231,46 @@ class PythonAdapter(LanguageAdapter):
             reqs += pytools.gate_tools([*commands.values(), self.cfg.format_fix_command])
         return reqs
 
-    def install_tools(self, dry_run: bool, echo: Callable[[str], None]) -> int:
-        return pytools.install(
-            self.python, self.root, self.tool_requirements(), self._has_module, dry_run, echo
+    def tools_version(self) -> str | None:
+        """The version of the framegate package (the pytest plugin) in the project
+        interpreter; "" = not installed there."""
+        code, out = run_command(
+            [
+                self.python,
+                "-c",
+                "import importlib.metadata as m; print(m.version('framegate'))",
+            ],
+            self.root,
         )
+        return out.strip().splitlines()[-1].strip() if code == 0 and out.strip() else ""
+
+    def install_tools(
+        self, dry_run: bool, echo: Callable[[str], None], update: bool = False
+    ) -> int:
+        stale = update and self.tools_version() not in ("", __version__)
+        code = pytools.install(
+            self.python,
+            self.root,
+            self.tool_requirements(),
+            self._has_module,
+            dry_run,
+            echo,
+            update=("framegate",) if stale else (),
+        )
+        if code == 0 and stale and not dry_run and self.tools_version() != __version__:
+            echo(
+                f"error: the project interpreter still has framegate {self.tools_version()}, "
+                f"not {__version__}"
+            )
+            return 1
+        return code
 
     def tool_report(self) -> list[tuple[str, bool, str]]:
         out = []
         ok = self._has_module("framegate")
         hint = "run: framegate install-tools"
         out.append(("framegate (pytest plugin: --req)", ok, self.python if ok else hint))
+        out.append(self._agent_python_report())
         for module, what in (
             ("pytest", "tests"),
             ("pytest_cov", "coverage"),
@@ -255,6 +291,19 @@ class PythonAdapter(LanguageAdapter):
             ok = self._has_module("mutmut")
             out.append(("mutmut (mutation)", ok, self.python if ok else "install mutmut"))
         return out
+
+    def _agent_python_report(self) -> tuple[str, bool, str]:
+        """What `python` is in an agent's shell (agent_env) and whether its pytest knows
+        `--req`: the agents are told `python -m pytest -q --req <IDs>`."""
+        name = "agents' python (`python -m pytest --req` in an agent's shell)"
+        path = self.agent_env().get("PATH")
+        found = shutil.which("python", path=path) if path else None
+        if not found:
+            return name, False, f"the project interpreter {self.python} was not found"
+        code, out = run_command([found, "-m", "pytest", "--help"], self.root)
+        if code == 0 and "--req" in out:
+            return name, True, found
+        return name, False, f"{found}: its pytest has no --req; run: framegate install-tools"
 
     def _has_module(self, module: str) -> bool:
         code, _ = run_command(

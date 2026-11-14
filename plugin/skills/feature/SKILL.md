@@ -23,26 +23,40 @@ If the output above says the spec is **already approved**, do not start the dial
 ask: continue it (default; then the run protocol below, by state as in its section B), or change
 the spec (that needs `framegate approve-spec` again and restarts from the tests).
 
-## Version (checked when this skill loaded)
+## Start check (your first step)
 
-This plugin is version 0.9.0. The installed command-line tool is:
+This plugin is version 0.9.0. Before anything else run this command yourself (it is not run
+at load: a command-line tool older than this plugin does not have it yet):
 
-!`framegate --version`
+    framegate preflight $ARGUMENTS --plugin-version 0.9.0
 
-- The same version: go on without a word.
-- Another version, and the output under "Setup" above says the spec is **already approved**
-  (work in progress that was started with that version): leave it as it is and go on without
-  a word. The next new feature, bug fix or refactor brings it in line.
-- Another version otherwise (nothing in progress here): bring the tool to this plugin's
-  version before anything else:
+It compares this plugin with the command-line tool and with the workflow tools in the
+project's environment, updates what it may and prints the rest. Act on every line, then go on:
 
-      uv tool install --force "git+https://github.com/Dunganh98/framegate@v0.9.0"
-
+- `Start check: ok ...` and `KEPT: ...` lines: without a word (work in progress keeps the
+  versions it was started with; the next new feature, bug fix or refactor brings them in line).
+- `UPDATED: ...`: one line to the user: what was brought to which version; a `CHANGED
+  versions` part as it is (a pinned package moved: the user decides whether to keep it).
+- `RUN: <command>`: the command-line tool is not at this plugin's version and cannot replace
+  itself while it runs. Run the command, then the start check again and act on its lines.
   Then run `framegate spec-brief $ARGUMENTS` again and use its output in place of the one
   under "Project conventions" below (that one came from the old version). When it worked, say
   nothing about it: the user saw the one update line when the session started. If it fails
   (no network, no access, the tool is running in another window), say so in one line and go
   on with the installed version.
+- `TELL THE USER: ...` (the plugin was updated while this session ran, so these skills are
+  the old ones): say it as it is and stop. Nothing else from this skill until Claude Code was
+  restarted.
+- `PROBLEM: ...`: say it in one line with its fix and ask: fix it first (default), or go on.
+- The command itself fails with `invalid choice: 'preflight'`: the installed tool is older
+  than this plugin and has no start step. If the output under "Setup" above says the spec is
+  **already approved**, go on without a word (work in progress keeps its tool). Otherwise
+  bring the tool to this plugin's version:
+
+      uv tool install --force "git+https://github.com/Dunganh98/framegate@v0.9.0"
+
+  then run the start check again and act on its lines as above (`framegate spec-brief
+  $ARGUMENTS` again included).
 
 ## Project conventions for the spec
 

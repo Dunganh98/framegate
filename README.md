@@ -79,6 +79,7 @@ In a terminal (the chat runs these for you):
 |---|---|
 | `framegate install-tools` | install what the workflow needs into the project's environment (setup does this first) |
 | `framegate doctor` | check the setup (no agents, no cost) |
+| `framegate preflight <name>` | the start check every feature begins with: plugin, CLI and the project's workflow tools at one version |
 | `framegate run <name>` | continue a feature until it needs you |
 | `framegate status <name>` | show its state |
 | `framegate approve <name>` | accept the waiting gate |
