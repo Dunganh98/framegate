@@ -105,7 +105,14 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
     "frame": {"forbidden_patterns": (list,)},
     "spec": {"id_pattern": (str,)},
     "roles": {"extra_dir": (str,)},
-    "git": {"base": (str,), "branch_prefix": (str,), "branch": (bool,), "markers": (str,)},
+    "git": {
+        "base": (str,),
+        "branch_prefix": (str,),
+        "branch": (bool,),
+        "markers": (str,),
+        "state_branch": (str,),
+        "publish_code_map": (bool,),
+    },
     "notify": {"toast": (bool,)},
     "phases": {},
     # name -> path, or name -> {path, note}: checked in parse_references
@@ -383,6 +390,15 @@ class Config:
     branch_prefix: str = "feat/"
     #: [git] markers: "refs" (private refs, never pushed) | "tags" (see MARKER_KINDS)
     git_markers: str = "refs"
+    #: [git] state_branch: "" (default) = framegate's own files are committed on the feature
+    #: branch, as ever. A name, e.g. "framegate/{base}" ({base} = [git] base without its
+    #: remote): they live on that branch, which is pushed and never merged into the base;
+    #: `framegate publish` builds the branch for the pull request from the product files
+    #: only (publish.py)
+    state_branch: str = ""
+    #: [git] publish_code_map: the code map ([docs] code_map) is product documentation and
+    #: goes to the pull request (default: it is one of framegate's files)
+    publish_code_map: bool = False
     #: [notify] toast: Windows toast at each gate, DONE and on error (no-op elsewhere / on failure)
     toast: bool = True
     #: [references] name -> folder the agents may read (see Reference)
@@ -727,6 +743,13 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
         )
     if not cfg.git_base.strip():
         raise ConfigError("[git] base must not be empty")
+    cfg.state_branch = git_cfg.get("state_branch", cfg.state_branch).strip()
+    if re.search(r"\{(?!base\})|(?<!\{base)\}|\s", cfg.state_branch):
+        raise ConfigError(
+            "[git] state_branch is a branch name; its one placeholder is {base} (e.g. "
+            '"framegate/{base}")'
+        )
+    cfg.publish_code_map = git_cfg.get("publish_code_map", cfg.publish_code_map)
     cfg.toast = data.get("notify", {}).get("toast", cfg.toast)
     cfg.references = parse_references(data.get("references", {}))
     for section in LANGUAGE_SECTIONS:

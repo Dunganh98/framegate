@@ -231,6 +231,36 @@ class PythonAdapter(LanguageAdapter):
             reqs += pytools.gate_tools([*commands.values(), self.cfg.format_fix_command])
         return reqs
 
+    #: the line the project's own pytest config needs so that the feature's tests run
+    #: without framegate's plugin (pytest.ini / setup.cfg / tox.ini `markers =`, pyproject.toml
+    #: `[tool.pytest.ini_options] markers = [...]`)
+    MARKER_LINE = "req(*ids): spec IDs this test proves"
+
+    def team_checks(self) -> list[tuple[str, bool, str]]:
+        """The tests carry `@pytest.mark.req(...)`. framegate's pytest plugin registers the
+        marker; without the plugin pytest warns about an unknown marker and fails with
+        `--strict-markers`. Asked of pytest itself, with the plugin switched off."""
+        code, out = run_command(
+            [self.python, "-m", "pytest", "--markers", "-p", "no:framegate"], self.root, timeout=300
+        )
+        name = "pytest without framegate knows the `req` marker"
+        if code != 0:
+            tail = " / ".join(out.strip().splitlines()[-2:])
+            return [(name, False, f"`pytest --markers -p no:framegate` failed: {tail}")]
+        if "@pytest.mark.req" in out:
+            return [(name, True, "registered in the project's pytest config")]
+        return [
+            (
+                name,
+                False,
+                f'add "{self.MARKER_LINE}" to `markers` in the pytest config of the project '
+                "(pytest.ini, or [tool.pytest.ini_options] in pyproject.toml): the pull "
+                "request carries the tests without framegate, and an unknown marker is a "
+                "warning there (an error with --strict-markers). A setup file: the next "
+                "approved spec commits it with the product",
+            )
+        ]
+
     def tools_version(self) -> str | None:
         """The version of the framegate package (the pytest plugin) in the project
         interpreter; "" = not installed there."""

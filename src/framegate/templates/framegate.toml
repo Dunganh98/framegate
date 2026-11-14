@@ -167,6 +167,17 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 #                                  # (refs/<name>; no push ever publishes them); "tags" = git
 #                                  # tags, for a CI job that runs `framegate gates`
 #                                  # (git push --tags)
+# state_branch = ""                # a repository a team shares: "framegate/{base}" keeps
+#                                  # framegate's files (this file, specs, metrics,
+#                                  # .framegate/, the code map) on that branch: pushed, never
+#                                  # merged into the base, which holds none of them. `spec`
+#                                  # merges it into the new feature branch; `framegate
+#                                  # publish <f>` pushes it and a branch with the product
+#                                  # only for the pull request. First use: `framegate state
+#                                  # init`. "" = framegate's files are committed on the
+#                                  # feature branch and go into its pull request
+# publish_code_map = false         # with state_branch: true = the code map is product
+#                                  # documentation and goes to the pull request
 
 [notify]
 # toast = true                     # Windows toast at each gate, DONE and on error (env

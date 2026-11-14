@@ -129,17 +129,40 @@ fail for no reason. Reading files and git log/diff/status are fine.
    backlog (tracked: it survives the cleanup; proposals not kept are counted if they come
    back) and prints the kept ones; say in one line where they are (`framegate backlog`).
    Applying proposals is separate work, only if the user asks; the full file on request.
-2. Then ask in one message, each with its default:
-   1. When the remote is on GitHub (`git remote get-url origin` names github.com): "Create
-      the PR with the final summary as its description? (pushes <branch>)", default no.
-      Any other host (Azure DevOps, GitLab, ...): "Push <branch>, so you can open the pull
-      request there?", default no;
-   2. "Clean up the run files now (specs and metrics stay)?", default yes.
-3. Only on an explicit yes: `git push -u origin <branch>`. Then, on GitHub only:
-   `gh pr create --base <[git] base, default main> --head <branch> --title "<f>: <one line>"
-   --body-file <out>/<f>/final_summary.md`. On any other host do not create the pull
-   request: print the branch name and say that `<out>/<f>/final_summary.md` is the text for
-   its description (copy it before the cleanup). Do it before the cleanup (the cleanup
-   deletes the file). Never push without that yes.
+2. Run `framegate publish <f> --dry-run` (it changes nothing). Its first line decides
+   which of the two offers below applies:
+   - `State branch: off`: the feature branch itself is what gets pushed (2a, 3a).
+   - `Publish <f> (dry run ...)`: the project keeps framegate's files apart from the code
+     (`[git] state_branch`): the pull request gets a branch with the product only (2b, 3b).
+   Then ask in one message, each with its default.
+   - 2a. When the remote is on GitHub (`git remote get-url origin` names github.com): "Create
+     the PR with the final summary as its description? (pushes <branch>)", default no.
+     Any other host (Azure DevOps, GitLab, ...): "Push <branch>, so you can open the pull
+     request there?", default no.
+   - 2b. Say in two or three lines what the dry run found: how many product files go to the
+     branch `<branch>` for the team (name the ones that are not source or tests, e.g.
+     `.gitignore` or a packaging file, so the user can say no), that framegate's own files
+     go to the state branch and never to the pull request, and where the pull request would
+     go. Ask: "Publish it and create the pull request?", default no ("publish without a
+     pull request" is a valid answer).
+   - In both cases also: "Clean up the run files now (specs and metrics stay)?", default
+     yes.
+3. Only on an explicit yes, and before the cleanup (the cleanup deletes the final summary).
+   Never push without that yes.
+   - 3a. `git push -u origin <branch>`. Then, on GitHub only:
+     `gh pr create --base <[git] base, default main> --head <branch> --title "<f>: <one line>"
+     --body-file <out>/<f>/final_summary.md`. On any other host do not create the pull
+     request: print the branch name and say that `<out>/<f>/final_summary.md` is the text for
+     its description (copy it before the cleanup).
+   - 3b. `framegate publish <f> --pr --title "<f>: <one line>"` (without `--pr` when the
+     user wants no pull request). Never `git push` yourself here: the feature branch in this
+     checkout holds framegate's files and stays local; `publish` builds and pushes the
+     product branch and the state branch. Relay its result in two lines: what was pushed,
+     and the pull request's address, or (no `gh` / `az` on this machine, another host) the
+     address to open it by hand and that `<out>/<f>/final_summary.md` is its description
+     (copy it before the cleanup). If it refuses (uncommitted changes, a remote branch of
+     that name with other content, a state branch that moved): its reason in one line and
+     the decision with your default; `--force-with-lease` only when the user says to
+     replace the remote branch.
 4. Cleanup on yes: `framegate cleanup <f>`. Its result in one line.
 5. One line: after the PR is merged, `/framegate:status <f>` offers removing the feature's tags.

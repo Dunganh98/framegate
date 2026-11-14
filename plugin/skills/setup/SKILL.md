@@ -41,6 +41,12 @@ prints `CHANGED versions`, show that line as it is (a pinned package moved: the 
 whether to keep it). If the install fails, show the error and stop: the setup cannot be
 checked without the tools. A language framegate installs nothing for says so; go on.
 
+Then run `framegate state`. If it prints `State branch: <name> (...)` and this checkout has
+no `framegate.toml`, the repository is set up already and keeps framegate's files on that
+branch (pushed by whoever set it up): do not draft anything. Say so in one line, tell the user
+to start with `/framegate:feature <name>` (it fetches the branch and brings the files in), and
+stop here. An error ("no framegate.toml found") or `State branch: off` means: go on.
+
 ## 1. Read the repo (no edits yet)
 
 Find out, from files only (Read / Glob / Grep):
@@ -96,7 +102,14 @@ the code cannot tell; typical ones: which tests are slow or need special setup
 (they stay out of the step checks); what must never change and how tests leave new members out;
 how test data for a rare situation is found; what is off-limits for agents; whether mutation
 testing should run (and its threshold for glue code vs libraries); the base branch; which
-paths must always get the user's own look at the final gate (`[risk] never_auto`). The toml,
+paths must always get the user's own look at the final gate (`[risk] never_auto`).
+
+Always ask this one when the repository has a remote (`.git/config` names one): "Other people
+work in this repository. Keep framegate's own files (config, specs, metrics, project facts,
+code map) out of their code? A: yes, on a separate branch `framegate/<base>` that is pushed
+but never merged; pull requests carry only source and tests (default when the remote is
+shared with a team) / B: no, commit them with the code (default for a repository of your
+own)." The toml,
 the knowledge file or the code map in full only on request.
 
 ## 4. Write
@@ -118,6 +131,18 @@ file under ~150 lines: facts, not prose), and write the code map (`[docs] code_m
     Where to look for: <a task> -> `<file>`
 
 Every later feature's SUMMARY phase updates the sections it touches.
+
+If the answer to the shared-repository question was A: set `[git] state_branch =
+"framegate/{base}"` in framegate.toml; take the lines `framegate init` added to `.gitignore`
+out again (`.gitignore` is the team's file; `framegate state init` ignores the run files
+through `.git/info/exclude`); if the project has a folder named like one of framegate's
+(`specs/`, `metrics/`), point framegate's path elsewhere (`[paths] metrics =
+".framegate/metrics"`). For Python also add the line `req(*ids): spec IDs this test proves`
+to `markers` in the project's own pytest config (`pytest.ini`, or `[tool.pytest.ini_options]`
+in `pyproject.toml`; create the `markers` list if there is none): the pull request carries
+the tests without framegate, and pytest must know the marker there. Tell the user about this
+one line: it is the only change to a file of theirs, and the first feature's pull request
+brings it to the base.
 
 If the project is installed into its environment from its packaging files (a Python editable
 install, for example), set `[env] refresh` in framegate.toml to the command that redoes it,
@@ -144,6 +169,12 @@ with the decision and your default ("mutmut is not installed: mutation testing o
 Default: yes"). The full output (`framegate doctor`) on request; `framegate doctor --full` also
 times the whole test suite (the final regression run), offer it in one line.
 
+With `[git] state_branch` set, doctor warns that the state branch is missing until this
+last step, done once every other point is settled (a later edit of these files in this
+checkout would no longer match the branch): run `framegate state init`. It creates the
+state branch from framegate's files in this checkout and pushes nothing. Its result in one
+line. From here on the files are changed on a feature branch only.
+
 ## 6. Offer a smoke run, in one line
 
 "A smoke run (a tiny throwaway feature through the whole flow, about USD 2-4 and 15-30 minutes)
@@ -156,11 +187,15 @@ language):
     step. No other code changes.
 
 and to remove it afterwards: `framegate cleanup smoke --tags --force`, then switch back to the
-base branch and delete the branch `feat/smoke`.
+base branch and delete the branch `feat/smoke` (with a state branch: the smoke feature is
+never published).
 
 ## 7. Finish
 
-In two or three lines: what to commit (framegate.toml, `.framegate/project.md`, the code map,
+With `[git] state_branch` set, say in two or three lines: framegate's files are on the state
+branch (step 5) and nothing of them is to be committed on the base; the first `framegate
+publish` (offered at the end of a feature) pushes that branch; and the allow rules below.
+Else, in two or three lines: what to commit (framegate.toml, `.framegate/project.md`, the code map,
 `specs/_template/`, `.gitignore`, a tag helper if added) and that the chat skills need the CLI
 allowed: `"Bash(framegate *)"` and `"PowerShell(framegate *)"` in `permissions.allow` of
 `.claude/settings.local.json` (`framegate doctor` warns while they are missing; offer to add
