@@ -25,9 +25,11 @@ Sections:
 11. Open questions
 
 Do not write a cost table: framegate appends cost, time and turns per phase. The same holds
-for "Pipeline follow-up" in final_facts.md (deploy / CI changes the feature makes necessary, to
-do as a separate step): framegate appends it to the summary and shows it on the brief. It is no
-gate item: never a question, a decision or a "Left out" line, and do not repeat it.
+for "Pipeline follow-up" (deploy / CI changes the feature makes necessary, to do as a separate
+step) and "Reference follow-up" (what a reference project should change because of this
+feature) in final_facts.md: framegate appends them to the summary and shows them on the brief.
+They are no gate items: never a question, a decision or a "Left out" line, and do not repeat
+them.
 
 ## 2. {out}/{feature}/final_brief.md (what the human reads; ~20 lines when nothing went wrong)
 

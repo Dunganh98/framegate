@@ -22,7 +22,7 @@ else:  # pragma: no cover - exercised only on 3.10
     import tomli as tomllib
 
 from framegate import __version__, pytools, release_requirement
-from framegate.adapters import wsl
+from framegate.adapters import python_port, wsl
 from framegate.adapters.base import (
     Check,
     CheckResult,
@@ -57,7 +57,9 @@ PYTEST_INCOMPLETE = {2: "pytest interrupted (exit 2)", 3: "pytest internal error
 BRIEF = """\
 Language: Python. Test framework: pytest (framegate plugin provides the `req` marker).
 - Stubs (SPEC phase): full type-annotated signatures, docstrings naming the spec IDs they
-  serve, body `raise NotImplementedError`. Stubs must import cleanly.
+  serve, body `raise NotImplementedError`. Stubs must import cleanly. Except the code files
+  of a port (the spec's "Ported from"): their stubs are the reference's text with the bodies
+  replaced, no spec IDs added (written in the SPEC phase by `framegate port-stubs`).
 - Tag every test with the spec IDs it covers: `@pytest.mark.req("XXX-R-001", "XXX-E-002")`
   directly on the test function (or class). Do not use module-level `pytestmark`.
 - Edge cases: assert the exact value, or `pytest.raises(ExcType, match="...")`.
@@ -352,6 +354,37 @@ class PythonAdapter(LanguageAdapter):
             return []
         files = set(tests.rglob("test_*.py")) | set(tests.rglob("*_test.py"))
         return sorted(files)
+
+    # ---------- ports (adapters/python_port.py) ----------
+    def reference_stub(self, source: bytes) -> tuple[bytes, list[str]] | None:
+        return python_port.stub_source(source)
+
+    def stub_import_problems(self, target: str, text: bytes, ported: dict[str, str]) -> list[str]:
+        roots = [self.root / r for r in self.cfg.src_roots]
+        bases = list(dict.fromkeys([self.root, *roots, *(r.parent for r in roots)]))
+        tops = sorted(
+            {m.split(".")[0] for _, level, m in python_port.imported_modules(text) if not level}
+            - set(sys.stdlib_module_names)  # known without asking the interpreter
+        )
+        return python_port.import_problems(
+            self.root, bases, target, text, ported, self.importable(tops)
+        )
+
+    def importable(self, names: Sequence[str]) -> set[str] | None:
+        """The top-level module names the project's interpreter can import (None: it could
+        not be asked)."""
+        if not names:
+            return set()
+        probe = (
+            "import importlib.util, sys\n"
+            "print('FOUND', *[m for m in sys.argv[1:] if importlib.util.find_spec(m)])"
+        )
+        code, out = run_command([self.python, "-c", probe, *names], self.root)
+        found = [x for x in out.splitlines() if x.startswith("FOUND")]
+        return set(found[-1].split()[1:]) if code == 0 and found else None
+
+    def test_names(self, source: bytes) -> list[str] | None:
+        return python_port.test_names(source)
 
     def collect_req_tags(self) -> dict[str, list[str]]:
         found: dict[str, list[str]] = {}

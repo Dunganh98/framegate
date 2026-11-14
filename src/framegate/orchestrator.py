@@ -33,6 +33,7 @@ from framegate import (
     backlog,
     followup,
     notify,
+    ported,
     procs,
     references,
     risk,
@@ -54,6 +55,7 @@ from framegate.checks import structure as structure_check
 from framegate.checks.frame_diff import CHECK_NAME as FRAME_CHECK
 from framegate.checks.frame_diff import (
     PROTECTED_CHANGED,
+    approved_tag,
     knowledge_tag,
     path_matches,
     setup_state,
@@ -105,6 +107,7 @@ from framegate.state import (
     clear_phase,
     clear_reqs,
     commit,
+    commit_paths,
     delete_marker,
     fresh_progress,
     git,
@@ -309,11 +312,12 @@ LOOK_AROUND = (
 ORIENTATION_SKIP = {"prompts", "progress.log", "progress.cursor", "progress.json", "parked"}
 #: deploy / CI files are no feature's to change (followup.py): the need is noted, not met
 PIPELINE_NOTE = (
-    "If the work needs a change in a deploy, CI or other locked file (a Dockerfile, a compose "
-    "or k8s file, a CI yml or script, any protected path), do not attempt it: add one line "
-    "to your step note, `- PIPELINE FOLLOW-UP [<file>]: <what must change and why>`. It is "
-    "raised at the final gate as a separate step after the feature. Park only if your step "
-    "cannot be done without that change."
+    "If the work needs a change in a deploy or CI file (a Dockerfile, a compose or k8s file, "
+    "a CI yml or script; a path this project locks the same way), do not attempt it: add one "
+    "line to your step note, `- PIPELINE FOLLOW-UP [<file>]: <what must change and why>`. It "
+    "is raised at the final gate as a separate step after the feature. Park only if your "
+    "step cannot be done without that change. Only for such a file: a note about anything "
+    "else (the code, the spec, another project, an idea) is not a pipeline follow-up."
 )
 NO_STOP = (
     "Nobody answers questions during the run. Where the spec is ambiguous, assume what fits the "
@@ -331,6 +335,11 @@ REDO_NOTE = (
 
 #: the failed "check" of a refactor step that left the source as it was
 IDLE_STEP = "refactor step changed nothing"
+#: a plan step of a feature whose run changed nothing (gates.py, scope "idle")
+IDLE_PROGRESS = (
+    "nothing changed since the last green gate: only this step's tests run "
+    "(lint, frame check, suite: that gate's results)"
+)
 
 TASKS = {
     # a bug fix / a refactor: the code exists, so the first proof is not "red against stubs"
@@ -724,6 +733,9 @@ class Orchestrator:
         port = references.port_note(self.cfg, feature, kind)
         if port:
             task += "\n\n" + port
+        other = references.followup_note(self.cfg, feature, kind)
+        if other:
+            task += "\n\n" + other
         task += "\n\n" + LOOK_AROUND + "\n\n" + self.orientation(feature)
         if kind in BRIEF_PHASES:
             # the brief names only the commands this run's tool rules allow
@@ -1297,6 +1309,9 @@ class Orchestrator:
                 # a plan step: its tests and the whole suite; a run after the review ("fix"):
                 # the feature's tests, the final gates run the suite right after
                 scope = str(item.get("gate") or "step")
+                if not question and self.unchanged_since_green(feature, prog, item):
+                    scope = "idle"  # only the step's tests; the rest is the last gate's result
+                    self.progress(feature, f"[{label}] {IDLE_PROGRESS}")
                 rep = None if question else gate_report(self.adapter, feature, scope)
                 if rep is not None and rep.ok and self.idle_refactor_step(feature, item):
                     # green tests prove nothing here: they were green before the step
@@ -1339,10 +1354,24 @@ class Orchestrator:
                 excerpt=rep.excerpt() if not rep.ok else "",
                 seconds=round(time.time() - t0),
                 grown=rep.structure.get("grown") or [],
+                **({"fidelity": rep.fidelity} if rep.fidelity else {}),
             )
             if rep.ok:
-                commit(self.cfg, f"{feature}: {label}")
-                self.progress(feature, f"[{label}] green (attempt {attempt}), committed")
+                done = commit(self.cfg, f"{feature}: {label}")
+                drift = references.differing(rep.fidelity)
+                self.progress(
+                    feature,
+                    f"[{label}] green (attempt {attempt}), "
+                    + ("committed" if done else "nothing to commit")
+                    + (
+                        f"; {drift} ported file(s) differ from the reference (not blocking; "
+                        f"{self.cfg.paths.out}/{feature}/{references.FIDELITY_DIR}/)"
+                        if drift
+                        else ""
+                    ),
+                )
+                if scope in ("step", "idle"):  # the gates that hold the whole suite
+                    prog["green_gate"] = git(self.cfg, "rev-parse", "HEAD").strip()
                 prog["attempt"] = 0
                 prog["feedback"] = ""
                 save_progress(self.cfg, feature, prog)
@@ -2004,12 +2033,18 @@ class Orchestrator:
                 f"### {scope_coverage.NAME} (note, not blocking): "
                 f"{cover.summary or cover.status}\n~~~\n{cover.output}\n~~~"
             )
+        # a port: which of the reference's tests are in the target files (a note)
+        report = ported.carried_report(self.cfg, self.adapter, feature, prog.get("references"))
+        carried = ported.carried_summary(report, "test_checks.md")
+        if report:
+            sections.append(ported.checks_section(report))
         path = self.fdir(feature) / "test_checks.md"
         path.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
         self.progress(
             feature,
             "[TESTS] checks: "
             + ", ".join(f"{n} {s}" for n, s in status.items())
+            + (f"; {carried.split(';')[0]}" if carried else "")
             + (f"; existing members asserted without a fixture test: {listed}" if listed else "")
             + (f"; scope coverage: {uncovered}" if uncovered else ""),
         )
@@ -2221,6 +2256,45 @@ class Orchestrator:
             return False
         return not git(self.cfg, "status", "--porcelain", "--", *self.cfg.src_roots).strip()
 
+    def unchanged_since_green(
+        self, feature: str, prog: dict[str, Any], item: dict[str, Any]
+    ) -> bool:
+        """A plan step of a feature or a bug fix whose implementer run changed nothing: HEAD
+        is the commit the last green step gate left and the workflow's paths are clean. That
+        gate checked this very code (lint, frame, the whole suite, this feature's later
+        steps left out), so only the step's own tests are new (gates.py, scope "idle"). Seen
+        live (a port): step 1 ported two whole files, step 4 "needed no code change", and its
+        gate ran the suite again (4.5 min). Not for a refactor: there an idle step fails."""
+        if item.get("kind") != "step" or item.get("gate") or not prog.get("green_gate"):
+            return False
+        if feature_mode(self.cfg, feature) == "refactor":
+            return False
+        try:
+            if git(self.cfg, "rev-parse", "HEAD").strip() != prog["green_gate"]:
+                return False
+            return not git(self.cfg, "status", "--porcelain", "--", *commit_paths(self.cfg)).strip()
+        except GitError:
+            return False
+
+    def port_context(self, feature: str, prog: dict[str, Any]) -> str:
+        """Task lines of a port: the ported files the earlier steps changed that differ from
+        the reference (the numbers of the fidelity report), so drift is restored while the
+        files are still being written and not after the review."""
+        try:
+            touched = references.touched_targets(self.cfg, feature, approved_tag(feature))
+            if not touched:
+                return ""
+            rep = references.fidelity(self.cfg, feature, prog.get("references"), only=touched)
+            lines = references.step_fidelity_lines(rep)
+        except Exception:  # a note, never a reason to stop the step
+            return ""
+        if not lines:
+            return ""
+        return (
+            "\n\nPorted files as the steps before this run left them (not blocking; your own "
+            "files are shown at the step gate):\n" + "\n".join(lines)
+        )
+
     def step_batches(self, steps: list[PlanStep], single: bool = False) -> list[list[PlanStep]]:
         """Consecutive steps share one implementer run while their spec IDs add up to at most
         [agents] step_batch_ids (0 = one run per step): a small plan costs one run instead of
@@ -2372,7 +2446,7 @@ class Orchestrator:
                     note=note,
                 )
             task += self.parked_context(prog, steps) + self.provisional_context(prog)
-            task += self.size_context(feature)
+            task += self.size_context(feature) + self.port_context(feature, prog)
             if redo:
                 task += REDO_NOTE.format(**self.placeholders(feature))
             for r in redo:
@@ -2625,6 +2699,7 @@ class Orchestrator:
             note=self.note_path(feature, "review-fixes"),
         )
         task += self.parked_context(prog, steps) + self.provisional_context(prog)
+        task += self.port_context(feature, prog)
         shape = [x for r in redo for x in r.get("structure") or []]
         if shape:
             task += (
@@ -2954,8 +3029,8 @@ class Orchestrator:
             text += "\n" + "\n".join(spec).replace(
                 "## Spec changes from your answers", "## Spec changes from your answers (generated)"
             )
-        todo = followup.section_lines(followup.items(self.cfg, feature))
-        if todo:  # generated: the summary agent cannot drop it
+        for todo in followup.all_sections(self.cfg, feature):
+            # generated: the summary agent cannot drop it
             text += "\n\n" + "\n".join(todo).replace(": ", " (generated by framegate): ", 1)
         summary.write_text(
             text + "\n\n## Cost, time, turns per phase (generated by framegate)\n\n" + table + "\n",
@@ -2982,7 +3057,7 @@ class Orchestrator:
             self.code_map_note(feature),
             feature_mode(self.cfg, feature),
             parse_causes(steps.read_text(encoding="utf-8") if steps.is_file() else ""),
-            followup.section_lines(followup.write(self.cfg, feature)),
+            followup.facts_lines(self.cfg, feature),
         )
         (d / "final_facts.md").write_text(facts, encoding="utf-8")
 
@@ -3485,22 +3560,23 @@ class Orchestrator:
                 mfile.write_text("\n".join([METRICS_HEADER, *lines[1:]]) + "\n", encoding="utf-8")
         with open(mfile, "a", encoding="utf-8") as fh:
             fh.write(",".join(map(str, row)) + "\n")
-        self.keep_pipeline_followup(feature)
+        self.keep_followups(feature)
         commit(self.cfg, f"{feature}: workflow metrics")
 
-    def keep_pipeline_followup(self, feature: str) -> None:
-        """The feature ends: its pipeline follow-ups (followup.py) go to
-        {specs}/<f>/pipeline_followup.md, committed with the metrics row (`framegate cleanup`
-        keeps the spec folder), and to an event."""
-        todo = followup.write(self.cfg, feature, durable=True)
-        if not todo:
-            return
-        log_event(self.cfg, feature, "pipeline_followup", items=[it.line() for it in todo])
-        self.progress(
-            feature,
-            f"Pipeline follow-up, {len(todo)} item(s) to do as a separate step (deploy / CI): "
-            f"{self.cfg.paths.specs}/{feature}/{followup.FILE}",
-        )
+    def keep_followups(self, feature: str) -> None:
+        """The feature ends: its pipeline and reference follow-ups (followup.py) go to
+        {specs}/<f>/pipeline_followup.md / reference_followup.md, committed with the metrics
+        row (`framegate cleanup` keeps the spec folder), and to an event each."""
+        for kind in followup.KINDS:
+            todo = followup.write(self.cfg, feature, durable=True, kind=kind)
+            if not todo:
+                continue
+            log_event(self.cfg, feature, kind.name, items=[it.line() for it in todo])
+            self.progress(
+                feature,
+                f"{kind.section}, {len(todo)} item(s) {kind.done}: "
+                f"{self.cfg.paths.specs}/{feature}/{kind.file}",
+            )
 
     def advance(
         self, feature: str, prog: dict[str, Any], phase: str, sub: str | None = None

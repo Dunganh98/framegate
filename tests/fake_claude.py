@@ -15,6 +15,10 @@ Scenario keys:
   assume: true -> the first successful IMPLEMENT run logs one assumption in steps.md
   followup: true -> every IMPLEMENT step note has one pipeline follow-up line (the
     Dockerfile), and REVIEW writes one of its own (the CI file) into review.md
+  ref_followup: true -> every IMPLEMENT step note, the REVIEW run's review.md and the TRIAGE
+    run's triage.md have one reference follow-up line each
+  whole_files: true -> the IMPLEMENT run of step 1 also builds step 2's neg() (a port lands
+    whole files), so the run of step 2 changes nothing
   review_finding: true -> the reviewer writes one failing test (bool accepted as int); TRIAGE
     marks it VALID
   review_invalid: true -> the reviewer also writes an invalid finding (negative ints rejected);
@@ -449,7 +453,8 @@ def main() -> int:
         nums = [int(x) for x in m.group(1).split(", ")] if m else []
         step = nums[-1] if nums else 0
         parked = state.setdefault("parked", [])
-        neg = (NEG_DONE if "# neg-done" in cur or step == 2 else NEG_STUB) if two else ""
+        done = "# neg-done" in cur or step == 2 or scen.get("whole_files")
+        neg = (NEG_DONE if done else NEG_STUB) if two else ""
         # strict once the code is, or once a failing review test (gate feedback) asks for it
         strict = "type(a) is not int" in cur or lang["valid_name"] in prompt
         # a provisional step whose test fix the human did not approve: the tests stand
@@ -496,6 +501,11 @@ def main() -> int:
                     "- PIPELINE FOLLOW-UP [deploy/Dockerfile]: COPY the new demo/ folder "
                     "(the image does not contain it)\n"
                 )
+            if scen.get("ref_followup"):
+                note += (
+                    "- REFERENCE FOLLOW-UP [`demo/__init__.py`]: refuse bools "
+                    "(fixed here; the reference accepts them)\n"
+                )
             if scen.get("mode") == "bugfix":
                 note += (
                     "- ROOT CAUSE: add() subtracted its arguments (src/demo/__init__.py: add)\n"
@@ -525,6 +535,11 @@ def main() -> int:
                 "No findings.\n- PIPELINE FOLLOW-UP [ci/tests.yml]: add tests/test_demo.py to "
                 "the unit selection (CI does not run it)\n"
             )
+        if scen.get("ref_followup"):
+            lines += (
+                "- REFERENCE FOLLOW-UP [demo/__init__.py]: add() has no check for None "
+                "(the reference crashes the same way)\n"
+            )
         write("out/demo/review.md", lines or "No findings.\n")
     elif phase == "TRIAGE":
         lines = ""
@@ -533,6 +548,11 @@ def main() -> int:
         if lang.get("invalid_name", "-") in prompt:
             pathlib.Path(lang["review_invalid"][0]).unlink()
             lines += f"- {lang['invalid_name']}: INVALID — the spec allows negative ints\n"
+        if scen.get("ref_followup"):
+            lines += (
+                "- REFERENCE FOLLOW-UP [tests/test_demo.py]: add the bool test "
+                "(valid here, missing there)\n"
+            )
         write("out/demo/triage.md", lines)
     elif phase == "DIAGNOSIS":
         owner = scen.get("diagnosis", "src")

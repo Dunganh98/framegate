@@ -421,6 +421,24 @@ class LanguageAdapter(abc.ABC):
         (e.g. it did not fail because of the stub), else None. Default: every failure counts."""
         return None
 
+    # ---------- ports (ported.py; None = this language has no support: said, not guessed) ----
+    def reference_stub(self, source: bytes) -> tuple[bytes, list[str]] | None:
+        """The stub of a ported code file: the reference file's text with every function body
+        replaced by "not implemented" and everything else byte for byte, plus notes about
+        what was left whole. None: not supported (the stub is written by hand)."""
+        return None
+
+    def stub_import_problems(self, target: str, text: bytes, ported: dict[str, str]) -> list[str]:
+        """Imports of a generated stub (repo-relative `target`) that will not resolve in this
+        repository, one line each. `ported`: reference path -> target path of the port's code
+        files (a module that is ported under another name)."""
+        return []
+
+    def test_names(self, source: bytes) -> list[str] | None:
+        """The names of the test functions of a test file's text, in file order. None: not
+        supported for this language."""
+        return None
+
     # ---------- gates ----------
     @abc.abstractmethod
     def default_gate_commands(self) -> dict[str, list[str]]:

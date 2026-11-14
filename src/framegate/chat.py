@@ -12,7 +12,7 @@ import time
 from typing import Any
 
 from framegate import brief as briefs
-from framegate import followup, procs, references, risk
+from framegate import followup, ported, procs, references, risk
 from framegate.orchestrator import (
     PROGRESS_CURSOR,
     PROGRESS_LOG,
@@ -466,7 +466,7 @@ def _final_brief(
             f"Left out of the questions: {len(plan.left_out)} gate item(s) (asked twice, "
             "answered, or a note; on request)."
         )
-    lines += followup.brief_lines(followup.items(orch.cfg, feature))
+    lines += followup.all_brief_lines(orch.cfg, feature)
     lines += _spec_diff_lines(orch, feature)
     lines.append(
         f"On request: the full summary ({out}/{feature}/final_summary.md), the gate report "
@@ -555,6 +555,9 @@ def _outcomes(
     fidelity = references.fidelity_summary(last.get("fidelity") or {})
     if fidelity:
         lines.append("  " + fidelity)
+    carried = ported.brief_line(orch.cfg, orch.adapter, feature, prog.get("references"))
+    if carried:
+        lines.append("  " + carried)
     shape = last.get("structure") or {}
     longest = shape.get("longest") or []
     if shape.get("files"):

@@ -5,6 +5,11 @@ scope step   fast checks after each implementation step (tests of current + earl
 scope fix    the same checks for a run after the review (review fixes, structure fixes, final
              repair) with the feature's tests and the review tests only: the final gates run
              the whole suite right after
+scope idle   a plan step whose run changed nothing since the last green step gate (same
+             commit, clean tree): only the step's tests; the rest is that gate's result
+             (the orchestrator picks it, never a refactor: an idle refactor step fails)
+A port's step and fix gates also show the ported files the run touched against the
+reference (not blocking; references.step_fidelity_lines).
 scope final  everything, including coverage on the diff, traceability and mutation testing,
              then the structure report (sizes of the changed files, longest methods), for a
              port the fidelity report (each target file against its reference file) and the
@@ -357,6 +362,16 @@ FIX_TESTS = "tests (this feature)"
 REVIEW_TESTS = "review tests"
 
 
+#: idle scope (a plan step whose run changed nothing since the last green step gate: same
+#: commit, clean tree): only the step's tests run. Seen live (da-argos, a port): step 1
+#: ported two whole files, step 4 "needed no code change", and its gate ran the whole suite
+#: again (4.5 min) on the code the gate before it had just checked.
+IDLE_NOTE = (
+    "Nothing changed since the last green step gate (same commit, clean tree): lint, the "
+    "frame check and the whole suite are that gate's results; only this step's tests ran."
+)
+
+
 def review_tests_checked(adapter: LanguageAdapter, feature: str) -> bool:
     """Does a fix gate run the review tests folder on top of the feature's IDs (a review test
     without a spec-ID tag)? Not while a step is parked: findings on its IDs wait for the redo,
@@ -388,9 +403,13 @@ def checks(
     exp: ExpectedRed | None = None,
 ) -> list[Check]:
     tag = frame_diff.approved_tag(feature)
-    c = list(adapter.lint_checks(tag))
-    c.append(Check(frame_diff.CHECK_NAME, lambda: frame_diff.check(adapter, feature)))
-    if scope in ("step", "fix"):
+    # an idle step (scope "idle"): the code is the one the last green gate checked, so only
+    # the step's own tests are new; lint, the frame check and the whole suite are its results
+    idle = scope == "idle"
+    c = [] if idle else list(adapter.lint_checks(tag))
+    if not idle:
+        c.append(Check(frame_diff.CHECK_NAME, lambda: frame_diff.check(adapter, feature)))
+    if scope in ("step", "fix", "idle"):
         reqs = read_reqs(adapter.cfg)
         contested = read_contested(adapter.cfg)
 
@@ -554,8 +573,10 @@ def gate_report(
                 emit(f"- contested tests, left out: {', '.join(exp.contested)}")
             emit("- coverage, diff coverage and mutation: skipped until the redo")
         emit("")
+    if scope == "idle":
+        emit(IDLE_NOTE)
     try:
-        note = adapter.format_fix(frame_diff.approved_tag(feature))
+        note = "" if scope == "idle" else adapter.format_fix(frame_diff.approved_tag(feature))
     except Exception as e:  # the checks below still report the formatting
         note = f"skipped ({type(e).__name__}: {e})"
     if note:
@@ -621,7 +642,13 @@ def gate_report(
             emit(line)
         if scope == "final" or shown:
             shape = report.as_dict()
-    fidelity = port_fidelity(adapter.cfg, feature, emit) if scope == "final" else {}
+    fidelity = (
+        port_fidelity(adapter.cfg, feature, emit)
+        if scope == "final"
+        else step_fidelity(adapter.cfg, feature, emit)
+        if feature
+        else {}
+    )
     extra = run_extra_checks(adapter, feature, emit, durations) if scope == "final" else {}
     return GateReport(
         not failed,
@@ -652,6 +679,28 @@ def port_fidelity(cfg: Config, feature: str, emit: Callable[[str], None]) -> dic
     for line in lines:
         emit(line)
     return rep
+
+
+def step_fidelity(cfg: Config, feature: str, emit: Callable[[str], None]) -> dict[str, object]:
+    """A step or fix gate of a port: the target files the run touched (uncommitted changes)
+    against their reference files, with the same numbers as the final report. Reported, never
+    part of the verdict; the lines are part of the report, so a failed attempt's feedback
+    holds them. Seen live: a ported file's wording differed from the reference from step 1
+    on and only the review said so (three structure findings, one more run and gate)."""
+    try:
+        touched = references.touched_targets(cfg, feature)
+        if not touched:
+            return {}
+        pins = load_progress(cfg, feature).get("references")
+        rep: dict[str, object] = references.fidelity(cfg, feature, pins, only=touched)
+        lines = references.step_fidelity_lines(rep)
+    except Exception:  # a report, never a reason to fail the gate
+        return {}
+    if lines:
+        emit("")
+    for line in lines:
+        emit(line)
+    return rep if lines else {}
 
 
 def save_full_output(adapter: LanguageAdapter, feature: str, check: str, text: str) -> str:

@@ -67,13 +67,25 @@ Feature code: XXX   <!-- 2–10 uppercase chars, prefix for all IDs, e.g. HI2 --
 ## Ported from
 <!-- Only when this feature copies code of a reference ("file for file, same names"); else
      "None." and nothing below. Then the tests are the reference's tests, carried over, and the
-     code is the reference's code, changed only as "What may differ" says; the final gate shows
-     how far each target file is from its source (not blocking).
+     code is the reference's code, changed only as "What may differ" says; every step gate and
+     the final gate show how far each target file is from its source (not blocking).
      Reference: its name in `[references]`. Commit: the commit you read (spec-brief shows it).
      One row per file, with paths relative to the reference's folder / to this repository;
      Kind `tests` = a test file of the reference to carry over, `code` = everything else.
+     The stubs of the `code` rows are not written by hand: `framegate port-stubs <feature>`
+     writes each target as the reference's text with the function bodies replaced.
      What may differ: every allowed deviation, one bullet each (import names, things only this
-     repository has, things left out). A difference that is not listed is a review finding. -->
+     repository has, things left out). A difference that is not listed is a review finding.
+     Ticket / plan / ADR numbers and repository names inside the reference's docstrings and
+     comments stay the reference's, word for word (they say where the code comes from, and
+     every reworded line is a difference to explain); list a bullet here only where this
+     repository must not carry one.
+     Kept quirks: behaviours of the reference the port keeps on purpose although a stricter
+     reading of this spec would forbid them (a regex `$` that accepts a trailing newline,
+     `json.dumps` writing NaN), one bullet each: `- <file: function>: <the behaviour>`. The
+     reviewer writes no finding about them and the triage dismisses one by citing the line.
+     A behaviour of the reference that IS to be fixed here is no quirk: it is a requirement
+     of this spec, and a line under "Reference follow-up". -->
 Reference:
 Commit:
 
@@ -84,6 +96,9 @@ Commit:
 What may differ:
 -
 
+Kept quirks:
+-
+
 ## Pipeline follow-up
 <!-- Deploy files (Dockerfile, compose, k8s manifests, ...) and CI files (yml, scripts) are
      never changed by a feature, not even now: they stay locked. What must change there
@@ -91,7 +106,29 @@ What may differ:
      (the final summary raises it). One bullet per change: `- <file>: <what must change>
      (<why>)`, e.g. `- platform/deploy/Dockerfile: COPY the new runner/ folder (the image
      must contain the new package)`, a new dependency the image must install, a new test
-     selection for CI. "None." when the feature needs no such change. -->
+     selection for CI. Only deploy / CI files: nothing else belongs here. "None." when the
+     feature needs no such change. -->
+None.
+
+## Reference follow-up
+<!-- A reference (another project, read-only) is never changed by a feature. What the
+     REFERENCE should change because of this feature is work for that project; note it here
+     so it is not lost (the final summary raises it, and the list is kept in this folder).
+     One bullet per change: `- <reference file>: <what should change> (<why>)`, e.g.
+     `- platform/runner/common.py: parse_ts() must refuse a non-string instead of crashing
+     (fixed in this port; the reference has the same bug)`, a deliberate improvement of a
+     port the reference should take over. "None." when there is no such change. -->
+None.
+
+## Green against stubs
+<!-- Every test must FAIL before the implementation ("red against stubs"). The exceptions,
+     by design, are listed here, one bullet each: `- <test name or node ID>: <why it cannot
+     fail before the implementation>`. Typical: a scan or negative check ("no analytic name
+     appears in the code", "X is not imported"), a structure test; in a port, a carried-over
+     test of that kind (the test writer may not change it). Only the listed tests may pass
+     the check; a listed test that fails there is a failure. Every spec ID such a test is
+     tagged with needs another test that does fail against the stubs (checked). "None."
+     for the usual feature. -->
 None.
 
 ## Test data and fixtures

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -63,11 +64,29 @@ def _columns(text: str) -> dict[str, list[str]]:
     return out
 
 
+_LABEL = re.compile(r"^([A-Z][\w ()'/-]*):\s*$")
+
+
+def _labels(text: str) -> list[tuple[str, str]]:
+    """(`## ` section, label) of every label line of a template: a line that is only
+    `<Words>:` and starts a value or a list the workflow reads (`Reference:`, `What may
+    differ:`, `Kept quirks:`). Comments do not count."""
+    out: list[tuple[str, str]] = []
+    section = ""
+    for line in re.sub(r"<!--.*?-->", "", text, flags=re.S).splitlines():
+        if line.startswith("## "):
+            section = line[3:].strip()
+        elif m := _LABEL.match(line.strip()):
+            out.append((section, m.group(1)))
+    return out
+
+
 def outdated_templates(cfg: Config) -> dict[str, list[str]]:
     """Spec template copy in the project (`framegate init` writes one, and `framegate spec`
     prefers it) -> the `## ` sections framegate's packaged template has and the copy lacks, and
-    the table columns it lacks in a section both have. Compared by heading and column title,
-    so a customized copy is fine as long as it keeps them."""
+    the table columns and label lines (`Kept quirks:`) it lacks in a section both have.
+    Compared by heading, column title and label, so a customized copy is fine as long as it
+    keeps them."""
     from framegate.orchestrator import package_text
 
     out: dict[str, list[str]] = {}
@@ -85,6 +104,12 @@ def outdated_templates(cfg: Config) -> dict[str, list[str]]:
                 continue  # the whole section is reported above
             there = {t.lower() for t in my_columns.get(section, [])}
             lacks += [f'column "{t}"' for t in titles if t.lower() not in there]
+        my_labels = {(s.lower(), x.lower()) for s, x in _labels(mine)}
+        lacks += [
+            f'line "{label}:" (in {section})'
+            for section, label in _labels(packaged)
+            if section.lower() in have and (section.lower(), label.lower()) not in my_labels
+        ]
         if lacks:
             out[name] = lacks
     return out

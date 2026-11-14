@@ -112,11 +112,32 @@ knowledge. It overrides any default you would otherwise assume.
      names as in X"): fill requirements.md, "Ported from": the reference and its commit, every
      source -> target file, the reference's test files to carry over (Kind `tests`), and
      "What may differ" (import names, things only this repository has, things left out). The
-     stubs mirror the reference's public names and signatures exactly; the spec's IDs describe
+     stubs of the ported files come from the reference itself (step 4); the spec's IDs describe
      what the reference does today (read its code and tests; do not decide the behavior
      again); ask the user only about what is to differ. The agents then carry over the
-     reference's tests and copy its files instead of writing their own, and the final gate
-     shows how far each file is from its source;
+     reference's tests and copy its files instead of writing their own, and every step gate
+     and the final gate show how far each file is from its source. Also for a port:
+     - "Kept quirks" (in "Ported from"): read the reference for behaviours a stricter reading
+       of your spec would forbid (a regex `$` that also accepts a trailing newline,
+       `json.dumps` writing NaN / Infinity, a loose parse). Each one is a decision: kept on
+       purpose -> one bullet under "Kept quirks" (the reviewer then writes no finding about
+       it); to be fixed here -> a requirement or edge case of the spec, and one bullet under
+       "Reference follow-up" (the reference has it too). Ask the user only where neither is
+       clearly right;
+     - carried tests that cannot fail before the implementation: look through the reference's
+       test files for scans and negative checks ("no analytic name appears in the code", "X
+       is not imported"). List each under "Green against stubs" with its reason, and make
+       sure every ID such a test serves has another test that does fail against the stubs;
+     - a reference test file that will be carried over only in part (it tests code that is
+       not ported): say so in "What may differ", so the test reviewer can tell a test left
+       out on purpose from a missing one (the run lists every reference test not carried);
+   - tests green by design (any feature): a test that cannot fail before the implementation
+     (a scan, a negative check, a structure test) is listed under "Green against stubs" in
+     requirements.md (`- <test name>: <reason>`); only listed tests may pass the red check;
+   - reference follow-up: what a reference should change because of this task (a bug it
+     shares that is fixed here, a deliberate improvement): one bullet under "Reference
+     follow-up" in requirements.md (`- <reference file>: <what should change> (<why>)`); the
+     reference itself is never changed;
    - structure: which file each new concept goes in (one concept per file; the code map says
      where things live), so no file grows past ~400 lines or mixes two concepts.
 2. Ask only what those sources cannot decide: what the user wants (behavior, priorities,
@@ -139,10 +160,27 @@ knowledge. It overrides any default you would otherwise assume.
    copy semantics" and "Data flow" sections (if the project's templates lack them, add them
    anyway), and "Existing data this spec reads" / "Mirrored code" likewise. A step that builds
    on an earlier step's code, or changes the same method, gets a "Depends on: Step N" line.
+   A port: the plan follows the files, not the IDs: one step per `code` target file, in
+   import order (leaf modules first; a file after the files it imports), each step covering
+   the IDs its file serves (an ID two files serve goes to the later one). The code lands
+   whole files at a time anyway; steps cut by ID end in steps with nothing left to build.
 4. Create interface stubs in the source paths named above, in the stub style named above: full
    typed signatures, a one-line doc comment per public type and method saying what it is for
    (in words) plus the IDs it serves, bodies that only signal "not implemented". One concept
    per file. Stubs must compile or import cleanly.
+   Except the code files of a port: do not write those stubs by hand. Run
+   `framegate port-stubs $ARGUMENTS` once "Ported from" is filled: it writes every `code`
+   target as the reference's own text at the spec's commit with the function bodies replaced
+   (docstrings, signatures, constants, imports and module-level code word for word; no spec
+   IDs added: the tests' tags carry them). Act on its lines: `IMPORT: ...` (an import that
+   will not resolve here, e.g. the reference's package name): change that import line in the
+   stub and list the kind of change under "What may differ"; `kept whole` (a function that
+   runs when the module is imported keeps its body): a test of it passes before the
+   implementation, so list it under "Green against stubs" or expect the red check to name
+   it; `KEPT: ... exists` (a file you wrote before): `--force` overwrites it; `PROBLEM:` as
+   it says. `NOT SUPPORTED` (a language without a stub generator): write those stubs by
+   hand with the reference's names, signatures and doc comments as they are, and tell the
+   user in one line that the stubs were written by hand.
 5. Do not write tests or implementation. The test tagging conventions are for reference only;
    the TESTS phase uses them.
    Then run `framegate spec-check $ARGUMENTS` and fix what it lists (a rule without a spec
@@ -166,7 +204,10 @@ knowledge. It overrides any default you would otherwise assume.
    write one bullet per change under "Pipeline follow-up" in requirements.md (`- <file>: <what
    must change> (<why>)`; "None." otherwise; add the section if the project's template lacks
    it). It is done as a separate step after the feature; framegate raises it again in the
-   final summary.
+   final summary. Only deploy / CI files go there. What a reference project should change
+   because of this task goes under "Reference follow-up" the same way (`- <reference file>:
+   <what should change> (<why>)`); show it on the brief under "Pipeline follow-up" as "for
+   <reference>: ...".
 6. Write the spec gate brief to `<out>/$ARGUMENTS/spec_brief.md` (the out folder above; the
    final gate compares the run with it) and show it in the chat. About one screen, plain words,
    no spec IDs, one line per bullet, no sentence that repeats a heading or another section, a

@@ -120,7 +120,9 @@ the language, how tests are written here, the code map and the project knowledge
    write one bullet per change under "Pipeline follow-up" in requirements.md (`- <file>: <what
    must change> (<why>)`; "None." otherwise; add the section if the project's template lacks
    it). It is done as a separate step after the feature; framegate raises it again in the
-   final summary.
+   final summary. Only deploy / CI files go there. What a reference project should change
+   because of this refactor goes under "Reference follow-up" the same way (`- <reference
+   file>: <what should change> (<why>)`): the reference is never changed here.
 4. Write the spec gate brief to `<out>/$ARGUMENTS/spec_brief.md` (the out folder above) and
    show it in the chat. About one screen, plain words, no spec IDs, one line per bullet;
    exactly these sections:
