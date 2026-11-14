@@ -27,17 +27,17 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 # claude = "claude"                # override with env FRAMEGATE_CLAUDE
 # max_attempts = 3                 # implementation attempts per step before it is parked
 # max_turns = 80                   # one turn cap for all phases; default per phase: TESTS 50,
-#                                  # TEST_REVIEW 30, IMPLEMENT 80, REVIEW 40, TRIAGE 30, PR 30,
+#                                  # TEST_REVIEW 30, IMPLEMENT 80, REVIEW 40, TRIAGE 30, SUMMARY 30,
 #                                  # RETRO 30
 #                                  # (API round trips; the result's num_turns runs higher)
 # max_budget_usd = 2.0             # one cost cap (USD) per agent run for all phases; default per
 #                                  # phase: TESTS 2.0, TEST_REVIEW 1.5, IMPLEMENT 1.5, REVIEW 1.5,
-#                                  # TRIAGE 1.5, PR 1.5, RETRO 3.0; 0 = no cap
+#                                  # TRIAGE 1.5, SUMMARY 1.5, RETRO 3.0; 0 = no cap
 # test_review_rounds = 2           # test reviewer objections sent back to the test writer
 #                                  # (per gate cycle) before the tests gate
 # permission_mode = "acceptEdits"
 # model = ""                       # one `claude --model` for all phases; default per phase:
-#                                  # "sonnet" for TESTS, IMPLEMENT, SPEC_UPDATE, PR (they follow
+#                                  # "sonnet" for TESTS, IMPLEMENT, SPEC_UPDATE, SUMMARY (they follow
 #                                  # the approved spec / frozen tests); "opus" for TEST_REVIEW,
 #                                  # REVIEW, TRIAGE, RETRO (the checkers); "" = Claude Code's own
 # effort = ""                      # one `claude --effort` (low|medium|high|xhigh|max); "" = default
@@ -89,7 +89,11 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 # step_tests = "suite"             # a step gate also runs the whole suite (the everyday
 #                                  # selection: [dotnet] base_filter, [python] pytest_args),
 #                                  # with the tests of this feature's later steps left out;
-#                                  # "feature" = only the tests of the step's IDs (slow suite)
+#                                  # "feature" = only the tests of the step's IDs (slow suite).
+#                                  # Plan steps only: the runs after the review (review
+#                                  # fixes, structure fixes, final repair) are checked with
+#                                  # the feature's tests + the review tests either way; the
+#                                  # final gates run the whole suite right after
 # unreached_assertions = true      # the final gate fails on an assertion of a new test that
 #                                  # never ran in the feature's tests (`if (x) Assert...` on
 #                                  # data without x); false = off
@@ -126,7 +130,7 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 [docs]
 # code_map = "docs/code-map.md"    # living code map: per module its purpose, key classes, how
 #                                  # they work together, where to look for X (/framegate:setup
-#                                  # drafts it; the PR phase updates what a feature touched)
+#                                  # drafts it; the SUMMARY phase updates what a feature touched)
 
 [protected]
 # extra = ["ci/", "deploy/", "config/"]    # added to the core + adapter protected paths:

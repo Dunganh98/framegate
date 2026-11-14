@@ -313,7 +313,7 @@ def test_the_first_code_after_a_skipped_review_is_reviewed(demo_repo: DemoRepo) 
     (r.root / "out/demo/answers.md").write_text("1. Q: step 1\n   A: Ints only.\n", "utf-8")
     assert r.af("answer", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE
-    assert phases(r)[3:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "REVIEW", "PR"]
+    assert phases(r)[3:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "REVIEW", "SUMMARY"]
     prog = r.progress()
     assert prog["completed_steps"] == [1] and "review_skipped" not in prog
     assert prog["waiting"]["message"].startswith("Final gates PASSED; nothing parked")

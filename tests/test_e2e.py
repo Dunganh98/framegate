@@ -136,7 +136,7 @@ def test_full_flow_human_mode(demo_repo: DemoRepo, capsys: pytest.CaptureFixture
 
     # IMPLEMENT (step 1: assumption; step 2 parks) -> REVIEW -> TRIAGE -> fix -> final gates -> PR
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    assert phases(r)[9:] == ["IMPLEMENT", "IMPLEMENT", "REVIEW", "TRIAGE", "IMPLEMENT", "PR"]
+    assert phases(r)[9:] == ["IMPLEMENT", "IMPLEMENT", "REVIEW", "TRIAGE", "IMPLEMENT", "SUMMARY"]
     prog = r.progress()
     assert prog["phase"] == "FINAL" and prog["completed_steps"] == [1]
     parked = prog["parked"]
@@ -156,6 +156,10 @@ def test_full_flow_human_mode(demo_repo: DemoRepo, capsys: pytest.CaptureFixture
     # parked step 2's tests are red by design: the fix check leaves them out
     assert "--req DEMO-R-001,DEMO-E-001" in fix["prompt"]
     assert [e["kind"] for e in r.events()].count("findings_fixed") == 1
+    # the fix run's gate: the feature's tests, not the whole suite (the plan steps' gates
+    # run it; the final gates run it again right after)
+    scopes = [(e["step"], e["scope"]) for e in r.events() if e["kind"] == "gate"]
+    assert scopes == [("step 1 - add", "step"), ("review fixes", "fix")]
     final = read(r, "out/demo/final_gates.md")
     # step 2 is parked: its test is expected red, coverage and mutation wait for the redo
     assert "ALL GATES PASSED" in final and "expected red (parked): 1" in final
@@ -214,7 +218,7 @@ def test_full_flow_human_mode(demo_repo: DemoRepo, capsys: pytest.CaptureFixture
         assert msg in log
     assert "demo: step 2 - neg" not in log
     cap = {"TESTS": 50, "TEST_REVIEW": 30, "IMPLEMENT": 80, "REVIEW": 40, "TRIAGE": 30}
-    cap.update(PR=30, RETRO=30, SPEC_UPDATE=30)
+    cap.update(SUMMARY=30, RETRO=30, SPEC_UPDATE=30)
     for call in r.calls():
         argv = call["argv"]
         assert "-p" in argv and "--bare" not in argv
@@ -253,7 +257,7 @@ def test_answer_parked_redoes_only_parked_items(demo_repo: DemoRepo) -> None:
     r.two_steps()
     r.scenario(park_steps=[2])
     to_final_gate(r)
-    assert phases(r) == ["TESTS", "TEST_REVIEW", "IMPLEMENT", "IMPLEMENT", "REVIEW", "PR"]
+    assert phases(r) == ["TESTS", "TEST_REVIEW", "IMPLEMENT", "IMPLEMENT", "REVIEW", "SUMMARY"]
     assert [p["label"] for p in r.progress()["parked"]] == ["step 2 - neg"]
     assert r.af("answer", "demo") == 1  # answers.md missing
     (r.root / "out/demo/answers.md").write_text("neg(0) is 0.\n", encoding="utf-8")
@@ -267,7 +271,7 @@ def test_answer_parked_redoes_only_parked_items(demo_repo: DemoRepo) -> None:
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
     # the answers go into the spec first, the test writer applies the ones that need a test
     # change (none here: no commit, no test review), then only the parked step: no review
-    assert phases(r)[n:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "PR"]
+    assert phases(r)[n:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "SUMMARY"]
     assert "at the final gate" in r.calls()[n]["prompt"]
     amend = r.calls()[n + 1]["prompt"]
     assert "the human answered questions at the final gate (answer reference ANS-1" in amend
@@ -450,7 +454,7 @@ def test_tests_gate_auto(demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
     r.set_toml("gates", "tests", '"auto"')
     assert r.af("approve-spec", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    assert phases(r) == ["TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "PR"]
+    assert phases(r) == ["TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "SUMMARY"]
     assert marker(r.root, "tests-approved/demo")
     auto = [e for e in r.events() if e["kind"] == "tests_gate_auto"]
     assert auto == [auto[0]] and auto[0]["passed"] is True and auto[0]["reasons"] == []
@@ -498,7 +502,7 @@ def test_tests_gate_deferred_two_human_gates(
     r.scenario(questions_in=["TESTS"], test_review_objections=1)
     assert r.af("approve-spec", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    assert phases(r) == ["TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "PR"]
+    assert phases(r) == ["TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "SUMMARY"]
     assert marker(r.root, "tests-approved/demo")
     deferred = [e for e in r.events() if e["kind"] == "tests_gate_deferred"]
     assert len(deferred) == 1
@@ -516,7 +520,7 @@ def test_tests_gate_deferred_two_human_gates(
     assert r.af("answer", "demo") == 0
     assert r.progress()["phase"] == "SPEC_UPDATE"
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    assert phases(r)[5:] == ["SPEC_UPDATE", "TESTS", "REVIEW", "PR"]
+    assert phases(r)[5:] == ["SPEC_UPDATE", "TESTS", "REVIEW", "SUMMARY"]
     assert not (r.root / "out/demo/open_questions.md").exists()
     assert "Floats are rejected." in read(r, "out/demo/questions_archive.md")
     # the answer event pairs each numbered answer with the question the gate showed
@@ -539,7 +543,7 @@ def test_answers_with_an_unchanged_spec_skip_the_review(demo_repo: DemoRepo) -> 
     assert r.af("answer", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
     # no spec change, no test change: nothing to review again
-    assert phases(r)[5:] == ["SPEC_UPDATE", "TESTS", "PR"]
+    assert phases(r)[5:] == ["SPEC_UPDATE", "TESTS", "SUMMARY"]
     assert r.af("answer", "demo") == 1  # nothing parked, no question open any more
 
 
@@ -565,7 +569,7 @@ def test_models_per_phase(demo_repo: DemoRepo) -> None:
         ("IMPLEMENT", "sonnet", "high"),  # incl. the review fixes
         ("REVIEW", "opus", None),
         ("TRIAGE", "opus", None),
-        ("PR", "sonnet", None),
+        ("SUMMARY", "sonnet", None),
         ("RETRO", "opus", None),
     }
     runs = [e for e in r.events() if e["kind"] == "agent_run"]
@@ -582,7 +586,7 @@ def test_small_plan_in_one_implementer_run(demo_repo: DemoRepo) -> None:
     r.set_toml("agents", "step_batch_ids", "15")
     assert r.af("approve-spec", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    assert phases(r) == ["TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "PR"]
+    assert phases(r) == ["TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "SUMMARY"]
     impl = r.calls()[2]["prompt"]
     assert "implement plan steps 1, 2 in one go, in plan order: 1. add (DEMO-R-001" in impl
     assert "2. neg (DEMO-R-002)" in impl
@@ -608,7 +612,7 @@ def test_a_parked_batch_is_redone_as_one(demo_repo: DemoRepo) -> None:
     assert r.af("answer", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
     # the batch once, as one run; its code is the first the reviewer sees
-    assert phases(r)[-5:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "REVIEW", "PR"]
+    assert phases(r)[-5:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "REVIEW", "SUMMARY"]
     assert r.progress()["completed_steps"] == [1, 2] and not r.progress()["parked"]
     redo = [e for e in r.events() if e["kind"] == "redo_result"]
     assert [(e["label"], e["passed"]) for e in redo] == [("steps 1, 2", True)]
@@ -636,7 +640,7 @@ def test_dependent_steps_wait_for_a_parked_step(demo_repo: DemoRepo) -> None:
     (r.root / "out/demo/answers.md").write_text("1. Q: step 1\n   A: Ints only.\n", "utf-8")
     assert r.af("answer", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    assert phases(r)[3:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "IMPLEMENT", "REVIEW", "PR"]
+    assert phases(r)[3:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "IMPLEMENT", "REVIEW", "SUMMARY"]
     redo = [e for e in r.events() if e["kind"] == "redo_result"]
     assert [(e["label"], e["passed"]) for e in redo] == [
         ("step 1 - add", True),
@@ -666,7 +670,7 @@ def test_a_review_finding_on_a_parked_step_is_deferred(demo_repo: DemoRepo) -> N
         "IMPLEMENT",
         "REVIEW",
         "TRIAGE",
-        "PR",
+        "SUMMARY",
     ]
     parked = r.progress()["parked"]
     assert [p["label"] for p in parked] == ["step 1 - add"]
@@ -726,7 +730,7 @@ def test_answers_that_need_a_test_change_reach_the_tests(demo_repo: DemoRepo) ->
     )
     assert r.af("answer", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    assert phases(r)[5:] == ["SPEC_UPDATE", "TESTS", "TEST_REVIEW", "REVIEW", "PR"]
+    assert phases(r)[5:] == ["SPEC_UPDATE", "TESTS", "TEST_REVIEW", "REVIEW", "SUMMARY"]
     assert (
         "This pass reviews only the test changes made from the answers ANS-1"
         in (r.calls()[7]["prompt"])
@@ -767,7 +771,7 @@ def test_repeated_failure_gets_a_diagnosis_for_the_implementer(demo_repo: DemoRe
         "DIAGNOSIS",
         "IMPLEMENT",
         "REVIEW",
-        "PR",
+        "SUMMARY",
     ]
     diag = r.calls()[4]
     assert "DIAGNOSIS agent" in diag["role"] and flag(diag, "--model") == "opus"
@@ -816,7 +820,7 @@ def test_a_diagnosed_test_problem_is_approved_at_the_final_gate(
     )
     assert r.af("answer", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    assert phases(r)[5:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "REVIEW", "PR"]
+    assert phases(r)[5:] == ["SPEC_UPDATE", "TESTS", "IMPLEMENT", "REVIEW", "SUMMARY"]
     assert "Diagnosis (out/demo/diagnoses/step-1-add.md)" in read(
         r, "out/demo/questions_archive.md"
     )
@@ -849,7 +853,7 @@ def test_project_knowledge_reaches_the_agents_and_grows_from_the_retro(
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
     for c in r.calls():
         has = "# Project knowledge (.framegate/project.md" in c["role"]
-        assert has == (c["phase"] != "PR"), c["phase"]
+        assert has == (c["phase"] != "SUMMARY"), c["phase"]
         assert not has or "- add() keeps its signature." in c["role"]
     finish_with_retro(r)
     assert "- K1 [Test harness]: demo data comes from DATA" in read(
@@ -965,19 +969,19 @@ def test_resume_after_interruption_at_each_gate(demo_repo: DemoRepo) -> None:
     assert phases(r) == ["TESTS", "TEST_REVIEW"]
     assert r.af("approve", "demo") == 0
 
-    for phase in ("IMPLEMENT", "TRIAGE", "PR"):
+    for phase in ("IMPLEMENT", "TRIAGE", "SUMMARY"):
         assert run_interrupting(phase) == EXIT_INTERRUPTED, phase
         cleared()
-    assert r.progress()["phase"] == "PR"
+    assert r.progress()["phase"] == "SUMMARY"
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
-    expected = ["TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "TRIAGE", "IMPLEMENT", "PR"]
+    expected = ["TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "TRIAGE", "IMPLEMENT", "SUMMARY"]
     assert phases(r) == expected
     assert r.af("approve", "demo") == 0
     assert run_interrupting("RETRO") == EXIT_INTERRUPTED
     cleared()
     assert r.af("run", "demo") == 0 and r.progress()["phase"] == "DONE"
     ev = [e["phase"] for e in r.events() if e["kind"] == "interrupted"]
-    assert ev == ["TESTS", "IMPLEMENT", "REVIEW", "PR", "RETRO"]
+    assert ev == ["TESTS", "IMPLEMENT", "REVIEW", "SUMMARY", "RETRO"]
     assert [g["attempt"] for g in r.events() if g["kind"] == "gate"] == [1, 1]
 
 

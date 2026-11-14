@@ -23,15 +23,15 @@ def test_defaults_match_the_guide(tmp_path: pathlib.Path) -> None:
         "out",
     )
     assert cfg.max_attempts == 3 and cfg.max_turns is None
-    caps = {p: cfg.turn_cap(p) for p in ("TESTS", "IMPLEMENT", "REVIEW", "PR", "RETRO")}
-    assert caps == {"TESTS": 50, "IMPLEMENT": 80, "REVIEW": 40, "PR": 30, "RETRO": 30}
+    caps = {p: cfg.turn_cap(p) for p in ("TESTS", "IMPLEMENT", "REVIEW", "SUMMARY", "RETRO")}
+    assert caps == {"TESTS": 50, "IMPLEMENT": 80, "REVIEW": 40, "SUMMARY": 30, "RETRO": 30}
     assert cfg.diff_coverage == 90 and cfg.mutation_score == 80
     assert cfg.id_pattern == DEFAULT_ID_PATTERN
     assert cfg.write_paths("TESTS") == ["tests/", "out/"]
     assert cfg.write_paths("IMPLEMENT") == ["src/", "out/"]
     assert cfg.write_paths("REVIEW") == ["tests/review/", "out/"]
     assert cfg.write_paths("SPEC") == ["specs/", "src/"]
-    assert cfg.write_paths("PR") == ["out/", "docs/code-map.md"]
+    assert cfg.write_paths("SUMMARY") == ["out/", "docs/code-map.md"]
     assert cfg.write_paths("TEST_REVIEW") == ["out/"]
     assert cfg.write_paths("TRIAGE") == ["tests/review/", "out/"]
     assert cfg.turn_cap("TEST_REVIEW") == 30 and cfg.turn_cap("TRIAGE") == 30
@@ -52,11 +52,11 @@ def test_tests_gate_and_review_rounds(tmp_path: pathlib.Path) -> None:
 def test_models_effort_batches_format_fix_and_extra_checks(tmp_path: pathlib.Path) -> None:
     cfg = parse_config(tmp_path, {})
     # defaults: the spec-following writers on Sonnet, the checkers and the retro on Opus
-    assert {p: cfg.agent_model(p) for p in ("TESTS", "IMPLEMENT", "SPEC_UPDATE", "PR")} == {
+    assert {p: cfg.agent_model(p) for p in ("TESTS", "IMPLEMENT", "SPEC_UPDATE", "SUMMARY")} == {
         "TESTS": "sonnet",
         "IMPLEMENT": "sonnet",
         "SPEC_UPDATE": "sonnet",
-        "PR": "sonnet",
+        "SUMMARY": "sonnet",
     }
     assert {cfg.agent_model(p) for p in ("TEST_REVIEW", "REVIEW", "TRIAGE", "RETRO")} == {"opus"}
     assert cfg.agent_effort("IMPLEMENT") == ""
@@ -89,8 +89,8 @@ def test_models_effort_batches_format_fix_and_extra_checks(tmp_path: pathlib.Pat
     assert cfg.extra_checks == {"readcheck": ["dotnet", "run", "--", "{out}"]}
     for bad, msg in [
         ({"agents": {"effort": "huge"}}, r"\[agents\] effort must be one of low"),
-        ({"phases": {"PR": {"effort": "x"}}}, r"\[phases.PR\] effort must be one of"),
-        ({"phases": {"PR": {"model": 3}}}, r"\[phases.PR\] model must be a string"),
+        ({"phases": {"SUMMARY": {"effort": "x"}}}, r"\[phases.SUMMARY\] effort must be one of"),
+        ({"phases": {"SUMMARY": {"model": 3}}}, r"\[phases.SUMMARY\] model must be a string"),
         ({"agents": {"step_batch_ids": -1}}, "step_batch_ids must be >= 0"),
         ({"gates": {"extra": {"x": []}}}, r"\[gates.extra\] x must not be empty"),
         ({"gates": {"extra": {"x": "cmd"}}}, r"\[gates.extra\] x must be a list of strings"),
@@ -160,8 +160,8 @@ def test_env_overrides_claude(tmp_path: pathlib.Path, monkeypatch: pytest.Monkey
         ({"phases": {"RETRO": {"max_turns": "9"}}}, "max_turns must be an int >= 1"),
         ({"agents": {"max_budget_usd": -1}}, "max_budget_usd must be >= 0"),
         ({"agents": {"max_budget_usd": "2"}}, "must be int/float"),
-        ({"phases": {"PR": {"max_budget_usd": -0.5}}}, "max_budget_usd must be a number >= 0"),
-        ({"phases": {"PR": {"max_budget_usd": True}}}, "max_budget_usd must be a number >= 0"),
+        ({"phases": {"SUMMARY": {"max_budget_usd": -0.5}}}, "max_budget_usd must be a number >= 0"),
+        ({"phases": {"SUMMARY": {"max_budget_usd": True}}}, "max_budget_usd must be a number >= 0"),
         ({"gates": {"commands": {"build": ["x"]}}}, "unknown key 'build'"),
         ({"gates": {"commands": {"lint": "ruff"}}}, "list of strings"),
         ({"phases": {"DEPLOY": {"write": []}}}, "unknown phase"),
@@ -199,7 +199,9 @@ def test_turn_caps(tmp_path: pathlib.Path) -> None:
     )
     assert cfg.turn_cap("RETRO") == 12  # phase wins
     assert cfg.turn_cap("TESTS") == 60 and cfg.turn_cap("IMPLEMENT") == 60  # [agents] for all
-    assert parse_config(tmp_path, {"phases": {"PR": {"max_turns": 5}}}).turn_cap("PR") == 5
+    assert (
+        parse_config(tmp_path, {"phases": {"SUMMARY": {"max_turns": 5}}}).turn_cap("SUMMARY") == 5
+    )
 
 
 def test_budget_caps(tmp_path: pathlib.Path) -> None:
@@ -209,9 +211,9 @@ def test_budget_caps(tmp_path: pathlib.Path) -> None:
     assert caps == {"TESTS": 2.0, "TEST_REVIEW": 1.5, "IMPLEMENT": 1.5, "RETRO": 3.0}
     cfg = parse_config(
         tmp_path,
-        {"agents": {"max_budget_usd": 4}, "phases": {"PR": {"max_budget_usd": 0.75}}},
+        {"agents": {"max_budget_usd": 4}, "phases": {"SUMMARY": {"max_budget_usd": 0.75}}},
     )
-    assert cfg.budget_cap("PR") == 0.75 and cfg.budget_cap("TESTS") == 4.0
+    assert cfg.budget_cap("SUMMARY") == 0.75 and cfg.budget_cap("TESTS") == 4.0
     cfg = parse_config(
         tmp_path, {"agents": {"max_budget_usd": 0}, "phases": {"RETRO": {"max_budget_usd": 1}}}
     )

@@ -1,7 +1,7 @@
-"""The final brief's questions (final_brief.md, written by the PR agent).
+"""The final brief's questions (final_brief.md, written by the summary agent).
 
 The final gate has numbered items (parked work, the provisional steps, the open questions;
-`Orchestrator.final_items`). The PR agent sorts every item into one of three sections, naming it
+`Orchestrator.final_items`). The summary agent sorts every item into one of three sections, named
 by its gate-item number `[N]`:
 
     ## Questions          a real decision: the problem in one line, then
@@ -16,7 +16,8 @@ The human sees the questions numbered 1..k in the brief's order; `BriefPlan` map
 back to the gate items, and `expand_answers` turns the human's answers into answers for every
 gate item (a decision: its decision; the same question: the other one's answer). Parked work and
 the provisional steps block the run, so they are always asked. A gate item the brief does not
-place is asked as it is. `check_brief` lists what the PR agent should rewrite (not blocking)."""
+place is asked as it is. `check_brief` lists what the summary agent should rewrite (not
+blocking)."""
 
 from __future__ import annotations
 
@@ -49,7 +50,7 @@ class Entry:
 class BriefPlan:
     #: (gate item, text) the human is asked, in the order shown (1..k)
     questions: list[tuple[int, str]] = field(default_factory=list)
-    #: (gate item or None, the decision) made by the PR agent, shown as "Decisions I made"
+    #: (gate item or None, the decision) made by the summary agent, shown as "Decisions I made"
     decided: list[tuple[int | None, str]] = field(default_factory=list)
     #: (gate item, reason, the item it repeats or None), not shown
     left_out: list[tuple[int, str, int | None]] = field(default_factory=list)
@@ -116,7 +117,7 @@ def question_entries(sections: dict[str, list[str]]) -> list[Entry]:
 
 
 def plan(sections: dict[str, list[str]], items: list[str], must_ask: set[int]) -> BriefPlan:
-    """Which gate items (1..len(items)) the human is asked, which the PR agent decided or left
+    """Which gate items (1..len(items)) the human is asked, which the summary agent decided or left
     out. `must_ask`: items that are always asked (parked work, the provisional steps)."""
     n_items = len(items)
     p = BriefPlan()
@@ -202,7 +203,7 @@ def _norm(text: str) -> str:
 
 
 def check_brief(sections: dict[str, list[str]], n_items: int, must_ask: set[int]) -> list[str]:
-    """What the PR agent should rewrite in final_brief.md: questions without a gate-item number
+    """What the summary agent should rewrite in final_brief.md: questions without a gate-item number
     or with one option, duplicates, closed items or notes asked as questions, parked work left
     out, gate items placed nowhere. [] = fine."""
     problems: list[str] = []

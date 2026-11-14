@@ -59,7 +59,7 @@ mutation score) and never stops to ask.
 | TESTS | test writer -> mechanical checks -> **test reviewer** (`roles/test_review.md`); objections go back to the writer, at most `[agents] test_review_rounds` (2) times | **gate 2**: `out/<f>/tests_gate.md` (ID -> tests -> what it checks, check results, reviewer verdict + remaining objections, all open questions batched) -> approve (tag `tests-approved/<f>`) / reject / answer (answers go into the spec first: SPEC_UPDATE). `[gates] tests = "auto"` passes it without a stop when everything is clean |
 | IMPLEMENT | implementer, one fresh run per plan step | step gates green -> commit. Ambiguity: assume from the spec, log it in `steps.md`. No reasonable assumption, or `max_attempts` failed attempts: the step is **parked** (its code set aside as `out/<f>/parked/*.diff`), the run goes on |
 | REVIEW | adversarial reviewer (bugs as failing tests, structure findings without tests) -> **triage** by the test reviewer -> fixes -> structure fixes | valid findings fixed (or parked), invalid ones removed with a reason, the code restructured with every test green; final gates + structure report |
-| PR | summary agent (`roles/pr.md`): `final_summary.md` (detail), `final_brief.md` (the gate brief), the code map update (committed) | **gate 3**: the final brief -> approve (retro) / `finish --no-retro` / answer the numbered items (into the spec, then redo only those) |
+| SUMMARY | summary agent (`roles/summary.md`): `final_summary.md` (detail), `final_brief.md` (the gate brief), the code map update (committed) | **gate 3**: the final brief -> approve (retro) / `finish --no-retro` / answer the numbered items (into the spec, then redo only those) |
 | RETRO | retro agent (reads the retro backlog; a problem seen again is counted there) | `retro_proposals.md` + metrics row -> DONE; then `framegate keep` records your pick in the backlog |
 
 ## Parts
@@ -154,16 +154,16 @@ answered, already resolved (e.g. by a scan) or a note -> left out; the same ques
 agents -> one item. Questions are ordered by impact (what changes most if answered differently
 first).
 
-At the final gate the PR agent sorts every numbered gate item (parked work, the provisional
+At the final gate the summary agent sorts every numbered gate item (parked work, the provisional
 steps, the open questions) into `## Questions`, `## Decisions I made` or `## Left out` of
 final_brief.md, naming it `[N]`. Parked work and the provisional steps are always asked (they
 block the run); an item the brief places nowhere is asked as it is. The human sees the questions
 numbered 1..k; `framegate answer` maps answers.md back to the gate items and rewrites it
 (`# Answers (final gate, numbered by gate item)`): a decided item gets `Default: <decision>`, a
 repeated one the answer of the item it repeats, any other left-out item "No answer needed"; the
-chat's own file is kept in the `answer` event (`as_given`). After the PR agent's run framegate
+chat's own file is kept in the `answer` event (`as_given`). After the summary agent's run framegate
 checks the brief (not blocking): questions without `[N]` or with one option, duplicates, closed
-items or notes asked as questions, parked work left out, gate items placed nowhere -> the PR
+items or notes asked as questions, parked work left out, gate items placed nowhere -> the summary
 agent rewrites final_brief.md once (event `brief_check`).
 
 ## Structure and the code map
@@ -198,7 +198,7 @@ The human owns what the classes are for and how they work together, not every li
 - The code map (`[docs] code_map`, default `docs/code-map.md`): a living Markdown doc, per
   module its purpose, its key classes (one line each), how they work together (short flow,
   mermaid optional), "where to look for X"; under ~300 lines. `/framegate:setup` drafts it
-  from the code; the PR phase updates the sections the feature touched (framegate commits it
+  from the code; the SUMMARY phase updates the sections the feature touched (framegate commits it
   as `<f>: code map`); a new public type in the feature's diff that the map does not name is a
   WARN on the final brief's code map line. `framegate doctor` WARNs when it is missing.
 
@@ -216,7 +216,7 @@ the tests (steps, step gates, review, final gates, the two human gates) is the s
 | First proof (`test_checks.md`) | every test FAILS against the stubs | reproduction tests FAIL on today's code (each listed with why, for the test reviewer); must-not-change tests PASS | every test PASSES on today's code; the check lists how many tagged tests existed before and how many are new |
 | Steps | per plan step, batched | usually one; the step note names `ROOT CAUSE` and `RULED OUT` lines (shown in final_facts.md and the brief) | one move per run; every step is checked with ALL the tests; a step that changes no source file fails |
 | Review | against the spec | also: the same bug through another input or caller | a finding is a difference from the code before (`git show tests-approved/<f>:<path>`) |
-| Structure fixes after the review | checked with the whole suite | checked with the whole suite | checked with the feature's tests, like a step (the whole suite runs once, in the final gates) |
+| Runs after the review (review fixes, structure fixes, final repair) | checked with the feature's tests and the review tests (the whole suite runs once, in the final gates) | the same | the same |
 | Risk rating | every changed line counts | every changed line counts | moved lines are not counted (`moved_lines` in the `risk` event) |
 | Final-gate repair | code, then tests | code, then tests | code only: tests written after the refactor would pin the changed code, so weak tests go to the human |
 
@@ -488,7 +488,7 @@ agent cannot place it under "Left out". (4) After DONE: the list is written to
 keeps the spec folder) and logged as a `pipeline_followup` event.
 
 `run` never waits on the keyboard. It advances TESTS -> IMPLEMENT (per plan step) -> REVIEW ->
-PR -> FINAL -> RETRO -> DONE and stops only at the final gate (and the tests gate with
+SUMMARY -> FINAL -> RETRO -> DONE and stops only at the final gate (and the tests gate with
 `[gates] tests = "human"`, or `"auto"` when it isn't clean), writing
 `out/<f>/progress.json` (`waiting: {kind: gate, gate: tests|final}`) and printing what to read.
 Exit codes: 0 done/ok, 1 error, 10 human gate (tests or final; the output and `status` name it),
@@ -612,13 +612,13 @@ about a phase lock without a running orchestrator (`SPEC` excepted: `framegate s
 the interactive session); `framegate unlock` clears it.
 
 Turn and cost caps per agent run: `--max-turns` = `[phases.<P>] max_turns`, else
-`[agents] max_turns`, else TESTS 50, TEST_REVIEW 30, IMPLEMENT 80, REVIEW 40, TRIAGE 30, PR 30,
+`[agents] max_turns`, else TESTS 50, TEST_REVIEW 30, IMPLEMENT 80, REVIEW 40, TRIAGE 30, SUMMARY 30,
 RETRO 30. A turn is one model round trip (one assistant message, however many parallel tool calls
 it makes); the CLI's `num_turns` counts messages (prompt + every tool result) and runs about 2x
 higher, so framegate logs both (`turns` = round trips from the message stream, `messages` =
 `num_turns`; docs/claude-cli-notes.md). `--max-budget-usd` = `[phases.<P>] max_budget_usd`, else
 `[agents] max_budget_usd`, else TESTS 2.0, TEST_REVIEW 1.5, IMPLEMENT 1.5, REVIEW 1.5, TRIAGE 1.5,
-PR 1.5, RETRO 3.0 USD (~3x the live FCSim cost per run; `0` = no cap). A run that stops at
+SUMMARY 1.5, RETRO 3.0 USD (~3x the live FCSim cost per run; `0` = no cap). A run that stops at
 either cap is logged (`max_turns` / `max_budget` event). IMPLEMENT: the step gate decides (a
 failed gate is a normal failed attempt whose feedback names the cap); other phases are re-run
 once with a note; if that run stops at a cap too, it is logged (`escalation` event with
@@ -632,6 +632,20 @@ task again. A reset further away than `[agents] limit_wait_max_hours` (default 6
 wait), e.g. a weekly limit, or a limit still there after 4 waits, stops the run like Ctrl+C
 (exit 130, `interrupted` with the reset time); `framegate run <f>` after the reset goes on.
 
+API / connection error: a run of any phase that did no work because the API could not be
+reached (an error result whose text starts with "API Error:", e.g. "API Error: Can't reach
+the API server ... (ENOTFOUND)", or an error result with no cost and at most one turn) is not
+a failed attempt either, and no gate runs on it. framegate logs an `api_error` event, waits
+30 s, then 2 min, then 5 min (progress line each time), and starts the same task again. Still
+unreachable after the third wait: the run stops like Ctrl+C (exit 130, nothing parked);
+`framegate run <f>` goes on with the same run.
+
+The summary phase was called `PR` before 0.9.1 (it writes the final summary, the final brief
+and the code map; it never created a pull request). Still read: a `[phases.PR]` section and a
+`pr.md` in `[roles] extra_dir` (`framegate doctor` WARNs: rename them to `[phases.SUMMARY]` /
+`summary.md`), a progress.json that says `PR`, and old events (counted as SUMMARY in
+`framegate stats`).
+
 Check output in the gate report and the fix prompt: a failing check's output of more than 40
 lines is filtered to the lines that look like failures (failure words, pytest `E` lines, file
 locations such as `src/x.py:12:` or `Foo.cs(12,5)`) with two lines of context, plus the last 8
@@ -641,7 +655,7 @@ Decisions on the output (e.g. "lint fails only in frozen files") read the whole 
 Models and speed:
 - `--model` per phase: `[phases.<P>] model`, else `[agents] model`, else Sonnet for the writers
   that follow the approved spec and the frozen tests (TESTS, IMPLEMENT incl. review fixes,
-  SPEC_UPDATE, PR summary) and Opus for the checkers and the retro (TEST_REVIEW, REVIEW, TRIAGE,
+  SPEC_UPDATE, SUMMARY) and Opus for the checkers and the retro (TEST_REVIEW, REVIEW, TRIAGE,
   RETRO). `--effort` likewise (`effort`, default: Claude Code's). Each `agent_run` event records
   the model, so cost and failed attempts per model can be compared across features.
 - Small plans run in one implementer run: consecutive steps share a run while their spec IDs add
@@ -654,7 +668,14 @@ Models and speed:
   or a test that already failed when the spec was approved (`regression_baseline`). Seen
   live: a step made helpers public and broke another feature's frozen public-surface test;
   both step gates passed and the break showed in a later fix run. `[gates] step_tests =
-  "feature"` keeps the step gate to the step's own tests (a suite too slow to run per step). Before checking, the gates format the changed source files
+  "feature"` keeps the step gate to the step's own tests (a suite too slow to run per step).
+  The runs after the review (review fixes, structure fixes, a final-gate repair) are checked
+  with the feature's tests (its spec IDs; with parked steps the done steps' IDs) and the
+  review tests folder, not with the whole suite: the final gates run it right after (seen
+  live: 4.5 minutes per gate, twice for two small fix runs, directly before the final
+  regression). What such a run breaks elsewhere fails the final regression and goes to the
+  one repair run, and the repair of a whole-suite failure is checked with the whole suite.
+  Before checking, the gates format the changed source files
   and the changed review tests, and the test writer's files are formatted after each of its
   runs (`[gates] format_fix`, default on, only with the adapter's own format check), so a
   formatting slip costs no attempt and never sits in a file the implementer may not edit. For
@@ -812,6 +833,23 @@ be denied by the permission check without a reason. During a run (any phase but 
 blocks them first and tells the agent why and what to do instead: one command per call, and the
 command's own options (`--filter`, `--logger "console;verbosity=minimal"`, `-k`, `-q`) or the
 result file it writes to see less output. The task text says the same (`COMMAND_FORM`).
+
+The lint / format / type commands a task names are the project's own: the effective
+`[gates.commands]` (else the adapter's defaults), with `{src}` as every source folder, a
+disabled command (`[]`) left out, and the format command in its fix form
+(`[gates.commands] format_fix` on `<files>`, e.g. `python -m black <files>`). The tool rules
+of a run are built from the same list (`Bash(python -m black *)`), so a run is never told to
+use a command it is denied; a run without lint rules (reviewer, triage, test reviewer,
+diagnosis) is told that the gates check them. `framegate doctor` WARNs when a
+`[phases.<P>] tools` list denies a command that phase's task names.
+
+Test writer <-> test reviewer rounds: failed test checks or objections send the tests back,
+at most `[agents] test_review_rounds` times. A check that fails exactly as in the round
+before (the same problem lines) while the reviewer has no objections ends the loop at once
+(the writer had its round; seen live: a carried-over test that passes by design); the
+failure goes to the gate. A question the same asker already has open is not collected again:
+at least 80% of the shorter one's words shared, or the same tests / files and spec IDs named
+and half of the other words shared.
 
 Configuration: `framegate.toml` (all keys optional; see the commented template written by
 `init`). `[agents] claude` or env `FRAMEGATE_CLAUDE` selects the claude executable;

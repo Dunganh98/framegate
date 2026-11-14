@@ -143,7 +143,42 @@ def same_question(new: str, old: str) -> bool:
     ia, ib = set(_SPEC_ID.findall(new)), set(_SPEC_ID.findall(old))
     if (ia or ib) and not ia & ib:
         return False
-    return min(len(a), len(b)) >= 4 and len(a & b) / min(len(a), len(b)) >= 0.8
+    if min(len(a), len(b)) < 4:
+        return False
+    if len(a & b) / min(len(a), len(b)) >= 0.8:
+        return True
+    # about exactly the same tests / files and spec IDs: the wording may differ more. The
+    # names themselves are left out of the comparison (they are shared by construction, and
+    # another question about the same test must not pass on them)
+    ra, rb = _test_refs(new), _test_refs(old)
+    if not ra or ra != rb or ia != ib:
+        return False
+    pa, pb = _prose_words(new), _prose_words(old)
+    return min(len(pa), len(pb)) >= 4 and len(pa & pb) / min(len(pa), len(pb)) >= REWORDED_SHARE
+
+
+#: same_question: the share of the shorter question's words (without the names of tests,
+#: files and spec IDs) the other must have when both name exactly the same tests / files
+#: (seen live: the test writer asked about the same carried-over test twice, in other words;
+#: the 80% rule let it through)
+REWORDED_SHARE = 0.5
+_FILE_SUFFIX = r"\.(?:py|cs|js|ts|go|rs)"
+_TEST_REF = re.compile(rf"[\w./\\-]+{_FILE_SUFFIX}\b|\b(?:test_\w+|\w+_test|Test[A-Z]\w+)\b")
+
+
+def _test_refs(text: str) -> set[str]:
+    """The tests and files a question names: test functions / classes and source files (no
+    folder, no suffix: `tests/test_run.py` and `test_run` are the same), lower case."""
+    refs = set()
+    for m in _TEST_REF.finditer(text):
+        name = m.group(0).replace("\\", "/").rsplit("/", 1)[-1]
+        refs.add(re.sub(rf"{_FILE_SUFFIX}$", "", name).lower())
+    return refs
+
+
+def _prose_words(text: str) -> set[str]:
+    """A question's words without the tests, files and spec IDs it names."""
+    return _question_words(_SPEC_ID.sub(" ", _TEST_REF.sub(" ", text)))
 
 
 def _closest_answer(question: str, items: list[dict[str, Any]]) -> str | None:

@@ -11,7 +11,7 @@ import subprocess
 import time
 from typing import Any
 
-from framegate.config import Config
+from framegate.config import Config, phase_name
 
 
 class GitError(Exception):
@@ -209,6 +209,8 @@ def read_events(cfg: Config, feature: str | None = None) -> list[dict[str, Any]]
         except ValueError:  # a line cut short by a killed run: skip it, keep the rest
             continue
         if isinstance(rec, dict) and "kind" in rec:
+            if isinstance(rec.get("phase"), str):  # an event written under an earlier name
+                rec["phase"] = phase_name(rec["phase"])
             events.append(rec)
     return [e for e in events if feature is None or e.get("feature") == feature]
 
@@ -235,6 +237,11 @@ def load_progress(cfg: Config, feature: str) -> dict[str, Any]:
             prog.update(json.loads(p.read_text(encoding="utf-8")))
         except ValueError as e:
             raise StateError(f"{p} is not valid JSON ({e}); fix or delete it") from e
+    # a feature in progress that an earlier version left in a renamed phase ("PR")
+    prog["phase"] = phase_name(str(prog.get("phase")))
+    then = (prog.get("amend") or {}).get("then")
+    if isinstance(then, dict) and then.get("phase"):
+        then["phase"] = phase_name(str(then["phase"]))
     return prog
 
 

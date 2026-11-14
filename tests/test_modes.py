@@ -206,26 +206,45 @@ def test_feature_mode_is_unchanged(demo_repo: DemoRepo) -> None:
     assert "This is a" not in orch.task_text("REVIEW", "demo")
 
 
-def test_refactor_structure_fix_is_checked_like_a_step(
+def test_runs_after_the_review_are_checked_with_the_features_tests(
     demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Live (FCSim): a helper extraction after the review ran the whole suite in the agent, in
-    its gate and again in the final gates. A refactor's structure fix uses the feature's tests;
-    the whole suite runs once, at the end."""
+    its gate and again in the final gates. Live (da-argos): six gates, 21 minutes, two of
+    them for the small review-fix and structure-fix runs, directly before the final gates.
+    The structure fix, the review fixes and a final repair use the feature's tests (gate
+    scope "fix") in every mode; the whole suite runs once, in the final gates. Only the
+    repair of a whole-suite failure is checked with the suite: that is the failing check."""
     r = demo_repo
     cfg = load_config(r.root)
-    seen: list[object] = []
+    seen: list[tuple[object, object, str]] = []
 
     def loop(
         self: Orchestrator, feature: str, prog: dict, task: str, reqs: object, item: dict
     ) -> bool:
-        seen.append(reqs)
+        seen.append((reqs, item.get("gate"), task))
         return True
 
     monkeypatch.setattr(Orchestrator, "implement_loop", loop)
     orch = Orchestrator(cfg, get_adapter(cfg), echo=lambda s: None)
+    ids = ["DEMO-E-001", "DEMO-R-001"]
     orch.fix_structure("demo", {"phase": "REVIEW", "structure_findings": ["split x"]})
-    assert seen == [None]  # a feature: the whole suite, as before
+    assert seen[-1][:2] == (ids, "fix")
+    assert "Check with: python -m pytest -q --req DEMO-E-001,DEMO-R-001\n" in seen[-1][2]
+    orch.fix_findings("demo", {"phase": "REVIEW", "valid_findings": ["t"]})
+    assert seen[-1][:2] == (ids, "fix")
+    (r.root / "tests/review").mkdir()
+    orch.repair_final_src("demo", {"phase": "REVIEW"}, ["lint", "coverage run (feature tests)"])
+    assert seen[-1][:2] == (ids, "fix")
+    assert "(the gate also runs every test in tests/review/)" in seen[-1][2]
+    for name in ("regression: whole suite, no coverage", "full test suite + coverage"):
+        orch.repair_final_src("demo", {"phase": "REVIEW"}, ["lint", name])
+        assert seen[-1][0] is None and "Check with: python -m pytest -q\n" in seen[-1][2]
+    # with a parked step: only the done steps' IDs (the parked step's tests are red)
+    parked = {"phase": "REVIEW", "completed_steps": [], "structure_findings": ["split x"]}
+    parked["parked"] = [{"kind": "step", "step": 1, "label": "step 1"}]
+    orch.fix_structure("demo", parked)
+    assert seen[-1][:2] == ([], "fix")
     start(r, "refactor", REFACTOR, PLAN, LOOSE)
     orch.fix_structure("demo", {"phase": "REVIEW", "structure_findings": ["split x"]})
-    assert seen[1] == ["DEMO-E-001", "DEMO-R-001"]
+    assert seen[-1][:2] == (ids, "fix")

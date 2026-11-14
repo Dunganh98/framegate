@@ -1,6 +1,10 @@
 """Gate runner: run the frame checks for a feature.
 
-scope step   fast checks after each implementation step (tests of current + earlier steps)
+scope step   fast checks after each implementation step (tests of current + earlier steps,
+             then the whole everyday suite: [gates] step_tests)
+scope fix    the same checks for a run after the review (review fixes, structure fixes, final
+             repair) with the feature's tests and the review tests only: the final gates run
+             the whole suite right after
 scope final  everything, including coverage on the diff, traceability and mutation testing,
              then the structure report (sizes of the changed files, longest methods), for a
              port the fidelity report (each target file against its reference file) and the
@@ -344,6 +348,38 @@ def step_suite(adapter: LanguageAdapter, feature: str, covered: list[str]) -> Ch
     return CheckResult("PASS", run.output, note + "; no other failure")
 
 
+#: fix scope (the gates of the runs after the review: review fixes, structure fixes, final
+#: repair): the feature's tests and the review tests, not the whole suite. Seen live
+#: (da-argos): the suite took 4.5 min per gate, twice for two small fix runs, directly before
+#: the final gates ran it again. What such a run breaks elsewhere, the final regression finds
+#: (and its repair run then checks with the whole suite).
+FIX_TESTS = "tests (this feature)"
+REVIEW_TESTS = "review tests"
+
+
+def review_tests_checked(adapter: LanguageAdapter, feature: str) -> bool:
+    """Does a fix gate run the review tests folder on top of the feature's IDs (a review test
+    without a spec-ID tag)? Not while a step is parked: findings on its IDs wait for the redo,
+    their review tests are red by design (the tagged ones of the done steps still run)."""
+    cfg = adapter.cfg
+    if not (cfg.root / cfg.paths.review_tests).exists():
+        return False
+    return not expected_red(cfg, feature).parked_ids
+
+
+def review_tests(adapter: LanguageAdapter, feature: str, contested: list[str]) -> CheckResult:
+    """Every test in the review tests folder (contested tests and tests that already failed
+    when the spec was approved are left out, as in the suite)."""
+    cfg = adapter.cfg
+    run = adapter.run_tests(
+        paths=[cfg.paths.review_tests], junit=cfg.out_dir / "step_review_tests.xml"
+    )
+    if run.status == "no_tests":
+        return CheckResult("PASS", run.output, "no review tests")
+    known = regression_baseline(cfg, feature)
+    return tests_expecting(run, ExpectedRed(contested=contested), set(), known)
+
+
 def checks(
     adapter: LanguageAdapter,
     feature: str,
@@ -354,7 +390,7 @@ def checks(
     tag = frame_diff.approved_tag(feature)
     c = list(adapter.lint_checks(tag))
     c.append(Check(frame_diff.CHECK_NAME, lambda: frame_diff.check(adapter, feature)))
-    if scope == "step":
+    if scope in ("step", "fix"):
         reqs = read_reqs(adapter.cfg)
         contested = read_contested(adapter.cfg)
 
@@ -365,8 +401,12 @@ def checks(
             run = adapter.run_tests(req_ids=reqs, junit=adapter.cfg.out_dir / "step_tests.xml")
             return tests_expecting(run, ExpectedRed(contested=contested), set())
 
-        c.append(Check("tests (current + earlier steps)", step_tests))
-        if reqs and feature and adapter.cfg.step_tests == "suite":
+        fix = scope == "fix" and bool(reqs)  # without IDs the check runs everything
+        c.append(Check(FIX_TESTS if fix else "tests (current + earlier steps)", step_tests))
+        if fix:
+            if review_tests_checked(adapter, feature):
+                c.append(Check(REVIEW_TESTS, lambda: review_tests(adapter, feature, contested)))
+        elif scope == "step" and reqs and feature and adapter.cfg.step_tests == "suite":
             # without IDs the check above already ran everything
             c.append(
                 Check(STEP_SUITE, lambda: step_suite(adapter, feature, reqs), needs_green=True)

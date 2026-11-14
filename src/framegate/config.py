@@ -24,9 +24,23 @@ PHASES = (
     "REVIEW",
     "TRIAGE",
     "DIAGNOSIS",
-    "PR",
+    "SUMMARY",
     "RETRO",
 )
+#: phase names of earlier versions -> today's name. "PR" was the run that writes the final
+#: summary and the final brief (it never created a pull request): a `[phases.PR]` section, a
+#: progress.json that says "PR" and old events are still read (doctor WARNs about the section)
+PHASE_ALIASES = {"PR": "SUMMARY"}
+#: role file -> its earlier name: a project's additions in `[roles] extra_dir` under the
+#: earlier name (pr.md) are still read (doctor WARNs)
+ROLE_ALIASES = {"summary": "pr"}
+
+
+def phase_name(phase: str) -> str:
+    """Today's name of a phase (an earlier version's name is mapped, any other kept)."""
+    return PHASE_ALIASES.get(phase, phase)
+
+
 DEFAULT_ID_PATTERN = r"\b[A-Z][A-Z0-9]{1,9}-[REI]-\d{3}\b"
 
 # section -> key -> accepted python type(s). "phases.<PHASE>" is handled separately.
@@ -173,7 +187,7 @@ DEFAULT_MODELS = {
     "TESTS": "sonnet",
     "IMPLEMENT": "sonnet",
     "SPEC_UPDATE": "sonnet",
-    "PR": "sonnet",
+    "SUMMARY": "sonnet",
     "TEST_REVIEW": "opus",
     "REVIEW": "opus",
     "TRIAGE": "opus",
@@ -184,7 +198,7 @@ DEFAULT_MODELS = {
 #: --max-turns caps the model's API round trips (one assistant message, with any number of
 #: parallel tool calls). The result's `num_turns` counts messages (prompt + one per tool result),
 #: so it runs higher: the live RETRO with `num_turns` 46 made 23 API round trips under a cap of 30
-#: (docs/claude-cli-notes.md). RETRO and PR only read and write one file; TEST_REVIEW (test
+#: (docs/claude-cli-notes.md). RETRO and SUMMARY only read and write one file; TEST_REVIEW (test
 #: reviewer) and TRIAGE (the test reviewer triaging review findings) too.
 DEFAULT_MAX_TURNS = {
     "TESTS": 50,
@@ -193,14 +207,14 @@ DEFAULT_MAX_TURNS = {
     "REVIEW": 40,
     "TRIAGE": 30,
     "DIAGNOSIS": 40,
-    "PR": 30,
+    "SUMMARY": 30,
     "RETRO": 30,
     "SPEC_UPDATE": 30,
 }
 FALLBACK_MAX_TURNS = 80
 #: --max-budget-usd per agent run when neither [phases.<P>] max_budget_usd nor
 #: [agents] max_budget_usd is set: about 3x the live FCSim costs per run (TESTS 0.69, TEST_REVIEW
-#: 0.42, IMPLEMENT 0.40, REVIEW 0.46, PR 0.39, RETRO 1.15 USD; 2026-11-09). 0 = no cap.
+#: 0.42, IMPLEMENT 0.40, REVIEW 0.46, SUMMARY 0.39, RETRO 1.15 USD; 2026-11-09). 0 = no cap.
 DEFAULT_MAX_BUDGET_USD = {
     "TESTS": 2.0,
     "TEST_REVIEW": 1.5,
@@ -208,7 +222,7 @@ DEFAULT_MAX_BUDGET_USD = {
     "REVIEW": 1.5,
     "TRIAGE": 1.5,
     "DIAGNOSIS": 2.0,
-    "PR": 1.5,
+    "SUMMARY": 1.5,
     "RETRO": 3.0,
     "SPEC_UPDATE": 1.0,
 }
@@ -330,7 +344,7 @@ class Config:
     #: feature added that the feature's own tests never ran (needs the coverage run)
     unreached_assertions: bool = True
     #: [docs] code_map: the living code map (per module: purpose, key classes, how they work
-    #: together, where to look for X); drafted by /framegate:setup, updated by the PR phase
+    #: together, where to look for X); drafted by /framegate:setup, updated by the SUMMARY phase
     code_map: str = "docs/code-map.md"
     #: [gates] tests: "defer" | "human" | "auto" (see TESTS_GATE_MODES)
     tests_gate: str = "defer"
@@ -375,6 +389,9 @@ class Config:
     references: dict[str, Reference] = field(default_factory=dict)
     #: raw, type-checked adapter sections, e.g. {"dotnet": {"configuration": "Release"}}
     language_options: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: names of an earlier version found in framegate.toml and still read, each with what to
+    #: rename it to (`framegate doctor` WARNs)
+    renamed: list[str] = field(default_factory=list)
     loaded_from_file: bool = False
 
     # ---- paths ----
@@ -463,7 +480,7 @@ class Config:
             "REVIEW": [p.review_tests, p.out],
             "TRIAGE": [p.review_tests, p.out],
             "DIAGNOSIS": [p.out],
-            "PR": [p.out, self.code_map],
+            "SUMMARY": [p.out, self.code_map],
             "RETRO": [p.out],
         }
         return [_as_prefix(x) for x in defaults.get(phase, [])]
@@ -720,11 +737,16 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
                     _str_list(f"[{section}] {key}", value)
             cfg.language_options[section] = body
 
-    for phase, body in data.get("phases", {}).items():
+    # an earlier name first, so a section under today's name wins key by key
+    sections = sorted(data.get("phases", {}).items(), key=lambda kv: kv[0] not in PHASE_ALIASES)
+    for written, body in sections:
+        phase = phase_name(written)
         if phase not in PHASES:
-            raise ConfigError(f"[phases.{phase}] unknown phase (allowed: {', '.join(PHASES)})")
+            raise ConfigError(f"[phases.{written}] unknown phase (allowed: {', '.join(PHASES)})")
         if not isinstance(body, dict):
-            raise ConfigError(f"[phases.{phase}] must be a table")
+            raise ConfigError(f"[phases.{written}] must be a table")
+        if written != phase:
+            cfg.renamed.append(f"[phases.{written}] is now [phases.{phase}]")
         for key, value in body.items():
             if key not in PHASE_KEYS:
                 raise ConfigError(f"[phases.{phase}] unknown key '{key}' (allowed: {PHASE_KEYS})")

@@ -22,6 +22,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from framegate.adapters.base import (
+    FILES_ARG,
     Check,
     CheckResult,
     LanguageAdapter,
@@ -374,13 +375,15 @@ class GenericAdapter(LanguageAdapter):
         keys = ("test_all", "test_ids", "test_paths")
         return self._rules([self.opts[k] for k in keys if k in self.opts])
 
-    def lint_tools(self) -> list[str]:
-        cmds = [c for c in self.cfg.gate_commands.values() if c]
-        if self.opts.get("format_fix"):
-            cmds.append(self.opts["format_fix"])
-        return self._rules(cmds)
+    def agent_format_fix(self) -> list[list[str]]:
+        # the fix is [generic] format_fix, whatever checks the formatting
+        return self.format_fix_commands([FILES_ARG])
 
-    def conventions_brief(self) -> str:
+    def lint_tools(self) -> list[str]:
+        # by the tool's name (`Bash(<tool> *)`): covers every command agent_commands names
+        return self._rules(self.agent_commands())
+
+    def conventions_brief(self, allowed: Sequence[str] | None = None) -> str:
         p = self.cfg.paths
         text = str(self.opts.get("conventions", "")).strip()
         lines = [
@@ -388,6 +391,7 @@ class GenericAdapter(LanguageAdapter):
             text,
             f"- Run tests: `{self.test_command()}`; only some IDs: "
             f"`{self.test_command(['ID1', 'ID2'])}`.",
+            self.lint_brief(allowed),
             f"- Tests live in {p.tests}/; reviewer tests in {p.review_tests}/.",
         ]
         forbidden = self.default_forbidden_patterns()

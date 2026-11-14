@@ -24,7 +24,7 @@ PHASE_ORDER = [
     "IMPLEMENT",
     "REVIEW",
     "TRIAGE",
-    "PR",
+    "SUMMARY",
     "RETRO",
 ]
 

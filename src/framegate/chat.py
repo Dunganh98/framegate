@@ -38,8 +38,9 @@ DIFF_LINES = 12
 BRIEF_SECTION_LINES = 8
 #: Proven / Not proven at the final gate: the most important points (the rest on request)
 BRIEF_PROVEN_LINES = 3
-#: phase names in run log file names ({stamp}-{feature}-{PHASE}.json / .prompt.md / ...)
-RUN_LOG_PHASES = "SPEC_UPDATE|TESTS|TEST_REVIEW|IMPLEMENT|DIAGNOSIS|REVIEW|TRIAGE|PR|RETRO"
+#: phase names in run log file names ({stamp}-{feature}-{PHASE}.json / .prompt.md / ...);
+#: PR: the SUMMARY phase's name before 0.9.1 (run files of a feature started with it)
+RUN_LOG_PHASES = "SPEC_UPDATE|TESTS|TEST_REVIEW|IMPLEMENT|DIAGNOSIS|REVIEW|TRIAGE|SUMMARY|PR|RETRO"
 TAG_PREFIXES = (
     "spec-approved",
     "tests-approved",

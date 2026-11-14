@@ -130,11 +130,16 @@ fail for no reason. Reading files and git log/diff/status are fine.
    back) and prints the kept ones; say in one line where they are (`framegate backlog`).
    Applying proposals is separate work, only if the user asks; the full file on request.
 2. Then ask in one message, each with its default:
-   1. "Create the PR with the final summary as its description? (pushes feat/<f>)", default no;
+   1. When the remote is on GitHub (`git remote get-url origin` names github.com): "Create
+      the PR with the final summary as its description? (pushes <branch>)", default no.
+      Any other host (Azure DevOps, GitLab, ...): "Push <branch>, so you can open the pull
+      request there?", default no;
    2. "Clean up the run files now (specs and metrics stay)?", default yes.
-3. PR only on an explicit yes: `git push -u origin <branch>`, then
+3. Only on an explicit yes: `git push -u origin <branch>`. Then, on GitHub only:
    `gh pr create --base <[git] base, default main> --head <branch> --title "<f>: <one line>"
-   --body-file <out>/<f>/final_summary.md`. Do it before the cleanup (the cleanup deletes
-   the file). Never push without that yes.
+   --body-file <out>/<f>/final_summary.md`. On any other host do not create the pull
+   request: print the branch name and say that `<out>/<f>/final_summary.md` is the text for
+   its description (copy it before the cleanup). Do it before the cleanup (the cleanup
+   deletes the file). Never push without that yes.
 4. Cleanup on yes: `framegate cleanup <f>`. Its result in one line.
 5. One line: after the PR is merged, `/framegate:status <f>` offers removing the feature's tags.

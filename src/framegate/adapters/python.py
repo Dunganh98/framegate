@@ -39,6 +39,8 @@ from framegate.adapters.base import (
 )
 
 SKIP_MARKS = {"skip", "skipif", "xfail"}
+#: an allow rule for a tool run as a module (lint_tools adds the tool's own name)
+MODULE_RULE = "Bash(python -m "
 #: bump to force the WSL mutmut venvs to be rebuilt
 MUTMUT_ENV_VERSION = 2  # 2: pytest plugin --req-paths
 #: files whose content keys the WSL venv (besides the requirement list itself)
@@ -60,9 +62,8 @@ Language: Python. Test framework: pytest (framegate plugin provides the `req` ma
 - Edge cases: assert the exact value, or `pytest.raises(ExcType, match="...")`.
 - Invariants (I-IDs): property-based tests with hypothesis (`@given`).
 - Every test needs a concrete assertion. No skip/skipif/xfail, no pytest.skip().
-- Run tests: `python -m pytest -q` ; only some IDs: `python -m pytest -q --req ID1,ID2`.
-- Lint/format/types: `ruff format {src} {tests}`, `ruff check {src} {tests}`,
-  `python -m mypy {src}`.
+- Run tests: `{run_all}` ; only some IDs: `{run_ids}`.
+{lint}
 - Forbidden in source code: `# type: ignore`, `noqa`, `pragma: no cover`, broad
   `except Exception`, skips.
 - Tests live in {tests}/ (files test_*.py); reviewer tests in {review_tests}/.
@@ -710,17 +711,31 @@ class PythonAdapter(LanguageAdapter):
     def test_tools(self) -> list[str]:
         return ["Bash(python -m pytest *)", "Bash(pytest *)"]
 
-    def lint_tools(self) -> list[str]:
-        return [
-            "Bash(ruff check *)",
-            "Bash(ruff format *)",
-            "Bash(python -m ruff *)",
-            "Bash(python -m mypy *)",
-        ]
+    def agent_form(self, cmd: Sequence[str]) -> list[str]:
+        """The project interpreter is `python` for an agent, as in its test command."""
+        own = bool(cmd) and self.resolve_command(cmd[:1])[:1] == [self.python]
+        out = super().agent_form(cmd)
+        if own and out:
+            out[0] = "python"
+        return out
 
-    def conventions_brief(self) -> str:
+    def lint_tools(self) -> list[str]:
+        """The rules of the effective commands (base), and for a `python -m <tool> ...` one
+        the tool's own name too (`ruff check ...`): the same tool, typed the short way."""
+        rules = super().lint_tools()
+        short = ["Bash(" + r[len(MODULE_RULE) :] for r in rules if r.startswith(MODULE_RULE)]
+        return list(dict.fromkeys([*rules, *short]))
+
+    def conventions_brief(self, allowed: Sequence[str] | None = None) -> str:
         p = self.cfg.paths
-        return BRIEF.format(src=p.src, tests=p.tests, review_tests=p.review_tests)
+        text = BRIEF.format(
+            tests=p.tests,
+            review_tests=p.review_tests,
+            run_all=self.test_command(),
+            run_ids=self.test_command(["ID1", "ID2"]),
+            lint=self.lint_brief(allowed),
+        )
+        return "\n".join(line for line in text.splitlines() if line.strip()) + "\n"
 
     def gitignore_entries(self) -> list[str]:
         return ["mutants/"]  # mutmut's working copy (removed after each run)

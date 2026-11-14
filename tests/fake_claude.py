@@ -20,12 +20,12 @@ Scenario keys:
   review_invalid: true -> the reviewer also writes an invalid finding (negative ints rejected);
     TRIAGE deletes it and marks it INVALID
   structure: true -> the first REVIEW run lists one structure finding in review.md
-  brief: true -> PR also writes out/demo/final_brief.md (plain-words sections, gate item 1
+  brief: true -> SUMMARY also writes out/demo/final_brief.md (plain-words sections, gate item 1
     asked as question 1); "filtered" -> asks item 2 first, then item 1, one untagged decision,
     item 3 left out as the same as item 2 (use with park_steps=[2],
-    questions_in=["REVIEW", "PR"]); "bad" -> the first PR run's brief asks item 1 without its
+    questions_in=["REVIEW", "SUMMARY"]); "bad" -> the first SUMMARY run asks item 1 without its
     number and with one option (for the brief check), later runs as true
-  code_map: true -> PR also writes docs/code-map.md
+  code_map: true -> SUMMARY also writes docs/code-map.md
   language: "python" (default) or "dotnet" (C# files for the .NET fixture, see test_dotnet_e2e)
   mode: "bugfix" -> TESTS also writes a must-not-change test (DEMO-I-001) and IMPLEMENT's
     step note names the cause (ROOT CAUSE / RULED OUT); "refactor" -> IMPLEMENT keeps the
@@ -46,6 +46,13 @@ Scenario keys:
   usage_limit: {phase: n} -> the first n runs of that phase are refused by the usage limit (no
     files; a rejected rate_limit_event resetting in usage_limit_reset_s seconds, default 120);
     they do not count as runs for the other keys
+  api_error: {phase: n} -> the first n runs of that phase do no work and end with the result
+    "API Error: Can't reach the API server ..." (one turn, no cost; no files); they do not
+    count as runs for the other keys
+  test_question: the test writer's question, one text per TESTS run (a list; the last one for
+    later runs), instead of the `questions_in` question
+  green_test: true -> every TESTS run also writes test_reference_constant, which passes
+    against the stub ("Red against stubs" fails the same way in every round)
   contest_steps: plan step numbers whose first IMPLEMENT run finds the extra test
     test_add_refuses_bool_contested wrong: TESTS adds that test (bools must be rejected), the run
     writes the loose add() (bools pass) and a `Park kind: tests-wrong` park.md naming it
@@ -92,6 +99,14 @@ TESTS_KEEP = """
 @pytest.mark.req("DEMO-I-001")
 def test_add_zero_stays() -> None:
     assert add(0, 0) == 0
+"""
+
+#: passes against the stub in every round (a carried-over test that is green by design)
+TESTS_GREEN = """
+
+@pytest.mark.req("DEMO-R-001")
+def test_reference_constant() -> None:
+    assert add.__name__ == "add"
 """
 
 TESTS_E2 = """
@@ -322,6 +337,26 @@ def main() -> int:
         print(json.dumps({"type": "rate_limit_event", "rate_limit_info": info}))
         print(json.dumps(result))
         return 1
+    offline = state.setdefault("offline", {})
+    if offline.get(phase, 0) < scen.get("api_error", {}).get(phase, 0):
+        # as seen live: one turn, no cost, subtype "success", the error as the result text
+        offline[phase] = offline.get(phase, 0) + 1
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        text = "API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)"
+        result = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": True,
+            "result": text,
+            "num_turns": 1,
+            "total_cost_usd": 0,
+            "session_id": "fake",
+        }
+        msg = {"id": "msg_err", "role": "assistant", "content": [{"type": "text", "text": text}]}
+        print(json.dumps({"type": "system", "subtype": "init", "session_id": "fake"}))
+        print(json.dumps({"type": "assistant", "message": msg}))
+        print(json.dumps(result))
+        return 1
     runs = state.setdefault("runs", {})
     runs[phase] = runs.get(phase, 0) + 1
     if scen.get("hang") == phase and runs[phase] == 1:
@@ -381,6 +416,11 @@ def main() -> int:
             text += TESTS_KEEP
             if scen.get("bug_not_shown") and runs[phase] == 1:  # passes with the bug in place
                 text = text.replace("assert add(2, 3) == 5", "assert add(0, 0) == 0")
+        if scen.get("green_test"):
+            text += TESTS_GREEN
+        asks = scen.get("test_question") or []
+        if asks:
+            write("out/demo/questions.md", f"- {asks[min(runs[phase], len(asks)) - 1]}\n")
         write(rel, text)
         write("out/demo/test_summary.md", "| DEMO-R-001 | test_add_returns_sum | sum | example |\n")
     elif phase == "TEST_REVIEW":
@@ -495,7 +535,7 @@ def main() -> int:
                 f"Fix owner: {owner}\n"
                 "Proposed fix: return a + b.\nEvidence:\n- ran the step tests\n",
             )
-    elif phase == "PR":
+    elif phase == "SUMMARY":
         write("out/demo/final_summary.md", "# Final summary\nSummary.\n")
         mode = scen.get("brief")
         if mode:
