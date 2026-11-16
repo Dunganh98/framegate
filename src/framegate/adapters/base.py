@@ -16,7 +16,7 @@ import subprocess
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from framegate import procs
 from framegate.agent_commands import (
@@ -802,6 +802,35 @@ class LanguageAdapter(abc.ABC):
             "the tools it looks for and how to get them."
         )
         return 0
+
+    # ---------- probe (`framegate probe`: instant facts, nothing is run on the code) ----------
+    @classmethod
+    def guess_layout(cls, root: pathlib.Path) -> tuple[list[str], str]:
+        """(source folders, test folder) of a repository with no framegate.toml yet, guessed
+        from its files. Default: framegate's own defaults."""
+        return ["src"], "tests"
+
+    def interpreter(self) -> tuple[str, str] | None:
+        """(the interpreter / toolchain executable every run uses, where it comes from);
+        None = this language has none to name."""
+        return None
+
+    def env_facts(self) -> dict[str, Any]:
+        """One instant question to the project's environment. Keys, all optional: `version`
+        (of the interpreter / toolchain; absent = it did not answer), `editable` (the
+        project's packages installed there from the source tree), `refresh` (the
+        `[env] refresh` command that redoes that install)."""
+        return {}
+
+    def test_runner(self) -> list[str]:
+        """The command whose `--version` shows that the test runner is there ([] = unknown)."""
+        return []
+
+    def detected_tools(self) -> dict[str, tuple[list[str], str]]:
+        """Per role (`test`, a `[gates.commands]` key, `format_fix`): the command the
+        project's own config files point to, as it is written in framegate.toml, and the file
+        that says so. A role the project's files do not settle is left out."""
+        return {}
 
     # ---------- init ----------
     def config_template(self) -> str:

@@ -10,7 +10,7 @@ a terminal.
 
 | Command | What it means | When |
 |---|---|---|
-| `/framegate:setup` | set up framegate in this repo (draft config, project facts and code map; a short brief that asks only the real decisions; doctor) | once per repo |
+| `/framegate:setup` | set up framegate in this repo (probe the project, one table of its facts to confirm, then config, project facts and code map; doctor) | once per repo |
 | `/framegate:feature <f>` | start or continue feature `<f>`: spec dialogue, run, gates, wrap-up | each feature |
 | `/framegate:bugfix <f>` | a bug fix: bug report dialogue, tests that fail on today's code, the fix, gates | each bug |
 | `/framegate:refactor <f>` | a refactor: scope dialogue, tests that pin today's behavior, small steps, gates | each refactor |
@@ -18,6 +18,7 @@ a terminal.
 | `/framegate:status [f]` | where features stand; tag cleanup after the PR is merged | any time |
 | `framegate init` | write the starter files (config, spec templates, project facts, .gitignore lines) | once per repo |
 | `framegate install-tools [--dry-run] [--update]` | install what the workflow needs into the project's environment (python: the framegate pytest plugin, pytest, pytest-cov, hypothesis, diff-cover, and with a framegate.toml the lint / format / type tools its gate commands name); `--update` also brings the framegate pytest plugin there to the command-line tool's version; reports versions it changed; works before `init` | first step of `/framegate:setup`, after config changes |
+| `framegate probe [--json]` | the project facts every run depends on, from instant checks only (no test run, no linter over the code, no agent): language, the interpreter the run uses, the test / lint / format / type commands with where each comes from and whether the tool answers `--version` there, source and test folders, base branch, remote and host, deploy / CI paths locked or to lock, editable install, references; works before `init` (proposals from the project's own files) and with a framegate.toml (the configured values); always exit 0 | step 1 of `/framegate:setup` |
 | `framegate preflight [<f>] [--plugin-version X] [--check]` | the start check: the command-line tool at the plugin's version (prints the install command for the chat), the project environment's workflow tools at the tool's version (updated here, unless the feature's spec is approved, `--check` is given or no feature is named), a session with outdated skills told to restart, a short setup check; one line when all is in line; always exit 0 | first step of `/framegate:feature`, `:bugfix`, `:refactor`; `:resume` with `--check` |
 | `framegate doctor [--full] [--brief]` | check the setup without agents; ends with a verdict and only what needs action (`--brief`: only that); `--full` also runs the whole test suite | after setup or config changes |
 | `framegate spec <f> [--mode feature\|bugfix\|refactor]` | create the branch `feat/<f>` and open the spec phase with the mode's templates | start of a feature |
@@ -75,9 +76,10 @@ mutation score) and never stops to ask.
 
 ## Daily use: from the Claude Code chat
 
-Once per repository: `/framegate:setup` in the chat (it reads the repo, drafts framegate.toml,
-`.framegate/project.md` and the code map, shows a short brief that asks only the real decisions, runs
-`framegate init` and `framegate doctor --brief`, and offers a small smoke feature in one line), or by hand `framegate init [--language
+Once per repository: `/framegate:setup` in the chat (it runs `framegate probe`, reads a little,
+shows one table of the project's facts to confirm with "ok" or "5: use black", then writes
+framegate.toml, `.framegate/project.md` and the code map, runs `framegate init` and
+`framegate doctor --brief`, and offers a small smoke feature in one line; a few minutes), or by hand `framegate init [--language
 python|dotnet|generic]` (framegate.toml, spec templates, `.framegate/project.md`, .gitignore
 lines; commit them) and `framegate doctor` (checks config, git, that framegate.toml is on the base
 branch, the claude CLI, the chat's allow rules, the tools, the gate commands and the test selection by spec ID, without agents; `--full` also times the
@@ -132,7 +134,7 @@ is no mode or switch for this.
 | Spec gate (`out/<f>/spec_brief.md`, written by the chat) | Task (2-4 lines) / Plan (one line per step, with its main file) / How it is proven (the 3 most important checks) / Not proven (the 3 most important things to check by using it) / Decisions I made for you (one line each, with what it rules out) / Project details that matter / Setup files changed (config, packaging and tool files the spec phase changed; approved and frozen with the spec) / Questions (the real decisions, by impact) |
 | Tests gate (`[gates] tests = "human"`/`"auto"`) | what the tests check in plain words (the test reviewer's `## What the tests check` in test_review.md), objections left, one line of mechanical checks, questions with defaults |
 | Final gate (`framegate gate-summary`, from `final_brief.md` + run records; ~20 lines when nothing went wrong) | Steps (the spec brief's plan again: one line per step with how it went, as planned / changed / parked, what happened inside it and its main file) / Struggles (only what happened outside the steps; one line when none) / Decisions I made / Outcomes with numbers (gates, diff coverage, mutation, failed attempts, parks, cost, agent and check time, structure) / Proven and Not proven (the 3 most important points each, the rest on request) / Code map (one line; a WARN when new public types are missing) / Questions numbered 1..k by impact (the problem in one line, then `A: ... (default) / B: ...`) / Decisions I made / how many gate items were left out |
-| Setup | what I found, the settings that differ from the defaults (with why), the knowledge facts in short lines, the code map's modules, the real decisions as questions with defaults |
+| Setup | one fixed table, shown every time, each row with its value, where it comes from (a file or `framegate probe`) and, for a tool, whether it answered: language / adapter, interpreter, test command, lint, format, types, source / test folders, base branch, shared repository (state branch yes / no), locked deploy / CI paths, reinstall command (`[env] refresh`), reference projects. Reply "ok" or the row and the change ("5: use black"). Below it: the knowledge facts in short lines, the code map's modules in one line, one line saying the rest uses the defaults. No detail questions (slow tests, thresholds, risk limits); a "Blocker:" line only for what the repository cannot answer (no test framework, no way to tag tests, no project interpreter) |
 | `framegate doctor --brief` | one verdict line (ready / not ready), then only the FAILs with the fix and the WARNs that need a decision |
 | Retro (`## Brief` in retro_proposals.md) | numbered proposals, problem -> fix, recommend take / skip / fold into N (and `repeats B3` for a problem the backlog already holds); the knowledge facts; answered with numbers (`framegate keep`, `framegate learn`) |
 | Smoke run offer, DONE wrap-up, status, resume, errors, interruptions | one or two lines: the state and the one decision needed, with a default |
@@ -151,7 +153,8 @@ or another section.
 
 ### Which questions are asked
 
-No count cap anywhere (spec dialogue, spec / final gate briefs, setup). A point is a question
+No count cap anywhere (spec dialogue, spec / final gate briefs; the setup asks nothing but its
+table and blockers, see above). A point is a question
 only when it is a real decision: two or more reasonable options with different outcomes, and the
 spec, the code, `.framegate/project.md` and earlier answers don't settle it. Otherwise it is not
 a question: only one sensible option -> decided, one line under "Decisions I made"; already
@@ -591,6 +594,11 @@ framegate init [--language python|dotnet|generic]  # framegate.toml, specs/_temp
                                             # .framegate/project.md, .gitignore lines
 framegate doctor [--full] [--brief]         # check the setup without agents; ends with a
                                             # verdict + what needs action (--brief: only that)
+framegate probe [--json]                    # the project facts in seconds: interpreter, test /
+                                            # lint / format / type commands (+ does each tool
+                                            # answer --version), folders, base branch, remote,
+                                            # paths to lock, editable install; nothing is run
+                                            # on the code; works before init
 framegate preflight [<f>] [--plugin-version X] [--check]
                                             # the skills' start check: tool at the plugin's
                                             # version (prints the install command), project

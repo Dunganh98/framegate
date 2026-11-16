@@ -1,13 +1,15 @@
 ---
 name: setup
-description: Set up framegate in this repository - read the repo, draft framegate.toml, the project knowledge file and the code map, show a short brief that asks only the real decisions, check the setup with framegate doctor, offer a smoke run. Run only when the user invokes it.
+description: Set up framegate in this repository - probe the project (interpreter, test / lint / format / type commands, folders, branch, remote), show one table of these facts for the user to confirm, write framegate.toml, the project knowledge file and the code map, check with framegate doctor, offer a smoke run. Run only when the user invokes it.
 disable-model-invocation: true
 allowed-tools: Bash(framegate *) PowerShell(framegate *) Bash(uv tool install *) PowerShell(uv tool install *) Read Write Edit Glob Grep
 ---
-You set up framegate for this repository. The user is the manager: they answer a few questions
-and approve; you read the repo, draft the files, run the `framegate` commands. Every message:
-the decision and its default first, details only on request, plain words. You never change the
-project's source or tests (one exception, step 3: a tagging helper the user approved).
+You set up framegate for this repository, once per project. The user is the manager: they
+confirm one table; you probe, read, write the files and run the `framegate` commands. Plain
+words, the decision first, details only on request. The whole setup takes a few minutes: do
+not run the project's tests or linters yourself, and do not study the code in depth. You never
+change the project's source or tests (one exception, step 3: a tagging helper the user
+approved).
 
 ## 0. Install the tools first
 
@@ -47,79 +49,118 @@ branch (pushed by whoever set it up): do not draft anything. Say so in one line,
 to start with `/framegate:feature <name>` (it fetches the branch and brings the files in), and
 stop here. An error ("no framegate.toml found") or `State branch: off` means: go on.
 
-## 1. Read the repo (no edits yet)
+## 1. Probe, then read a little (no edits yet)
 
-Find out, from files only (Read / Glob / Grep):
-- language, build and test tools: `pyproject.toml`, `*.sln` / `*.csproj`, `package.json`,
-  `go.mod`, `Cargo.toml`, ...; the test framework and how tests are run, filtered and reported
-  (JUnit XML?), how slow tests are marked (traits, markers, categories);
-- the layout: source and test folders (several source folders are fine: `[paths] src` takes
-  a list, e.g. `["core", "autoload", "scenes"]`), where specs could live, generated / build
-  folders;
-- the modules (folders / namespaces / packages): what each is for, its key classes, how they
-  work together (for the code map);
-- CI files (`.github/workflows/`, ...), formatter / linter / type checker configs;
-- `CLAUDE.md`, `README`, docs: architecture rules, conventions, things that must not change;
-- tests that pin outputs (golden files, hashes, fingerprints, snapshots, save formats) and how
-  test data is made (seeds, factories, recordings, scan or generator commands);
-- whether `framegate.toml`, `.framegate/project.md` and the code map (`[docs] code_map`,
-  default `docs/code-map.md`) exist already (then you update them).
+Run `framegate probe`. In seconds, without running a test, a linter or an agent, it prints one
+line per fact: the language, the interpreter every run uses, the test / lint / format / type
+commands with `[OK: <version>]` or `[MISSING]` (each tool was asked for `--version` in that
+interpreter) and where each comes from, the source and test folders, the base branch, the
+remote and its host, the deploy and CI paths that are locked or should be, the reinstall
+command, the reference projects, and which of framegate's files exist. It works before a
+`framegate.toml` exists (the values are proposals from the project's own files) and with one
+(the values are the configured ones). These lines fill the table of step 3: do not replace a
+probed value by one you assume.
+
+Then read, from files only (Read / Glob / Grep), just enough for the knowledge file and the
+code map; a few minutes, not a study:
+- `CLAUDE.md`, the README, a contributing or architecture doc: rules, conventions, things
+  that must not change, the test or lint commands the team documents (one that differs from
+  a probed value goes into the table with its file as the source);
+- the top-level folders and, per module, a file or two: what it is for, its key classes, how
+  the modules work together;
+- `framegate.toml`, `.framegate/project.md`, the code map when the probe says they exist
+  (then you update them).
+
+Not now: which tests are slow, coverage or mutation numbers, test data, risk limits.
 
 ## 2. Pick the adapter
 
-`python` (pytest) and `dotnet` (xUnit) have built-in adapters. Any other language or test
-framework: `generic`, configured entirely in framegate.toml `[generic]` (`framegate init
---language generic` writes a commented example): the test commands with placeholders (`{junit}`
-report path, `{ids}` / `{ids_regex}` spec-ID selection, `{paths}`), a `tag_pattern` regex that
-finds a test's spec IDs, the `stub_marker` a not-implemented stub prints, optional coverage
-(Cobertura / LCOV + `diff-cover`), mutation (command + score regex) and `format_fix`. If the
-framework has no way to tag a test with IDs and select by them, propose the smallest helper (for
-example a `req("X-R-001")` tag that the test runner can filter on) and it becomes a question.
+`python` (pytest) and `dotnet` (xUnit) have built-in adapters; the probe names the one it
+detected. `Language: unknown`, or another test framework: `generic`, configured entirely in
+framegate.toml `[generic]` (`framegate init --language generic` writes a commented example):
+the test commands with placeholders (`{junit}` report path, `{ids}` / `{ids_regex}` spec-ID
+selection, `{paths}`), a `tag_pattern` regex that finds a test's spec IDs, the `stub_marker`
+a not-implemented stub prints, optional coverage (Cobertura / LCOV + `diff-cover`), mutation
+(command + score regex) and `format_fix`. You fill its table rows from the project's files;
+their "Answers" cell reads "checked in step 5".
 
-## 3. Draft, then one short brief
+## 3. One table to confirm
 
-Draft (in your head, no files yet): the framegate.toml settings, the knowledge file
-`.framegate/project.md` (sections Architecture rules / Never changes / Test harness / Tools /
-Off-limits, one short verifiable line per fact) and the code map.
+Draft (in your head, no files yet) the knowledge file `.framegate/project.md` (sections
+Architecture rules / Never changes / Test harness / Tools / Off-limits, one short verifiable
+line per fact) and the code map. Then show this, every time, the same rows in the same order,
+no toml and no file dumps:
 
-Show the user a brief of about one screen, no toml and no file dumps:
+    **Please confirm the setup** - reply "ok", or the row and the change ("5: use black")
 
-    **What I found** — language and test framework, how tests run, the slow tests, what is
-      protected (hashes, save formats, golden files, public APIs)
-    **Settings I chose** — only those that differ from the defaults, each with why
-      ("diff coverage 80, not 90: the UI glue has no tests")
-    **What agents will know** — the knowledge facts, short lines
-    **Code map** — the modules it lists, one line
-    **Questions** — numbered, by impact; each: the problem in one line, then
-      "A: ... (default) / B: ..." on one line ("None." when nothing is open)
+    | # | What | Value | From | Answers |
+    |---|---|---|---|---|
+    | 1 | Language / adapter | python / python | pyproject.toml | |
+    | 2 | Interpreter | .venv/Scripts/python.exe | the project's .venv | OK (Python 3.12.4) |
+    | 3 | Test command | python -m pytest -q | pytest.ini | OK (pytest 8.3.2) |
+    | 4 | Lint | python -m ruff check app tests | pyproject.toml [tool.ruff] | OK (ruff 0.6.9) |
+    | 5 | Format | python -m black --check app tests | pyproject.toml [tool.black] | OK (black 24.8.0) |
+    | 6 | Types | off | the project names no type checker | |
+    | 7 | Source / test folders | app / tests | the folders | |
+    | 8 | Base branch | main | origin/HEAD | |
+    | 9 | Shared repository: framegate's files on their own branch | yes, framegate/main | remote on Azure DevOps, 4 authors | |
+    | 10 | Locked deploy / CI paths | azure-pipelines.yml, deploy/, Dockerfile | probe | |
+    | 11 | Reinstall when a spec changes packaging | python -m pip install -e . --no-deps | editable install found | |
+    | 12 | Reference projects | none | | |
 
-One line per bullet; a section with nothing in it is one line. A point is a question only when
-it is a real decision: two or more reasonable options with different outcomes, and the repo,
-`.framegate/project.md` and earlier answers don't settle it. Otherwise: one sensible option ->
-decide it (a line under "Settings I chose" or "What agents will know"); already settled or a
-note -> leave it out; the same question twice -> one. No limit on the number. Ask only what
-the code cannot tell; typical ones: which tests are slow or need special setup
-(they stay out of the step checks); what must never change and how tests leave new members out;
-how test data for a rare situation is found; what is off-limits for agents; whether mutation
-testing should run (and its threshold for glue code vs libraries); the base branch; which
-paths must always get the user's own look at the final gate (`[risk] never_auto`).
+    **What agents will know** - the knowledge facts, one short line each
+    **Code map** - the modules it lists, in one line
+    Defaults taken for everything else (which tests the step checks leave out, coverage and
+    mutation thresholds, risk limits): change them later in framegate.toml.
 
-Always ask this one when the repository has a remote (`.git/config` names one): "Other people
-work in this repository. Keep framegate's own files (config, specs, metrics, project facts,
-code map) out of their code? A: yes, on a separate branch `framegate/<base>` that is pushed
-but never merged; pull requests carry only source and tests (default when the remote is
-shared with a team) / B: no, commit them with the code (default for a repository of your
-own)." The toml,
-the knowledge file or the code map in full only on request.
+How the rows are filled:
+- Value, From and Answers are the probe's, word for word where it gave them. A value you
+  took from a doc instead: name the file under From.
+- Rows 4-6: where the probe prints a second line ("framegate's default is ...; to use the
+  project's tool set ..."), the value is the project's tool, as shown. A tool the probe marks
+  "framegate's default: the project's files do not name it": the value is "off" (agents are
+  never told a command the project does not use); only a project with no code yet keeps
+  framegate's defaults.
+- `MISSING` on a tool the project names: keep the row and write "MISSING, installed in step
+  5" under Answers (for Python: ruff, mypy, black); for any other tool write "MISSING" and
+  ask under the table how to get it.
+- Row 2, when the probe says "framegate's own interpreter: the project has no .venv": that is
+  not the project's environment. Write "none found" and ask under the table which interpreter
+  the project runs in (`[env] python`).
+- Row 3 carries the test selection only when the project's own files give one (an `addopts`
+  line, a documented `-m "not integration"`): `[python] pytest_args` / `[dotnet] base_filter`.
+- Row 9, same meaning as ever: yes = framegate's own files (config, specs, metrics, project
+  facts, code map) live on a separate branch `framegate/<base>` that is pushed but never
+  merged, and pull requests carry only source and tests; no = they are committed with the
+  code. The default is the probe's "suggested" (yes when the remote is shared with a team,
+  no for a repository of your own or without a remote); "no remote" under From when there
+  is none.
+- Row 10: the locked paths plus the probe's lock candidates (they will be locked on "ok").
+- Rows 11 and 12: "none" when the probe found none.
+
+Below the table, a line "Blocker:" only for what the repository cannot answer and the setup
+cannot go on without: no test framework at all; a framework with no way to tag a test with
+spec IDs and select by them (propose the smallest helper, e.g. a `req("X-R-001")` tag the
+test runner can filter on); the interpreter of row 2. One line each, with your default.
+Nothing else is asked. The toml, the knowledge file or the code map in full only on request.
 
 ## 4. Write
 
-After the answers ("ok" = every default): if there is no framegate.toml yet, run `framegate
-init` (or `framegate init --language generic`); it creates framegate.toml, `specs/_template/`,
-`.framegate/project.md` and `.gitignore` lines, and never overwrites a file. Then edit
-framegate.toml and `.framegate/project.md` with the drafted settings and the answers (knowledge
-file under ~150 lines: facts, not prose), and write the code map (`[docs] code_map`, under
-~300 lines) in this form:
+After "ok" (= every row as shown) or the changes: if there is no framegate.toml yet, run
+`framegate init` (or `framegate init --language generic`); it creates framegate.toml,
+`specs/_template/`, `.framegate/project.md` and `.gitignore` lines, and never overwrites a
+file. Then edit framegate.toml, only the keys whose row differs from framegate's default:
+
+- row 1 `[project] language`; row 2 `[env] python` (a `.venv` in the project needs no entry);
+- row 3 `[python] pytest_args`, `[dotnet]` or `[generic]`;
+- rows 4-6 `[gates.commands]` `lint` / `format` / `typecheck`: the lines the probe printed
+  after "set" (with `format_fix` when it names one), `[]` for "off";
+- row 7 `[paths] src` (one folder or a list, e.g. `["core", "autoload", "scenes"]`) and `tests`;
+- row 8 `[git] base`; row 9 `[git] state_branch = "framegate/{base}"` for yes;
+- row 10 `[protected] extra`; row 11 `[env] refresh`; row 12 `[references]`.
+
+Write `.framegate/project.md` (under ~150 lines: facts, not prose) and the code map
+(`[docs] code_map`, under ~300 lines) in this form:
 
     # Code map
 
@@ -132,31 +173,27 @@ file under ~150 lines: facts, not prose), and write the code map (`[docs] code_m
 
 Every later feature's SUMMARY phase updates the sections it touches.
 
-If the answer to the shared-repository question was A: set `[git] state_branch =
-"framegate/{base}"` in framegate.toml; take the lines `framegate init` added to `.gitignore`
-out again (`.gitignore` is the team's file; `framegate state init` ignores the run files
-through `.git/info/exclude`); if the project has a folder named like one of framegate's
-(`specs/`, `metrics/`), point framegate's path elsewhere (`[paths] metrics =
-".framegate/metrics"`). For Python also add the line `req(*ids): spec IDs this test proves`
-to `markers` in the project's own pytest config (`pytest.ini`, or `[tool.pytest.ini_options]`
-in `pyproject.toml`; create the `markers` list if there is none): the pull request carries
-the tests without framegate, and pytest must know the marker there. Tell the user about this
-one line: it is the only change to a file of theirs, and the first feature's pull request
-brings it to the base.
+Row 9 = yes: take the lines `framegate init` added to `.gitignore` out again (`.gitignore`
+is the team's file; `framegate state init` ignores the run files through
+`.git/info/exclude`); if the project has a folder named like one of framegate's (`specs/`,
+`metrics/`), point framegate's path elsewhere (`[paths] metrics = ".framegate/metrics"`).
+For Python also add the line `req(*ids): spec IDs this test proves` to `markers` in the
+project's own pytest config (`pytest.ini`, or `[tool.pytest.ini_options]` in
+`pyproject.toml`; create the `markers` list if there is none): the pull request carries the
+tests without framegate, and pytest must know the marker there. Tell the user about this one
+line: it is the only change to a file of theirs, and the first feature's pull request brings
+it to the base.
 
-If the project is installed into its environment from its packaging files (a Python editable
-install, for example), set `[env] refresh` in framegate.toml to the command that redoes it,
-e.g. `refresh = ["python", "-m", "pip", "install", "-e", ".", "--no-deps"]`: every spec
-approval runs it, so a package or source folder a feature adds in its spec phase imports in
-the run without a step by hand.
+Row 10, `[protected] extra`: deploy and CI files outside the built-in list (`.github/`,
+`.gitlab-ci.yml`, `azure-pipelines.yml`), e.g. `ci/`, `deploy/`, `k8s/`, `Dockerfile`,
+`docker-compose*.yml`, generated files such as `*_pb2.py`. They are locked for every feature,
+also in its spec phase; what a feature needs there is noted in its spec ("Pipeline
+follow-up"), raised in the final summary and done as a separate step. The packaging / test /
+tool-config files need no entry: the language adapter protects them, and they are the setup
+files a spec phase may change.
 
-Deploy and CI files outside the built-in list (`.github/`, `.gitlab-ci.yml`,
-`azure-pipelines.yml`): put them in `[protected] extra` (e.g. `ci/`, `deploy/`, `k8s/`,
-`Dockerfile`, `docker-compose*.yml`, generated files such as `*_pb2.py`). They are locked for
-every feature, also in its spec phase; what a feature needs there is noted in its spec
-("Pipeline follow-up"), raised in the final summary and done as a separate step. The
-packaging / test / tool-config files need no entry: the language adapter protects them, and
-they are the setup files a spec phase may change.
+Row 11, `[env] refresh`: every spec approval runs it, so a package or source folder a feature
+adds in its spec phase imports in the run without a step by hand.
 
 ## 5. Check: `framegate doctor --brief`
 
@@ -177,10 +214,10 @@ line. From here on the files are changed on a feature branch only.
 
 ## 6. Offer a smoke run, in one line
 
-"A smoke run (a tiny throwaway feature through the whole flow, about USD 2-4 and 15-30 minutes)
-proves the agents, gates and hooks work before a real feature. Do it? (default: yes)". On yes:
-tell them to run `/framegate:feature smoke` with this requirement (adapt the names to the
-language):
+"Optional: a smoke run (a tiny throwaway feature through the whole flow, about USD 2-4 and
+15-30 minutes) proves the agents, gates and hooks work before a real feature. Do it?
+(default: yes)". On yes: tell them to run
+`/framegate:feature smoke` with this requirement (adapt the names to the language):
 
     A pure function clamp(value, low, high) in the source folder: returns value limited to
     [low, high]; low > high raises an argument error with the message "low > high". One plan

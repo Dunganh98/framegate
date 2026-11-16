@@ -17,8 +17,9 @@ plugin/
   scripts/framegate-hook.js         # wrapper: node framegate-hook.js <event> -> framegate hook <event>
   scripts/session-start.js          # SessionStart: one line after an update (what changed)
   whats-new.json                    # version -> that one line
-  skills/setup/SKILL.md             # /framegate:setup: read the repo, draft framegate.toml and
-                                    # .framegate/project.md, one batch of questions, framegate
+  skills/setup/SKILL.md             # /framegate:setup: framegate probe, one table of the
+                                    # project's facts to confirm, framegate.toml,
+                                    # .framegate/project.md and the code map, framegate
                                     # doctor, optional smoke run
   skills/feature/SKILL.md           # /framegate:feature <f>: branch + spec dialogue, then the run
                                     # protocol (injected: framegate protocol)

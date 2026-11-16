@@ -497,6 +497,17 @@ class DotnetAdapter(LanguageAdapter):
                 return str(pathlib.Path(r) / exe)
         return "dotnet"
 
+    def interpreter(self) -> tuple[str, str]:
+        where = "framegate.toml [dotnet] executable" if self.settings.executable else "found"
+        return self.dotnet, where
+
+    def env_facts(self) -> dict[str, Any]:
+        code, out = run_command([self.dotnet, "--version"], self.root, timeout=30)
+        return {"version": f".NET SDK {out.strip().splitlines()[-1]}"} if code == 0 and out else {}
+
+    def test_runner(self) -> list[str]:
+        return [self.dotnet]
+
     def env(self) -> dict[str, str]:
         env = dict(os.environ)
         env.update(DOTNET_ENV)

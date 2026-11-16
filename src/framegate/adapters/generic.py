@@ -411,6 +411,9 @@ class GenericAdapter(LanguageAdapter):
             out.append(("diff-cover (diff coverage)", bool(diff), diff or "install diff-cover"))
         return out
 
+    def test_runner(self) -> list[str]:
+        return [str(x) for x in self.opts["test_all"][:1]]
+
     def config_template(self) -> str:
         return TEMPLATE
 
