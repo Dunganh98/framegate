@@ -1,4 +1,5 @@
 {
+  "0.12.4": "tool state of your machine (.serena/, .venv/, .idea/ and other dot folders) is ignored everywhere: it no longer blocks publish, the pipeline check or a branch switch.",
   "0.12.3": "new /framegate:update brings the command-line tool and the project tools to the plugin's version at any time; resume and the pipeline task now update too once a task is DONE.",
   "0.12.2": "\"ok\" at the end of a task now publishes and creates the pull request, with a short description written for reviewers that survives the cleanup; a follow-up item can be closed as not needed.",
   "0.12.1": "the pipeline check no longer counts files that were already changed before the task started; the start names them and asks once what to do with them.",
