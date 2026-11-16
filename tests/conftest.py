@@ -217,6 +217,13 @@ def no_toast(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def no_plugin_on_this_machine(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never the developer's own Claude Code plugin registry (`framegate status` compares the
+    installed plugin's version with the tool's)."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-home"))
+
+
+@pytest.fixture(autouse=True)
 def own_claude_settings(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`framegate doctor` never reads the developer's own ~/.claude/settings.json."""
     from framegate import doctor

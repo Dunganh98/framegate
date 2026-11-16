@@ -3,7 +3,7 @@ name: resume
 description: Reattach this chat to a framegate feature after a session restart - says in one line where it stands, then continues with the live view, the waiting gate or the wrap-up. Run only when the user invokes it.
 argument-hint: "[feature-slug]"
 disable-model-invocation: true
-allowed-tools: Bash(framegate *) PowerShell(framegate *) Monitor Read Write Edit Glob Grep
+allowed-tools: Bash(framegate *) PowerShell(framegate *) Bash(uv tool install *) PowerShell(uv tool install *) Monitor Read Write Edit Glob Grep
 ---
 Reattach to the framegate feature `$ARGUMENTS` (none given: pick from the list below).
 
@@ -13,12 +13,15 @@ Reattach to the framegate feature `$ARGUMENTS` (none given: pick from the list b
 
 ## What to do
 
-0. Start check: run `framegate preflight $ARGUMENTS --check --plugin-version 0.12.2` (this
-   plugin is version 0.12.2; from here it only reports, it updates nothing). `Start check: ok`
-   and `KEPT:` lines: nothing to say. A `TELL THE USER:` line (the plugin was updated while
-   this session ran: restart Claude Code) and every `PROBLEM:` line: pass it on in one line,
-   then go on. The command fails with `invalid choice: 'preflight'` (an older command-line
-   tool without the start step): go on without a word.
+0. Start check: run `framegate preflight $ARGUMENTS --plugin-version 0.12.3` (this plugin
+   is version 0.12.3). A task between "spec OK" and DONE keeps the versions it was started
+   with (`KEPT:` lines: nothing to say); a finished one (its wrap-up, its publish) and one
+   still in its spec phase are brought up to date. `Start check: ok`: nothing to say.
+   `RUN: <command>`: run it, then the start check again; say nothing when it worked, one line
+   when it failed, and go on. `UPDATED: ...`: one line to the user. A `TELL THE USER:` line
+   (the plugin was updated while this session ran: restart Claude Code) and every `PROBLEM:`
+   line: pass it on in one line, then go on. The command fails with `invalid choice:
+   'preflight'` (an older command-line tool without the start step): go on without a word.
 1. No feature was given and the list above shows several: ask which one in one line, with the
    one waiting at a gate or running as the default. Exactly one: take it. None: say so in one
    line and stop.

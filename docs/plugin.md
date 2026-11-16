@@ -2,7 +2,7 @@
 
 The plugin is the Claude Code side of framegate: seven skills that drive the workflow from the chat
 (`/framegate:setup`, `/framegate:feature`, `/framegate:bugfix`, `/framegate:refactor`,
-`/framegate:pipeline`, `/framegate:resume`, `/framegate:status`) and two hooks, all calling the
+`/framegate:pipeline`, `/framegate:resume`, `/framegate:status`, `/framegate:update`) and two hooks, all calling the
 `framegate` CLI (the Python package in `src/`). All logic lives in the package (including the
 chat run protocol, `framegate protocol`); the plugin only registers things. Installed
 **user-wide**, it stays inert in repos without `framegate.toml`.
@@ -12,7 +12,7 @@ chat run protocol, `framegate protocol`); the plugin only registers things. Inst
 ```
 .claude-plugin/marketplace.json     # marketplace "framegate", one entry: source "./plugin"
 plugin/
-  .claude-plugin/plugin.json        # name framegate, version 0.12.2
+  .claude-plugin/plugin.json        # name framegate, version 0.12.3
   hooks/hooks.json                  # PreToolUse (Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell), SessionStart, Stop
   scripts/framegate-hook.js         # wrapper: node framegate-hook.js <event> -> framegate hook <event>
   scripts/session-start.js          # SessionStart: one line after an update (what changed)
@@ -27,6 +27,8 @@ plugin/
                                     # bugfix), then the run protocol
   skills/refactor/SKILL.md          # /framegate:refactor <f>: scope dialogue (spec --mode
                                     # refactor), then the run protocol
+  skills/update/SKILL.md            # /framegate:update: the command-line tool and the project's
+                                    # workflow tools at the plugin's version, at any time
   skills/pipeline/SKILL.md          # /framegate:pipeline <f>: the deploy / CI changes of a task's
                                     # pipeline follow-up, or of their own (no run, no agents)
   skills/resume/SKILL.md            # /framegate:resume [f]: reattach after a session restart
@@ -101,7 +103,7 @@ How a machine gets the new version:
   machine keep the clone at the plugin's version.
 - Why the skills do not inject the check at load (`` !`framegate preflight ...` ``): a load
   command that exits non-zero aborts the whole skill ("Shell command failed for pattern
-  ..."; seen 2026-11-14, claude 2.1.325, with the 0.12.2 tool, which has no `preflight`), and
+  ..."; seen 2026-11-14, claude 2.1.325, with the 0.12.3 tool, which has no `preflight`), and
   a new plugin must work with the previous tool while a feature is in progress. Run as a
   tool call, the unknown command is an ordinary error the skill reads (`invalid choice:
   'preflight'` -> the old rule: install the plugin's version unless work is in progress).

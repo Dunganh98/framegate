@@ -47,11 +47,14 @@ def test_the_skills_bring_the_cli_to_the_plugin_version() -> None:
         assert skill.index("## Start check") < skill.index("## Project conventions"), name
         assert preflight.install_command(version) == install
     resume = (ROOT / "plugin/skills/resume/SKILL.md").read_text(encoding="utf-8")
-    assert f"framegate preflight $ARGUMENTS --check --plugin-version {version}" in resume
-    # the pipeline task: a report-only check, and the install when its command is missing
+    # resume and the pipeline task: the same check; work in progress keeps its versions,
+    # a finished task (wrap-up, publish, pipeline) is brought up to date
+    assert check in resume and "Bash(uv tool install *)" in resume
+    update = (ROOT / "plugin/skills/update/SKILL.md").read_text(encoding="utf-8")
+    assert f"framegate update --plugin-version {version}" in update and install in update
     pipeline = (ROOT / "plugin/skills/pipeline/SKILL.md").read_text(encoding="utf-8")
     assert f"This plugin is version {version}." in pipeline
-    assert f"framegate preflight $ARGUMENTS --check --plugin-version {version}" in pipeline
+    assert check in pipeline
     assert install in pipeline and "`invalid choice`" in pipeline
     assert "Bash(uv tool install *)" in pipeline and "PowerShell(uv tool install *)" in pipeline
     listed = (ROOT / "docs/plugin.md").read_text(encoding="utf-8")

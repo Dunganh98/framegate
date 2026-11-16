@@ -14,6 +14,8 @@ decision needed, with your default. No raw command lines; the output itself on r
   `/framegate:resume <f>`." One still in SPEC: "Continue the spec with
   `/framegate:feature <f>`" (a bug fix: `/framegate:bugfix <f>`; a refactor:
   `/framegate:refactor <f>`; the `Mode:` line of its requirements.md says which).
+- A first line `framegate: the plugin is X, the command-line tool Y`: "framegate is not up
+  to date here: `/framegate:update` brings it in line."
 - A line with `pipeline follow-up: N open item(s)` (deploy / CI changes a task left to do,
   also after it was cleaned up or merged): "Do them with `/framegate:pipeline <f>`."
 - A feature shown as `DONE, run files cleaned up; tags left: ...`: "Is its PR merged? Then I

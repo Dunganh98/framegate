@@ -255,3 +255,55 @@ def test_pytools_installs_an_update_though_the_module_is_there(
     )
     assert code == 0 and "  [update ] framegate (pytest plugin)" in lines
     assert ["py", "-m", "pip", "install", "framegate @ git+x@v1"] in commands
+
+
+def test_a_finished_task_is_updated_like_new_work(
+    demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Seen live: after a release the wrap-up of a DONE task (publish, pipeline task) ran
+    with the old tool, because "spec approved" counted as in progress for ever."""
+    r = demo_repo
+    assert r.af("approve-spec", "demo") == 0
+    cfg = load_config(r.root)
+    metrics = r.root / cfg.paths.metrics / "workflow_metrics.csv"
+    metrics.parent.mkdir(parents=True, exist_ok=True)
+    metrics.write_text("date,feature\n2026-11-16,demo\n", encoding="utf-8")
+    assert not preflight.in_progress(cfg, "demo")
+    tools = Tools(monkeypatch, OTHER)
+    code, lines = check("demo", NEWER)
+    assert code == 0 and lines[1].startswith("RUN: uv tool install --force")
+    code, lines = check("demo", V)
+    assert tools.updates == 1 and lines[1].startswith("UPDATED: the project environment")
+
+
+def test_update_keeps_nothing(
+    demo_repo: DemoRepo,
+    monkeypatch: pytest.MonkeyPatch,
+    claude_home: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`framegate update`: the user asked, so also with work in progress and without a
+    feature; the target is the plugin on this machine."""
+    r = demo_repo
+    assert r.af("approve-spec", "demo") == 0
+    tools = Tools(monkeypatch, OTHER)
+    code, lines = check(None, NEWER, update=True)
+    assert code == 0 and tools.updates == 0
+    assert lines[1].startswith(
+        f'RUN: uv tool install --force "git+{framegate.SOURCE_URL}@v{NEWER}"'
+    )
+    assert f"`framegate update --plugin-version {NEWER}` again" in lines[1]
+    code, lines = check(None, V, update=True)
+    assert tools.updates == 1 and lines[1].startswith("UPDATED: the project environment")
+    # the command: the plugin on disk is the target; status says when they differ
+    assert preflight.version_note() == ""
+    plugin_on_disk(claude_home, NEWER)
+    capsys.readouterr()
+    assert cli.main(["update"]) == 0
+    assert f"@v{NEWER}" in capsys.readouterr().out
+    note = f"framegate: the plugin is {NEWER}, the command-line tool {V}: /framegate:update"
+    assert cli.main(["status"]) == 0
+    assert capsys.readouterr().out.startswith(note)
+    plugin_on_disk(claude_home, V)
+    assert cli.main(["status", "demo", "--brief"]) == 0
+    assert "/framegate:update" not in capsys.readouterr().out

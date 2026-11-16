@@ -62,6 +62,11 @@ commands:
                           each tool answers --version, folders, base branch, remote, deploy
                           and CI files to lock, editable install; runs no test, no linter,
                           no agent; works before `init` (for /framegate:setup)
+  update [--plugin-version X]   bring this machine in line with the plugin: names the
+                          command that installs the command-line tool at the plugin's
+                          version (it cannot replace itself while it runs), then updates
+                          the project environment's workflow tools; /framegate:update
+                          does both in the chat
   preflight [<feature>] [--plugin-version X] [--check]   the start step of the chat
                           skills: the command-line tool at the plugin's version, the
                           project environment's workflow tools at the tool's version
@@ -190,6 +195,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("feature", nargs="?")
     p.add_argument("--plugin-version", default="", help="the version of the skill that asks")
     p.add_argument("--check", action="store_true", help="report only, update nothing")
+    p = sub.add_parser("update", help="bring the tool and the project's tools to the plugin")
+    p.add_argument("--plugin-version", default="", help="default: the plugin on this machine")
     p = sub.add_parser("doctor", help="check the project setup (no agents)")
     p.add_argument("--full", action="store_true", help="also run the whole test suite")
     p.add_argument("--brief", action="store_true", help="only the verdict and what needs action")
@@ -270,6 +277,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             from framegate import preflight
 
             return preflight.run(args.feature, args.plugin_version, check_only=args.check)
+        if args.command == "update":
+            from framegate import preflight
+
+            target = args.plugin_version or preflight.installed_plugin_version() or ""
+            return preflight.run(None, target, update=True)
         root = find_root()
         if root is not None:
             cfg = load_config(root)
@@ -382,6 +394,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             from framegate import chat
 
             if args.command == "status":
+                from framegate import preflight
+
+                if (f is None or args.brief) and preflight.version_note():
+                    print(preflight.version_note())
                 if f is None:
                     return chat.overview(orch)
                 return chat.brief(orch, f) if args.brief else orch.status(f)

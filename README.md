@@ -82,6 +82,7 @@ In a terminal (the chat runs these for you):
 | `framegate install-tools` | install what the workflow needs into the project's environment (setup does this first) |
 | `framegate probe` | the project facts in seconds: interpreter, test / lint / format commands and whether each tool answers (setup shows them for your "ok") |
 | `framegate doctor` | check the setup (no agents, no cost) |
+| `framegate update` / `/framegate:update` | bring the command-line tool and the project's workflow tools to the installed plugin's version, at any time |
 | `framegate preflight <name>` | the start check every feature begins with: plugin, CLI and the project's workflow tools at one version |
 | `framegate run <name>` | continue a feature until it needs you |
 | `framegate status <name>` | show its state |

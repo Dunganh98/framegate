@@ -42,7 +42,7 @@ from framegate import SOURCE_URL, __version__
 from framegate.adapters import get_adapter
 from framegate.adapters.base import LanguageAdapter
 from framegate.config import CONFIG_FILE, Config, ConfigError, find_root, load_config
-from framegate.state import GitError, tag_exists
+from framegate.state import GitError, feature_finished, tag_exists
 
 PLUGIN_NAME = "framegate"
 
@@ -77,9 +77,30 @@ def install_command(version: str) -> str:
     return f'uv tool install --force "git+{SOURCE_URL}@v{version}"'
 
 
-def again(feature: str | None, plugin_version: str) -> str:
+def again(feature: str | None, plugin_version: str, update: bool = False) -> str:
     version = f"--plugin-version {plugin_version}" if plugin_version else ""
-    return " ".join(a for a in ("framegate preflight", feature, version) if a)
+    command = "framegate update" if update else "framegate preflight"
+    return " ".join(a for a in (command, None if update else feature, version) if a)
+
+
+def in_progress(cfg: Config, feature: str | None) -> bool:
+    """Between "spec OK" and DONE: the run keeps the versions it was started with. A finished
+    task (its wrap-up, its publish, its pipeline task) is brought up to date like new work."""
+    return (
+        bool(feature) and spec_approved(cfg, feature) and not feature_finished(cfg, feature or "")
+    )
+
+
+def version_note() -> str:
+    """One line for `framegate status` when the plugin on this machine and the command-line
+    tool differ ("" when they are in line or no plugin is installed)."""
+    on_disk = installed_plugin_version()
+    if not on_disk or version_key(on_disk) == version_key(__version__):
+        return ""
+    return (
+        f"framegate: the plugin is {on_disk}, the command-line tool {__version__}: "
+        "/framegate:update brings them in line (in a terminal: framegate update)."
+    )
 
 
 def spec_approved(cfg: Config, feature: str | None) -> bool:
@@ -109,7 +130,10 @@ def run(
     check_only: bool = False,
     echo: Callable[[str], None] = print,
     start: pathlib.Path | None = None,
+    update: bool = False,
 ) -> int:
+    """`update` (`framegate update`, /framegate:update): the user asked for it, so nothing is
+    kept, whatever is in progress."""
     cli = __version__
     lines: list[str] = []
 
@@ -139,12 +163,12 @@ def run(
             adapter = get_adapter(cfg)
         except ConfigError as e:
             lines.append(f"PROBLEM: {CONFIG_FILE}: {e}")
-    working = cfg is not None and spec_approved(cfg, feature)
-    keep = working or check_only or not feature
+    working = cfg is not None and in_progress(cfg, feature)
+    keep = not update and (working or check_only or not feature)
     why_kept = (
         f"{feature} is in progress and keeps what it was started with"
         if working
-        else "nothing is updated from here; the next new feature, bug fix or refactor does it"
+        else "nothing is updated from here; /framegate:update does it, or the next task"
     )
 
     # --- the command-line tool at the plugin's version ---
@@ -155,9 +179,10 @@ def run(
             )
         else:
             echo("Start check:")
+            repeat = again(feature, plugin_version, update)
             echo(
                 f"RUN: {install_command(plugin_version)}   (the command-line tool is {cli}, the "
-                f"plugin {plugin_version}; then run `{again(feature, plugin_version)}` again; "
+                f"plugin {plugin_version}; then run `{repeat}` again; "
                 "if the install fails, say so in one line and go on with the installed tool)"
             )
             return 0
