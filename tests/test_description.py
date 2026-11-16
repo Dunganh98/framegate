@@ -91,7 +91,6 @@ Checks: all final checks passed; diff coverage PASS: 100% of 6 changed lines; mu
 - .github/workflows/ci.yml: run tests/test_demo.py (CI does not select it)
 - not done yet, a separate step after this pull request: Dockerfile: COPY the demo folder \
 (the image lacks it)
-- not needed: compose.yml: mount the folder (the image holds it)
 
 Built with framegate {__version__}
 """
@@ -180,7 +179,7 @@ def test_a_task_finished_before_there_was_a_description(tmp_path: pathlib.Path) 
     """No description, the run files gone: built from the spec, and said in one line."""
     requirements = REQUIREMENTS.replace(
         "## Requirements",
-        "## Context\n<!-- why -->\nThe demo package has no way to add numbers.\n\n"
+        "## Context\n<!-- why -->\nThe demo package has no way\nto add numbers (plan §2).\n\n"
         "## Goals\n- add two whole numbers\n\n## Requirements",
     )
     cfg = project(tmp_path, requirements, PLAN2)
@@ -191,9 +190,13 @@ def test_a_task_finished_before_there_was_a_description(tmp_path: pathlib.Path) 
         "written), so it is built from the spec."
     )
     text = (tmp_path / written.rel).read_text(encoding="utf-8")
-    assert (
-        "## What\n\nThe demo package has no way to add numbers.\n\nadd two whole numbers\n" in text
-    )
+    # a wrapped paragraph of the spec is one paragraph here (seen live: one per line, and cut
+    # in the middle of a sentence)
+    what = "## What\n\nThe demo package has no way to add numbers (plan §2).\n\nadd two whole"
+    assert what in text
+    long = "A sentence of the task. " * 40
+    assert description._sentences(long).endswith("task.")
+    assert len(description._sentences(long)) <= description.WHAT_MAX
     assert "## Changes\n\n1. add\n2. neg\n" in text
     assert "## To do by hand outside the repository: 1\n" in text
     assert "## How it is proven" not in text and "why" not in text

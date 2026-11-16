@@ -1162,7 +1162,18 @@ def pull_request(
         return True
     body = str(summary) if summary.is_file() else ""
     cmd = hosts.pr_command(host, n.base, head, _batch_safe(exe, title), body)
-    r = run_tool([exe, *cmd[1:]], cwd=cfg.root, capture_output=True, text=True)
+    # the description is a UTF-8 file (`@file`); az and gh are told so, else a Windows
+    # machine reads it in its own code page (seen live: "§" and "…" arrived as "?")
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    r = run_tool(
+        [exe, *cmd[1:]],
+        cwd=cfg.root,
+        capture_output=True,
+        text=True,
+        env=env,
+        encoding="utf-8",
+        errors="replace",
+    )
     if r.returncode != 0:
         tail = " / ".join((r.stderr or r.stdout or "").strip().splitlines()[-3:])
         what = " ".join(cmd[: cmd.index("create") + 1])

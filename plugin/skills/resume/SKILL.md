@@ -13,8 +13,8 @@ Reattach to the framegate feature `$ARGUMENTS` (none given: pick from the list b
 
 ## What to do
 
-0. Start check: run `framegate preflight $ARGUMENTS --plugin-version 0.12.4` (this plugin
-   is version 0.12.4). A task between "spec OK" and DONE keeps the versions it was started
+0. Start check: run `framegate preflight $ARGUMENTS --plugin-version 0.12.5` (this plugin
+   is version 0.12.5). A task between "spec OK" and DONE keeps the versions it was started
    with (`KEPT:` lines: nothing to say); a finished one (its wrap-up, its publish) and one
    still in its spec phase are brought up to date. `Start check: ok`: nothing to say.
    `RUN: <command>`: run it, then the start check again; say nothing when it worked, one line

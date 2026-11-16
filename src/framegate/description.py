@@ -183,6 +183,30 @@ def _bullets(lines: list[str], clean: _Cleaner, numbered: bool = False) -> list[
     return out
 
 
+#: most characters of the task's first paragraph when it comes from the spec itself
+WHAT_MAX = 700
+
+
+def _paragraphs(lines: list[str]) -> list[str]:
+    """Wrapped lines of a spec section -> its paragraphs (a bullet starts a new one)."""
+    out: list[str] = []
+    for raw in lines:
+        if _BULLET.match(raw) or not out:
+            out.append(_BULLET.sub("", raw).strip())
+        else:
+            out[-1] = f"{out[-1]} {raw.strip()}"
+    return out
+
+
+def _sentences(text: str, limit: int = WHAT_MAX) -> str:
+    """The text, ended at a sentence when it is longer than `limit`."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    end = max(cut.rfind(". "), cut.rfind(".) "))
+    return cut[: end + 1] if end > limit // 4 else _clip(text, limit)
+
+
 def _what(cfg: Config, feature: str, spec_brief: dict[str, list[str]], summary: str) -> list[str]:
     clean = _Cleaner(cfg)
     mode = feature_mode(cfg, feature)
@@ -207,10 +231,10 @@ def _what(cfg: Config, feature: str, spec_brief: dict[str, list[str]], summary: 
     names = {"bugfix": ("symptom",), "refactor": ("goal", "scope")}.get(mode, ("context", "goals"))
     found = []
     for name in names:
-        for raw in _find(spec, name):
-            text = _BULLET.sub("", clean(raw))
-            if text and not text.startswith(("|", "<")) and not _NOTHING.match(text):
-                found.append(text)
+        kept = [x for x in _find(spec, name) if not x.lstrip().startswith(("|", "<"))]
+        for para in _paragraphs([clean(x) for x in kept]):
+            if para and not _NOTHING.match(para):
+                found.append(_sentences(para))
     if not found:
         title = re.search(r"^#\s+(.+?)\s*$", _COMMENT.sub("", req), re.M)
         found = [_DOC_KIND.sub("", title.group(1)) if title else feature]
@@ -276,7 +300,7 @@ def _deploy(cfg: Config, feature: str) -> tuple[list[str], bool]:
         if it.outside:
             continue
         if it.not_needed:
-            other.append(f"- not needed: {text} ({it.not_needed})")
+            continue  # nothing was changed and nothing is left: no news for a reviewer
         elif it.ticked:
             done.append(f"- {text}")
         else:
@@ -363,6 +387,8 @@ def _render(sections: dict[str, Section], footer: str, levels: dict[str, int]) -
         section = sections[key]
         most, width = LEVELS[levels.get(key, 0)]
         lines = section.lines if most is None or key in KEEP_LINES else section.lines[:most]
+        if key == "what":  # paragraphs: room for whole sentences
+            width = max(width, WHAT_MAX if most is None else width * 2)
         shown = [_clip(x, width) for x in [*lines, *section.tail]]
         if key == "what":  # plain lines, not a list: a paragraph each
             shown = [y for x in shown for y in (x, "")][:-1]
