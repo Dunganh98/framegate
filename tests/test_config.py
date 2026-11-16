@@ -143,6 +143,29 @@ extra_dir = ".framegate/roles"
     assert cfg.roles_extra_dir == ".framegate/roles"
 
 
+def test_builtin_deploy_ci_paths_and_the_opt_out(tmp_path: pathlib.Path) -> None:
+    cfg = parse_config(tmp_path, {})
+    assert cfg.deploy_ci_paths() == [
+        *(".github/", ".circleci/", ".azure-pipelines/"),
+        *("**/Dockerfile", "**/Dockerfile.*", "**/*.dockerfile", "**/.dockerignore"),
+        *("**/docker-compose*.yml", "**/docker-compose*.yaml"),
+        *("**/compose*.yml", "**/compose*.yaml", "**/Jenkinsfile"),
+        *("**/bitbucket-pipelines.yml", "**/azure-pipelines*.yml"),
+        *("**/.gitlab-ci*.yml", "**/.travis.yml"),
+    ]
+    off = ["dockerfile", "**/compose*.yml", ".circleci", "Dockerfile"]
+    cfg = parse_config(tmp_path, {"protected": {"builtin_off": off}})
+    assert cfg.protected_builtin_off == ["Dockerfile", "compose*.yml", ".circleci/"]
+    left = cfg.deploy_ci_paths()
+    assert not {"**/Dockerfile", "**/compose*.yml", ".circleci/"} & set(left)
+    assert {"**/Dockerfile.*", "**/compose*.yaml", ".github/"} <= set(left)
+    for bad in (["deploy/"], ["src/app/Dockerfile"], ["*.yml"]):
+        with pytest.raises(ConfigError, match="is not a built-in deploy / CI name"):
+            parse_config(tmp_path, {"protected": {"builtin_off": bad}})
+    with pytest.raises(ConfigError, match="builtin_off must be list"):
+        parse_config(tmp_path, {"protected": {"builtin_off": "Dockerfile"}})
+
+
 def test_env_overrides_claude(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FRAMEGATE_CLAUDE", "/opt/fake-claude")
     assert parse_config(tmp_path, {"agents": {"claude": "x"}}).claude == "/opt/fake-claude"

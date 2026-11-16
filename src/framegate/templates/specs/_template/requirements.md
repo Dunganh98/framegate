@@ -106,7 +106,10 @@ Kept quirks:
      (the final summary raises it). One bullet per change: `- <file>: <what must change>
      (<why>)`, e.g. `- platform/deploy/Dockerfile: COPY the new runner/ folder (the image
      must contain the new package)`, a new dependency the image must install, a new test
-     selection for CI. Only deploy / CI files: nothing else belongs here. "None." when the
+     selection for CI. Something that is no file of this repository
+     (a CI variable, a secret in the vault, a migration of the real database, an environment
+     switch): `- OUTSIDE [<where>]: <what must be done> (<why>)`; a person does it by hand.
+     Only deploy / CI files and such outside steps: nothing else belongs here. "None." when the
      feature needs no such change. -->
 None.
 

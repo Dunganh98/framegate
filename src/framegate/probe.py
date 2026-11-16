@@ -19,18 +19,26 @@ import fnmatch
 import json
 import os
 import pathlib
+import re
 import subprocess
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from typing import Any
 
 from framegate import hosts
 from framegate.adapters import detect_language, get_adapter
 from framegate.adapters.base import GATE_NAMES, TIMEOUT_CODE, LanguageAdapter, run_command
 from framegate.agent_commands import command_text
-from framegate.checks.frame_diff import CORE_PROTECTED, path_matches, protected_paths
+from framegate.checks.frame_diff import (
+    core_protected,
+    maybe_pipeline_file,
+    path_matches,
+    protected_paths,
+)
 from framegate.config import (
     CONFIG_FILE,
+    DEPLOY_CI_FOLDERS,
     GATE_COMMAND_KEYS,
     Config,
     ConfigError,
@@ -46,20 +54,22 @@ AUTHOR_COMMITS = 200
 LIST_MAX = 8
 BASE_NAMES = ("main", "master", "develop", "dev")
 
-#: top-level folders that hold deploy / CI files (`[protected] extra` candidates)
+#: top-level folders whose name says deploy / CI but can mean something else: not built in,
+#: proposed for `[protected] extra` when they exist
 DEPLOY_DIRS = {"ci", "deploy", "deployment", "deployments", "k8s", "kubernetes", "helm"}
-DEPLOY_DIRS |= {"charts", "infra", "infrastructure", "terraform", "pipelines", ".circleci"}
-DEPLOY_DIRS |= {".azure-pipelines", ".azuredevops", ".gitlab", ".buildkite"}
-#: file names (lower case globs) that are deploy / CI files wherever they lie
-DEPLOY_FILES: tuple[str, ...]
-DEPLOY_FILES = ("dockerfile", "dockerfile.*", "*.dockerfile", "docker-compose*.y*ml")
-DEPLOY_FILES += ("compose.y*ml", "jenkinsfile", "azure-pipelines*.y*ml", "procfile")
-DEPLOY_FILES += ("bitbucket-pipelines.yml", "databricks.yml", "cloudbuild.y*ml")
+DEPLOY_DIRS |= {"charts", "infra", "infrastructure", "terraform", "pipelines"}
+DEPLOY_DIRS |= {".azuredevops", ".gitlab", ".buildkite"}
+#: file names (lower case globs) that are deploy / CI files wherever they lie and are not
+#: built in (config.DEPLOY_CI_NAMES): proposed by their path
+DEPLOY_FILES: tuple[str, ...] = ("procfile", "databricks.yml", "cloudbuild.y*ml")
 #: generated files no feature edits by hand
 GENERATED = ("*_pb2.py", "*_pb2_grpc.py", "*.g.cs", "*.designer.cs")
-
-#: the CI files every project has locked without an entry
-BUILTIN_CI = (".github/", ".gitlab-ci.yml", "azure-pipelines.yml")
+#: scripts a CI file calls (looked for in the CI files' text)
+SCRIPT_SUFFIXES = (".sh", ".bash", ".ps1", ".cmd", ".bat")
+YAML_SUFFIXES = (".yml", ".yaml")
+#: the content looks of the lock candidates stay within this: files read, bytes of each
+READ_MAX = 40
+READ_BYTES = 8192
 
 ROLE_NAMES = {"test": "Test", "lint": "Lint", "format": "Format", "typecheck": "Types"}
 
@@ -227,22 +237,134 @@ def tracked_files(root: pathlib.Path) -> list[str]:
     return [f"{p.name}/" if p.is_dir() else p.name for p in sorted(root.iterdir())]
 
 
-def lock_candidates(files: Sequence[str], locked: Sequence[str]) -> list[str]:
-    """Deploy / CI / generated files that are not locked yet (`[protected] extra` entries:
-    a folder as `name/`, a file by its path, generated files as a glob)."""
+def builtin_found(
+    cfg: Config, files: Sequence[str], source_suffixes: tuple[str, ...] = ()
+) -> list[str]:
+    """The built-in deploy / CI paths that exist here, by name: a built-in folder as
+    `name/`, a built-in file name by the path of each file that has it. A source file of
+    the language (`source_suffixes`: `dockerfile.py`) is none."""
     out: list[str] = []
+    builtin = cfg.deploy_ci_paths()
+    for f in files:
+        if not path_matches(f, builtin) or not maybe_pipeline_file(cfg, f):
+            continue
+        if source_suffixes and f.endswith(source_suffixes):
+            continue
+        folder = next((d for d in DEPLOY_CI_FOLDERS if f.startswith(d)), "")
+        if (folder or f) not in out:
+            out.append(folder or f)
+    return out
+
+
+def _head(root: pathlib.Path, rel: str) -> str:
+    """The first bytes of a file ("" when it cannot be read)."""
+    try:
+        with open(root / rel, "rb") as fh:
+            return fh.read(READ_BYTES).decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _is_manifest(text: str) -> bool:
+    """A Kubernetes manifest: a yml document with `apiVersion:` and `kind:` at the top level."""
+    return bool(re.search(r"^apiVersion:", text, re.M) and re.search(r"^kind:", text, re.M))
+
+
+def ci_scripts(root: pathlib.Path, files: Sequence[str], ci_files: Sequence[str]) -> list[str]:
+    """Tracked scripts (SCRIPT_SUFFIXES) that a CI file names by their path."""
+    scripts = [f for f in files if f.lower().endswith(SCRIPT_SUFFIXES)]
+    if not scripts:
+        return []
+    out: list[str] = []
+    for rel in ci_files:
+        text = _head(root, rel).replace("\\", "/")
+        out += [s for s in scripts if s not in out and s in text]
+    return out
+
+
+def lock_candidates(
+    files: Sequence[str],
+    locked: Sequence[str],
+    root: pathlib.Path | None = None,
+    keep: Sequence[str] = (),
+    ci_files: Sequence[str] = (),
+) -> dict[str, str]:
+    """Deploy / CI / generated paths that are not locked yet -> why each is proposed
+    (`[protected] extra` entries: a folder as `name/`, a file by its path, generated files
+    as a glob). By name: the top-level folders of DEPLOY_DIRS, the files of DEPLOY_FILES, a
+    folder with a Dockerfile, a Helm `Chart.yaml` or Terraform `*.tf` files. With `root`
+    also by a look into at most READ_MAX files (the first READ_BYTES of each): folders with
+    Kubernetes manifests, scripts that `ci_files` (the CI definitions) name. `keep`: folders
+    never proposed as a whole (the source, test and spec folders, and what holds them):
+    there the file is."""
+    found: dict[str, str] = {}
+    is_locked = partial(path_matches, entries=list(locked))
+
+    def overlaps(folder: str) -> bool:
+        return any(k.startswith(folder) or folder.startswith(k) for k in keep)
+
+    def add(cand: str, why: str) -> None:
+        if cand and cand not in found and not is_locked(cand):
+            found[cand] = why
+
+    def add_folder(f: str, why: str, or_file: bool = True) -> None:
+        """The folder that holds `f`; the file itself at the root or in a kept folder."""
+        folder = f.rsplit("/", 1)[0] + "/" if "/" in f else ""
+        if folder and not overlaps(folder):
+            add(folder, why)
+        elif or_file:
+            add(f, why)
+
+    reads = 0
+    yml: list[str] = []
     for f in files:
         parts = f.split("/")
         name = parts[-1].lower()
         if len(parts) > 1 and parts[0].lower() in DEPLOY_DIRS:
-            cand = parts[0] + "/"
+            add(parts[0] + "/", "a folder with a deploy / CI name")
         elif any(fnmatch.fnmatchcase(name, g) for g in DEPLOY_FILES):
-            cand = f
-        else:
-            cand = next((g for g in GENERATED if fnmatch.fnmatchcase(name, g)), "")
-        if cand and cand not in out and not path_matches(cand, list(locked)):
-            out.append(cand)
-    return out
+            add(f, "a deploy / CI file by its name")
+        elif name == "chart.yaml":
+            add_folder(f, "a Helm chart (Chart.yaml)")
+        elif name.endswith(".tf"):
+            add_folder(f, "Terraform files (*.tf)")
+        elif fnmatch.fnmatchcase(name, "dockerfile*") or name.endswith(".dockerfile"):
+            # the Dockerfile itself is built in; what lies next to it is the image's too
+            add_folder(f, "holds a Dockerfile", or_file=False)
+        elif generated := next((g for g in GENERATED if fnmatch.fnmatchcase(name, g)), ""):
+            add(generated, "generated files")
+        elif name.endswith(YAML_SUFFIXES):
+            yml.append(f)
+    if root is None:
+        return _outermost(found)
+    # shallow files first: a manifest folder is usually near the root
+    for f in sorted(yml, key=lambda x: (x.count("/"), x)):
+        if reads >= READ_MAX:
+            break
+        if is_locked(f) or any(f.startswith(c) for c in found if c.endswith("/")):
+            continue
+        reads += 1
+        if _is_manifest(_head(root, f)):
+            add_folder(f, "Kubernetes manifests (yml with apiVersion and kind)")
+    ci = [f for f in ci_files if _is_ci_file(f)][: max(0, READ_MAX - reads)]
+    for script in ci_scripts(root, files, ci):
+        if not any(script.startswith(c) for c in found if c.endswith("/")):
+            add(script, "a script a CI file calls")
+    return _outermost(found)
+
+
+def _is_ci_file(f: str) -> bool:
+    """A CI definition whose text may name scripts (not a Dockerfile, not an ignore file)."""
+    name = f.rsplit("/", 1)[-1].lower()
+    return name.endswith(YAML_SUFFIXES) or name == "jenkinsfile"
+
+
+def _outermost(found: dict[str, str]) -> dict[str, str]:
+    """Without the folders and files that lie inside another proposed folder."""
+    folders = [c for c in found if c.endswith("/")]
+    return {
+        c: why for c, why in found.items() if not any(c != d and c.startswith(d) for d in folders)
+    }
 
 
 # ---------- the whole probe ----------
@@ -317,10 +439,17 @@ def collect(start: pathlib.Path | None = None) -> dict[str, Any]:
     }
 
     files = tracked_files(root)
-    locked = protected_paths(adapter) if adapter is not None else list(CORE_PROTECTED)
-    builtin = [e for e in BUILTIN_CI if any(path_matches(f, [e]) for f in files)]
+    locked = protected_paths(adapter) if adapter is not None else core_protected(cfg)
+    suffixes = tuple(adapter.source_suffixes) if adapter is not None else ()
+    builtin = builtin_found(cfg, files, suffixes)
     data["locked"] = [*builtin, *cfg.protected_extra]
-    data["lock_candidates"] = lock_candidates(files, locked)
+    data["locked_builtin"] = builtin
+    data["builtin_off"] = list(cfg.protected_builtin_off)
+    keep = [p.rstrip("/") + "/" for p in (*cfg.src_roots, cfg.paths.tests, cfg.paths.specs)]
+    ci_files = [f for f in files if maybe_pipeline_file(cfg, f)]
+    why = lock_candidates(files, locked, root, keep, ci_files)
+    data["lock_candidates"] = list(why)
+    data["lock_why"] = why
 
     data["editable"] = {
         "packages": facts.get("editable", []),
@@ -403,9 +532,18 @@ def render(data: dict[str, Any]) -> list[str]:
             else "no remote"
         )
         out.append(f"State branch: off; suggested: {'yes' if state['suggested'] else 'no'} ({why})")
-    out.append(f"Locked deploy / CI paths: {_listed(data['locked']) or 'none'}")
+    extra = [e for e in data["locked"] if e not in data["locked_builtin"]]
+    parts = [
+        f"built in: {_listed(data['locked_builtin'])}" if data["locked_builtin"] else "",
+        f"[protected] extra: {_listed(extra)}" if extra else "",
+    ]
+    out.append(f"Locked deploy / CI paths: {'; '.join(p for p in parts if p) or 'none found'}")
+    if data["builtin_off"]:
+        out.append(f"  taken off ([protected] builtin_off): {', '.join(data['builtin_off'])}")
+    why = data["lock_why"]
     out.append(
-        "Lock candidates ([protected] extra): " + (_listed(data["lock_candidates"]) or "none")
+        "Lock candidates ([protected] extra): "
+        + (_listed([f"{c} ({why[c]})" for c in data["lock_candidates"]]) or "none")
     )
     edit = data["editable"]
     if edit["configured"]:

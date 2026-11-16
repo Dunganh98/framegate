@@ -918,6 +918,44 @@ def test_pull_request_on_github(
     assert not publish.pull_request(cfg, n, "demo", "demo: add", lines.append, create=True)
     assert "`gh pr create` failed (boom); open it at " + page in lines[-1]
 
+    # what is left to do by hand outside the repository: an unticked checklist on top of the
+    # description, for the task's pull request and for a pipeline-only one
+    kept = r / "specs" / "demo" / "pipeline_followup.md"
+    kept.write_text(
+        "- [x] .github/workflows/ci.yml: run the new tests\n"
+        "- [ ] OUTSIDE [CI variable group]: add DEMO_TOKEN (the job reads it)\n"
+        "- [x] OUTSIDE [vault]: done already\n",
+        encoding="utf-8",
+    )
+    described = r / "out" / "demo" / "pr_description.md"
+    tool = Tool("https://github.com/acme/widgets/pull/9\n")
+    monkeypatch.setattr(publish, "run_tool", tool)
+    del lines[:]
+    assert publish.pull_request(
+        cfg, n, "demo", "demo: add", lines.append, create=False, write=False
+    )  # a dry run: said, nothing written
+    assert lines[0].startswith("Outside the repository: 1 item(s) to do by hand; an unticked")
+    assert not described.exists()
+    assert publish.pull_request(cfg, n, "demo", "demo: add", lines.append, create=True)
+    (call,) = tool.calls
+    assert call[call.index("--body-file") + 1] == str(described)
+    text = described.read_text(encoding="utf-8")
+    summary = (r / "out" / "demo" / "final_summary.md").read_text(encoding="utf-8")
+    head = "## Outside the repository, by hand (framegate does not do them): 1\n\n"
+    assert text.startswith(head + "- [ ] CI variable group: add DEMO_TOKEN (the job reads it)\n")
+    assert "vault" not in text and summary.strip() in text
+    brief = r / "out" / "demo" / "pipeline_brief.md"
+    brief.write_text("**What was asked**\n1. run the new tests\n", encoding="utf-8")
+    assert publish.pull_request(
+        *(cfg, n, "demo", "demo: deploy / CI changes", lines.append),
+        create=False,
+        head="pipeline/demo",
+        body="out/demo/pipeline_brief.md",
+    )
+    assert "its description: out/demo/pr_description.md (copy it before the cleanup)" in lines[-1]
+    text = described.read_text(encoding="utf-8")
+    assert text.startswith(head) and text.endswith("**What was asked**\n1. run the new tests\n")
+
 
 def test_pull_request_on_azure_devops(
     team: Team, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch

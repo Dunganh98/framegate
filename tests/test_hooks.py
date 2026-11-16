@@ -78,7 +78,6 @@ def test_no_phase_allows_everything(project: pathlib.Path) -> None:
         ("SPEC", "CLAUDE.md", False),
         ("SPEC", ".claude/settings.json", False),
         ("SPEC", ".framegate/project.md", False),
-        ("SPEC", ".github/workflows/ci.yml", False),
         ("SPEC", "README.md", False),
         ("TESTS", "pyproject.toml", False),
         ("SPEC_UPDATE", "framegate.toml", False),
@@ -119,6 +118,50 @@ def test_spec_phase_setup_files_follow_the_config(project: pathlib.Path) -> None
     assert (code("App.sln"), code("pyproject.toml"), code("tests/T/T.csproj")) == (0, 2, 2)
     toml.write_text('[project]\nlanguage = "cobol"\n', encoding="utf-8")
     assert (code("framegate.toml"), code("pyproject.toml")) == (0, 2)
+
+
+DEPLOY_FILES = (
+    *("Dockerfile", "src/pkg/Dockerfile", "src/pkg/Dockerfile.dev", "src/pkg/api.dockerfile"),
+    *("src/pkg/.dockerignore", "docker-compose.yml", "src/pkg/docker-compose.dev.yaml"),
+    *("compose.yaml", "src/pkg/compose.override.yml", "Jenkinsfile", "src/jenkinsfile"),
+    *(".circleci/config.yml", ".azure-pipelines/build.yml", "azure-pipelines.yml"),
+    *("build/azure-pipelines-nightly.yml", "bitbucket-pipelines.yml", ".gitlab-ci.yml"),
+    *(".gitlab-ci.build.yml", ".travis.yml", ".github/workflows/ci.yml"),
+)
+
+
+@pytest.mark.parametrize("phase", ["SPEC", "TESTS", "IMPLEMENT", "REVIEW", "SUMMARY"])
+def test_deploy_and_ci_files_are_locked_in_every_phase(project: pathlib.Path, phase: str) -> None:
+    """The built-in deploy / CI names need no config entry and are locked for a feature in
+    every phase, also inside a folder the phase may write; the message says where the need
+    goes instead."""
+    set_phase(project, phase)
+
+    def ask(rel: str) -> tuple[int, str]:
+        return protect_paths.evaluate(hook_json(project, file_path=str(project / rel)))
+
+    for rel in DEPLOY_FILES:
+        code, msg = ask(rel)
+        assert code == 2 and f"[{phase}] Blocked write to {rel}: it is a deploy / CI file" in msg
+        if phase == "SPEC":
+            assert "`## Pipeline follow-up`" in msg
+        else:
+            assert f"`- PIPELINE FOLLOW-UP [{rel}]: <what must change and why>`" in msg
+            assert "[protected] builtin_off" in msg
+    # names that only look alike are source like any other
+    for rel in ("src/pkg/dockerfile.py", "src/pkg/compose.py", "src/pkg/jenkinsfile.py"):
+        assert "deploy / CI file" not in ask(rel)[1], rel
+        assert ask(rel)[0] == (0 if phase in ("SPEC", "IMPLEMENT") else 2), rel
+    # under the test folder a built-in name is test data: the test phases write it
+    assert ask("tests/data/compose.yml")[0] == (0 if phase == "TESTS" else 2)
+    assert "deploy / CI file" not in ask("tests/data/compose.yml")[1]
+    # the opt-out takes exactly the named built-in off the list
+    toml = project / "framegate.toml"
+    toml.write_text('[protected]\nbuiltin_off = ["dockerfile", ".github/"]\n', encoding="utf-8")
+    inside = 0 if phase in ("SPEC", "IMPLEMENT") else 2
+    assert ask("src/pkg/Dockerfile")[0] == inside
+    assert "deploy / CI file" not in ask(".github/workflows/ci.yml")[1]
+    assert "deploy / CI file" in ask("src/pkg/Dockerfile.dev")[1]
 
 
 def test_relative_path_resolves_against_cwd(project: pathlib.Path) -> None:

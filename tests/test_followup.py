@@ -22,6 +22,8 @@ EXTRA = '["ci/", "platform/deploy/", "*_pb2.py", "pytest.ini", "requirements.txt
 SPEC_ITEM = "platform/deploy/Dockerfile: install the new dependency (the image lacks it)"
 STEP_ITEM = "deploy/Dockerfile: COPY the new demo/ folder (the image does not contain it)"
 REVIEW_ITEM = "ci/tests.yml: add tests/test_demo.py to the unit selection (CI does not run it)"
+OUTSIDE_ITEM = "OUTSIDE [CI variable group demo-dev]: add DEMO_TOKEN (the new job reads it)"
+OUTSIDE_SHOWN = "CI variable group demo-dev: add DEMO_TOKEN (the new job reads it) (from the spec)"
 
 
 def write(r: DemoRepo, rel: str, text: str) -> None:
@@ -178,6 +180,126 @@ def test_parse_the_spec_section_and_the_run_lines() -> None:
     assert followup.brief_lines([]) == [] and followup.section_lines([]) == []
 
 
+def test_items_outside_the_repository_have_one_form() -> None:
+    """`- OUTSIDE [<where>]: <what> (<why>)` in the spec section and in an agent's notes; the
+    same text in the kept list. Shown apart, never mixed with the repository's items."""
+    spec = (
+        "## Pipeline follow-up\n- ci/unit.yml: add the folder\n"
+        "- OUTSIDE [vault kv/argos]: add the queue password (the runner logs in with it)\n"
+        "- `outside follow-up` [prod database] run migration 0042\n\n## Next\n"
+    )
+    assert followup.parse_spec(spec) == [
+        "ci/unit.yml: add the folder",
+        "OUTSIDE [vault kv/argos]: add the queue password (the runner logs in with it)",
+        "OUTSIDE [prod database]: run migration 0042",
+    ]
+    notes = (
+        "- PIPELINE FOLLOW-UP [Dockerfile]: COPY runner/\n"
+        "* OUTSIDE [`CI variable group`]: set RUNNER_TOKEN (the job reads it)\n"
+        "- outside the repository nothing changes\n- OUTSIDE: no place named\n"
+    )
+    assert followup.parse_run(notes) == [
+        "Dockerfile: COPY runner/",
+        "OUTSIDE [CI variable group]: set RUNNER_TOKEN (the job reads it)",
+    ]
+    # only the pipeline list has them
+    assert followup.parse_run(notes, followup.REFERENCE) == []
+    found = [
+        followup.Item("Dockerfile: COPY runner/", "implementer"),
+        followup.Item("OUTSIDE [vault]: add the password", "spec"),
+    ]
+    assert [it.outside for it in found] == [False, True]
+    assert found[1].line() == "OUTSIDE [vault]: add the password (from the spec)"
+    assert found[1].shown() == "vault: add the password (from the spec)"
+    assert followup.brief_lines(found) == [
+        "Pipeline follow-up (a separate step after this feature; not part of it): 1; nothing "
+        "to answer",
+        "  - Dockerfile: COPY runner/ (implementer)",
+        "Pipeline follow-up, outside the repository: by hand: 1; nothing to answer (a "
+        "checklist in the pull request)",
+        "  - vault: add the password (from the spec)",
+    ]
+    by_hand = "## Outside the repository, by hand (framegate does not do them): 1"
+    assert followup.sections(found) == [
+        [
+            "## Pipeline follow-up (a separate step after this feature; not part of it): 1",
+            "",
+            "- Dockerfile: COPY runner/ (implementer)",
+        ],
+        [by_hand, "", "- [ ] vault: add the password (from the spec)"],
+    ]
+    assert followup.sections(found[1:]) == [
+        [by_hand, "", "- [ ] vault: add the password (from the spec)"]
+    ]
+    assert "- [ ] OUTSIDE [vault]: add the password (from the spec)" in followup.markdown(
+        "demo", found
+    )
+    assert followup.with_checklist("# Summary\n\ntext\n", []) == "# Summary\n\ntext\n"
+    assert followup.with_checklist("", ["vault: x"]) == f"{by_hand}\n\n- [ ] vault: x\n"
+
+
+# ---------- the built-in deploy / CI names ----------
+def test_builtin_names_are_deploy_files_everywhere(demo_repo: DemoRepo) -> None:
+    """No [protected] extra entry: a Dockerfile, a compose file and a CI yml are deploy / CI
+    files by their name, at any depth; a folder name that can mean something else is not.
+    The frame, the stray-file check and the spec brief agree."""
+    r = demo_repo
+    adapter = get_adapter(load_config(r.root))
+    yes = (
+        *("Dockerfile", "src/demo/Dockerfile", "a/b/dockerfile.prod", "img/api.Dockerfile"),
+        *(".dockerignore", "docker-compose.yml", "x/docker-compose.override.yaml"),
+        *("compose.yaml", "x/compose.dev.yml", "Jenkinsfile", ".circleci/config.yml"),
+        *("bitbucket-pipelines.yml", ".azure-pipelines/jobs/build.yml", "azure-pipelines.yml"),
+        *("ci/azure-pipelines-pr.yml", ".gitlab-ci.yml", ".gitlab-ci.deploy.yml", ".travis.yml"),
+        ".github/workflows/ci.yml",
+    )
+    no = (
+        *(
+            "deploy/job.yml",
+            "ci/build.sh",
+            "k8s/app.yml",
+            "helm/values.yaml",
+            "charts/x/Chart.yaml",
+        ),
+        *("src/demo/compose.py", "src/demo/dockerfile.py", "docs/Dockerfile.md/x.txt"),
+        *("tests/data/Dockerfile", "specs/demo/compose.yml", "out/demo/compose.yml"),
+        *("pyproject.toml", "framegate.toml", "sub/.github/workflows/ci.yml"),
+    )
+    protected = frame_diff.protected_paths(adapter)
+    for rel in yes:
+        assert frame_diff.is_pipeline_file(adapter, rel), rel
+        assert frame_diff.path_matches(rel, protected), rel
+    for rel in no:
+        assert not frame_diff.is_pipeline_file(adapter, rel), rel
+    assert frame_diff.path_matches("Dockerfile", frame_diff.spec_locked(adapter.cfg))
+    # a source file that a built-in name happens to match is source: for the frame as well
+    assert not frame_diff.is_protected(adapter, "src/demo/dockerfile.py", protected)
+    assert frame_diff.is_protected(adapter, "src/demo/Dockerfile.dev", protected)
+    assert frame_diff.is_protected(adapter, "tests/dockerfile.py", protected)
+
+    write(r, "src/demo/Dockerfile", "FROM python\n")
+    write(r, "docker-compose.yml", "services: {}\n")
+    write(r, "deploy/job.yml", "x: 1\n")  # not built in, not in extra: not the frame's business
+    assert frame_diff.setup_state(adapter) == ([], ["docker-compose.yml", "src/demo/Dockerfile"])
+    follow = next(
+        x for x in spec_brief(adapter.cfg, "demo").splitlines() if x.startswith("- Pipeline")
+    )
+    assert "by name, at any depth: Dockerfile*" in follow and "[protected] extra" not in follow
+    assert "`- OUTSIDE [<where>]: <what must be done> (<why>)`" in follow
+    assert "'outside the repository: by hand'" in follow
+
+    r.set_toml("protected", "builtin_off", '["Dockerfile", "docker-compose*.yml"]')
+    adapter = get_adapter(load_config(r.root))
+    assert frame_diff.setup_state(adapter) == ([], [])
+    assert not frame_diff.is_pipeline_file(adapter, "src/demo/Dockerfile")
+    assert frame_diff.is_pipeline_file(adapter, "src/demo/Dockerfile.dev")
+    assert not frame_diff.path_matches("Dockerfile", frame_diff.protected_paths(adapter))
+    follow = next(
+        x for x in spec_brief(adapter.cfg, "demo").splitlines() if x.startswith("- Pipeline")
+    )
+    assert "not here ([protected] builtin_off): Dockerfile, docker-compose*.yml" in follow
+
+
 def test_every_template_has_the_section_and_the_agents_are_told() -> None:
     for name in ("_template", "_template_bugfix", "_template_refactor"):
         text = package_text("templates", f"specs/{name}/requirements.md")
@@ -199,7 +321,7 @@ def test_pipeline_followup_reaches_the_final_brief_and_survives_cleanup(
     write(
         r,
         "specs/demo/requirements.md",
-        REQUIREMENTS + f"\n## Pipeline follow-up\n- {SPEC_ITEM}\n",
+        REQUIREMENTS + f"\n## Pipeline follow-up\n- {SPEC_ITEM}\n- {OUTSIDE_ITEM}\n",
     )
     r.scenario(followup=True)
     to_final_gate(r)
@@ -213,13 +335,20 @@ def test_pipeline_followup_reaches_the_final_brief_and_survives_cleanup(
         f"{REVIEW_ITEM} (reviewer)",
     ]
     cfg = load_config(r.root)
-    assert [it.line() for it in followup.items(cfg, "demo")] == wanted
+    # the item outside the repository is on the list, and apart from the three everywhere
+    outside = f"{OUTSIDE_ITEM} (from the spec)"
+    listed = [wanted[0], outside, *wanted[1:]]
+    assert [it.line() for it in followup.items(cfg, "demo")] == listed
+    assert "`- OUTSIDE [<where>]: <what must be done> (<why>)`" in task["prompt"]
     run_file = (r.root / "out/demo/pipeline_followup.md").read_text(encoding="utf-8")
-    assert all(f"- [ ] {x}" in run_file for x in wanted)
+    assert all(f"- [ ] {x}" in run_file for x in listed)
+    assert "A line that starts with OUTSIDE is no file of this repository" in run_file
     facts = (r.root / "out/demo/final_facts.md").read_text(encoding="utf-8")
     head = "## Pipeline follow-up (a separate step after this feature; not part of it): 3"
     assert head in facts and all(f"- {x}" in facts for x in wanted)
-    assert "Not a gate item" in facts
+    by_hand = "## Outside the repository, by hand (framegate does not do them)"
+    assert f"{by_hand}: 1\n\n- [ ] {OUTSIDE_SHOWN}\n" in facts
+    assert facts.count("Not a gate item") == 2
     assert "## Gate items (numbered as the final gate shows them): 0" in facts
     summary = (r.root / "out/demo/final_summary.md").read_text(encoding="utf-8")
     assert (
@@ -227,6 +356,12 @@ def test_pipeline_followup_reaches_the_final_brief_and_survives_cleanup(
         "(generated by framegate): 3" in summary
     )
     assert all(f"- {x}" in summary for x in wanted)
+    # an unticked checklist in the summary, and on top of a pull request's description
+    assert f"{by_hand} (generated by framegate): 1\n\n- [ ] {OUTSIDE_SHOWN}\n" in summary
+    assert followup.pr_checklist(cfg, "demo") == [OUTSIDE_SHOWN]
+    text = followup.with_checklist(summary, [OUTSIDE_SHOWN])
+    assert text.startswith(f"{by_hand}: 1\n\n- [ ] {OUTSIDE_SHOWN}\n\n")
+    assert text.count(by_hand) == 1 and "## Cost, time, turns per phase" in text
 
     capsys.readouterr()
     assert r.af("gate-summary", "demo") == 0
@@ -236,20 +371,34 @@ def test_pipeline_followup_reaches_the_final_brief_and_survives_cleanup(
         "to answer\n"
         + "".join(f"  - {x}\n" for x in wanted)
         + "  after this task: /framegate:pipeline demo does them\n"
+        + "Pipeline follow-up, outside the repository: by hand: 1; nothing to answer (a "
+        + "checklist in the pull request)\n"
+        + f"  - {OUTSIDE_SHOWN}\n"
     ) in brief
     assert 'Decision: "ok" approves' in brief  # no question came of it
     assert r.progress()["waiting"]["gate"] == "final" and not r.progress().get("parked")
 
     assert r.af("finish", "demo", "--no-retro") == 0
     kept = r.root / "specs/demo/pipeline_followup.md"
-    assert all(f"- [ ] {x}" in kept.read_text(encoding="utf-8") for x in wanted)
+    assert all(f"- [ ] {x}" in kept.read_text(encoding="utf-8") for x in listed)
     assert "specs/demo/pipeline_followup.md" in git(
         r.root, "show", "--name-only", "--format=%s", "HEAD"
     )
     (ev,) = [e for e in r.events() if e["kind"] == "pipeline_followup"]
-    assert ev["items"] == wanted
+    assert ev["items"] == listed
+    # the pipeline task has three items to do; the fourth is counted apart
+    assert (followup.open_count(cfg, "demo"), followup.outside_count(cfg, "demo")) == (3, 1)
+    capsys.readouterr()
+    assert r.af("status", "demo", "--brief") == 0
+    assert (
+        "Pipeline follow-up: 3 open item(s) -> /framegate:pipeline demo; outside the "
+        "repository: 1 item(s) to do by hand (specs/demo/pipeline_followup.md)"
+    ) in capsys.readouterr().out
     assert r.af("cleanup", "demo") == 0
     assert not (r.root / "out/demo").exists() and kept.is_file()
+    # ticked by the user: no longer counted, no longer in a pull request
+    kept.write_text(kept.read_text("utf-8").replace("- [ ] OUTSIDE", "- [x] OUTSIDE"), "utf-8")
+    assert followup.outside_count(cfg, "demo") == 0 and followup.pr_checklist(cfg, "demo") == []
 
 
 def test_no_followup_no_lines(demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]) -> None:

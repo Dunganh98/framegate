@@ -15,7 +15,8 @@ from conftest import DemoRepo, git, init_git
 from framegate import cli, probe
 from framegate.adapters import get_adapter, python_probe
 from framegate.adapters import python as python_adapter
-from framegate.config import load_config
+from framegate.checks import frame_diff
+from framegate.config import load_config, parse_config
 
 BLACK_PROJECT = """\
 [project]
@@ -151,8 +152,9 @@ def test_probe_before_the_config_exists(fake_tools: FakeTools) -> None:
     assert "Base branch: main (a branch of that name; origin/HEAD is not set)" in out
     assert "Remote: origin on Azure DevOps, https://dev.azure.com/org/proj/_git/argos; 1 " in out
     assert "State branch: off; suggested: no (a remote, one author address)" in out
-    assert "Locked deploy / CI paths: azure-pipelines.yml" in out
-    assert "Lock candidates ([protected] extra): Dockerfile, deploy/" in out
+    # the built-in names that exist here, by their path; the folder is a proposal
+    assert "Locked deploy / CI paths: built in: Dockerfile, azure-pipelines.yml" in out
+    assert "Lock candidates ([protected] extra): deploy/ (a folder with a deploy / CI name)" in out
     assert (
         'Reinstall ([env] refresh): ["python", "-m", "pip", "install", "-e", ".", "--no-deps"] '
         "(candidate: argos is installed editable in the interpreter)"
@@ -215,22 +217,6 @@ def test_small_parts(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) ->
         "--version",
     ]
     assert probe.version_command(["dotnet", "format", "x.sln"]) == ["dotnet", "--version"]
-    files = [
-        "src/a.py",
-        "k8s/app.yml",
-        "k8s/db.yml",
-        "services/api/Dockerfile",
-        "docker-compose.dev.yml",
-        "gen/a_pb2.py",
-        ".github/workflows/ci.yml",
-        "ci/run.sh",
-    ]
-    assert probe.lock_candidates(files, [".github/", "ci/"]) == [
-        "k8s/",
-        "services/api/Dockerfile",
-        "docker-compose.dev.yml",
-        "*_pb2.py",
-    ]
     answers = iter([(124, "TIMEOUT"), (127, "Tool not found"), (2, "usage"), (0, "\n v1.2 \nx")])
     monkeypatch.setattr(probe, "run_command", lambda *a, **k: next(answers))
     states = [probe.ask_version(["x", "--version"], tmp_path) for _ in range(4)]
@@ -241,6 +227,84 @@ def test_small_parts(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) ->
     assert "Language: unknown (not detected)" in lines
     assert "Base branch: unknown (no branch found)" in lines
     assert not any(x.startswith(("Interpreter", "Test:", "Lint:")) for x in lines)
+
+
+def test_deploy_and_ci_paths_are_named_exactly(tmp_path: pathlib.Path) -> None:
+    """Row 10 of the setup table: the built-in names that exist, and the candidates with why
+    (by name, and by a bounded look into yml and CI files)."""
+    manifest = "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\n"
+    files = {
+        "src/app/a.py": "",
+        "src/app/Dockerfile": "FROM python\n",
+        "src/app/values.yml": manifest,  # inside the source folder: the file, not the folder
+        "tests/data/compose.yml": "services: {}\n",  # test data: not a deploy file
+        "Dockerfile": "FROM python\n",
+        ".dockerignore": ".venv\n",
+        "docker-compose.dev.yaml": "services: {}\n",
+        "docker/api.dockerfile": "FROM python\n",
+        "docker/entrypoint.txt": "",
+        ".github/workflows/ci.yml": "jobs:\n  a:\n    steps:\n      - run: ./tools/build.sh x\n",
+        ".gitlab-ci.yml": "build:\n  script: [pwsh tools\\release.ps1]\n",
+        "tools/build.sh": "",
+        "tools/release.ps1": "",
+        "tools/unused.sh": "",
+        "k8s/app.yml": manifest,
+        "manifests/base/deployment.yaml": manifest,
+        "manifests/base/notes.yml": "a: 1\n",
+        "settings/app.yml": "debug: true\n",
+        "iac/main.tf": "",
+        "iac/modules/net/main.tf": "",
+        "platform/chart/Chart.yaml": "name: x\n",
+        "platform/chart/templates/deploy.yaml": "{{- if .Values.on }}\napiVersion: v1\n",
+        "gen/a_pb2.py": "",
+        "Procfile": "web: run\n",
+    }
+    for rel, text in files.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    cfg = parse_config(tmp_path, {"protected": {"builtin_off": [".dockerignore"]}})
+    tracked = sorted(files)
+    assert probe.builtin_found(cfg, tracked) == [
+        ".github/",
+        ".gitlab-ci.yml",
+        "Dockerfile",
+        "docker-compose.dev.yaml",
+        "docker/api.dockerfile",
+        "src/app/Dockerfile",
+    ]
+    locked = [*frame_diff.core_protected(cfg), "tests/", "specs/"]
+    ci_files = [f for f in tracked if frame_diff.maybe_pipeline_file(cfg, f)]
+    keep = ["src/", "tests/", "specs/"]
+    found = probe.lock_candidates(tracked, locked, tmp_path, keep, ci_files)
+    assert found == {  # `.dockerignore`, taken off the built-in list, is not proposed again
+        "Procfile": "a deploy / CI file by its name",
+        "docker/": "holds a Dockerfile",
+        "*_pb2.py": "generated files",
+        "iac/": "Terraform files (*.tf)",
+        "k8s/": "a folder with a deploy / CI name",
+        "platform/chart/": "a Helm chart (Chart.yaml)",
+        "manifests/base/": "Kubernetes manifests (yml with apiVersion and kind)",
+        "src/app/values.yml": "Kubernetes manifests (yml with apiVersion and kind)",
+        "tools/build.sh": "a script a CI file calls",
+        "tools/release.ps1": "a script a CI file calls",
+    }
+    # by name only (no root): nothing is read
+    by_name = probe.lock_candidates(tracked, locked)
+    assert "manifests/base/" not in by_name and "tools/build.sh" not in by_name
+    assert "k8s/" in by_name and "iac/" in by_name
+    # the budget: at most READ_MAX files are opened, however many yml files there are
+    many = [f"conf/{i:03}/x.yml" for i in range(200)]
+    opened: list[str] = []
+
+    def head(root: pathlib.Path, rel: str) -> str:
+        opened.append(rel)
+        return ""
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(probe, "_head", head)
+        assert probe.lock_candidates(many, locked, tmp_path, keep, [".gitlab-ci.yml"]) == {}
+    assert len(opened) == probe.READ_MAX
 
 
 def test_the_interpreter_is_the_runs_own(demo_repo: DemoRepo) -> None:

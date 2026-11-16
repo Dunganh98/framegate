@@ -695,13 +695,45 @@ folders (stubs):
   folder; generic: `[generic] protected`);
 - `out/<f>/spec_brief.md` (and `answers.md`).
 
-Spec-locked, also for the chat: `tests/`, `.claude/`, `.framegate/`, `CLAUDE.md`, the CI files
-(`.github/`, `.gitlab-ci.yml`, `azure-pipelines.yml`), `[roles] extra_dir` and **every
-`[protected] extra` path** (deploy, CI, generated files such as `ci/`, `platform/deploy/`,
-`*_pb2.py`), also where it lies inside a source folder. Deploy and CI files are never a
-feature's to change, not even at spec time ("Pipeline follow-up" below). A path listed in
-`[protected] extra` that is also one of the language's setup files (`pyproject.toml`,
-`pytest.ini`, `requirements.txt`, `ruff.toml`, ...) is a setup file all the same.
+Spec-locked, also for the chat: `tests/`, `.claude/`, `.framegate/`, `CLAUDE.md`, the
+built-in deploy / CI paths (below), `[roles] extra_dir` and **every `[protected] extra`
+path** (deploy, CI, generated files such as `ci/`, `platform/deploy/`, `*_pb2.py`), also
+where it lies inside a source folder. Deploy and CI files are never a feature's to change,
+not even at spec time ("Pipeline follow-up" below). A path listed in `[protected] extra`
+that is also one of the language's setup files (`pyproject.toml`, `pytest.ini`,
+`requirements.txt`, `ruff.toml`, ...) is a setup file all the same.
+
+**Deploy / CI paths.** One definition (`frame_diff.is_pipeline_file`) for the frame check,
+the write guard in every phase, the stray-file check of `approve-spec`, the pipeline task
+and the two commits of `publish`:
+
+| Part | What | Where it is set |
+|---|---|---|
+| built-in folders (at the root) | `.github/`, `.circleci/`, `.azure-pipelines/` | nothing to write |
+| built-in file names (at any depth, case does not matter) | `Dockerfile`, `Dockerfile.*`, `*.dockerfile`, `.dockerignore`, `docker-compose*.yml`, `docker-compose*.yaml`, `compose*.yml`, `compose*.yaml`, `Jenkinsfile`, `bitbucket-pipelines.yml`, `azure-pipelines*.yml`, `.gitlab-ci*.yml`, `.travis.yml` | nothing to write |
+| the project's own | folders and files whose name can mean something else: `deploy/`, `ci/`, `k8s/`, `helm/`, `charts/`, Terraform folders, scripts CI calls, generated files | `[protected] extra` (`framegate probe` proposes them; `x/` = a folder, a glob such as `*_pb2.py`, `**/<name>` = a file name at any depth) |
+| taken off | a built-in name that is no deploy file in this project | `[protected] builtin_off = ["Dockerfile"]`: the name as written above; anything else is a config error |
+
+A built-in name under the test folder, the spec folder, the out folder, `.claude/` or
+`.framegate/` is no deploy file (a `tests/data/compose.yml` is test data, locked as a
+test). A setup file is never a deploy file, and neither is a source file of the
+project's language that a built-in name happens to match (`dockerfile.py` and
+`Dockerfile.*`), unless `[protected] extra` lists it. For a feature, a bug fix or a refactor these
+files are locked in every phase, also inside a source folder: the write guard refuses the
+write and names the pipeline follow-up line to write instead, and the frame check reports
+`PROTECTED PATH CHANGED`. Only the pipeline task may write them. `[protected] exceptions`
+is another thing: paths the frame check leaves out (the review tests).
+
+`framegate probe` names the exact files and folders of this repository. "Locked deploy / CI
+paths": the built-in ones that exist (a folder as `name/`, a file by its path) and the
+`[protected] extra` entries. "Lock candidates", each with why: top-level folders with a
+deploy / CI name (`deploy/`, `ci/`, `k8s/`, `helm/`, `charts/`, `infra/`, `terraform/`,
+`pipelines/`, ...), a folder that holds a Dockerfile, a Helm `Chart.yaml`, Terraform `*.tf`
+files or Kubernetes manifests (yml with `apiVersion:` and `kind:`), scripts (`.sh`, `.ps1`,
+`.cmd`, `.bat`) a CI file names, `Procfile` / `databricks.yml` / `cloudbuild.yml`, generated
+files. A source, test or spec folder (or one that holds them) is never proposed as a whole:
+there the single file is. The budget: the tracked file names (`git ls-files`) and at most
+40 files read, the first 8 KB of each; no deeper look.
 
 `approve-spec` then, in this order: (1) spec check; (2) refuses while a protected file that is
 neither a setup file nor in a path the workflow commits has uncommitted changes or is untracked
@@ -745,6 +777,29 @@ deploy / CI files (the agents are told so: a note about anything else is an assu
 park request). What a reference project should change has its own list with the same life
 cycle: "Reference follow-up" under "References and ports".
 
+**Items outside the repository.** Some of what a task makes necessary is no file here: a
+variable in the CI's variable group, a secret in the vault, a migration of the real
+database, a switch of an environment. It is part of the pipeline follow-up, in one fixed
+form everywhere (the spec section, an agent's note, the kept list):
+
+    - OUTSIDE [<where>]: <what must be done> (<why>)
+    - [ ] OUTSIDE [CI variable group argos-dev]: add RUNNER_TOKEN (the new job reads it)
+
+Nothing in framegate ever does such an item; it only keeps it in sight:
+
+| Where | What is shown |
+|---|---|
+| spec brief (the chat) | under "Pipeline follow-up", as "outside the repository: by hand: <where>: <what>" |
+| final brief (`gate-summary`) | its own line under the pipeline follow-up: "Pipeline follow-up, outside the repository: by hand: N", not counted with the repository's items |
+| final_summary.md, final_facts.md | a generated section "Outside the repository, by hand (framegate does not do them): N" with an unticked checklist (`- [ ] <where>: <what>`) |
+| `framegate pipeline`, `pipeline-check`, `pipeline-approve` | "Outside the repository: by hand, not this task: N to do" and the items; never numbered, never open work, never a problem (a list with only such items passes the check) |
+| pipeline brief (the chat) | its own section "Outside the repository: by hand" |
+| pull request (`framegate publish`) | the unticked checklist on top of the description, for the task's pull request (above final_summary.md) and for a pipeline-only one (above the brief); the text is then `out/<f>/pr_description.md`, also when the pull request is opened by hand. A dry run only says so |
+| `framegate status` | counted apart: "...; outside the repository: N item(s) to do by hand (specs/<f>/pipeline_followup.md)" |
+
+The user ticks such a line in `specs/<f>/pipeline_followup.md` by hand when it is done;
+a ticked one is no longer counted or put into a pull request.
+
 **The pipeline task** (`/framegate:pipeline <name>`; `src/framegate/pipeline.py`) is that
 separate step: the only place where deploy / CI files are changed. It starts three ways with
 one skill: after a task of any mode whose kept list has open items (`<name>` = the task; the
@@ -760,14 +815,15 @@ agent run: a yml change has no unit test. The chat makes the edits itself.
 | approve | `framegate pipeline-approve <name>` | after the user's OK on the brief (`out/<name>/pipeline_brief.md`: what was asked, what changed per item with its file, checks, not proven: "the pipeline itself has not run: the pull request's CI run is the proof", questions): the check again, the done items ticked (`- [x]`), the files and the list committed, the phase cleared |
 
 What may be written in the `PIPELINE` phase (the write guard, `hooks/protect_paths.py`):
-deploy / CI files, which are the built-in CI paths (`.github/`, `.gitlab-ci.yml`,
-`azure-pipelines.yml`) and `[protected] extra` without the setup files, and of those only
-the files the list names (the user adds one by saying so: its line goes on the list first);
-plus the list itself and the brief. Source, tests, setup files, specs and framegate's own
-files are locked. A project's Dockerfile or k8s folder counts only when `[protected] extra`
-names it. In every other phase these files stay locked as before. YAML is parsed with PyYAML
-when it is installed next to framegate (it is not a dependency); without it only tabs in the
-indentation are found, and the check says so.
+deploy / CI files ("Deploy / CI paths" above: the built-in names and `[protected] extra`
+without the setup files), and of those only the files the list names (the user adds one by
+saying so: its line goes on the list first); plus the list itself and the brief. Source,
+tests, setup files, specs and framegate's own files are locked. A Dockerfile, a compose file
+or a CI yml counts by its name; a `k8s/` or `deploy/` folder only when `[protected] extra`
+names it. In every other phase these files stay locked. YAML is parsed with PyYAML (a
+dependency of framegate): every document of a file, and tags of the file's own dialect
+(`!reference`, `!Ref`) are accepted. A yml file that is a template (Helm, Jinja: `{{- }}`,
+`{% %}`) and does not parse as plain YAML is a note, not a problem.
 
 How the change lands depends on the task before it, read from git alone (never from the
 host): the task counts as merged when every product file it changed has the same content
@@ -1132,7 +1188,8 @@ it parked: an `out/*/park.md` exists). Both read
 the hook JSON on stdin, exit 0 silently without `framegate.toml` or `.phase`, and block with exit
 2. The write protection holds for every session while a phase is set, the chat included; in the
 SPEC phase the chat may also write the setup files and `out/<f>/spec_brief.md` ("The spec phase
-covers the setup" above), and never a `[protected] extra` path. A path outside the repository is blocked only for the agents of a run
+covers the setup" above); a deploy / CI file (the built-in names, `[protected] extra`) is
+refused in every phase but the pipeline task's. A path outside the repository is blocked only for the agents of a run
 (`FRAMEGATE_AGENT` set): a chat session keeps writing its own files there (memory, scratch);
 a `[references]` folder is read-only for both. Shell calls: only plain single commands are pre-approved, so a pipe (`dotnet test ... |
 Select-String`), a `;` / `&&` / `||` chain, several lines, or a `cd` / env-variable prefix would

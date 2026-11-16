@@ -204,7 +204,10 @@ knowledge. It overrides any default you would otherwise assume.
    write one bullet per change under "Pipeline follow-up" in requirements.md (`- <file>: <what
    must change> (<why>)`; "None." otherwise; add the section if the project's template lacks
    it). It is done as a separate step after the feature; framegate raises it again in the
-   final summary. Only deploy / CI files go there. What a reference project should change
+   final summary. Only deploy / CI files go there, and what must be done outside the
+   repository (a CI variable, a secret in the vault, a migration of the real database, an
+   environment switch): `- OUTSIDE [<where>]: <what must be done> (<why>)`. Nothing in
+   framegate does such an item; the brief shows it for the user to do by hand. What a reference project should change
    because of this task goes under "Reference follow-up" the same way (`- <reference file>:
    <what should change> (<why>)`); show it on the brief under "Pipeline follow-up" as "for
    <reference>: ...".
@@ -224,7 +227,8 @@ knowledge. It overrides any default you would otherwise assume.
        **Setup files changed** — one line: the files `spec-check` lists, each with why
          ("pyproject.toml: registers the new package"); they are approved with the spec
        **Pipeline follow-up** — deploy / CI changes this task makes necessary, one line each
-         (file: what, why); not part of the task, a separate step after it ("None.")
+         (file: what, why); not part of the task, a separate step after it ("None."); an
+         OUTSIDE item as "outside the repository: by hand: <where>: <what>"
        **Questions** — the real decisions still open (step 2's rule), by impact ("None.")
 
    "Decisions I made for you" is the part the user really checks: list the ones that change

@@ -11,7 +11,7 @@ import pathlib
 import pytest
 
 from conftest import FAKE_CLAUDE, GITIGNORE, PYPROJECT, REQUIREMENTS, git, init_git
-from framegate import cli, followup, pipeline
+from framegate import cli, followup, pipeline, publish
 from framegate.config import load_config, parse_config
 from framegate.hooks import protect_paths
 
@@ -100,7 +100,10 @@ def test_a_pipeline_task_of_its_own(repo: pathlib.Path, capsys: pytest.CaptureFi
     out = capsys.readouterr().out
     assert "Created the pipeline branch pipeline/infra from main" in out
     assert "Pipeline task infra (on its own: no task of this name), branch pipeline/infra." in out
-    assert "deploy / CI files (.github/, .gitlab-ci.yml, azure-pipelines.yml, ci/, deploy/" in out
+    assert (
+        "deploy / CI files (the built-in names: Dockerfile, compose files, Jenkinsfile, CI yml "
+        "and folders; [protected] extra: ci/, deploy/, pytest.ini)" in out
+    )
     assert "No list yet: write it to specs/infra/pipeline_followup.md" in out
     assert (repo / ".phase").read_text(encoding="utf-8") == "PIPELINE infra"
     assert af("status") == 0  # a phase of the chat's own: no stale-lock warning
@@ -158,9 +161,9 @@ def test_a_pipeline_task_of_its_own(repo: pathlib.Path, capsys: pytest.CaptureFi
     write(repo, "ci/tests.yml", CI.replace("    steps", "\tsteps"))
     assert af("pipeline-check", "infra") == 1
     out = capsys.readouterr().out
-    assert "- DOES NOT PARSE: ci/config.json" in out and "- DOES NOT PARSE: ci/tests.yml" in out
+    assert "- DOES NOT PARSE: ci/config.json" in out and "- DOES NOT PARSE: ci/tests.yml:" in out
     assert "2. left open (the image is rebuilt next sprint): `deploy/Dockerfile`" in out
-    assert "NOTE: yml files: no YAML parser is installed" in out or pipeline.yaml_parser()
+    assert "no YAML parser" not in out  # PyYAML is a dependency: the yml check always parses
     write(repo, "ci/config.json", '{"jobs": []}\n')
     write(repo, "ci/tests.yml", CI + "      - run: pytest tests/test_a.py -q\n")
     write(repo, "out/infra/pipeline_brief.md", "**What was asked**\n")
@@ -193,6 +196,116 @@ def test_a_pipeline_task_of_its_own(repo: pathlib.Path, capsys: pytest.CaptureFi
     assert "Pipeline follow-up: 1 open item(s) -> /framegate:pipeline infra" in out
     assert af("cleanup", "infra") == 0  # only the brief is there: nothing of a run to keep
     assert not (repo / "out/infra").exists() and (repo / "specs/infra").is_dir()
+
+
+# ---------- the yml check ----------
+def test_yml_is_always_parsed(tmp_path: pathlib.Path) -> None:
+    """PyYAML is a dependency: every document of a file is parsed, tags of the file's own
+    dialect pass, a template that is no plain YAML is a note and never a problem."""
+    cfg = parse_config(tmp_path, {})
+    cases = {
+        "ok.yml": "a: 1\nb: [x, y]\n",
+        "multi.yaml": "kind: A\n---\nkind: B\n---\nkind: C\n",
+        "tags.yml": "job:\n  script: !reference [.setup, script]\nref: !Ref B\nmap: !x {a: 1}\n",
+        "bad.yml": "a: 1\n  b: 2\n",
+        "bad-second.yml": "kind: A\n---\nkind: [unclosed\n",
+        "tab.yml": "a:\n\tb: 1\n",
+        "helm.yaml": "{{- if .Values.on }}\napiVersion: v1\nkind: {{ .Values.kind }}\n{{- end }}\n",
+        "jinja.yml": "{% for x in items %}\n- name: {{ x }}\n{% endfor %}\n",
+        "ok.json": '{"a": 1}\n',
+        "bad.toml": "a = \n",
+    }
+    for name, text in cases.items():
+        write(tmp_path, f"ci/{name}", text)
+    result = {name: pipeline.parse_problem(cfg, f"ci/{name}") for name in cases}
+    for name in ("ok.yml", "multi.yaml", "tags.yml", "ok.json"):
+        assert result[name] == ("", ""), name
+    assert result["bad.yml"][0].startswith("DOES NOT PARSE: ci/bad.yml:2: ")
+    assert result["bad-second.yml"][0].startswith("DOES NOT PARSE: ci/bad-second.yml:")
+    assert result["tab.yml"][0].startswith("DOES NOT PARSE: ci/tab.yml:2: ")
+    assert result["bad.toml"][0].startswith("DOES NOT PARSE: ci/bad.toml: ")
+    for name in ("helm.yaml", "jinja.yml"):
+        problem, note = result[name]
+        assert problem == "" and note.startswith(f"ci/{name} is a template, not plain YAML"), name
+    assert pipeline.parse_problem(cfg, "ci/gone.yml") == ("", "")
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert '"pyyaml>=6.0",' in pyproject.split("[project.optional-dependencies]")[0]
+
+
+# ---------- built-in deploy / CI names, and items outside the repository ----------
+def test_builtin_names_and_outside_items(
+    repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A Dockerfile and a compose file count by their name (no [protected] extra entry), also
+    inside a source folder; publish puts them into the deploy / CI commit. An `OUTSIDE` line
+    of the list is nobody's work here: shown apart, never open, never a problem."""
+    write(repo, "src/demo/Dockerfile", "FROM python:3.12\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "an image of the package")
+    start = git(repo, "rev-parse", "HEAD").strip()
+    listed = (
+        "# Pipeline follow-up: img\n\n"
+        "- [ ] src/demo/Dockerfile: install libpq (the new driver needs it)\n"
+        "- [ ] docker-compose.dev.yml: add the queue service (the runner needs it)\n"
+        "- [ ] OUTSIDE [CI variable group argos-dev]: add QUEUE_URL (the job reads it)\n"
+        "- [x] outside [vault]: rotate the token (it was in a log) (from the spec)\n"
+    )
+    write(repo, "specs/img/pipeline_followup.md", listed)
+    cfg = load_config(repo)
+    one, two, three, four = followup.read_list(cfg, "img")
+    assert (one.outside, three.outside, four.outside) == (False, True, True)
+    assert three.file == "" and three.text.startswith("OUTSIDE [CI variable group argos-dev]: ")
+    assert three.shown() == "CI variable group argos-dev: add QUEUE_URL (the job reads it)"
+    assert (followup.open_count(cfg, "img"), followup.outside_count(cfg, "img")) == (2, 1)
+
+    assert af("pipeline", "img") == 0
+    out = capsys.readouterr().out
+    assert "List (specs/img/pipeline_followup.md): 2 open of 2 item(s)" in out
+    assert "Outside the repository: by hand, not this task: 1 to do, 1 ticked" in out
+    assert "  - CI variable group argos-dev: add QUEUE_URL (the job reads it)" in out
+    assert "  - [x] vault: rotate the token" in out
+    for rel in ("src/demo/Dockerfile", "docker-compose.dev.yml"):
+        assert guard(repo, rel)[0] == 0, rel
+    code, msg = guard(repo, "src/demo/__init__.py")
+    assert code == 2 and "`- OUTSIDE [<where>]: <what must be done> (<why>)`" in msg
+    code, msg = guard(repo, "Jenkinsfile")
+    assert code == 2 and "but not on the list" in msg
+
+    write(repo, "src/demo/Dockerfile", "FROM python:3.12\nRUN apt-get install -y libpq5\n")
+    write(repo, "docker-compose.dev.yml", "services:\n  queue:\n    image: redis\n")
+    assert af("pipeline-check", "img") == 0
+    out = capsys.readouterr().out
+    assert "Pipeline check img: OK; 2 deploy / CI file(s) changed" in out
+    assert "Outside the repository: by hand, not this task: 1 to do, 1 ticked" in out
+    assert "OPEN" not in out
+    assert af("pipeline-approve", "img") == 0
+    out = capsys.readouterr().out
+    assert "approved: 2 item(s) ticked, 0 left open; 2 file(s) committed" in out
+    assert "Outside the repository: by hand, not this task: 1 to do" in out
+    text = (repo / "specs/img/pipeline_followup.md").read_text(encoding="utf-8")
+    assert "- [ ] OUTSIDE [CI variable group argos-dev]" in text  # never ticked by the task
+    assert text.count("- [x] ") == 3
+
+    # the publish split is by the same definition
+    assert publish.pipeline_changed(load_config(repo), start) == [
+        "docker-compose.dev.yml",
+        "src/demo/Dockerfile",
+    ]
+    # status: no open work for the pipeline task; the outside item counted apart
+    assert af("status") == 0
+    out = capsys.readouterr().out
+    line = "- img: outside the repository: 1 item(s) to do by hand (specs/img/pipeline_followup.md)"
+    assert line in out and "/framegate:pipeline img" not in out
+
+    # a list with nothing but outside items: nothing to do, nothing fails
+    write(repo, "specs/env/pipeline_followup.md", "- [ ] OUTSIDE [prod database]: migrate (v2)\n")
+    assert af("pipeline", "env") == 0
+    assert af("pipeline-check", "env") == 0
+    out = capsys.readouterr().out
+    assert "Pipeline check env: OK; 0 deploy / CI file(s) changed" in out
+    assert af("pipeline-approve", "env") == 0
+    assert "Pipeline task env approved: 0 item(s) ticked, 0 left open" in capsys.readouterr().out
+    assert not (repo / ".phase").exists()
 
 
 # ---------- after a task: its branch while it is not merged, else a branch of its own ----------
@@ -266,3 +379,18 @@ def test_every_mode_keeps_the_list_and_offers_the_pipeline_task() -> None:
         assert command in skill
     assert "framegate pipeline-approve $ARGUMENTS" in skill
     assert "the pull request's CI run is the proof" in skill
+    # items outside the repository: one form, told to every writer of the list
+    form = "OUTSIDE [<where>]: <what must be done> (<why>)"
+    assert followup.OUTSIDE_FORMAT == f"- {form}" and f"- [ ] {form}" in skill
+    assert "**Outside the repository: by hand**" in skill and "tabs" not in skill
+    for name in ("feature", "bugfix", "refactor"):
+        text = (ROOT / f"plugin/skills/{name}/SKILL.md").read_text(encoding="utf-8")
+        assert f"`- {form}`" in text and '"outside the repository: by hand: ' in text, name
+    for folder in ("_template", "_template_bugfix", "_template_refactor"):
+        path = ROOT / "src/framegate/templates/specs" / folder / "requirements.md"
+        assert f"`- {form}`" in path.read_text(encoding="utf-8"), folder
+    for role in ("implement", "review"):
+        text = (ROOT / f"src/framegate/roles/{role}.md").read_text(encoding="utf-8")
+        assert f"`- {form}`" in text, role
+    assert "`- OUTSIDE [<where>]: <what> (<why>)`" in protocol
+    assert "Outside the repository: N item(s) to do by hand" in protocol

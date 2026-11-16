@@ -37,7 +37,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 
-from framegate import hosts
+from framegate import followup, hosts
 from framegate.config import CONFIG_FILE, Config, ConfigError, parse_config
 from framegate.state import GitError, commit_paths, feature_finished
 
@@ -1100,11 +1100,16 @@ def pull_request(
     create: bool,
     head: str = "",
     body: str = "",
+    write: bool = True,
 ) -> bool:
     """Create the pull request (`create`: the user said yes) with the host's tool, or say
     where to open it and where its description is. False = creating it failed. `head` /
     `body` (a repo-relative file): another branch and description than the product's (the
-    pipeline's own)."""
+    pipeline's own).
+
+    What the task left to do by hand outside the repository (followup.pr_checklist) goes on
+    top of the description as an unticked checklist, so it is seen at merge time: the
+    description is then {out}/<f>/pr_description.md (`write` False, a dry run: only said)."""
     head = head or product_branch(cfg, feature)
     if not n.remote:
         return True
@@ -1112,6 +1117,19 @@ def pull_request(
     link = hosts.pr_url(host, n.base, head)
     rel = body or f"{cfg.paths.out}/{feature}/{SUMMARY_FILE}"
     summary = cfg.root / rel
+    full = summary.name  # where a shortened description says the whole text is
+    outside = followup.pr_checklist(cfg, feature)
+    if outside:
+        echo(
+            f"Outside the repository: {len(outside)} item(s) to do by hand; an unticked "
+            "checklist on top of the pull request's description."
+        )
+        if write:
+            old = summary.read_text(encoding="utf-8", errors="replace") if summary.is_file() else ""
+            summary = cfg.feature_out(feature) / PR_DESCRIPTION_FILE
+            summary.parent.mkdir(parents=True, exist_ok=True)
+            summary.write_text(followup.with_checklist(old, outside), encoding="utf-8")
+            rel = f"{cfg.paths.out}/{feature}/{PR_DESCRIPTION_FILE}"
     kept = rel.startswith(cfg.paths.specs + "/")  # the cleanup deletes the out folder only
     text_at = (
         f"its description: {rel}" + ("" if kept else " (copy it before the cleanup)")
@@ -1142,7 +1160,7 @@ def pull_request(
             short = cfg.feature_out(feature) / PR_DESCRIPTION_FILE
             short.parent.mkdir(parents=True, exist_ok=True)
             text = summary.read_text(encoding="utf-8", errors="replace")
-            short.write_text(hosts.azure_description(text, summary.name), encoding="utf-8")
+            short.write_text(hosts.azure_description(text, full), encoding="utf-8")
             body = str(short)
     cmd = hosts.pr_command(host, n.base, head, _batch_safe(exe, title), body)
     r = run_tool([exe, *cmd[1:]], cwd=cfg.root, capture_output=True, text=True)
@@ -1302,7 +1320,9 @@ def publish(
                 + f", {branch}"
                 + (" (in line already)" if there == product else "")
             )
-            pull_request(cfg, n, feature, title, echo, create=False, head=branch, body=body)
+            pull_request(
+                cfg, n, feature, title, echo, create=False, head=branch, body=body, write=False
+            )
         else:
             echo("No remote: nothing would be pushed.")
         return 0

@@ -8,8 +8,10 @@ The spec phase (SPEC) is the human's chat: besides the specs and the source fold
 may write the setup files (frame_diff.is_setup_file: framegate.toml and the language's
 packaging / test / tool-config files) and its own two files under the out folder
 (SPEC_OUT_FILES). `approve-spec` commits the setup files with the spec; from then on they are
-frozen. `[protected] extra` (deploy, CI, generated files) stays locked in the spec phase too,
-also inside a source folder: such a change is a separate step, noted as a pipeline follow-up.
+frozen. Deploy / CI files (the built-in names: Dockerfile, compose files, CI yml and folders;
+and `[protected] extra`: the project's deploy, CI, generated files) stay locked in every phase
+of a task, the spec phase too, also inside a source folder: such a change is a separate step,
+noted as a pipeline follow-up.
 A path outside the repository is blocked for the agents of a run only: a chat session keeps
 its memory folder and scratch files in every phase. A `[references]` folder is read-only for
 both.
@@ -51,19 +53,21 @@ def spec_extra_allowed(cfg: Any, rel: str) -> bool:
         return rel == CONFIG_FILE
 
 
-def spec_extra_locked(cfg: Any, rel: str) -> bool:
-    """SPEC phase: a `[protected] extra` path that is not a setup file
-    (frame_diff.extra_locked)."""
-    if not cfg.protected_extra:
+def deploy_locked(cfg: Any, rel: str) -> bool:
+    """Every phase of a feature, bug fix or refactor: a deploy / CI file
+    (frame_diff.is_pipeline_file: the built-in names and `[protected] extra`, without the
+    setup files), also inside a folder the phase may write."""
+    from framegate.checks.frame_diff import is_pipeline_file, maybe_pipeline_file
+
+    if not maybe_pipeline_file(cfg, rel):
         return False
     from framegate.adapters import get_adapter
-    from framegate.checks.frame_diff import extra_locked
     from framegate.config import ConfigError
 
     try:
-        return extra_locked(get_adapter(cfg), rel)
+        return is_pipeline_file(get_adapter(cfg), rel)
     except ConfigError:
-        return False
+        return True
 
 
 def in_reference(cfg: Any, path: pathlib.Path) -> str | None:
@@ -148,12 +152,24 @@ def evaluate(stdin_text: str) -> tuple[int, str]:
         problem = write_problem(cfg, phase.partition(" ")[2].strip(), rel)
         return (2, problem) if problem else (0, "")
     allowed = cfg.write_paths(phase)
-    if phase == "SPEC" and spec_extra_locked(cfg, rel):
+    if deploy_locked(cfg, rel):
+        what = (
+            f"[{phase}] Blocked write to {rel}: it is a deploy / CI file (a built-in name such "
+            "as Dockerfile, compose or CI yml, or a path in [protected] extra), which no "
+            "feature, bug fix or refactor changes"
+        )
+        if phase == "SPEC":
+            return 2, (
+                f"{what}, not even in the spec phase. Write what must change there, and why, "
+                "under `## Pipeline follow-up` of the spec's requirements.md: it is done as "
+                "a separate step after the feature (/framegate:pipeline)."
+            )
         return 2, (
-            f"[SPEC] Blocked write to {rel}: it is in [protected] extra (deploy, CI or "
-            "generated files), which no feature changes, not even in the spec phase. Write "
-            "what must change there, and why, under `## Pipeline follow-up` of the spec's "
-            "requirements.md: it is done as a separate step after the feature."
+            f"{what}. Do not attempt it: add the line `- PIPELINE FOLLOW-UP [{rel}]: <what "
+            f"must change and why>` to your notes under {cfg.paths.out}/<feature>/ (the "
+            "implementer: its step note; the reviewer: review.md). It is done as a separate "
+            "step after the task. Not a deploy file of this project? Tell the user: "
+            f"[protected] builtin_off in {CONFIG_FILE} takes a built-in name off the list."
         )
     if any(rel == a.rstrip("/") or rel.startswith(a) for a in allowed):
         return 0, ""

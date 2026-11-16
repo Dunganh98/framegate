@@ -612,6 +612,45 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
   folder counts as a deploy file only when `[protected] extra` names it; an item that
   names no file can only be left open.
 
+- **Deploy / CI paths by name, outside items (2026-11-16, branch feat/deploy-paths; owner
+  rule: a feature, bug fix or refactor never changes deploy or CI files, the pipeline task
+  does). It closes the three "known limits" of the entry above.**
+  - **PyYAML is a dependency** (`pyyaml>=6.0`; dev: `types-pyyaml`). The yml check of
+    `pipeline-check` always parses: every document, tags of the file's own dialect
+    (`!reference`, `!Ref`) accepted, the error with its line. A Helm / Jinja template that
+    is no plain YAML stays a NOTE. The tabs-only fallback is gone.
+  - **Built-in deploy / CI paths** (`config.DEPLOY_CI_FOLDERS` / `DEPLOY_CI_NAMES`): folders
+    at the root `.github/`, `.circleci/`, `.azure-pipelines/`; file names at any depth
+    `Dockerfile`, `Dockerfile.*`, `*.dockerfile`, `.dockerignore`, `docker-compose*.yml`,
+    `docker-compose*.yaml`, `compose*.yml`, `compose*.yaml`, `Jenkinsfile`,
+    `bitbucket-pipelines.yml`, `azure-pipelines*.yml`, `.gitlab-ci*.yml`, `.travis.yml`.
+    Opt-out: `[protected] builtin_off = ["Dockerfile"]` (only these names; anything else is
+    a config error). Ambiguous folders (`deploy/`, `ci/`, `k8s/`, `helm/`, `charts/`) stay
+    `[protected] extra`. One definition, `frame_diff.is_pipeline_file`, for the frame check,
+    the stray-file check, the pipeline task and the two commits of publish. New: the write
+    guard refuses such a file in every phase of a task (before: only `[protected] extra`,
+    only in the spec phase), also inside a source folder, and names the follow-up line to
+    write. A built-in name under tests / specs / out / `.claude/` / `.framegate/` is no
+    deploy file, nor is a source file of the language (`dockerfile.py` and `Dockerfile.*`).
+    `path_matches` knows `**/<name>` (a file name at any depth).
+  - **Probe:** "Locked deploy / CI paths" names the built-in files and folders that exist;
+    "Lock candidates" each with why: deploy-named top folders, a folder with a Dockerfile, a
+    Helm `Chart.yaml`, `*.tf`, Kubernetes manifests (at most 40 files read, 8 KB each),
+    scripts a CI file names. A source / test / spec folder is never proposed as a whole.
+  - **Items outside the repository:** `- OUTSIDE [<where>]: <what must be done> (<why>)` in
+    the spec section, an agent's note and the kept list (a CI variable, a secret, a real
+    database, an environment). Nothing in framegate does one. Shown apart in the spec and
+    final brief ("outside the repository: by hand"), never open work or a problem for
+    `pipeline-check`, their own line in the pipeline brief, an unticked checklist in
+    final_summary.md and on top of the pull request's description
+    (`out/<f>/pr_description.md`, task and pipeline-only), counted apart by `status`. The
+    user ticks the line in `specs/<f>/pipeline_followup.md` by hand.
+  - **Not yet seen live:** all of it (unit tests and temp repos; no skill text ran in a
+    chat). Watch on the first real repo: `compose*.yml` also matches a `composer.yml`;
+    a project that keeps a Dockerfile as source or test data outside `tests/` needs
+    `builtin_off`; whether agents write the `OUTSIDE` line; the manifest look reads only
+    the first 40 yml files (shallow first).
+
 ## User decisions so far
 1. Two human gates, forward only: spec and final (2026-11-10, after the first FCSim feature;
    was three). The test reviewer checks the tests against the spec; its questions, objections

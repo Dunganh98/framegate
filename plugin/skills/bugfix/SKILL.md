@@ -114,7 +114,10 @@ the language, how tests are written here, the code map and the project knowledge
    write one bullet per change under "Pipeline follow-up" in requirements.md (`- <file>: <what
    must change> (<why>)`; "None." otherwise; add the section if the project's template lacks
    it). It is done as a separate step after the feature; framegate raises it again in the
-   final summary. Only deploy / CI files go there. If a reference project has the same bug
+   final summary. Only deploy / CI files go there, and what must be done outside the
+   repository (a CI variable, a secret in the vault, a migration of the real database, an
+   environment switch): `- OUTSIDE [<where>]: <what must be done> (<why>)`. Nothing in
+   framegate does such an item; the brief shows it for the user to do by hand. If a reference project has the same bug
    (or should take over the fix), write one bullet under "Reference follow-up" the same way
    (`- <reference file>: <what should change> (<why>)`): the reference is never changed
    here; show it on the brief under "Pipeline follow-up" as "for <reference>: ...".
@@ -131,7 +134,8 @@ the language, how tests are written here, the code map and the project knowledge
        **Setup files changed** — one line: the files `spec-check` lists, each with why
          ("None." when it lists none); they are approved with the spec
        **Pipeline follow-up** — deploy / CI changes this task makes necessary, one line each
-         (file: what, why); not part of the task, a separate step after it ("None.")
+         (file: what, why); not part of the task, a separate step after it ("None."); an
+         OUTSIDE item as "outside the repository: by hand: <where>: <what>"
        **Questions** — the real decisions still open ("None.")
 
 5. Ask: "Is the report OK? Then I start the run." (default: yes, with the defaults of any open

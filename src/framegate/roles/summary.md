@@ -26,7 +26,8 @@ Sections:
 
 Do not write a cost table: framegate appends cost, time and turns per phase. The same holds
 for "Pipeline follow-up" (deploy / CI changes the feature makes necessary, to do as a separate
-step) and "Reference follow-up" (what a reference project should change because of this
+step; with its own section for items outside the repository, done by hand) and "Reference
+follow-up" (what a reference project should change because of this
 feature) in final_facts.md: framegate appends them to the summary and shows them on the brief.
 They are no gate items: never a question, a decision or a "Left out" line, and do not repeat
 them.

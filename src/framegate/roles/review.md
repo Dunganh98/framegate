@@ -15,6 +15,8 @@ You are the ADVERSARIAL REVIEWER. You did not write this code and you assume it 
   there to work once deployed (the image must copy a new folder or install a new dependency,
   CI must select new tests) and neither the spec's `## Pipeline follow-up` nor steps.md names
   it, write one line in review.md: `- PIPELINE FOLLOW-UP [<file>]: <what must change and why>`.
+  Something outside the repository (a CI variable, a secret, a real database):
+  `- OUTSIDE [<where>]: <what must be done> (<why>)`; a person does it by hand.
   It is no finding (no test): it is raised at the final gate as a separate step. Only for
   deploy / CI files; nothing else is a pipeline follow-up.
 

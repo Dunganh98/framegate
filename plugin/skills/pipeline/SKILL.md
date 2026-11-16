@@ -40,13 +40,19 @@ written (and the list and your brief); source, tests, setup files and specs are 
   open items, numbered, in plain words, one line each, and go on with step 2. An item marked
   `[not a deploy / CI file here ...]` or `[names no file ...]` cannot be done from here: say
   so in one line with your default ("leave it open") and wait for the answer to that only.
+- `Outside the repository: by hand, not this task: N to do`: items that are no file of this
+  repository (a CI variable, a secret, a real database, an environment). You never do them,
+  not even when you could. Show them under their own line, after the numbered items: "By
+  hand, outside the repository: ...". They are never open work of this task.
 - `No list yet`: a change of its own. Ask what should change if the user has not said it.
   Read the deploy / CI files concerned, then write the list to the file the output names,
   one line per change: `- [ ] <file>: <what must change> (<why>)`. Show it numbered and ask:
   "Is this the list? Then I make the changes." (default: yes). Edit nothing before that OK.
 
 The user wants one more file changed: add its line to the list first, then edit it. Only
-deploy / CI files can be on the list.
+deploy / CI files can be on the list, and what a person must do outside the repository, as
+`- [ ] OUTSIDE [<where>]: <what must be done> (<why>)` (add such a line when a change you
+make needs one, e.g. a new variable the yml reads).
 
 ## 2. The changes
 
@@ -79,9 +85,10 @@ Exactly these sections:
     **What was asked** — the list, numbered, one line each
     **What changed** — per item, same numbers: what was changed, with its source; an item
       left open: "left open: <reason>"
+    **Outside the repository: by hand** — the `Outside the repository` items of the check,
+      one line each (where: what); nobody did them here ("None.")
     **Checks** — what the check proved, one or two lines (only listed deploy / CI files
-      changed, the files parse; "yml: only tabs checked" when it says no YAML parser is
-      installed); each `NOTE:` line as one line
+      changed, the files parse); each `NOTE:` line as one line
     **Not proven** — first line, as it is:
       "The pipeline itself has not run: the pull request's CI run is the proof."
       Then at most two things only that run can show
@@ -99,7 +106,10 @@ list, commits the deploy / CI files and closes the phase. Its result in one line
 ## 6. How it reaches the team
 
 Run `framegate publish $ARGUMENTS --dry-run` (it changes nothing). Push or publish only on
-an explicit yes.
+an explicit yes. Items outside the repository must be seen at merge time: `publish` puts
+them on top of the pull request's description as an unticked checklist (`- [ ] ...`) and
+says so; where you create the pull request yourself (`State branch: off`), put that
+checklist on top of its text.
 
 - `State branch: off`: the branch of this checkout is what gets pushed; the `Next:` line of
   step 5 names it.
