@@ -225,6 +225,81 @@ def write(cfg: Config, feature: str, durable: bool = False, kind: Kind = PIPELIN
     return found
 
 
+# ---------- the kept pipeline list: the input of the pipeline task (pipeline.py) ----------
+_LIST_LINE = re.compile(r"^(\s*[-*]\s*\[)([ xX])(\]\s*)(.+?)\s*$")
+_LEFT_OPEN = re.compile(r"\s*\(\s*left open\s*:\s*(.*?)\s*\)\s*$", re.I)
+_ITEM_FILE = re.compile(r"^`?([^\s:`]+)`?\s*:(?:\s|$)")
+#: how a line of the list is written, for messages
+LINE_FORMAT = "- [ ] <file>: <what must change> (<why>)"
+LEFT_OPEN_FORMAT = "(left open: <reason>)"
+
+
+@dataclass(frozen=True)
+class ListItem:
+    """One `- [ ]` line of {specs}/<f>/pipeline_followup.md."""
+
+    #: the line without its box and without a left-open note
+    text: str
+    #: the deploy / CI file it names (repo-relative posix; "" = none; `ci/` = a folder)
+    file: str
+    #: `[x]`: done and approved in a pipeline task
+    ticked: bool
+    #: `(left open: <reason>)` at the end of the line ("" = none)
+    reason: str
+
+    def covers(self, rel: str) -> bool:
+        return bool(self.file) and (
+            rel == self.file or (self.file.endswith("/") and rel.startswith(self.file))
+        )
+
+
+def list_path(cfg: Config, feature: str) -> pathlib.Path:
+    return cfg.spec_dir(feature) / PIPELINE.file
+
+
+def _list_item(line: str) -> ListItem | None:
+    m = _LIST_LINE.match(line)
+    if not m:
+        return None
+    text = m.group(4)
+    left = _LEFT_OPEN.search(text)
+    if left:
+        text = text[: left.start()].rstrip()
+    named = _ITEM_FILE.match(text)
+    file = named.group(1).replace("\\", "/") if named else ""
+    while file.startswith("./"):
+        file = file[2:]
+    return ListItem(text, file, m.group(2) != " ", left.group(1) if left else "")
+
+
+def read_list(cfg: Config, feature: str) -> list[ListItem]:
+    """The items of the kept pipeline list ([] = no file, or no item in it)."""
+    lines = _read(list_path(cfg, feature)).splitlines()
+    return [it for it in map(_list_item, lines) if it is not None]
+
+
+def open_count(cfg: Config, feature: str) -> int:
+    """How many items of the kept pipeline list are not ticked."""
+    return sum(1 for it in read_list(cfg, feature) if not it.ticked)
+
+
+def tick(cfg: Config, feature: str, changed: set[str]) -> int:
+    """Tick the open items whose file is in `changed` (one left open with a reason stays
+    open); returns how many."""
+    path = list_path(cfg, feature)
+    out, count = [], 0
+    for line in _read(path).splitlines():
+        it, m = _list_item(line), _LIST_LINE.match(line)
+        done = it and m and not it.ticked and not it.reason and any(it.covers(f) for f in changed)
+        if done and m:
+            line = f"{m.group(1)}x{m.group(3)}{m.group(4)}"
+            count += 1
+        out.append(line)
+    if count:
+        path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    return count
+
+
 # ---------- both lists ----------
 def reference_name(cfg: Config, feature: str) -> str:
     """Whom the reference follow-up is for: the feature's reference(s), by name."""
@@ -236,7 +311,13 @@ def reference_name(cfg: Config, feature: str) -> str:
 def all_brief_lines(cfg: Config, feature: str) -> list[str]:
     """The follow-up blocks of the final brief, the pipeline's first."""
     who = reference_name(cfg, feature)
-    return [x for k in KINDS for x in brief_lines(items(cfg, feature, k), k, who)]
+    out: list[str] = []
+    for kind in KINDS:
+        found = brief_lines(items(cfg, feature, kind), kind, who)
+        out += found
+        if found and kind is PIPELINE:
+            out.append(f"  after this task: /framegate:pipeline {feature} does them")
+    return out
 
 
 def all_sections(cfg: Config, feature: str) -> list[list[str]]:

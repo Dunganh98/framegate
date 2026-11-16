@@ -13,6 +13,10 @@ also inside a source folder: such a change is a separate step, noted as a pipeli
 A path outside the repository is blocked for the agents of a run only: a chat session keeps
 its memory folder and scratch files in every phase. A `[references]` folder is read-only for
 both.
+
+The pipeline task (`.phase` = `PIPELINE <name>`, set by `framegate pipeline <name>`) is the
+chat's too, and the reverse of every other phase: only deploy / CI files that its list names
+may be written, plus the list and its brief (pipeline.write_problem).
 """
 
 from __future__ import annotations
@@ -137,6 +141,12 @@ def evaluate(stdin_text: str) -> tuple[int, str]:
         return 2, f"[{phase}] Blocked: {raw} is outside the repository" + (
             f" (reference '{reference}': read-only)." if reference else "."
         )
+    if phase.startswith("PIPELINE "):
+        # a pipeline task (pipeline.py): deploy / CI files on its list, nothing else
+        from framegate.pipeline import write_problem
+
+        problem = write_problem(cfg, phase.partition(" ")[2].strip(), rel)
+        return (2, problem) if problem else (0, "")
     allowed = cfg.write_paths(phase)
     if phase == "SPEC" and spec_extra_locked(cfg, rel):
         return 2, (

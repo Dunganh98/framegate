@@ -48,6 +48,15 @@ def test_the_skills_bring_the_cli_to_the_plugin_version() -> None:
         assert preflight.install_command(version) == install
     resume = (ROOT / "plugin/skills/resume/SKILL.md").read_text(encoding="utf-8")
     assert f"framegate preflight $ARGUMENTS --check --plugin-version {version}" in resume
+    # the pipeline task: a report-only check, and the install when its command is missing
+    pipeline = (ROOT / "plugin/skills/pipeline/SKILL.md").read_text(encoding="utf-8")
+    assert f"This plugin is version {version}." in pipeline
+    assert f"framegate preflight $ARGUMENTS --check --plugin-version {version}" in pipeline
+    assert install in pipeline and "`invalid choice`" in pipeline
+    assert "Bash(uv tool install *)" in pipeline and "PowerShell(uv tool install *)" in pipeline
+    listed = (ROOT / "docs/plugin.md").read_text(encoding="utf-8")
+    for path in (ROOT / "plugin/skills").glob("*/SKILL.md"):
+        assert f"skills/{path.parent.name}/SKILL.md" in listed, path  # every skill is listed
     # a skill command that fails at load aborts the whole skill (docs/plugin.md), and the
     # previous tool has no `preflight`: no skill runs it at load
     for path in (ROOT / "plugin/skills").glob("*/SKILL.md"):

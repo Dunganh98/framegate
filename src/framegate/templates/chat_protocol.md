@@ -132,6 +132,15 @@ fail for no reason. Reading files and git log/diff/status are fine.
    backlog (tracked: it survives the cleanup; proposals not kept are counted if they come
    back) and prints the kept ones; say in one line where they are (`framegate backlog`).
    Applying proposals is separate work, only if the user asks; the full file on request.
+1b. Pipeline follow-up, before the publish question: when `framegate status <f> --brief`
+   prints `Pipeline follow-up: N open item(s)` (deploy / CI changes this task made
+   necessary and did not make), ask in one line:
+   "Do the pipeline follow-up now? (`/framegate:pipeline <f>`)", default yes: done first,
+   the product and the deploy / CI change go out in one push, as two commits of one pull
+   request. On yes: tell the user to
+   type `/framegate:pipeline <f>` and stop here (that skill ends with the publish and the
+   cleanup questions). On no: go on with step 2 and say in one line that the same command
+   does it any time later (after the merge it gets a pull request of its own).
 2. Run `framegate publish <f> --dry-run` (it changes nothing). Its first line decides
    which of the two offers below applies:
    - `State branch: off`: the feature branch itself is what gets pushed (2a, 3a).

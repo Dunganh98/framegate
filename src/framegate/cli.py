@@ -86,6 +86,12 @@ commands:
                           per repository); save: this work branch's framegate files -> the
                           state branch; guard: (re)install the pre-push hook that refuses a
                           push of framegate's files to any branch but the state branch
+  pipeline <name>         the pipeline task: the separate step that changes deploy / CI
+                          files, from the task's pipeline follow-up list or a list of its
+                          own; sets the phase in which only those files may be written
+  pipeline-check <name>   its mechanical checks (only listed deploy / CI files changed,
+                          yml / json parse, every item done or left open with a reason)
+  pipeline-approve <name> after the user's OK: check, tick the items, commit, end the phase
   unlock [--force]        clear a stale phase lock (.phase/.reqs) left by a killed run
   protocol                the chat run protocol the plugin skills follow (printed)
   hook pre-tool-use|stop  Claude Code hooks (stdin = hook JSON; exit 2 = block)
@@ -197,6 +203,8 @@ def build_parser() -> argparse.ArgumentParser:
         "action", nargs="?", default="status", choices=["status", "init", "save", "guard"]
     )
     p.add_argument("--push", action="store_true", help="init / save: also push the state branch")
+    for name in ("pipeline", "pipeline-check", "pipeline-approve"):
+        sub.add_parser(name, help="the pipeline task (deploy / CI files)").add_argument("feature")
     p = sub.add_parser("unlock", help="clear a stale phase lock left by a killed run")
     p.add_argument("--force", action="store_true", help="even if a run looks active")
     sub.add_parser("protocol", help="print the chat run protocol (used by the plugin skills)")
@@ -259,7 +267,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             # [git] state_branch: the base branch holds no framegate.toml; a feature starts
             # from there with the config of the state branch
-            wanted = args.command in ("spec", "state")
+            wanted = args.command in ("spec", "state", "pipeline")
             from_state = publish.config_from_state() if wanted else None
             if from_state is None:
                 hint = publish.missing_config_hint()
@@ -338,7 +346,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 get_adapter(cfg), args.feature, args.scope, args.skip_mutation, echo=print
             )
             return 0 if ok else 1
+        if args.command in ("pipeline-check", "pipeline-approve"):
+            from framegate import pipeline
+
+            step = pipeline.run_check if args.command == "pipeline-check" else pipeline.approve
+            return step(cfg, args.feature)
         orch = Orchestrator(cfg)
+        if args.command == "pipeline":
+            from framegate import pipeline
+
+            return pipeline.start(orch, args.feature)
         if args.command == "unlock":
             return orch.unlock(force=args.force)
         if args.command == "backlog":

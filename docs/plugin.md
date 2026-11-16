@@ -1,8 +1,8 @@
 # framegate Claude Code plugin
 
-The plugin is the Claude Code side of framegate: six skills that drive the workflow from the chat
+The plugin is the Claude Code side of framegate: seven skills that drive the workflow from the chat
 (`/framegate:setup`, `/framegate:feature`, `/framegate:bugfix`, `/framegate:refactor`,
-`/framegate:resume`, `/framegate:status`) and two hooks, all calling the
+`/framegate:pipeline`, `/framegate:resume`, `/framegate:status`) and two hooks, all calling the
 `framegate` CLI (the Python package in `src/`). All logic lives in the package (including the
 chat run protocol, `framegate protocol`); the plugin only registers things. Installed
 **user-wide**, it stays inert in repos without `framegate.toml`.
@@ -27,6 +27,8 @@ plugin/
                                     # bugfix), then the run protocol
   skills/refactor/SKILL.md          # /framegate:refactor <f>: scope dialogue (spec --mode
                                     # refactor), then the run protocol
+  skills/pipeline/SKILL.md          # /framegate:pipeline <f>: the deploy / CI changes of a task's
+                                    # pipeline follow-up, or of their own (no run, no agents)
   skills/resume/SKILL.md            # /framegate:resume [f]: reattach after a session restart
   skills/status/SKILL.md            # /framegate:status [f]: where features stand, tag cleanup
   tests/framegate-hook.test.js      # node --test "plugin/tests/*.test.js"
