@@ -1,0 +1,40 @@
+# The whole suite, on every push and pull request. It is not run on a developer machine
+# (about ten minutes here, over an hour on a laptop with slow process starts): locally only
+# the tests around a change run. A release is tagged from a commit this workflow passed.
+name: tests
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.10"
+      - name: git identity (the tests make commits in temporary repositories)
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+          git config --global init.defaultBranch main
+      - name: Install
+        run: uv sync
+      - name: Lint, format, types
+        run: |
+          uv run ruff check src tests
+          uv run ruff format --check src tests
+          uv run mypy src
+      - name: Tests (everything but the `slow` ones, which need WSL / dotnet builds)
+        run: uv run pytest -m "not slow" -q --durations=15
+      - name: Plugin hook tests
+        working-directory: plugin
+        run: node --test
