@@ -127,7 +127,7 @@ def run_files(root: pathlib.Path, cfg: Config) -> None:
             "structure": "SKIPPED: off",
         },
     )
-    log_event(cfg, "demo", "agent_run", cost=12.5, seconds=600)
+    log_event(cfg, "demo", "agent_run", cost=77.25, seconds=600)
 
 
 def test_the_description_of_a_finished_task(tmp_path: pathlib.Path) -> None:
@@ -142,7 +142,7 @@ def test_the_description_of_a_finished_task(tmp_path: pathlib.Path) -> None:
     text = (tmp_path / written.rel).read_text(encoding="utf-8")
     assert text == EXPECTED
     # for a reviewer: no cost figure, no path into the out folder, no gate-item number
-    assert "$" not in text and "12.5" not in text and "out/" not in text and "[2]" not in text
+    assert "$" not in text and "77.25" not in text and "out/" not in text and "[2]" not in text
     assert "Struggles" not in text and "Questions" not in text and "regression" not in text
     assert not description.refresh(cfg, "demo").changed  # again: the same text
 
