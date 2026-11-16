@@ -57,6 +57,11 @@ commands:
                           works before `init`; --dry-run: only list what is missing;
                           --update: also bring the framegate pytest plugin there to this
                           version
+  probe [--json]          the project facts every run depends on, read in seconds: the
+                          interpreter, the test / lint / format / type commands and whether
+                          each tool answers --version, folders, base branch, remote, deploy
+                          and CI files to lock, editable install; runs no test, no linter,
+                          no agent; works before `init` (for /framegate:setup)
   preflight [<feature>] [--plugin-version X] [--check]   the start step of the chat
                           skills: the command-line tool at the plugin's version, the
                           project environment's workflow tools at the tool's version
@@ -167,6 +172,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="also bring framegate's own part there (the pytest plugin) to this version",
     )
+    p = sub.add_parser("probe", help="the project facts every run depends on (instant checks)")
+    p.add_argument("--json", action="store_true", help="the facts as JSON")
     p = sub.add_parser("preflight", help="the start step of the chat skills: versions, tools")
     p.add_argument("feature", nargs="?")
     p.add_argument("--plugin-version", default="", help="the version of the skill that asks")
@@ -238,6 +245,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             from framegate.scaffold import install_tools
 
             return install_tools(dry_run=args.dry_run, update=args.update)
+        if args.command == "probe":
+            from framegate import probe
+
+            return probe.run(as_json=args.json)
         if args.command == "preflight":
             from framegate import preflight
 

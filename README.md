@@ -35,8 +35,9 @@ Release: one version for the CLI and the plugin (`pyproject.toml`, `src/framegat
 ## Use
 
 1. **Set up the repo (once):** in Claude Code run `/framegate:setup`: it first installs the
-   tools the workflow needs into the project's environment, then asks its questions; commit
-   the files it lists.
+   tools the workflow needs into the project's environment, then shows one table of what it
+   found (interpreter, test / lint / format commands, folders, branch) for you to confirm
+   with "ok" or a correction; a few minutes. Commit the files it lists.
 2. **Start a feature:** `/framegate:feature <name>`, describe what you want, answer the few
    questions (each has a default), check the spec brief (above all "Decisions I made for
    you"), then say **"spec OK"**.
@@ -78,6 +79,7 @@ In a terminal (the chat runs these for you):
 | Command | Does |
 |---|---|
 | `framegate install-tools` | install what the workflow needs into the project's environment (setup does this first) |
+| `framegate probe` | the project facts in seconds: interpreter, test / lint / format commands and whether each tool answers (setup shows them for your "ok") |
 | `framegate doctor` | check the setup (no agents, no cost) |
 | `framegate preflight <name>` | the start check every feature begins with: plugin, CLI and the project's workflow tools at one version |
 | `framegate run <name>` | continue a feature until it needs you |

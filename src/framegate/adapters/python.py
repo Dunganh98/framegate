@@ -15,6 +15,8 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -22,7 +24,7 @@ else:  # pragma: no cover - exercised only on 3.10
     import tomli as tomllib
 
 from framegate import __version__, pytools, release_requirement
-from framegate.adapters import python_port, wsl
+from framegate.adapters import python_port, python_probe, wsl
 from framegate.adapters.base import (
     Check,
     CheckResult,
@@ -40,6 +42,8 @@ from framegate.adapters.base import (
 )
 
 SKIP_MARKS = {"skip", "skipif", "xfail"}
+#: seconds the project interpreter gets to answer `framegate probe`
+PROBE_TIMEOUT = 30
 #: an allow rule for a tool run as a module (lint_tools adds the tool's own name)
 MODULE_RULE = "Bash(python -m "
 #: bump to force the WSL mutmut venvs to be rebuilt
@@ -185,21 +189,57 @@ class PythonAdapter(LanguageAdapter):
         return list(self.cfg.language_options.get("python", {}).get("pytest_args", []))
 
     # ---------- interpreter ----------
-    @property
-    def python(self) -> str:
-        """[env] python, else the project's .venv interpreter, else the current interpreter."""
+    def interpreter(self) -> tuple[str, str]:
+        """[env] python, else the project's .venv interpreter, else the current interpreter;
+        with where it comes from (`framegate probe` shows it)."""
         if self.cfg.python:
             p = self.cfg.python
-            if os.sep in p or "/" in p:
-                return str((self.root / p).resolve()) if not os.path.isabs(p) else p
-            return p
+            if (os.sep in p or "/" in p) and not os.path.isabs(p):
+                p = str((self.root / p).resolve())
+            return p, "framegate.toml [env] python"
         for cand in (
             self.root / ".venv" / "Scripts" / "python.exe",
             self.root / ".venv" / "bin" / "python",
         ):
             if cand.is_file():
-                return str(cand)
-        return sys.executable
+                return str(cand), "the project's .venv"
+        return sys.executable, "framegate's own interpreter: the project has no .venv"
+
+    @property
+    def python(self) -> str:
+        return self.interpreter()[0]
+
+    def env_facts(self) -> dict[str, Any]:
+        code, out = run_command(
+            [self.python, "-c", python_probe.ENV_SCRIPT], self.root, timeout=PROBE_TIMEOUT
+        )
+        try:
+            data = json.loads(out.strip().splitlines()[-1]) if code == 0 else None
+        except (ValueError, IndexError):
+            data = None
+        if not isinstance(data, dict):
+            return {}
+        here = os.path.normcase(str(self.root.resolve()))
+        mine = []
+        for name, url in data.get("editable", []):
+            path = url2pathname(urlparse(url).path)
+            if os.path.normcase(os.path.abspath(path)) == here:
+                mine.append(name)
+        facts: dict[str, Any] = {"version": f"Python {data.get('version', '?')}", "editable": mine}
+        if mine:
+            pip = ["python", "-m", "pip"] if data.get("pip") else ["uv", "pip"]
+            facts["refresh"] = [*pip, "install", "-e", ".", "--no-deps"]
+        return facts
+
+    def test_runner(self) -> list[str]:
+        return [self.python, "-m", "pytest"]
+
+    def detected_tools(self) -> dict[str, tuple[list[str], str]]:
+        return python_probe.detected_tools(self.root)
+
+    @classmethod
+    def guess_layout(cls, root: pathlib.Path) -> tuple[list[str], str]:
+        return python_probe.guess_layout(root)
 
     def resolve_command(self, cmd: Sequence[str]) -> list[str]:
         out = super().resolve_command(cmd)

@@ -565,6 +565,29 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
   commits stay). Open: on 2026-11-15 the working tree lost two committed changes
   (`state_branch` line, reference_followup.md) with no reflog entry and no framegate event;
   it matches a tree restored from a stash made on the commit before them; not traced.
+- **Light setup (2026-11-16, branch feat/light-setup; user decision: one confirmation, a few
+  minutes, no detail questions):** on da-argos the setup trusted what it read and showed only
+  "settings that differ from the defaults", so agents ran in the global Python and were told
+  ruff format in a black project. Now:
+  - `framegate probe [--json]` (`src/framegate/probe.py`): instant facts, before or with a
+    framegate.toml; no test run, no linter over the code, no agent. Interpreter (the
+    adapter's `interpreter()`, the code the `python` property reads), test / lint / format /
+    type commands with their source and whether the tool answers `--version` (asked at once,
+    30 s each), folders, base branch (origin/HEAD), remote + host, state-branch suggestion
+    (a remote and more than one author address in the last 200 commits), deploy / CI /
+    generated paths to lock, editable install (`[env] refresh` candidate), references. Where
+    the project's files name another tool than framegate's default (python:
+    `adapters/python_probe.py`: black, flake8, pylint, pyright), the row is the project's
+    tool plus the `[gates.commands]` lines to set. New adapter hooks: `guess_layout`,
+    `interpreter`, `env_facts`, `test_runner`, `detected_tools` (docs/adapters.md).
+  - `/framegate:setup` shows one fixed table of 12 numbered rows (value, from, answers);
+    "ok" or "5: use black". A tool the project does not name is "off". The detail questions
+    are gone (defaults, changed later in framegate.toml); a "Blocker:" line only for no test
+    framework, no way to tag tests, no project interpreter.
+  - **Not yet seen live:** the skill on a real repository, dotnet / generic probes (dotnet
+    names the SDK and default commands only; no detection of the project's own tools there),
+    `setup.py develop` installs (no direct_url.json: not seen as editable), 9 s for the
+    probe on the work laptop (this repo).
 
 ## User decisions so far
 1. Two human gates, forward only: spec and final (2026-11-10, after the first FCSim feature;
