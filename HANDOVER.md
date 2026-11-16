@@ -566,6 +566,29 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
   (`state_branch` line, reference_followup.md) with no reflog entry and no framegate event;
   it matches a tree restored from a stash made on the commit before them; not traced.
 
+- **The pipeline task (2026-11-16, branch feat/pipeline-task; decision 17's "separate
+  step"):** `/framegate:pipeline <name>` (skill `plugin/skills/pipeline/`,
+  `src/framegate/pipeline.py`) changes deploy / CI files, from the task's kept list
+  `specs/<name>/pipeline_followup.md` or a list the chat writes for a change of its own. No
+  spec, no tests, no agent run; the chat edits. `framegate pipeline <name>` sets `.phase` to
+  `PIPELINE <name>` and the start ref `refs/framegate/pipeline/<name>`; in that phase the
+  write guard allows only deploy / CI files (`frame_diff.is_pipeline_file`: built-in CI
+  paths + `[protected] extra`, minus setup files) that the list names, the list and
+  `out/<name>/pipeline_brief.md`. `framegate pipeline-check <name>` (no agents: only listed
+  deploy / CI files changed, yml / json / toml parse, items done or `(left open: <reason>)`;
+  missing repo paths are notes), `framegate pipeline-approve <name>` (ticks, commits,
+  clears the phase). Publish, by path, decided from git: parent not merged -> a second
+  commit on the product branch (added on top when already published); merged or no parent
+  -> branch `<pipeline_prefix><name>` (`[git] pipeline_prefix`, default `pipeline/`) with
+  its own pull request, the brief as its text. Without a state branch the branch is chosen
+  at the start (feature branch while unmerged, else `pipeline/<name>` from the base) and
+  the chat pushes it. Wrap-up D.1b offers it before the publish question; `status` shows
+  open pipeline items. docs/reference.md "The pipeline task". **Not yet seen live:** all of
+  it (temp repos; the skill text never ran in a chat; gh / az not called). Known limits:
+  PyYAML is no dependency (without it only tabs are found in yml); a Dockerfile or k8s
+  folder counts as a deploy file only when `[protected] extra` names it; an item that
+  names no file can only be left open.
+
 ## User decisions so far
 1. Two human gates, forward only: spec and final (2026-11-10, after the first FCSim feature;
    was three). The test reviewer checks the tests against the spec; its questions, objections

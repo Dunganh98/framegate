@@ -20,15 +20,10 @@ from framegate.adapters.base import CheckResult, LanguageAdapter
 from framegate.config import CONFIG_FILE, Config
 from framegate.state import GitError, commit_paths, git, tag_exists
 
-CORE_PROTECTED = (
-    ".claude/",
-    ".framegate/",
-    "CLAUDE.md",
-    CONFIG_FILE,
-    ".github/",
-    ".gitlab-ci.yml",
-    "azure-pipelines.yml",
-)
+#: the CI files every project has protected; with `[protected] extra` (deploy, CI and
+#: generated files of the project) they are what the pipeline task may change
+CI_PATHS = (".github/", ".gitlab-ci.yml", "azure-pipelines.yml")
+CORE_PROTECTED = (".claude/", ".framegate/", "CLAUDE.md", CONFIG_FILE, *CI_PATHS)
 
 
 def approved_tag(feature: str) -> str:
@@ -129,6 +124,19 @@ def extra_locked(adapter: LanguageAdapter, path: str) -> bool:
     return path_matches(path, list(adapter.cfg.protected_extra)) and not is_setup_file(
         adapter, path
     )
+
+
+def pipeline_entries(cfg: Config) -> list[str]:
+    """The deploy / CI paths as configured (prefixes / globs): the built-in CI paths and
+    `[protected] extra`."""
+    return [*CI_PATHS, *cfg.protected_extra]
+
+
+def is_pipeline_file(adapter: LanguageAdapter, path: str) -> bool:
+    """A deploy / CI file: under a built-in CI path or `[protected] extra`, and not a setup
+    file. No feature, bug fix or refactor changes one; the pipeline task changes nothing
+    else (pipeline.py)."""
+    return path_matches(path, pipeline_entries(adapter.cfg)) and not is_setup_file(adapter, path)
 
 
 def setup_state(adapter: LanguageAdapter) -> tuple[list[str], list[str]]:

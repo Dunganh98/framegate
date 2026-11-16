@@ -70,6 +70,7 @@ In the chat:
 | `/framegate:feature <name>` | build a feature, start to finish |
 | `/framegate:bugfix <name>` | fix a bug: first a test that fails because of it |
 | `/framegate:refactor <name>` | restructure code: first tests that pin what it does today |
+| `/framegate:pipeline <name>` | make the deploy / CI changes a task left to do, or one of their own |
 | `/framegate:resume [name]` | reconnect the chat to a feature |
 | `/framegate:status [name]` | show where features stand |
 

@@ -112,6 +112,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "markers": (str,),
         "state_branch": (str,),
         "work_prefix": (str,),
+        "pipeline_prefix": (str,),
         "publish_code_map": (bool,),
     },
     "notify": {"toast": (bool,)},
@@ -401,6 +402,9 @@ class Config:
     #: work_prefix + f (never pushed: it holds framegate's files); branch_prefix + f is then
     #: only the name of the product branch `framegate publish` pushes
     work_prefix: str = "framegate-work/"
+    #: [git] pipeline_prefix: a deploy / CI change that gets its own pull request (the
+    #: pipeline task of a merged task, or one without a task) is pushed as pipeline_prefix + f
+    pipeline_prefix: str = "pipeline/"
     #: [git] publish_code_map: the code map ([docs] code_map) is product documentation and
     #: goes to the pull request (default: it is one of framegate's files)
     publish_code_map: bool = False
@@ -766,6 +770,12 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
         raise ConfigError(
             "[git] work_prefix must not be empty or equal to branch_prefix: with state_branch "
             "the local work branch and the pushed product branch have different names"
+        )
+    cfg.pipeline_prefix = git_cfg.get("pipeline_prefix", cfg.pipeline_prefix).strip()
+    if cfg.pipeline_prefix in ("", cfg.branch_prefix, cfg.work_prefix):
+        raise ConfigError(
+            "[git] pipeline_prefix must not be empty or equal to branch_prefix / work_prefix: "
+            "a deploy / CI change with its own pull request gets a branch name of its own"
         )
     if cfg.state_branch and not cfg.git_branch:
         # the work branch must never carry the product branch's name (user decision 18)

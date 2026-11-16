@@ -3675,6 +3675,12 @@ class Orchestrator:
                 f"{(lock or {}).get('pid')}); a branch switch or the SPEC phase now would break "
                 "it. Reattach with /framegate:resume, or wait until it stops."
             )
+        open_phase = read_phase(self.cfg) or ""
+        if open_phase.startswith("PIPELINE "):
+            raise WorkflowError(
+                f"A pipeline task is open in this checkout ({open_phase}): approve it first "
+                f"(/framegate:pipeline {open_phase.split()[1]}), or give it up: framegate unlock"
+            )
         self.feature_branch(feature)
         if self.cfg.state_branch and (self.cfg.root / CONFIG_FILE).is_file():
             # the branch's own framegate.toml (from the state branch) is what counts from
@@ -3981,7 +3987,8 @@ class Orchestrator:
                 f"framegate run is active: pid {(lock or {}).get('pid')}, feature "
                 f"{(lock or {}).get('feature')}, phase lock {phase or 'none'}."
             )
-        if (phase and phase != "SPEC") or lock is not None:
+        # a pipeline task (`PIPELINE <name>`) is the chat's own phase too, like SPEC
+        if (phase and phase.split()[0] not in ("SPEC", "PIPELINE")) or lock is not None:
             return (
                 f"WARNING: stale phase lock '{phase or 'none'}'"
                 + (f" (left by pid {lock.get('pid')})" if lock else "")

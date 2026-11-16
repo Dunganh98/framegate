@@ -1013,3 +1013,182 @@ def test_the_chat_offers_the_publish_only_with_a_state_branch() -> None:
     assert "framegate publish <f> --pr" in wrap_up
     assert "State branch: off" in wrap_up and "gh pr create" in wrap_up  # the old offer stays
     assert "Never push without that yes" in wrap_up
+    # the pipeline follow-up is offered before the publish: both commits in the first push
+    offer = wrap_up.index("Do the pipeline follow-up now? (`/framegate:pipeline <f>`)")
+    assert offer < wrap_up.index("framegate publish <f> --dry-run")
+
+
+# ---------- the pipeline task: deploy / CI files are a commit of their own ----------
+CI_FILE = ".github/workflows/ci.yml"
+CI_TEXT = "jobs:\n  unit:\n    steps:\n      - run: pytest tests/test_demo.py\n"
+CI_ITEM = f"{CI_FILE}: run the new tests (CI does not select them)"
+
+
+def pipeline_task(root: pathlib.Path, name: str = "demo", item: str = CI_ITEM) -> None:
+    """A pipeline task as the chat does it: start, the list (kept at DONE, or written now),
+    the edit, the check, the user's OK."""
+    assert af(root, "pipeline", name) == 0
+    listed = root / "specs" / name / "pipeline_followup.md"
+    listed.parent.mkdir(parents=True, exist_ok=True)
+    listed.write_text(f"# Pipeline follow-up: {name}\n\n- [ ] {item}\n", encoding="utf-8")
+    (root / CI_FILE).parent.mkdir(parents=True, exist_ok=True)
+    (root / CI_FILE).write_text(CI_TEXT, encoding="utf-8")
+    assert af(root, "pipeline-check", name) == 0
+    assert af(root, "pipeline-approve", name) == 0
+    assert f"- [x] {item}" in listed.read_text(encoding="utf-8")
+    assert not (root / ".phase").exists() and not git(root, "status", "--porcelain").strip()
+
+
+def parents(root: pathlib.Path, rev: str) -> list[str]:
+    return git(root, "rev-list", "--parents", "-1", rev).split()[1:]
+
+
+def changed(root: pathlib.Path, rev: str) -> set[str]:
+    return set(git(root, "diff", "--name-only", f"{rev}^", rev).split())
+
+
+def tree(root: pathlib.Path, rev: str) -> str:
+    return git(root, "rev-parse", f"{rev}^{{tree}}").strip()
+
+
+def test_pipeline_before_the_publish_two_commits_in_the_first_push(
+    team: Team, capsys: pytest.CaptureFixture[str]
+) -> None:
+    r, o = team.root, team.origin
+    dev = sha(o, "dev")
+    pipeline_task(r)
+    capsys.readouterr()
+    assert team.af("publish", "demo", "--dry-run") == 0
+    out = capsys.readouterr().out
+    assert "Product branch feature/demo: 3 file(s), 1 of them deploy / CI files in a commit" in out
+    assert team.af("publish", "demo", "--title", "demo: add two ints") == 0
+    # dev <- the product <- the deploy / CI files, on the one product branch
+    second = sha(o, "feature/demo")
+    (first,) = parents(o, second)
+    assert parents(o, first) == [dev]
+    assert git(o, "log", "--format=%s", f"{dev}..feature/demo").splitlines() == [
+        "demo: deploy / CI changes",
+        "demo: add two ints",
+    ]
+    assert changed(o, first) == {"src/demo/__init__.py", "tests/test_demo.py"}
+    assert changed(o, second) == {CI_FILE}
+    assert show(o, "feature/demo", CI_FILE) == CI_TEXT
+    assert not top_level(o, "feature/demo") & WORKFLOW_TOP
+    assert "refs/heads/pipeline/demo" not in refs(o)
+    assert "- [x] " in show(o, "framegate/dev", "specs/demo/pipeline_followup.md")
+    # again: nothing moves
+    there = refs(o)
+    assert team.af("publish", "demo", "--title", "demo: add two ints") == 0
+    assert refs(o) == there
+    # a remote branch that was replaced: with the lease both commits are built again
+    assert push(r, "--no-verify", "-f", "origin", "dev:feature/demo").returncode == 0
+    assert team.af("publish", "demo") == 1
+    assert team.af("publish", "demo", "--force-with-lease") == 0
+    rebuilt = sha(o, "feature/demo")
+    assert changed(o, rebuilt) == {CI_FILE} and parents(o, parents(o, rebuilt)[0]) == [dev]
+    assert tree(o, rebuilt) == tree(o, second)
+
+
+def test_pipeline_after_the_publish_is_a_second_commit_on_the_same_branch(
+    team: Team, capsys: pytest.CaptureFixture[str]
+) -> None:
+    r, o = team.root, team.origin
+    assert team.af("publish", "demo") == 0
+    first = sha(o, "feature/demo")
+    # while the task is open nothing is published
+    assert team.af("pipeline", "demo") == 0
+    capsys.readouterr()
+    assert team.af("publish", "demo") == 1
+    assert "The pipeline task of demo is open" in capsys.readouterr().err
+    pipeline_task(r)
+    assert team.af("publish", "demo") == 0
+    second = sha(o, "feature/demo")
+    assert parents(o, second) == [first]  # added, never rewritten
+    assert changed(o, second) == {CI_FILE}
+    assert git(o, "log", "-1", "--format=%s", second).strip() == "demo: deploy / CI changes"
+    assert sha(r, publish.product_ref("demo")) == second
+
+
+def squash_merge(team: Team, branch: str = "feature/demo") -> None:
+    """The pull request is merged on the host (a squash); this clone's `dev` does not know."""
+    other = team.clone("merger")
+    git(other, "merge", "-q", "--squash", f"origin/{branch}")
+    git(other, "commit", "-q", "-m", f"{branch} (#1)")
+    git(other, "push", "-q", "origin", "dev")
+
+
+def test_pipeline_of_a_merged_task_gets_its_own_branch_and_pull_request(
+    team: Team, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r, o = team.root, team.origin
+    start = sha(r, "dev")
+    assert team.af("publish", "demo") == 0
+    product = sha(o, "feature/demo")
+    squash_merge(team)
+    toml = r / "framegate.toml"
+    text = toml.read_text(encoding="utf-8")
+    toml.write_text(text.replace("[git]\n", '[git]\npipeline_prefix = "infra/"\n', 1), "utf-8")
+    git(r, "commit", "-q", "-m", "config", "framegate.toml")
+    pipeline_task(r)
+    brief = r / "out" / "demo" / "pipeline_brief.md"
+    brief.write_text("**What was asked**\n1. run the new tests\n", encoding="utf-8")
+    capsys.readouterr()
+    assert team.af("publish", "demo") == 0
+    out = capsys.readouterr().out
+    assert "Pipeline branch infra/demo (the product is merged): 1 deploy / CI file(s)" in out
+    assert "Pull request infra/demo -> dev: not created: no tool for this host" in out
+    assert "its description: out/demo/pipeline_brief.md (copy it before the cleanup)" in out
+    # its own branch: one commit on the commit the work started from, the CI file only
+    tip = sha(o, "infra/demo")
+    assert parents(o, tip) == [start] and changed(o, tip) == {CI_FILE}
+    assert files(o, "infra/demo") == files(o, start) | {CI_FILE}
+    assert git(o, "log", "-1", "--format=%s", tip).strip() == "demo: deploy / CI changes"
+    assert sha(o, "feature/demo") == product  # the merged branch is left alone
+    assert sha(r, publish.pipeline_ref("demo")) == tip
+    there = refs(o)
+    assert team.af("publish", "demo") == 0  # again: in line
+    assert refs(o) == there
+    # the pull request, when the host has a tool: this branch, the approved brief as its text
+    cfg = load_config(r)
+    git(r, "remote", "set-url", "origin", "git@github.com:acme/widgets.git")
+    tool = Tool("https://github.com/acme/widgets/pull/8\n")
+    monkeypatch.setattr(publish, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(publish, "run_tool", tool)
+    assert publish.pull_request(
+        *(cfg, publish.names(cfg), "demo", "demo: deploy / CI changes", lambda s: None),
+        create=True,
+        head="infra/demo",
+        body="out/demo/pipeline_brief.md",
+    )
+    (call,) = tool.calls
+    assert call[call.index("--head") + 1] == "infra/demo"
+    assert call[call.index("--body-file") + 1] == str(brief)
+    assert team.af("cleanup", "demo", "--tags") == 0
+    assert publish.pipeline_ref("demo") not in refs(r)
+    with pytest.raises(ConfigError, match="pipeline_prefix"):
+        parse_config(r, {"git": {"pipeline_prefix": "feat/"}})
+
+
+def test_a_pipeline_task_of_its_own_with_a_state_branch(
+    team: Team, capsys: pytest.CaptureFixture[str]
+) -> None:
+    r, o = team.root, team.origin
+    git(r, "push", "-q", "origin", "framegate/dev")
+    git(r, "checkout", "-q", "dev")  # no framegate.toml here: read from the state branch
+    capsys.readouterr()
+    pipeline_task(r, "ci-cache", f"{CI_FILE}: cache the packages (slow builds)")
+    out = capsys.readouterr().out
+    assert "Pipeline task ci-cache (on its own: no task of this name)" in out
+    assert "No list yet: write it to specs/ci-cache/pipeline_followup.md" in out
+    assert git(r, "rev-parse", "--abbrev-ref", "HEAD").strip() == "framegate-work/ci-cache"
+    assert team.af("publish", "ci-cache") == 0  # no spec, no metrics row: nothing to be DONE
+    out = capsys.readouterr().out
+    assert "Pipeline branch pipeline/ci-cache (this branch changed nothing else)" in out
+    assert "its description: specs/ci-cache/pipeline_followup.md." in out
+    tip = sha(o, "pipeline/ci-cache")
+    assert parents(o, tip) == [sha(o, "dev")] and changed(o, tip) == {CI_FILE}
+    assert not top_level(o, "pipeline/ci-cache") & WORKFLOW_TOP
+    assert "refs/heads/feature/ci-cache" not in refs(o)
+    assert "- [x] " in show(o, "framegate/dev", "specs/ci-cache/pipeline_followup.md")
+    # the work branch stays local: the guard still refuses it
+    assert push(r, "origin", "framegate-work/ci-cache").returncode != 0

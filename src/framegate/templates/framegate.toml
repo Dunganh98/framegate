@@ -180,6 +180,9 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 #                                  # is <work_prefix><f>, never pushed (it holds framegate's
 #                                  # files; a pre-push hook framegate installs refuses it);
 #                                  # <branch_prefix><f> is the product branch `publish` pushes
+# pipeline_prefix = "pipeline/"    # a deploy / CI change with its own pull request (the
+#                                  # pipeline task of a merged task, or one without a task)
+#                                  # is pushed as <pipeline_prefix><name>
 # publish_code_map = false        # with state_branch: true = the code map is product
 #                                  # documentation and goes to the pull request
 

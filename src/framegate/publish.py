@@ -35,6 +35,7 @@ import tempfile
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import partial
 
 from framegate import hosts
 from framegate.config import CONFIG_FILE, Config, ConfigError, parse_config
@@ -53,6 +54,15 @@ Echo = Callable[[str], None]
 STATE_PREFIX = "framegate/"
 #: the last product commit built for a feature: a private ref (no push publishes it)
 PRODUCT_REF = "refs/framegate/product/{feature}"
+#: a deploy / CI change with its own branch (the pipeline task of a merged task, or one
+#: without a task): the last commit built for it
+PIPELINE_REF = "refs/framegate/pipeline-product/{feature}"
+#: set while a pipeline task is open (pipeline.py): the commit it started on
+PIPELINE_START_REF = "refs/framegate/pipeline/{feature}"
+#: the pipeline task's brief ({out}/<f>/): the description of its own pull request
+PIPELINE_BRIEF_FILE = "pipeline_brief.md"
+#: the kept pipeline list ({specs}/<f>/; followup.py)
+LIST_FILE = "pipeline_followup.md"
 SUMMARY_FILE = "final_summary.md"
 PR_DESCRIPTION_FILE = "pr_description.md"
 LIST_MAX = 30
@@ -105,6 +115,9 @@ def _rev(root: pathlib.Path, name: str) -> str | None:
 
 def _ancestor(root: pathlib.Path, older: str, newer: str) -> bool:
     return _run(root, "merge-base", "--is-ancestor", older, newer).returncode == 0
+
+
+is_ancestor = _ancestor
 
 
 def _tree(root: pathlib.Path, rev: str) -> str:
@@ -177,6 +190,24 @@ def product_branch(cfg: Config, feature: str) -> str:
 
 def product_ref(feature: str) -> str:
     return PRODUCT_REF.format(feature=feature)
+
+
+def pipeline_branch(cfg: Config, feature: str) -> str:
+    """The branch of a deploy / CI change that gets its own pull request."""
+    return cfg.pipeline_prefix + feature
+
+
+def pipeline_ref(feature: str) -> str:
+    return PIPELINE_REF.format(feature=feature)
+
+
+def pipeline_start_ref(feature: str) -> str:
+    return PIPELINE_START_REF.format(feature=feature)
+
+
+def pipeline_title(feature: str) -> str:
+    """The message of the commit that holds the deploy / CI files."""
+    return f"{feature}: deploy / CI changes"
 
 
 def _require(cfg: Config) -> None:
@@ -266,6 +297,96 @@ def product_tree(cfg: Config, rev: str) -> str:
             env=env,
         )
         return _git(cfg.root, "write-tree", env=env).strip()
+
+
+#: the paths below are file names, never patterns
+_LITERAL = {"GIT_LITERAL_PATHSPECS": "1"}
+
+
+def _names(root: pathlib.Path, *args: str) -> list[str]:
+    """The file names `git diff --name-only <args>` lists."""
+    out = _git(root, "diff", "--no-renames", "--name-only", "-z", *args, env=_LITERAL)
+    return [x for x in out.split("\0") if x]
+
+
+def pipeline_changed(cfg: Config, start: str, rev: str = "HEAD") -> list[str]:
+    """The deploy / CI files (frame_diff.is_pipeline_file) that differ between `start` and
+    `rev`: what a pipeline task changed on this branch. A feature never changes one."""
+    from framegate.adapters import get_adapter
+    from framegate.checks.frame_diff import is_pipeline_file
+
+    try:
+        adapter = get_adapter(cfg)
+    except ConfigError:
+        return []
+    names = _names(cfg.root, start, rev)
+    return sorted(f for f in names if not is_workflow(cfg, f) and is_pipeline_file(adapter, f))
+
+
+def tree_with(cfg: Config, tree: str, source: str, paths: Sequence[str]) -> str:
+    """`tree` with `paths` as they are in `source` (missing there: removed)."""
+    if not paths:
+        return tree
+    with _index() as index:
+        env = {**index, **_LITERAL}
+        _git(cfg.root, "read-tree", tree, env=env)
+        remove = ("rm", "-r", "-q", "-f", "--cached", "--ignore-unmatch", "--")
+        _git(cfg.root, *remove, *paths, env=env)
+        listing = _git(cfg.root, "ls-tree", "-r", "-z", "--full-tree", source, *paths, env=env)
+        if listing:
+            _git(cfg.root, "update-index", "-z", "--index-info", env=env, stdin=listing)
+        return _git(cfg.root, "write-tree", env=env).strip()
+
+
+def base_tip(cfg: Config, n: Names) -> str:
+    """The newest commit of the base this clone can know: the remote's branch, fetched
+    (unless the local base has commits it lacks), else `[git] base` as it is here."""
+    root = cfg.root
+    local = _rev(root, cfg.git_base)
+    if n.remote:
+        ref = f"refs/remotes/{n.remote}/{n.base}"
+        _run(root, "fetch", "-q", n.remote, f"+refs/heads/{n.base}:{ref}")
+        there = _rev(root, ref)
+        if there and (not local or _ancestor(root, local, there)):
+            return there
+    if not local:
+        raise PublishError(f"Base branch '{cfg.git_base}' not found.")
+    return local
+
+
+def contained(root: pathlib.Path, tree: str, start: str, tip: str) -> bool:
+    """True when the change from `start` to `tree` is in `tip` already (merged, also as a
+    squash): every file it changed has the same content there, or merging it into `tip`
+    changes nothing. Read from git alone; no host is asked."""
+    changed = _names(root, start, tree)
+    if not changed or not _names(root, tip, tree, "--", *changed):
+        return True
+    probe = _commit_tree(root, tree, [start], "framegate: merged?")  # never referenced
+    r = _run(root, "merge-tree", "--write-tree", tip, probe)  # git >= 2.38; older: not merged
+    return r.returncode == 0 and r.stdout.split()[:1] == [_tree(root, tip)]
+
+
+def verify_pipeline(
+    cfg: Config, commit: str, start: str, paths: Sequence[str], work: str = "HEAD"
+) -> None:
+    """Refuse a pipeline commit that holds one of framegate's files, that changes anything
+    but the deploy / CI files `paths`, or whose files differ from the work branch's."""
+    inside, _ = _split(cfg, _files(cfg.root, commit))
+    if inside:
+        raise PublishError(
+            "refused: the pipeline commit would hold framegate's files: " + _listed(inside)
+        )
+    other = [x for x in _names(cfg.root, start, commit) if x not in set(paths)]
+    if other:
+        raise PublishError(
+            "refused: the pipeline commit would change files that are not deploy / CI files: "
+            + _listed(other)
+        )
+    late = _names(cfg.root, commit, work, "--", *paths)
+    if late:
+        raise PublishError(
+            "refused: the pipeline commit differs from the work branch in: " + _listed(late)
+        )
 
 
 def verify_product(cfg: Config, product: str, work: str = "HEAD") -> None:
@@ -904,14 +1025,24 @@ def _product_commit(
     title: str,
     there: str | None,
     lease: bool,
+    *,
+    first: str = "",
+    branch: str = "",
+    ref: str = "",
 ) -> str:
     """The commit to push as the product branch: the one built before when nothing changed,
     a commit on top of it when it is what the remote has (a fast-forward), else one commit
     on `start`, the base commit the feature started from. `there` = the remote branch's
-    tip; one that is neither refuses unless `lease` (--force-with-lease) is asked for."""
+    tip; one that is neither refuses unless `lease` (--force-with-lease) is asked for.
+
+    `first` (a tree other than `tree`): the product without the deploy / CI files a
+    pipeline task changed. The branch is then two commits, `first` and on top of it `tree`;
+    on a published branch that holds `first`, the second one is the fast-forward.
+    `branch` / `ref`: another branch than the product's (the pipeline's own)."""
     root = cfg.root
-    branch = product_branch(cfg, feature)
-    prev = _rev(root, product_ref(feature))
+    branch = branch or product_branch(cfg, feature)
+    prev = _rev(root, ref or product_ref(feature))
+    two = bool(first) and first != tree
 
     def same(commit: str) -> bool:
         return _tree(root, commit) == tree and _ancestor(root, start, commit)
@@ -921,7 +1052,9 @@ def _product_commit(
             return prev
         if there == prev:  # published: add to it, never rewrite it
             parents = [prev] if _ancestor(root, start, prev) else [prev, start]
-            return _commit_tree(root, tree, parents, title)
+            only_pipeline = two and _tree(root, prev) == first
+            message = pipeline_title(feature) if only_pipeline else title
+            return _commit_tree(root, tree, parents, message)
     if there and there != prev:
         _run(root, "fetch", "-q", n.remote, f"refs/heads/{branch}")
         if _rev(root, there) and same(there):
@@ -934,6 +1067,9 @@ def _product_commit(
                 f"{n.remote}/{branch}); to replace it with this result: framegate publish "
                 f"{feature} --force-with-lease"
             )
+    if two:
+        product = _commit_tree(root, first, [start], title)
+        return _commit_tree(root, tree, [product], pipeline_title(feature))
     return _commit_tree(root, tree, [start], title)
 
 
@@ -955,19 +1091,30 @@ def _batch_safe(exe: str, text: str) -> str:
 
 
 def pull_request(
-    cfg: Config, n: Names, feature: str, title: str, echo: Echo, *, create: bool
+    cfg: Config,
+    n: Names,
+    feature: str,
+    title: str,
+    echo: Echo,
+    *,
+    create: bool,
+    head: str = "",
+    body: str = "",
 ) -> bool:
     """Create the pull request (`create`: the user said yes) with the host's tool, or say
-    where to open it and where its description is. False = creating it failed."""
-    head = product_branch(cfg, feature)
+    where to open it and where its description is. False = creating it failed. `head` /
+    `body` (a repo-relative file): another branch and description than the product's (the
+    pipeline's own)."""
+    head = head or product_branch(cfg, feature)
     if not n.remote:
         return True
     host = hosts.parse_remote(_git(cfg.root, "remote", "get-url", n.remote).strip())
     link = hosts.pr_url(host, n.base, head)
-    summary = cfg.feature_out(feature) / SUMMARY_FILE
-    rel = f"{cfg.paths.out}/{feature}/{SUMMARY_FILE}"
+    rel = body or f"{cfg.paths.out}/{feature}/{SUMMARY_FILE}"
+    summary = cfg.root / rel
+    kept = rel.startswith(cfg.paths.specs + "/")  # the cleanup deletes the out folder only
     text_at = (
-        f"its description: {rel} (copy it before the cleanup)"
+        f"its description: {rel}" + ("" if kept else " (copy it before the cleanup)")
         if summary.is_file()
         else f"no description file ({rel} is gone)"
     )
@@ -993,8 +1140,9 @@ def pull_request(
         body = str(summary)
         if host.kind == hosts.AZURE:
             short = cfg.feature_out(feature) / PR_DESCRIPTION_FILE
+            short.parent.mkdir(parents=True, exist_ok=True)
             text = summary.read_text(encoding="utf-8", errors="replace")
-            short.write_text(hosts.azure_description(text, SUMMARY_FILE), encoding="utf-8")
+            short.write_text(hosts.azure_description(text, summary.name), encoding="utf-8")
             body = str(short)
     cmd = hosts.pr_command(host, n.base, head, _batch_safe(exe, title), body)
     r = run_tool([exe, *cmd[1:]], cwd=cfg.root, capture_output=True, text=True)
@@ -1046,7 +1194,14 @@ def publish(
         )
     if not cfg.spec_dir(feature).is_dir():
         raise PublishError(f"No feature '{feature}' here ({cfg.paths.specs}/{feature}/ missing).")
-    if not unfinished and not feature_finished(cfg, feature):
+    if not unfinished and _rev(root, pipeline_start_ref(feature)):
+        raise PublishError(
+            f"The pipeline task of {feature} is open (not approved yet): finish it first "
+            f"(/framegate:pipeline {feature}; by hand: framegate pipeline-approve {feature})."
+        )
+    # a pipeline task without a parent task has a list and no spec: nothing to be DONE
+    alone = not (cfg.spec_dir(feature) / "requirements.md").is_file()
+    if not unfinished and not alone and not feature_finished(cfg, feature):
         raise PublishError(
             f"{feature} is not DONE yet (no metrics row). Finish it first; --unfinished "
             "publishes the work so far (a later run's frame check then sees the merged "
@@ -1071,9 +1226,33 @@ def publish(
     tree = product_tree(cfg, "HEAD")
     if tree == _tree(root, start):
         raise PublishError(f"{feature} changed no product file since {cfg.git_base}: no branch.")
+    # deploy / CI files a pipeline task changed here are a commit of their own: the second
+    # one of the product branch, or (the product is merged, or there is none) a branch and
+    # pull request of their own
+    pipe = pipeline_changed(cfg, start)
+    first = tree_with(cfg, tree, start, pipe)
+    no_product = first == _tree(root, start)
+    own = bool(pipe) and (no_product or contained(root, first, start, base_tip(cfg, n)))
+    ref, body = product_ref(feature), ""
+    verify: Callable[[str], None] = partial(verify_product, cfg)
+    if own:
+        branch, ref = pipeline_branch(cfg, feature), pipeline_ref(feature)
+        if title == feature:
+            title = pipeline_title(feature)
+        tree, first = tree_with(cfg, _tree(root, start), "HEAD", pipe), ""
+        verify = partial(verify_pipeline, cfg, start=start, paths=pipe)
+        # its pull request: the brief the user approved, else the list itself
+        brief = f"{cfg.paths.out}/{feature}/{PIPELINE_BRIEF_FILE}"
+        body = brief if (root / brief).is_file() else f"{cfg.paths.specs}/{feature}/{LIST_FILE}"
+
     there = _remote_tip(cfg, n, branch)
-    product = _product_commit(cfg, n, feature, tree, start, title, there, force_with_lease)
-    verify_product(cfg, product)
+    product = _product_commit(
+        *(cfg, n, feature, tree, start, title, there, force_with_lease),
+        first=first,
+        branch=branch,
+        ref=ref,
+    )
+    verify(product)
 
     # --- framegate's files -> the state branch ---
     tip, changed = save_state(
@@ -1084,17 +1263,32 @@ def publish(
     for line in changed[:LIST_MAX]:
         echo("  " + line.replace("\t", " "))
     # a merge of the state branch moved the work branch: it touches framegate's files only
-    verify_product(cfg, product)
+    verify(product)
 
     files = _git(root, "diff", "--no-renames", "--name-status", start, product).splitlines()
     left_out, _ = _split(cfg, _files(root, "HEAD"))
     behind = len(_git(root, "rev-list", f"{start}..{cfg.git_base}").split())
+    if own:
+        why = "this branch changed nothing else" if no_product else "the product is merged"
+        shape = f"Pipeline branch {branch} ({why}): {len(files)} deploy / CI file(s), one commit"
+    elif pipe:
+        shape = (
+            f"Product branch {branch}: {len(files)} file(s), {len(pipe)} of them deploy / CI "
+            f'files in a commit of their own ("{pipeline_title(feature)}") after'
+        )
+    else:
+        shape = f"Product branch {branch}: {len(files)} file(s), one commit"
     echo(
-        f'Product branch {branch}: {len(files)} file(s), one commit "{title}" on '
+        f'{shape} "{title}" on '
         f"{cfg.git_base} ({start[:8]}"
         + (f"; {behind} newer commit(s) there: the pull request merges them" if behind else "")
         + f"); {len(left_out)} framegate file(s) left out"
     )
+    if there and there != product and _ancestor(root, there, product):
+        echo(
+            f"{branch} is on {n.remote} already: this adds to it (and to its pull request, if "
+            "one is open)."
+        )
     for line in files[:LIST_MAX]:
         echo("  " + line.replace("\t", " "))
     if len(files) > LIST_MAX:
@@ -1108,7 +1302,7 @@ def publish(
                 + f", {branch}"
                 + (" (in line already)" if there == product else "")
             )
-            pull_request(cfg, n, feature, title, echo, create=False)
+            pull_request(cfg, n, feature, title, echo, create=False, head=branch, body=body)
         else:
             echo("No remote: nothing would be pushed.")
         return 0
@@ -1117,21 +1311,22 @@ def publish(
     # --- push: the state first (a failed product push leaves nothing half-told) ---
     push_state(cfg, n, tip, echo)
     if not n.remote:
-        _git(root, "update-ref", product_ref(feature), product)
-        echo(f"No remote: nothing pushed. The product commit: {product_ref(feature)}")
+        _git(root, "update-ref", ref, product)
+        echo(f"No remote: nothing pushed. The {'pipeline' if own else 'product'} commit: {ref}")
         return 0
     if there != product:
         _push_product(cfg, n, product, branch, there if force_with_lease and there else None)
         echo(f"Pushed {branch} to {n.remote} ({product[:8]}).")
     else:
         echo(f"{branch} on {n.remote} is in line already ({product[:8]}).")
-    _git(root, "update-ref", product_ref(feature), product)
-    return 0 if pull_request(cfg, n, feature, title, echo, create=pr) else 1
+    _git(root, "update-ref", ref, product)
+    created = pull_request(cfg, n, feature, title, echo, create=pr, head=branch, body=body)
+    return 0 if created else 1
 
 
 def forget(cfg: Config, feature: str) -> bool:
     """Remove the feature's product ref (`framegate cleanup --tags`, after the merge)."""
-    if _rev(cfg.root, product_ref(feature)) is None:
-        return False
-    _git(cfg.root, "update-ref", "-d", product_ref(feature))
-    return True
+    found = [r for r in (product_ref(feature), pipeline_ref(feature)) if _rev(cfg.root, r)]
+    for ref in found:
+        _git(cfg.root, "update-ref", "-d", ref)
+    return bool(found)

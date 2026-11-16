@@ -14,6 +14,7 @@ a terminal.
 | `/framegate:feature <f>` | start or continue feature `<f>`: spec dialogue, run, gates, wrap-up | each feature |
 | `/framegate:bugfix <f>` | a bug fix: bug report dialogue, tests that fail on today's code, the fix, gates | each bug |
 | `/framegate:refactor <f>` | a refactor: scope dialogue, tests that pin today's behavior, small steps, gates | each refactor |
+| `/framegate:pipeline <f>` | the pipeline task: make the deploy / CI changes a task left as its pipeline follow-up (`<f>` = that task), or one of their own (`<f>` = a new name): the list, the edits in the chat, one check, one brief to approve, the publish ("The pipeline task" below) | after a task with a pipeline follow-up; any time for a change of its own |
 | `/framegate:resume [f]` | reattach the chat to a running or waiting feature | after a restart |
 | `/framegate:status [f]` | where features stand; tag cleanup after the PR is merged | any time |
 | `framegate init` | write the starter files (config, spec templates, project facts, .gitignore lines) | once per repo |
@@ -642,6 +643,9 @@ framegate state [status|init|save|guard] [--push]
                                             # this checkout's framegate files / this work
                                             # branch's framegate files -> the state branch /
                                             # (re)install the pre-push guard
+framegate pipeline <name>                   # the pipeline task (deploy / CI files): start it,
+framegate pipeline-check <name>             # its mechanical checks,
+framegate pipeline-approve <name>           # tick + commit after the user's OK
 framegate gates <f> --scope step|final      # the frame checks (also used in CI)
 framegate spec-brief <f>                    # conventions for the spec dialogue (skill injects it)
 framegate protocol                          # the chat run protocol (skills inject it)
@@ -732,6 +736,46 @@ keeps the spec folder) and logged as a `pipeline_followup` event. The line is on
 deploy / CI files (the agents are told so: a note about anything else is an assumption or a
 park request). What a reference project should change has its own list with the same life
 cycle: "Reference follow-up" under "References and ports".
+
+**The pipeline task** (`/framegate:pipeline <name>`; `src/framegate/pipeline.py`) is that
+separate step: the only place where deploy / CI files are changed. It starts three ways with
+one skill: after a task of any mode whose kept list has open items (`<name>` = the task; the
+list is the input, no new dialogue), the same after the task's pull request is merged, or on
+its own (`<name>` is new; the chat writes the same kind of list, `- [ ] <file>: <what>
+(<why>)`, and shows it for an OK before any edit). There is no spec, no test-first and no
+agent run: a yml change has no unit test. The chat makes the edits itself.
+
+| Step | Command | What it does |
+|---|---|---|
+| start | `framegate pipeline <name>` | switches to the branch, sets `.phase` to `PIPELINE <name>`, remembers the start commit (`refs/framegate/pipeline/<name>`), prints the list |
+| check | `framegate pipeline-check <name>` | no agents; exit 1 on a problem: a changed file that is not a deploy / CI file or not on the list (so: nothing else changed since the start), a yml / json / toml file that does not parse, an open item whose file did not change and that has no `(left open: <reason>)`. Notes, not blocking: repo paths the added lines name that do not exist (e.g. a test file added to a CI list) |
+| approve | `framegate pipeline-approve <name>` | after the user's OK on the brief (`out/<name>/pipeline_brief.md`: what was asked, what changed per item with its file, checks, not proven: "the pipeline itself has not run: the pull request's CI run is the proof", questions): the check again, the done items ticked (`- [x]`), the files and the list committed, the phase cleared |
+
+What may be written in the `PIPELINE` phase (the write guard, `hooks/protect_paths.py`):
+deploy / CI files, which are the built-in CI paths (`.github/`, `.gitlab-ci.yml`,
+`azure-pipelines.yml`) and `[protected] extra` without the setup files, and of those only
+the files the list names (the user adds one by saying so: its line goes on the list first);
+plus the list itself and the brief. Source, tests, setup files, specs and framegate's own
+files are locked. A project's Dockerfile or k8s folder counts only when `[protected] extra`
+names it. In every other phase these files stay locked as before. YAML is parsed with PyYAML
+when it is installed next to framegate (it is not a dependency); without it only tabs in the
+indentation are found, and the check says so.
+
+How the change lands depends on the task before it, read from git alone (never from the
+host): the task counts as merged when every product file it changed has the same content
+in the fetched base, or merging its product into the base changes nothing.
+
+| The task's product | With `[git] state_branch` (`framegate publish <name>`) | Without it |
+|---|---|---|
+| not merged into the base | a second commit on the same product branch and pull request: commit 1 the product (everything that is not a deploy / CI file), commit 2 the deploy / CI files, both built by path from the work branch; published before: commit 2 is added on top (never rewritten); the lease / force rules are the product branch's | one more commit on the task's feature branch (`pipeline-approve` makes it; the chat pushes the branch) |
+| merged, or there is no task | its own branch `<pipeline_prefix><name>` (`[git] pipeline_prefix`, default `pipeline/`): one commit with the deploy / CI files on the base commit the work branch started from, its own pull request with the brief as its text (ref `refs/framegate/pipeline-product/<name>`) | the work is done on a local branch `<pipeline_prefix><name>` created from the base at the start; the chat pushes it and opens its pull request |
+
+With a state branch the work happens on the task's local work branch (a new
+`framegate-work/<name>` for a change of its own), the ticked list goes to the state branch,
+and neither the product nor the pipeline branch ever holds a framegate file (checked on the
+commit; the push guard stays in force). `framegate status` shows every task with open
+pipeline items, also after its cleanup; the wrap-up after DONE offers the pipeline task
+before the publish question, so both commits go out in the first push.
 
 **An idle plan step.** A plan step (feature, bug fix) whose implementer run changed nothing
 is neither a failure nor a full gate: when HEAD is still the commit the last green step gate

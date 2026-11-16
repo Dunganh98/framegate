@@ -28,6 +28,7 @@ from framegate.state import (
     git,
     load_progress,
     read_events,
+    read_phase,
     tag_exists,
 )
 
@@ -42,6 +43,8 @@ BRIEF_PROVEN_LINES = 3
 #: phase names in run log file names ({stamp}-{feature}-{PHASE}.json / .prompt.md / ...);
 #: PR: the SUMMARY phase's name before 0.9.1 (run files of a feature started with it)
 RUN_LOG_PHASES = "SPEC_UPDATE|TESTS|TEST_REVIEW|IMPLEMENT|DIAGNOSIS|REVIEW|TRIAGE|SUMMARY|PR|RETRO"
+#: every spec has it; a pipeline task of its own (pipeline.py) has only its list
+SPEC_FILE = "requirements.md"
 TAG_PREFIXES = (
     "spec-approved",
     "tests-approved",
@@ -112,7 +115,11 @@ def watch(orch: Orchestrator, feature: str, start_wait: float = WATCH_START_WAIT
 
 def run_state(orch: Orchestrator, feature: str) -> str:
     """One phrase: where the feature stands and what comes next."""
-    if not orch.cfg.feature_out(feature).is_dir() and finished(orch, feature):
+    spec = orch.cfg.spec_dir(feature)
+    if followup.list_path(orch.cfg, feature).is_file() and not (spec / SPEC_FILE).is_file():
+        return "a pipeline task of its own (deploy / CI files; no spec, no run)"
+    # no progress file: cleaned up (a pipeline task after it may have left its brief there)
+    if not (orch.cfg.feature_out(feature) / "progress.json").is_file() and finished(orch, feature):
         tags = feature_tags(orch, feature)
         return "DONE, run files cleaned up" + (
             f"; tags left: {', '.join(tags)} (after the PR merge: framegate cleanup "
@@ -171,11 +178,37 @@ def features(orch: Orchestrator) -> list[str]:
                 d.is_dir()
                 and not d.name.startswith("_")
                 and d.name not in names
+                and (d / SPEC_FILE).is_file()  # a pipeline task of its own has only a list
                 and not tag_exists(orch.cfg, f"spec-approved/{d.name}")
                 and not finished(orch, d.name)
             ):
                 names.add(d.name)
     return sorted(names)
+
+
+def pipeline_line(orch: Orchestrator, feature: str) -> str:
+    """The pipeline follow-up of a task, when something is left of it ("" otherwise)."""
+    cfg = orch.cfg
+    n = followup.open_count(cfg, feature)
+    going = (read_phase(cfg) or "") == f"PIPELINE {feature}"
+    if not n and not going:
+        return ""
+    return (
+        f"pipeline follow-up: {n} open item(s)"
+        + (", pipeline task in progress" if going else "")
+        + f" -> /framegate:pipeline {feature}"
+    )
+
+
+def pipeline_todo(orch: Orchestrator) -> dict[str, str]:
+    """Every task of this checkout with open pipeline items -> its line."""
+    specs = orch.cfg.root / orch.cfg.paths.specs
+    found = {}
+    for d in sorted(specs.iterdir()) if specs.is_dir() else []:
+        line = pipeline_line(orch, d.name) if d.is_dir() and not d.name.startswith("_") else ""
+        if line:
+            found[d.name] = line
+    return found
 
 
 def overview(orch: Orchestrator) -> int:
@@ -186,11 +219,14 @@ def overview(orch: Orchestrator) -> int:
     except GitError:
         branch = "?"
     print(f"Branch: {branch}")
-    if not names:
+    todo = pipeline_todo(orch)
+    if not names and not todo:
         print("No framegate features in progress here (start one: /framegate:feature <name>).")
         return 0
     for f in names:
-        print(f"- {f}: {run_state(orch, f)}")
+        print(f"- {f}: {run_state(orch, f)}" + (f"; {todo.pop(f)}" if f in todo else ""))
+    for f, line in sorted(todo.items()):  # finished and cleaned up, or a task of its own
+        print(f"- {f}: {line}")
     warning = orch.stale_warning()
     if warning and not warning.startswith("framegate run is active"):
         print(warning)
@@ -210,6 +246,9 @@ def brief(orch: Orchestrator, feature: str) -> int:
     print(f"{feature}: {run_state(orch, feature)}")
     note = "" if not orch.cfg.git_branch or branch == want else f" (feature branch: {want})"
     print(f"Branch: {branch}{note}; cost so far {_money(orch.cost_so_far(feature))}")
+    todo = pipeline_line(orch, feature)
+    if todo:
+        print(todo[0].upper() + todo[1:])
     lines = last_progress(orch, feature)
     if lines:
         print("Last progress:")
@@ -598,7 +637,12 @@ def cleanup(orch: Orchestrator, feature: str, tags: bool = False, force: bool = 
     if procs.lock_alive(lock) and (lock or {}).get("feature") == feature:
         raise WorkflowError(f"a run of {feature} is active (pid {(lock or {}).get('pid')})")
     fout = orch.cfg.feature_out(feature)
-    if fout.is_dir() and not force:
+    # only a pipeline task's brief is left there (after a cleanup, or it had no task before
+    # it): nothing of a run to keep
+    brief_only = not (fout / "progress.json").is_file() and (
+        finished(orch, feature) or not (orch.cfg.spec_dir(feature) / SPEC_FILE).is_file()
+    )
+    if fout.is_dir() and not force and not brief_only:
         phase = load_progress(orch.cfg, feature).get("phase")
         if phase != "DONE":
             raise WorkflowError(

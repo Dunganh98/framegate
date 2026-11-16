@@ -233,7 +233,9 @@ def test_pipeline_followup_reaches_the_final_brief_and_survives_cleanup(
     brief = capsys.readouterr().out
     assert (
         "Pipeline follow-up (a separate step after this feature; not part of it): 3; nothing "
-        "to answer\n" + "".join(f"  - {x}\n" for x in wanted)
+        "to answer\n"
+        + "".join(f"  - {x}\n" for x in wanted)
+        + "  after this task: /framegate:pipeline demo does them\n"
     ) in brief
     assert 'Decision: "ok" approves' in brief  # no question came of it
     assert r.progress()["waiting"]["gate"] == "final" and not r.progress().get("parked")
