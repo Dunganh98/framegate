@@ -88,7 +88,8 @@ def test_references_config_forms(tmp_path: pathlib.Path) -> None:
     )
     assert cfg.references["otto"].note == "the runner"
     assert cfg.reference_dir("otto") == tmp_path / "da-otto"
-    assert cfg.reference_dir("core") == pathlib.Path("/x/c").resolve()
+    # a path without a drive is on the repository's drive (CI: checkout and temp differ)
+    assert cfg.reference_dir("core") == (cfg.root / "/x/c").resolve()
     assert parse_config(tmp_path, {}).references == {}
 
 

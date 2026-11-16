@@ -136,7 +136,8 @@ def test_the_per_machine_settings_file_never_blocks(demo_repo: DemoRepo) -> None
     adapter = get_adapter(load_config(r.root))
     assert frame_diff.setup_state(adapter) == ([], [])
     assert r.af("approve-spec", "demo") == 0
-    assert local not in git(r.root, "show", "--name-only", "--format=", "HEAD")
+    # not committed with the spec (HEAD may still be the commit above that untracked it)
+    assert local not in git(r.root, "log", "-1", "--name-only", "--diff-filter=AM", "--format=")
     assert r.af("run", "demo") == EXIT_GATE
     assert r.af("approve", "demo") == 0
     write(r, local, '{"permissions": {"allow": ["Bash(framegate *)", "Bash(git log *)"]}}\n')
