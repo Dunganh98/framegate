@@ -30,10 +30,10 @@ folder is a spec of another kind, tell the user and stop.
 
 ## Start check (your first step)
 
-This plugin is version 0.11.1. Before anything else run this command yourself (it is not run
+This plugin is version 0.11.2. Before anything else run this command yourself (it is not run
 at load: a command-line tool older than this plugin does not have it yet):
 
-    framegate preflight $ARGUMENTS --plugin-version 0.11.1
+    framegate preflight $ARGUMENTS --plugin-version 0.11.2
 
 It compares this plugin with the command-line tool and with the workflow tools in the
 project's environment, updates what it may and prints the rest. Act on every line, then go on:
@@ -58,7 +58,7 @@ project's environment, updates what it may and prints the rest. Act on every lin
   **already approved**, go on without a word (work in progress keeps its tool). Otherwise
   bring the tool to this plugin's version:
 
-      uv tool install --force "git+https://github.com/Dunganh98/framegate@v0.11.1"
+      uv tool install --force "git+https://github.com/Dunganh98/framegate@v0.11.2"
 
   then run the start check again and act on its lines as above (`framegate spec-brief
   $ARGUMENTS` again included).
@@ -119,12 +119,12 @@ the language, how tests are written here, the code map and the project knowledge
    (`- <reference file>: <what should change> (<why>)`): the reference is never changed
    here; show it on the brief under "Pipeline follow-up" as "for <reference>: ...".
 4. Write the spec gate brief to `<out>/$ARGUMENTS/spec_brief.md` (the out folder above) and
-   show it in the chat. About one screen, plain words, no spec IDs, one line per bullet;
-   exactly these sections:
+   show it in the chat. About one screen, plain words, no spec IDs, one line per bullet. Sources: the user navigates from the brief, so a line whose detail is elsewhere ends with its source in brackets, as a path from the repository root that opens in the editor: `(src/app/parser.py:120)` for code, `(<specs>/$ARGUMENTS/plan.md, Step 2)` for the spec; one source per line, the most useful one. The final gate lists these same plan steps again, each with how it went.
+   Exactly these sections:
 
        **Bug** — what goes wrong, with the input that shows it and the result you measured
        **Right result** — what it should be, and why
-       **Plan** — how it gets fixed, one line per step
+       **Plan** — how it gets fixed, the steps numbered as in plan.md, one line each, ending with the main file it builds or changes
        **How it is proven** — the tests that fail today and pass after; what stays as it is
        **Not proven** — what to check by using it
        **Decisions I made for you** — one line each, with what it rules out

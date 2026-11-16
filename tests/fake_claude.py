@@ -568,9 +568,9 @@ def main() -> int:
         mode = scen.get("brief")
         if mode:
             head = (
-                "# Final brief\n\n## Plan followed?\n- Step 1 (add two numbers): done as planned\n"
-                "- Step 2 (negate): parked: the sign of zero is open\n"
-                "\n## Struggles\n- No struggles.\n\n## Proven\n- adding two ints gives their sum\n"
+                "# Final brief\n\n## Steps\n1. add two numbers: as planned (src/demo/__init__.py)\n"
+                "2. negate: parked: the sign of zero is open\n"
+                "\n## Struggles\n- None.\n\n## Proven\n- adding two ints gives their sum\n"
                 "- adding zero changes nothing\n- the order does not matter\n- a fourth point\n"
                 "\n## Not proven\n- nothing to check by hand\n\n## Code map\nadd() listed under "
                 "demo\n\n"

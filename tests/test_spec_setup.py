@@ -293,7 +293,7 @@ def test_frame_failure_on_protected_files_parks_at_once_and_skips_the_review(
     assert r.af("gate-summary", "demo") == 0
     brief = capsys.readouterr().out
     assert "Decision: answer question 1" in brief
-    assert "Step 1 (add): parked (see the items)" in brief
+    assert "1. add: parked (see the items)" in brief
     assert "Outcomes: nothing built, so no review and no final checks; 1 failed attempt(s)" in brief
     assert "pyproject.toml" in brief and "Proven by the tests" not in brief
     assert r.af("stats", "demo") == 0

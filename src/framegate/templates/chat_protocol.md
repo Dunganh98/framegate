@@ -64,8 +64,11 @@ fail for no reason. Reading files and git log/diff/status are fine.
 
 ## C. At a gate
 
-1. Run `framegate gate-summary <f>` and show its output unchanged (it is the brief: the
-   decision line first, then about one screen in plain words). Add nothing but one line if a
+1. Run `framegate gate-summary <f>` and show its output with every word unchanged (it is
+   the brief: the decision line first, then about one screen in plain words), laid out like
+   the spec brief: as markdown text, never in a code block; each section title (`Steps:`,
+   `Struggles:`, `Outcomes:`, ...) in bold on its own line, its lines as a list under it;
+   file paths stay as written (they open in the editor). Add nothing but one line if a
    numbered question needs a word of context. Number the answers as the brief numbers its
    questions; framegate maps them to the gate items (and answers the decided and left-out
    ones itself). The left-out items: on request (final_brief.md).

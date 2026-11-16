@@ -45,7 +45,7 @@ Release: one version for the CLI and the plugin (`pyproject.toml`, `src/framegat
    once, a test or spec fix waits for you at the final gate. If only a step's tests are
    wrong, its code is kept as provisional and later steps build on it; you approve the
    proposed test fixes at the final gate in one reply.
-4. **Final gate:** read the brief (~20 lines: plan followed?, numbers, struggles, what is
+4. **Final gate:** read the brief (~20 lines: the steps and how each went, struggles, numbers, what is
    proven and what to check by hand, the decisions made for you, and only the real decisions as
    questions), then reply **"ok"** (takes every default of the numbered questions, or approves
    when there are none), **"no retro"**, or answer questions by number (only the affected work

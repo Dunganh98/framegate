@@ -279,7 +279,7 @@ def test_gate_summary_spec_diff_and_final_gate_parked(
     assert lines[0] == "FINAL GATE: demo"
     assert lines[1].startswith('Decision: answer question 1 ("ok" takes every default below)')
     # no brief from the summary agent: generated plan lines and struggles
-    assert "Plan followed?\n  - Step 1 (add): done\n  - Step 2 (neg): parked (see the items)" in out
+    assert "Steps:\n  1. add: done\n  2. neg: parked (see the items)\nStruggles: step 2" in out
     # the parked step's tests are expected red, not a failure
     assert "Outcomes: final gates PASSED; skipped: " in out
     assert "0 failed attempt(s), 1 parked; $" in out
@@ -287,6 +287,7 @@ def test_gate_summary_spec_diff_and_final_gate_parked(
     assert "structure (not blocking): __init__.py " in out
     # one line when a section has one point
     assert "\nStruggles: step 2 - neg: parked (no reasonable assumption possible" in out
+    assert out.index("Struggles:") < out.index("Outcomes:")
     assert "Code map: - (WARN: no code map at docs/code-map.md)" in out
     assert 'Questions (answer by number; "ok" takes every default):\n  1. [parked] step 2' in out
     assert "bool counts as int" not in out  # assumptions: on request
@@ -312,8 +313,9 @@ def test_final_gate_brief_from_the_summary_agent(
     capsys.readouterr()
     assert r.af("gate-summary", "demo") == 0
     out = capsys.readouterr().out
-    assert "Plan followed?\n  - Step 1 (add two numbers): done as planned" in out
-    assert "Struggles: No struggles." in out
+    # the spec brief's steps again, one line each with its source, then the struggles
+    assert "Steps:\n  1. add two numbers: as planned (src/demo/__init__.py)\n  2. negate" in out
+    assert "\nStruggles: None.\nOutcomes: " in out
     # the 3 most important points, the rest on request
     assert "Proven by the tests:\n  - adding two ints gives their sum" in out
     assert "  - the order does not matter\n  ... 1 more line(s) (on request)" in out
@@ -345,9 +347,10 @@ def test_final_gate_questions_filtered_by_the_brief(
     assert (
         "  1. Should add() accept floats?\n     A: no, ints only (default) / B: yes, floats too\n"
         "  2. Should neg(0) give 0 or -0?\n     A: 0 (default) / B: -0\n"
-        "Decisions I made:\n  - bools count as ints (Python says so)\n"
         "Left out of the questions: 1 gate item(s)"
     ) in out
+    # the decisions come right after the steps and the struggles, before the numbers
+    assert "Decisions I made:\n  - bools count as ints (Python says so)\nOutcomes: " in out
     answers = r.root / "out/demo/answers.md"
     answers.write_text(
         "# Answers (final gate)\n\n1. Q: Should add() accept floats?\n   A: yes, floats too\n"

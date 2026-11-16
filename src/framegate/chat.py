@@ -431,15 +431,20 @@ def _final_brief(
         lines.append(
             'Decision: "ok" approves (default: retro, then DONE); "no retro" finishes now.'
         )
-    followed = _section(sections, "plan followed", "plan")
-    lines += _titled("Plan followed?", followed or _step_lines(orch, feature, prog, events))
+    # the spec brief's plan again, one line per step (never folded into "all as planned")
+    steps = _section(sections, "steps", "plan followed", "plan")
+    lines += ["Steps:", *_block(steps or _step_lines(orch, feature, prog, events), 20)]
+    struggles = _section(sections, "struggles")
+    lines += _titled("Struggles", struggles or _struggle_lines(prog, events))
+    decided = [text for _, text in plan.decided]
+    if decided:
+        lines.append("Decisions I made:")
+        lines += [f"  - {_clip(x.splitlines()[0], 300)}" for x in decided]
     lines += _outcomes(orch, feature, prog, events)
     rated = prog.get("risk") or {}
     if rated.get("level"):
         rating = risk.Assessment(rated["level"], list(rated.get("reasons") or []))
         lines.append(rating.line(auto=orch.cfg.final_gate == "auto"))
-    struggles = _section(sections, "struggles")
-    lines += _titled("Struggles", struggles or _struggle_lines(prog, events))
     for title, names in (
         ("Proven by the tests", ("proven",)),
         ("Not proven (check it by using it)", ("not proven",)),
@@ -454,10 +459,6 @@ def _final_brief(
         )
     lines.append(_code_map_line(orch, prog, _section(sections, "code map")))
     lines += _items_block('Questions (answer by number; "ok" takes every default)', questions)
-    decided = [text for _, text in plan.decided]
-    if decided:
-        lines.append("Decisions I made:")
-        lines += [f"  - {_clip(x.splitlines()[0], 300)}" for x in decided]
     if plan.left_out:
         lines.append(
             f"Left out of the questions: {len(plan.left_out)} gate item(s) (asked twice, "
@@ -475,15 +476,12 @@ def _final_brief(
 def _step_lines(
     orch: Orchestrator, feature: str, prog: dict[str, Any], events: list[dict[str, Any]]
 ) -> list[str]:
-    """Generated "Plan followed?" lines (when the summary agent wrote no brief)."""
+    """Generated "Steps" lines (when the summary agent wrote no brief)."""
     parked = {n for p in prog.get("parked") or [] for n in (p.get("steps") or [p.get("step")])}
     prov = {n for p in prog.get("provisional") or [] for n in (p.get("steps") or [p.get("step")])}
     done = set(prog.get("completed_steps") or [])
-    steps = plan_steps(orch.cfg, feature)
-    if steps and all(s.num in done and s.num not in prov for s in steps):
-        return [f"All {len(steps)} step(s) done."]
     out = []
-    for s in steps:
+    for s in plan_steps(orch.cfg, feature):
         state = (
             "kept as provisional (its tests are contested)"
             if s.num in prov
@@ -493,7 +491,7 @@ def _step_lines(
             if s.num in parked
             else "not run"
         )
-        out.append(f"- Step {s.num} ({s.title}): {state}")
+        out.append(f"{s.num}. {s.title}: {state}")
     return out
 
 

@@ -40,12 +40,19 @@ final_gates.md states it; never paraphrase or guess a cause (a project listed as
 is not a failure). One line per bullet; no sentence that repeats a heading or another section;
 a section where nothing happened is one line. Exactly these sections:
 
-    ## Plan followed?
-    - All 3 steps as planned.                      (or one line per step that changed / parked:
-    - Step 2 (<what it does>): changed: <what, why>   the others are "as planned")
+    ## Steps
+    1. <the step, in the spec brief's words>: as planned (<its main file>)
+    2. <the step>: changed: <what, why> (<file>)
+    3. <the step>: as planned, 1 failed attempt: <what failed, how it was solved> (<file>)
+    4. <the step>: parked: <why>
 
     ## Struggles
-    - No struggles.        (or: what went wrong and how it was solved: parks, failed attempts)
+    - None.     (or: what went wrong outside the steps and how it was solved: the tests phase,
+                 the review, the final gates, a stopped run)
+
+    ## Decisions I made
+    - [<gate item>] <the decision, one line>
+    - <a decision from the run that changes what the user sees, one line>
 
     ## Proven
     - <the 3 most important behaviors the tests check, one line each; the rest on request>
@@ -60,10 +67,6 @@ a section where nothing happened is one line. Exactly these sections:
     1. [<gate item>] <the problem in one line>
        A: <option> (default) / B: <option>
     2. [<gate item>] ...
-
-    ## Decisions I made
-    - [<gate item>] <the decision, one line>
-    - <a decision from the run that changes what the user sees, one line>
 
     ## Left out
     - [<gate item>] same as [<gate item>] | answered: <where> | resolved: <how> | note: <what>
@@ -87,7 +90,20 @@ them by impact (what changes most if answered differently first). framegate numb
 ... for the human and maps the answers back to the gate items; a decided item gets its decision
 as the answer, a repeated one the answer of the item it repeats.
 
-"Plan followed?" compares with the spec brief's plan. "Not proven" starts from the spec brief's
+"Steps" is the spec brief's Plan list again: every step, in the same order, numbering and
+words, each with how it went (as planned / changed / parked) and what happened inside it (a
+failed attempt, a retry, a fix after its gate); never "all steps as planned" in one line.
+"Struggles" holds only what no step line says: nothing is told twice.
+
+Sources: the human navigates from the brief. A line must be clear on its own; when its detail
+is elsewhere, end it with the source in brackets, as a path from the repository root that
+opens in the editor: `(src/app/parser.py:120)` for code or a test,
+`({specs}/{feature}/plan.md, Step 2)` for the spec, `({out}/{feature}/review.md)` for a run
+file. A step line
+names the main file it built or changed; a struggle, a decision and a "Not proven" point name
+where to look. One source per line, the most useful one.
+
+"Not proven" starts from the spec brief's
 list where it still holds, plus what the run showed. An assumption from steps.md that changes
 what the user sees: a decision ("Decisions I made"), or a question in questions.md when two
 answers are reasonable. A review finding that was dismissed but looks like a real gap: a

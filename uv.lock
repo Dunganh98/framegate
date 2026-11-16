@@ -450,7 +450,7 @@ wheels = [
 
 [[package]]
 name = "framegate"
-version = "0.11.1"
+version = "0.11.2"
 source = { editable = "." }
 dependencies = [
     { name = "tomli", marker = "python_full_version < '3.11'" },
