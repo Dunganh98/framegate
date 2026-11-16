@@ -31,6 +31,7 @@ from framegate import (
     agent_env,
     api_error,
     backlog,
+    description,
     followup,
     notify,
     ported,
@@ -317,7 +318,9 @@ PIPELINE_NOTE = (
     "line to your step note, `- PIPELINE FOLLOW-UP [<file>]: <what must change and why>`. It "
     "is raised at the final gate as a separate step after the feature. Park only if your "
     "step cannot be done without that change. Only for such a file: a note about anything "
-    "else (the code, the spec, another project, an idea) is not a pipeline follow-up. If "
+    "else (the code, the spec, another project, an idea) is not a pipeline follow-up, and "
+    "neither is a remark about packaging or the environment (pyproject.toml, an install "
+    "step, a tool's config): that is an assumption line. If "
     "the work needs something that is no file of this repository (a CI variable, a secret "
     "in the vault, a migration of the real database, an environment switch), write `- "
     "OUTSIDE [<where>]: <what must be done> (<why>)` instead: a person does it by hand."
@@ -3564,6 +3567,11 @@ class Orchestrator:
         with open(mfile, "a", encoding="utf-8") as fh:
             fh.write(",".join(map(str, row)) + "\n")
         self.keep_followups(feature)
+        # the pull request's description, while the run files it is written from are there;
+        # kept with the spec, so the cleanup's place in the wrap-up does not matter
+        described = description.safe_refresh(self.cfg, feature)
+        if described:
+            self.progress(feature, f"Pull request description: {described.rel}")
         commit(self.cfg, f"{feature}: workflow metrics")
 
     def keep_followups(self, feature: str) -> None:

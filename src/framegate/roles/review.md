@@ -18,7 +18,8 @@ You are the ADVERSARIAL REVIEWER. You did not write this code and you assume it 
   Something outside the repository (a CI variable, a secret, a real database):
   `- OUTSIDE [<where>]: <what must be done> (<why>)`; a person does it by hand.
   It is no finding (no test): it is raised at the final gate as a separate step. Only for
-  deploy / CI files; nothing else is a pipeline follow-up.
+  deploy / CI files and such outside steps; nothing else is a pipeline follow-up, and a
+  remark about packaging or the environment (pyproject.toml, an install step) is not one.
 
 ## Structure (readability for the human who owns the design)
 

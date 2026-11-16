@@ -650,6 +650,47 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
     a project that keeps a Dockerfile as source or test data outside `tests/` needs
     `builtin_off`; whether agents write the `OUTSIDE` line; the manifest look reads only
     the first 40 yml files (shallow first).
+- **Pull request by default, its own description, follow-up hygiene (2026-11-16, branch
+  fix/pr-description, not merged, no version bump):** from the first complete wrap-up of a
+  real task (Azure DevOps, `[git] state_branch`): the pull request was not created ("you
+  did not ask for one"), the cleanup deleted its text, and an implementer's packaging
+  remark sat on the pipeline list where nothing could close it.
+  - **Publish question:** one question, default yes, the yes includes the pull request
+    (protocol D.2/D.3, pipeline skill step 6). "publish without a pull request" and "no"
+    stay; nothing is pushed before the reply. Only `Pull request ... created: <address>`
+    counts as created; any other line is said as "not created: why", with the link and the
+    description file.
+  - **`specs/<f>/pr_description.md`** (`description.py`, no agent): What / To do by hand
+    outside the repository / Changes / How it is proven (+ one line of numbers) / Not
+    proven / Decisions / Deploy / CI changes / `Built with framegate <v>; N tests`. From
+    the final brief and the spec brief, else the summary, else the spec. No cost, no `out/`
+    path. Always within Azure's 4000 characters: whole lines of the least important
+    sections go first, `(shortened)` once. Written at DONE (write_metrics), by
+    `pipeline-approve` and by `publish` (which commits it on the work branch); one of
+    framegate's files, so on the state branch and never in the product. `publish` no longer
+    needs `out/`: cleanup first, pull request later works. Run files gone: the text stays,
+    only the two lists are read again; no description either (a task from before this):
+    built from the spec, said in one line. A pipeline-only pull request:
+    `specs/<f>/pipeline_pr_description.md` (the brief, else the list). New command
+    `framegate pr-description <f> [--pipeline]` for a pull request made without `publish`.
+    `hosts.azure_description` is no longer called by publish (left in place, tested).
+    The frame check no longer counts what framegate itself writes into `specs/<f>/` at the
+    end (`frame_diff.GENERATED_SPEC_FILES`: the two descriptions and the two kept follow-up
+    lists; read from the code, not tested before the change: a kept list would have failed a
+    frame check after DONE the same way the new file did).
+  - **Follow-up list:** an agent's `PIPELINE FOLLOW-UP [..]` line whose file is no deploy /
+    CI file here is not on the list; shown once on the final brief and in final_facts.md
+    ("Not a deploy / CI matter"). The spec's own section is not filtered (the user approved
+    it). `(not needed: <reason>)` at the end of a list line closes it: never open in
+    `pipeline`, `pipeline-check`, `status`, the pull request's checklist; ticked at the
+    approval. The pipeline skill proposes it as a question with default yes for an item
+    that is already in place or impossible as written.
+  - **Not yet seen live:** all of it. Watch: whether the chat really creates the pull
+    request on a plain "ok"; how the What section reads when the chat wrote the spec brief
+    in another form than `**Task** — ...` (then the summary's Summary or the spec is
+    used); `az repos pr create` with the new file (the old cut copy is gone); a project
+    whose CI folder is not in `[protected] extra` turns a right agent note into "not a
+    deploy / CI matter" (the brief line says where it belongs).
 
 ## User decisions so far
 1. Two human gates, forward only: spec and final (2026-11-10, after the first FCSim feature;

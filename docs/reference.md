@@ -39,7 +39,8 @@ a terminal.
 | `framegate backlog [show B3 \| done\|drop\|reopen B3 ...] [--all] [--scope ...]` | the open proposals; one in full; mark it applied / dropped / open again | any time |
 | `framegate stats [f] [--json]` | cost, agent and check time, final-gate runs per feature; with `<f>`: per phase and per final run | any time |
 | `framegate cleanup <f> [--tags]` | delete the run files; `--tags` also the feature's git tags (after the merge) | after DONE |
-| `framegate publish <f> [--dry-run] [--pr] [--title "..."]` | with `[git] state_branch`: framegate's files -> the state branch, the product -> the branch for the pull request, both pushed; `--pr` also creates the pull request; `--dry-run` only says what would go where ("Product branch and state branch" below) | after DONE, on your yes |
+| `framegate publish <f> [--dry-run] [--pr] [--title "..."]` | with `[git] state_branch`: framegate's files -> the state branch, the product -> the branch for the pull request, both pushed; `--pr` also creates the pull request, with `specs/<f>/pr_description.md` as its text; `--dry-run` only says what would go where ("Product branch and state branch" below); works after the cleanup too | after DONE, on your yes |
+| `framegate pr-description <f> [--pipeline]` | writes the pull request's description again from what is there now and commits it; prints the file ("Product branch and state branch" below, the pull request's description) | when a pull request is created without `publish` |
 | `framegate state [init\|save\|guard] [--push]` | the state branch: where it is; `init` creates it from this checkout's framegate files; `save` sends a work branch's framegate files to it; `guard` (re)installs the pre-push hook that keeps framegate's files off every other branch | once per repo; a change outside a feature |
 | `framegate gates <f> --scope step\|final` | run the checks by hand (also used in CI) | debugging, CI |
 | `framegate spec-brief <f>` | the project's spec conventions (the feature skill reads it) | internal |
@@ -113,9 +114,12 @@ A bug fix starts with `/framegate:bugfix <name>` and a refactor with `/framegate
    then DONE), answers by number, "approve as is", "no retro", "reject: <why>" (tests gate
    only). The skill runs the matching command and continues the run in the background.
 4. DONE: the skill shows the retro's numbered proposals (problem -> fix, with a recommendation)
-   and its knowledge facts, you answer with numbers; it offers the final summary as the PR
-   description (`gh pr create`; with `[git] state_branch`: `framegate publish --pr`, which
-   pushes a branch with the product only; only on your yes, nothing is pushed without it) and cleans up the
+   and its knowledge facts, you answer with numbers; it asks one question, "publish and
+   create the pull request?", whose default is yes (`gh pr create`; with `[git]
+   state_branch`: `framegate publish --pr`, which pushes a branch with the product only;
+   "publish without a pull request" and "no" are answers too, and nothing is pushed before
+   your reply). The pull request's text is `specs/<name>/pr_description.md`, written by
+   framegate. Then it cleans up the
    run files (`framegate cleanup`; `specs/<name>/` and the metrics row stay). After the PR is
    merged, `/framegate:status <name>` offers removing the feature's tags.
 
@@ -494,12 +498,37 @@ the lines `framegate init` adds to it are not needed (`git checkout -- .gitignor
      single commits (tests approved, steps, review fixes) stay on the local work branch.
    - *Again:* a second `publish` finds nothing to do. After more work (review feedback), the
      new product commit goes on top of the published one: a fast-forward, never a rewrite.
-   - *Pull request (`--pr`, only on your yes):* GitHub: `gh pr create`; Azure DevOps
-     (`dev.azure.com`, `*.visualstudio.com`, their ssh forms): `az repos pr create`, when
-     `az` and its `azure-devops` extension are there; the description is
-     `out/<f>/final_summary.md` (Azure DevOps: cut at 4000 characters). Without the tool, on
-     another host or without `--pr`: the address that opens the pull request by hand and
-     where its description is.
+   - *Pull request (`--pr`; the chat's publish question has it in its default, yes):*
+     GitHub: `gh pr create`; Azure DevOps (`dev.azure.com`, `*.visualstudio.com`, their
+     ssh forms): `az repos pr create`, when `az` and its `azure-devops` extension are
+     there; the description is `specs/<f>/pr_description.md` (below). Without the tool,
+     on another host, when creating fails or without `--pr`: one line that says why it
+     was not created, the address that opens the pull request by hand and where its
+     description is. Only the line `Pull request ... created: <address>` means it exists.
+   - *The pull request's description* (`description.py`): written by framegate itself, no
+     agent, for a reviewer who has not seen the run. Sections: What (the spec brief's
+     Task; a bug fix: Bug / Right result; a refactor: Goal / What moves), To do by hand
+     outside the repository (the unticked checklist), Changes (the steps as the final
+     brief lists them, how each went, its main file), How it is proven (the brief's
+     Proven lines and one line of numbers: final checks, tests, diff coverage, mutation),
+     Not proven / check by hand, Decisions, Deploy / CI changes (the done items of the
+     pipeline list: "the second commit of this pull request"; open ones and ones closed as
+     not needed are named as such), and a last line `Built with framegate <version>; N
+     tests`. No cost figure, no path into `out/`. It always fits Azure DevOps' 4000
+     characters: when too long, the least important sections lose their extra lines first
+     (decisions, not proven, deploy / CI, proven; the steps and the checklist keep every
+     line), no section is cut in the middle, and the last line says `(shortened)` once.
+     Written at DONE with the metrics row, again by `pipeline-approve` and by `publish`
+     (committed on the work branch when it changed: `<f>: pull request description`). It
+     is one of framegate's files: on the state branch, never on the product branch, and
+     `cleanup` keeps it, so the order of publish and cleanup does not matter and a
+     cleaned-up task still gets its pull request (`publish` needs the spec folder and
+     git, never `out/`). Run files gone: the text stays and only the two lists are read
+     again. A task finished by an older framegate (no description, no run files): built
+     from requirements.md, plan.md and the list, and `publish` says in one line that it
+     is short. A deploy / CI change with a pull request of its own has its own text,
+     `specs/<f>/pipeline_pr_description.md`: the approved brief, else the list, the
+     checklist on top. `final_summary.md` stays the run's internal report.
 5. *After the merge:* `framegate cleanup <f> --tags` removes the feature's private refs and
    the product ref; delete the local work branch yourself. The next feature starts from the
    base again.
@@ -645,7 +674,11 @@ framegate publish <f> [--dry-run] [--pr] [--title TEXT] [--force-with-lease] [--
                                             # [git] state_branch: framegate's files -> the
                                             # state branch, the product -> one commit on the
                                             # base, pushed as <branch_prefix><f>; --pr: the
-                                            # pull request (gh / az), else where to open it
+                                            # pull request (gh / az), else where to open it;
+                                            # works after the cleanup
+framegate pr-description <f> [--pipeline]   # write specs/<f>/pr_description.md again and
+                                            # commit it; --pipeline: the text of a deploy /
+                                            # CI change's own pull request
 framegate state [status|init|save|guard] [--push]
                                             # the state branch: where it is / create it from
                                             # this checkout's framegate files / this work
@@ -767,14 +800,18 @@ need does not attempt the change; the implementer writes `- PIPELINE FOLLOW-UP [
 <what must change and why>` in its step note (-> steps.md, like an assumption), the reviewer
 the same line in review.md. (3) The final gate: framegate itself lists every item (the
 spec's and the run's, each once) in `out/<f>/pipeline_followup.md`, in final_facts.md, in a
-generated section of final_summary.md (so the PR description has it) and in the final brief
+generated section of final_summary.md and in the final brief
 (`gate-summary`: "Pipeline follow-up (a separate step after this feature; not part of it):
 N; nothing to answer"). It is no gate item: not a question, not blocking, and the summary
 agent cannot place it under "Left out". (4) After DONE: the list is written to
 `specs/<f>/pipeline_followup.md` (a checklist, committed with the metrics row; `cleanup`
 keeps the spec folder) and logged as a `pipeline_followup` event. The line is only for
-deploy / CI files (the agents are told so: a note about anything else is an assumption or a
-park request). What a reference project should change has its own list with the same life
+deploy / CI files (the agents are told so: a note about anything else, also a remark about
+packaging or the environment, is an assumption or a park request). An agent's line whose
+file is no deploy / CI file of the project (`is_pipeline_file`) is not put on the list:
+the pipeline task could never do it. It is shown once on the final brief ("Not a deploy /
+CI matter (an agent's note; not on the pipeline list): N") and in final_facts.md. The
+spec's own section is the user's and stays as written. What a reference project should change has its own list with the same life
 cycle: "Reference follow-up" under "References and ports".
 
 **Items outside the repository.** Some of what a task makes necessary is no file here: a
@@ -794,7 +831,7 @@ Nothing in framegate ever does such an item; it only keeps it in sight:
 | final_summary.md, final_facts.md | a generated section "Outside the repository, by hand (framegate does not do them): N" with an unticked checklist (`- [ ] <where>: <what>`) |
 | `framegate pipeline`, `pipeline-check`, `pipeline-approve` | "Outside the repository: by hand, not this task: N to do" and the items; never numbered, never open work, never a problem (a list with only such items passes the check) |
 | pipeline brief (the chat) | its own section "Outside the repository: by hand" |
-| pull request (`framegate publish`) | the unticked checklist on top of the description, for the task's pull request (above final_summary.md) and for a pipeline-only one (above the brief); the text is then `out/<f>/pr_description.md`, also when the pull request is opened by hand. A dry run only says so |
+| pull request (`framegate publish`) | the unticked checklist near the top of the description (`specs/<f>/pr_description.md`, section "To do by hand outside the repository: N"), and on top of a pipeline-only one (`specs/<f>/pipeline_pr_description.md`); also when the pull request is opened by hand |
 | `framegate status` | counted apart: "...; outside the repository: N item(s) to do by hand (specs/<f>/pipeline_followup.md)" |
 
 The user ticks such a line in `specs/<f>/pipeline_followup.md` by hand when it is done;
@@ -811,8 +848,8 @@ agent run: a yml change has no unit test. The chat makes the edits itself.
 | Step | Command | What it does |
 |---|---|---|
 | start | `framegate pipeline <name>` | switches to the branch, sets `.phase` to `PIPELINE <name>`, remembers the start commit (`refs/framegate/pipeline/<name>`), prints the list |
-| check | `framegate pipeline-check <name>` | no agents; exit 1 on a problem: a changed file that is not a deploy / CI file or not on the list (so: nothing else changed since the start), a yml / json / toml file that does not parse, an open item whose file did not change and that has no `(left open: <reason>)`. Notes, not blocking: repo paths the added lines name that do not exist (e.g. a test file added to a CI list) |
-| approve | `framegate pipeline-approve <name>` | after the user's OK on the brief (`out/<name>/pipeline_brief.md`: what was asked, what changed per item with its file, checks, not proven: "the pipeline itself has not run: the pull request's CI run is the proof", questions): the check again, the done items ticked (`- [x]`), the files and the list committed, the phase cleared |
+| check | `framegate pipeline-check <name>` | no agents; exit 1 on a problem: a changed file that is not a deploy / CI file or not on the list (so: nothing else changed since the start), a yml / json / toml file that does not parse, an open item whose file did not change and that has neither `(left open: <reason>)` nor `(not needed: <reason>)`. Notes, not blocking: repo paths the added lines name that do not exist (e.g. a test file added to a CI list) |
+| approve | `framegate pipeline-approve <name>` | after the user's OK on the brief (`out/<name>/pipeline_brief.md`: what was asked, what changed per item with its file, checks, not proven: "the pipeline itself has not run: the pull request's CI run is the proof", questions): the check again, the done items ticked (`- [x]`) and the ones closed as not needed too, the pull request's description written again, the files, the list and the description committed, the phase cleared |
 
 What may be written in the `PIPELINE` phase (the write guard, `hooks/protect_paths.py`):
 deploy / CI files ("Deploy / CI paths" above: the built-in names and `[protected] extra`
@@ -934,7 +971,8 @@ Between the gates nothing stops:
   Write / Edit, the shell only for the named commands) and an orientation block: the files in
   `specs/<f>/` and `out/<f>/` and `git log -3 --stat`, which agents otherwise fetched with
   chained shell calls that the run denies.
-- The final summary (`final_summary.md`, the detail and the PR description) and the final brief
+- The final summary (`final_summary.md`, the detail; the pull request has its own text,
+  `specs/<f>/pr_description.md`, written by framegate) and the final brief
   (`final_brief.md`, what `gate-summary` shows) are written from `final_facts.md` (generated
   from the run records, with the final gate's numbered items, so the brief rewords each one in
   plain words under the same number) and `spec_brief.md`; framegate appends the cost / time /

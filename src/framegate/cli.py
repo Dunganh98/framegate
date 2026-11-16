@@ -80,7 +80,12 @@ commands:
                           base, pushed as the branch feat/<feature> (the local work
                           branch is framegate-work/<feature>); --pr: also the pull
                           request (GitHub: gh, Azure DevOps: az), else where to open it;
-                          --dry-run: only say what would go where
+                          --dry-run: only say what would go where; works after the
+                          cleanup too (it needs the spec folder, not the run files)
+  pr-description <feature> [--pipeline]   write the pull request's description
+                          (specs/<feature>/pr_description.md: what, changes, how it is
+                          proven, what is left to do by hand) again and commit it;
+                          --pipeline: the text of a deploy / CI change's own pull request
   state [status|init|save|guard] [--push]   the state branch (framegate/<base>): where
                           it is; init: create it from this checkout's framegate files (once
                           per repository); save: this work branch's framegate files -> the
@@ -90,7 +95,8 @@ commands:
                           files, from the task's pipeline follow-up list or a list of its
                           own; sets the phase in which only those files may be written
   pipeline-check <name>   its mechanical checks (only listed deploy / CI files changed,
-                          yml / json parse, every item done or left open with a reason)
+                          yml / json parse, every item done, left open with a reason, or
+                          closed as `(not needed: <reason>)`)
   pipeline-approve <name> after the user's OK: check, tick the items, commit, end the phase
   unlock [--force]        clear a stale phase lock (.phase/.reqs) left by a killed run
   protocol                the chat run protocol the plugin skills follow (printed)
@@ -198,6 +204,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="replace a remote product branch that has other content",
     )
     p.add_argument("--unfinished", action="store_true", help="even if the feature is not DONE")
+    p = sub.add_parser("pr-description", help="write the pull request's description again")
+    p.add_argument("feature")
+    p.add_argument("--pipeline", action="store_true", help="of the deploy / CI change's own PR")
     p = sub.add_parser("state", help="the state branch that holds framegate's files")
     p.add_argument(
         "action", nargs="?", default="status", choices=["status", "init", "save", "guard"]
@@ -303,6 +312,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 force_with_lease=args.force_with_lease,
                 unfinished=args.unfinished,
             )
+        if args.command == "pr-description":
+            return publish.describe(cfg, args.feature, pipeline=args.pipeline)
         if args.command == "doctor":
             from framegate import doctor
 

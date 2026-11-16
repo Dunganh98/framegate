@@ -84,7 +84,7 @@ def test_the_list_is_read_ticked_and_left_open(tmp_path: pathlib.Path) -> None:
     text += "- [ ] ci/: every job gets a timeout (left open: waits for the new agents)\n"
     text += "- [ ] the image needs more memory\n"
     path.write_text(text, encoding="utf-8")
-    assert followup.tick(cfg, "x", {"ci/tests.yml", "ci/other.yml"}) == 1
+    assert followup.tick(cfg, "x", {"ci/tests.yml", "ci/other.yml"}) == (1, 0)
     items = followup.read_list(cfg, "x")
     assert [it.ticked for it in items] == [True, False, False, False]
     assert items[2].reason == "waits for the new agents" and items[2].covers("ci/other.yml")
@@ -177,7 +177,12 @@ def test_a_pipeline_task_of_its_own(repo: pathlib.Path, capsys: pytest.CaptureFi
     assert "Next: push pipeline/infra and open its own pull request into main" in out
     assert not (repo / ".phase").exists()
     committed = set(git(repo, "show", "--name-only", "--format=", "HEAD").split())
-    assert committed == {"ci/config.json", "ci/tests.yml", "specs/infra/pipeline_followup.md"}
+    own_text = "specs/infra/pipeline_pr_description.md"  # the brief, kept for its pull request
+    assert committed == {
+        *("ci/config.json", "ci/tests.yml", "specs/infra/pipeline_followup.md", own_text)
+    }
+    assert f"(description: {own_text})" in out
+    assert (repo / own_text).read_text(encoding="utf-8").startswith("**What was asked**\n")
     assert git(repo, "log", "-1", "--format=%s").strip() == "infra: deploy / CI changes"
     assert git(repo, "status", "--porcelain").split() == ["??", "notes.md"]
     assert [it.ticked for it in followup.read_list(load_config(repo), "infra")] == [
@@ -225,7 +230,10 @@ def test_changes_from_before_the_task_are_not_held_against_it(
     assert af("pipeline-approve", "infra") == 0
     capsys.readouterr()
     committed = set(git(repo, "show", "--name-only", "--format=", "HEAD").split())
-    assert committed == {"ci/tests.yml", "specs/infra/pipeline_followup.md"}
+    assert committed == {
+        *("ci/tests.yml", "specs/infra/pipeline_followup.md"),
+        "specs/infra/pipeline_pr_description.md",
+    }
     # the user's changes are still there, uncommitted; the snapshot is gone
     assert git(repo, "status", "--porcelain", "-uno").split() == [
         *("M", "framegate.toml", "M", "src/demo/__init__.py")
@@ -340,6 +348,60 @@ def test_builtin_names_and_outside_items(
     assert af("pipeline-approve", "env") == 0
     assert "Pipeline task env approved: 0 item(s) ticked, 0 left open" in capsys.readouterr().out
     assert not (repo / ".phase").exists()
+
+
+def test_an_item_that_is_not_needed_is_closed(
+    repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Already in place, or impossible as written: `(not needed: <reason>)` closes the item.
+    `(left open: ...)` would keep it open in `framegate status` for good (seen live)."""
+    outside = "- [ ] OUTSIDE [vault]: add a secret (the job reads it)\n"
+    write(repo, "specs/x/pipeline_followup.md", LIST.format(name="x") + outside)
+    assert af("pipeline", "x") == 0
+    write(repo, "ci/tests.yml", CI + "      - run: pytest tests/test_a.py -q\n")
+    capsys.readouterr()
+    assert af("pipeline-check", "x") == 1
+    out = capsys.readouterr().out
+    assert "- OPEN ITEM 2: its file did not change" in out and "`(not needed: <reason>)`" in out
+    listed = repo / "specs/x/pipeline_followup.md"
+    text = listed.read_text(encoding="utf-8")
+    text = text.replace("(from the spec)", "(from the spec) (not needed: the image copies src/)")
+    listed.write_text(text.replace("reads it)", "reads it) (Not needed: no job reads it)"), "utf-8")
+    cfg = load_config(repo)
+    one, two, three = followup.read_list(cfg, "x")
+    assert (one.open, two.open, three.open) == (True, False, False)
+    assert two.not_needed == "the image copies src/" and not two.ticked and not two.reason
+    assert two.text.endswith("(from the spec)") and three.outside
+    assert (followup.open_count(cfg, "x"), followup.outside_count(cfg, "x")) == (1, 0)
+    assert followup.pr_checklist(cfg, "x") == []
+    assert af("pipeline", "x") == 0  # the list again
+    out = capsys.readouterr().out
+    assert "1 open of 2 item(s)" in out
+    assert "(the image lacks it) (from the spec)  [not needed: the image copies src/]" in out
+    assert "Outside the repository: by hand, not this task: 0 to do, 1 not needed" in out
+    assert "  - [not needed: no job reads it] vault: add a secret (the job reads it)" in out
+    assert af("pipeline-check", "x") == 0
+    out = capsys.readouterr().out
+    assert "Pipeline check x: OK; 1 deploy / CI file(s) changed" in out
+    assert "2. not needed (the image copies src/): `deploy/Dockerfile`: COPY the new folder" in out
+    assert af("pipeline-approve", "x") == 0
+    out = capsys.readouterr().out
+    assert "approved: 1 item(s) ticked, 2 closed as not needed, 0 left open; 1 file(s)" in out
+    # closed in the file too, with its reason; never open again, in no status
+    text = listed.read_text(encoding="utf-8")
+    assert text.count("- [x] ") == 3 and "(not needed: the image copies src/)" in text
+    assert followup.open_count(cfg, "x") == 0
+    assert af("status") == 0
+    assert "- x:" not in capsys.readouterr().out
+    described = (repo / "specs/x/pipeline_pr_description.md").read_text(encoding="utf-8")
+    assert "- ci/tests.yml: add the new test file (CI does not select it)\n" in described
+    assert (
+        "- not needed: `deploy/Dockerfile`: COPY the new folder (the image lacks it) "
+        "(the image copies src/)\n"
+    ) in described
+    assert "To do by hand" not in described and not git(repo, "status", "--porcelain").strip()
+    skill = (ROOT / "plugin/skills/pipeline/SKILL.md").read_text(encoding="utf-8")
+    assert '"<item>: not needed: <reason>? (default: yes)"' in skill
 
 
 # ---------- after a task: its branch while it is not merged, else a branch of its own ----------
