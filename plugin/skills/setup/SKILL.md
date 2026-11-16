@@ -55,7 +55,8 @@ Run `framegate probe`. In seconds, without running a test, a linter or an agent,
 line per fact: the language, the interpreter every run uses, the test / lint / format / type
 commands with `[OK: <version>]` or `[MISSING]` (each tool was asked for `--version` in that
 interpreter) and where each comes from, the source and test folders, the base branch, the
-remote and its host, the deploy and CI paths that are locked or should be, the reinstall
+remote and its host, the deploy and CI paths that are locked or should be, the tracked
+machine files (tool state such as `.serena/`, `.vscode/`: ignored by framegate), the reinstall
 command, the reference projects, and which of framegate's files exist. It works before a
 `framegate.toml` exists (the values are proposals from the project's own files) and with one
 (the values are the configured ones). These lines fill the table of step 3: do not replace a
@@ -67,7 +68,10 @@ code map; a few minutes, not a study:
   that must not change, the test or lint commands the team documents (one that differs from
   a probed value goes into the table with its file as the source);
 - the top-level folders and, per module, a file or two: what it is for, its key classes, how
-  the modules work together;
+  the modules work together. Not the machine folders (top-level dot folders of tools:
+  `.serena/`, `.vscode/`, `.idea/`, `.venv/`, `.aws/`, ...): never read or glob through
+  them, and none is a source folder, a test folder, a lock candidate or a module of the
+  code map;
 - `framegate.toml`, `.framegate/project.md`, the code map when the probe says they exist
   (then you update them).
 
@@ -108,6 +112,7 @@ no toml and no file dumps:
     | 11 | Reinstall when a spec changes packaging | python -m pip install -e . --no-deps | editable install found | |
     | 12 | Reference projects | none | | |
 
+    **Machine files, ignored by framegate** - .serena/project.yml (tool state of this machine, not the project's)
     **What agents will know** - the knowledge facts, one short line each
     **Code map** - the modules it lists, in one line
     Defaults taken for everything else (which tests the step checks leave out, coverage and
@@ -141,6 +146,15 @@ How the rows are filled:
   out: a candidate is left out of `extra`; a built-in name goes into `[protected]
   builtin_off`.
 - Rows 11 and 12: "none" when the probe found none.
+- The line "Machine files, ignored by framegate": the probe's "Machine files (tracked,
+  ignored by framegate)" list, word for word; "none tracked" when it found none. These are
+  tool state of this machine (what lies in a top-level dot folder such as `.serena/`,
+  `.vscode/`, `.idea/`, `.venv/`, `.aws/`; not `.github/` and the other CI folders, not
+  `.claude/`, `.framegate/`, `.devcontainer/`, not dot files at the root). framegate never
+  holds them against a step (no check, no refusal at `spec` or `publish`, never in a pull
+  request) and no agent writes them. The user changes the rule in one reply: "X is a
+  machine file too" -> `[git] machine_files = ["X"]`; ".config/ is part of the project" ->
+  `[git] project_folders = [".config/"]`.
 
 Below the table, a line "Blocker:" only for what the repository cannot answer and the setup
 cannot go on without: no test framework at all; a framework with no way to tag a test with

@@ -21,4 +21,6 @@
 <!-- project commands agents may use (they also need a [phases.<P>] tools rule) -->
 
 ## Off-limits
-<!-- files, folders or practices agents must not touch -->
+<!-- files, folders or practices agents must not touch. Not needed here: dot folders of
+     tools (.serena/, .vscode/, .venv/, ...) are machine files, not project context;
+     framegate ignores them and no agent may write them ([git] machine_files) -->

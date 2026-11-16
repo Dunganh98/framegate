@@ -69,7 +69,9 @@ knowledge. It overrides any default you would otherwise assume.
 ## Part 1: the spec dialogue
 
 1. Read the requirements the user gives, then decide everything you can yourself first: read
-   the docs, the code map, the code the feature touches and the project knowledge above. Work
+   the docs, the code map, the code the feature touches and the project knowledge above
+   (dot folders of tools such as `.serena/`, `.vscode/`, `.venv/` are machine files, not
+   project context: do not read through them, and no spec names one). Work
    through this checklist and settle each point from those sources (each gap cost a live run
    questions, assumptions or a parked step):
    - requirements and acceptance criteria; edge cases (empty, NaN, missing, out-of-range,

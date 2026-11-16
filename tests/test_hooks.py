@@ -164,6 +164,43 @@ def test_deploy_and_ci_files_are_locked_in_every_phase(project: pathlib.Path, ph
     assert "deploy / CI file" in ask("src/pkg/Dockerfile.dev")[1]
 
 
+@pytest.mark.parametrize("phase", ["SPEC", "TESTS", "IMPLEMENT", "REVIEW", "PIPELINE infra"])
+def test_machine_files_are_never_written(
+    project: pathlib.Path, phase: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tool state of this machine (a top-level dot folder, `[git] machine_files`) is outside
+    every task: no phase writes it, not the agents and not the chat's task phases, also
+    when the phase's own write paths would hold it. The message says what it is."""
+    toml = project / "framegate.toml"
+    toml.write_text(
+        '[git]\nmachine_files = ["src/pkg/local.settings.json"]\n'
+        '[phases.IMPLEMENT]\nwrite = ["src/", ".vscode/"]\n',
+        encoding="utf-8",
+    )
+    set_phase(project, phase)
+
+    def ask(rel: str) -> tuple[int, str]:
+        return protect_paths.evaluate(hook_json(project, file_path=str(project / rel)))
+
+    name = phase.split(" ")[0]
+    machine = (".serena/project.yml", ".vscode/settings.json", ".venv/x/Dockerfile")
+    for rel in (*machine, "src/pkg/local.settings.json"):
+        for chat in (False, True):
+            if chat:
+                monkeypatch.delenv("FRAMEGATE_AGENT", raising=False)
+            else:
+                monkeypatch.setenv("FRAMEGATE_AGENT", "implement")
+            code, msg = ask(rel)
+            assert code == 2, rel
+            assert f"[{name}] Blocked write to {rel}: it is a machine file (tool state" in msg
+            assert "[git] machine_files" in msg and "[git] project_folders" in msg
+            assert "deploy / CI" not in msg and "Allowed in this phase" not in msg
+    # the dot folders that are project context keep their own rules and messages
+    assert "machine file" not in ask(".github/workflows/ci.yml")[1]
+    assert "machine file" not in ask(".claude/settings.json")[1]
+    assert ask(".gitignore")[0] == 2 and "machine file" not in ask(".gitignore")[1]
+
+
 def test_relative_path_resolves_against_cwd(project: pathlib.Path) -> None:
     set_phase(project, "IMPLEMENT")
     sub = project / "src"

@@ -42,7 +42,9 @@ from framegate.config import (
     GATE_COMMAND_KEYS,
     Config,
     ConfigError,
+    drop_machine_files,
     find_root,
+    is_machine_file,
     load_config,
     parse_config,
 )
@@ -256,6 +258,26 @@ def builtin_found(
     return out
 
 
+#: a machine folder with more tracked files than this is named as the folder
+MACHINE_FOLDER_FILES = 3
+
+
+def machine_found(cfg: Config, files: Sequence[str]) -> list[str]:
+    """The tracked machine files (config.is_machine_file), short: each file by its path, a
+    top-level folder with more than MACHINE_FOLDER_FILES of them as `name/ (N files)`."""
+    by_top: dict[str, list[str]] = {}
+    for f in files:
+        if is_machine_file(cfg, f):
+            by_top.setdefault(f.split("/")[0] + "/" if "/" in f else f, []).append(f)
+    out: list[str] = []
+    for top, found in by_top.items():
+        if top.endswith("/") and len(found) > MACHINE_FOLDER_FILES:
+            out.append(f"{top} ({len(found)} files)")
+        else:
+            out += [f for f in found if f not in out]
+    return out
+
+
 def _head(root: pathlib.Path, rel: str) -> str:
     """The first bytes of a file ("" when it cannot be read)."""
     try:
@@ -438,7 +460,11 @@ def collect(start: pathlib.Path | None = None) -> dict[str, Any]:
         "suggested": bool(remote) and authors > 1,
     }
 
-    files = tracked_files(root)
+    # machine files (tool state: .serena/, .vscode/, a tracked .venv/) are no project
+    # context: never a lock candidate, never read, only named in a line of their own
+    listed = tracked_files(root)
+    files = drop_machine_files(cfg, listed)
+    data["machine_files"] = machine_found(cfg, listed)
     locked = protected_paths(adapter) if adapter is not None else core_protected(cfg)
     suffixes = tuple(adapter.source_suffixes) if adapter is not None else ()
     builtin = builtin_found(cfg, files, suffixes)
@@ -544,6 +570,13 @@ def render(data: dict[str, Any]) -> list[str]:
     out.append(
         "Lock candidates ([protected] extra): "
         + (_listed([f"{c} ({why[c]})" for c in data["lock_candidates"]]) or "none")
+    )
+    out.append(
+        "Machine files (tracked, ignored by framegate): "
+        + (_listed(data["machine_files"]) or "none")
+        + " (dot folders such as .serena/, .vscode/, .venv/ are tool state of this machine, "
+        "not project context; [git] machine_files adds a path, [git] project_folders takes "
+        "a dot folder back)"
     )
     edit = data["editable"]
     if edit["configured"]:

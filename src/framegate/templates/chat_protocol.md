@@ -190,7 +190,9 @@ fail for no reason. Reading files and git log/diff/status are fine.
      branch and the state branch, and creates the pull request with `gh` (GitHub) or `az`
      (Azure DevOps). If it refuses (uncommitted changes, a remote branch of that name with
      other content, a state branch that moved): its reason in one line and the decision
-     with your default; `--force-with-lease` only when the user says to replace the remote
+     with your default (an uncommitted file: commit it, restore it, or, for tool state of
+     this machine, add it to `[git] machine_files`; files in a tool's dot folder such as
+     `.serena/` never block); `--force-with-lease` only when the user says to replace the remote
      branch.
    - The result, in two lines: what was pushed, and the pull request's address as the
      command printed it (`Pull request ... created: <address>`). Any other line about the

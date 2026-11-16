@@ -38,8 +38,16 @@ from dataclasses import dataclass
 from functools import partial
 
 from framegate import description, followup, hosts
-from framegate.config import CONFIG_FILE, Config, ConfigError, parse_config
-from framegate.state import GitError, commit_paths, feature_finished
+from framegate.config import (
+    CONFIG_FILE,
+    MACHINE_FILES_HINT,
+    Config,
+    ConfigError,
+    drop_machine_files,
+    is_machine_file,
+    parse_config,
+)
+from framegate.state import DIRTY_CHOICES, GitError, commit_paths, dirty_lines, feature_finished
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -296,6 +304,13 @@ def product_tree(cfg: Config, rev: str) -> str:
         return _git(cfg.root, "write-tree", env=env).strip()
 
 
+def machine_changed(cfg: Config, start: str, rev: str = "HEAD") -> list[str]:
+    """The machine files (config.is_machine_file: tool state of this machine) that differ
+    between `start` and `rev`. A commit of one on the work branch is never published: the
+    product keeps the base's version of it (publish: tree_with(tree, start, these))."""
+    return sorted(f for f in _names(cfg.root, start, rev) if is_machine_file(cfg, f))
+
+
 #: the paths below are file names, never patterns
 _LITERAL = {"GIT_LITERAL_PATHSPECS": "1"}
 
@@ -388,8 +403,8 @@ def verify_pipeline(
 
 def verify_product(cfg: Config, product: str, work: str = "HEAD") -> None:
     """Refuse a product commit that holds one of framegate's files, or that differs from the
-    work branch in anything but framegate's files. Checked on the commit itself, apart from
-    how it was built."""
+    work branch in anything but framegate's files and machine files (those stay as the base
+    has them). Checked on the commit itself, apart from how it was built."""
     inside, _ = _split(cfg, _files(cfg.root, product))
     if inside:
         raise PublishError(
@@ -397,6 +412,7 @@ def verify_product(cfg: Config, product: str, work: str = "HEAD") -> None:
         )
     diff = _git(cfg.root, "diff", "--no-renames", "--name-only", "-z", product, work)
     _, other = _split(cfg, [x for x in diff.split("\0") if x])
+    other = drop_machine_files(cfg, other)
     if other:
         raise PublishError(
             "refused: the product commit differs from the work branch in files that are not "
@@ -621,7 +637,7 @@ def _record(cfg: Config, n: Names, sha: str) -> None:
     root = cfg.root
     if _ancestor(root, sha, "HEAD") or _current_branch(root) in ("HEAD", n.base, n.state):
         return
-    if _git(root, "status", "--porcelain", "--untracked-files=no").strip():
+    if dirty_lines(cfg):  # machine files left out: the merge below changes no file
         return
     if workflow_tree(cfg, "HEAD") != _tree(root, sha):
         return
@@ -723,18 +739,18 @@ def save_state(
 
 def _refuse_dirty(cfg: Config) -> None:
     """Uncommitted changes to tracked files, or untracked files where the workflow
-    commits (they would silently stay out)."""
-    out = _git(cfg.root, "status", "--porcelain", "--untracked-files=all")
+    commits (they would silently stay out). Machine files (tool state of this machine:
+    `.serena/`, `.vscode/`, `[git] machine_files`) are never held against a publish."""
     watched = [p.rstrip("/") for p in (*commit_paths(cfg), *workflow_paths(cfg))]
     dirty = []
-    for line in out.splitlines():
-        code, path = line[:2], line[3:].strip().strip('"')
+    for line in dirty_lines(cfg, "all"):
+        code, path = line[:2], line[3:]
         if code != "??" or any(path == w or path.startswith(w + "/") for w in watched):
             dirty.append(line)
     if dirty:
         raise PublishError(
-            "Uncommitted changes; commit or remove them first (what is not committed cannot "
-            "be published):\n" + "\n".join(dirty[:LIST_MAX])
+            "Uncommitted changes: what is not committed cannot be published. "
+            f"{DIRTY_CHOICES}\n" + "\n".join(dirty[:LIST_MAX])
         )
 
 
@@ -1276,7 +1292,9 @@ def publish(
     echo(f"Publish {feature}" + (" (dry run: nothing is changed or pushed)" if dry_run else ""))
 
     # --- the product: built and checked before anything is changed (it refuses here) ---
-    tree = product_tree(cfg, "HEAD")
+    # a machine file committed on the work branch is left out: the product keeps the base's
+    machine = machine_changed(cfg, start)
+    tree = tree_with(cfg, product_tree(cfg, "HEAD"), start, machine)
     if tree == _tree(root, start):
         raise PublishError(f"{feature} changed no product file since {cfg.git_base}: no branch.")
     # deploy / CI files a pipeline task changed here are a commit of their own: the second
@@ -1346,6 +1364,12 @@ def publish(
         echo("  " + line.replace("\t", " "))
     if len(files) > LIST_MAX:
         echo(f"  ... and {len(files) - LIST_MAX} more")
+    if machine:
+        echo(
+            f"Left out of the pull request: {len(machine)} machine file(s) committed on this "
+            f"branch (tool state of this machine, as on {cfg.git_base} there): "
+            f"{_listed(machine, 5)}. Wrong? {MACHINE_FILES_HINT}."
+        )
     if dry_run:
         if n.remote:
             state_there = _rev(root, n.remote_state_ref)

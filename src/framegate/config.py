@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import pathlib
 import re
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -37,6 +39,25 @@ DEPLOY_CI_NAMES = (
     ".gitlab-ci*.yml",
     ".travis.yml",
 )
+#: Machine files: tool state of this machine, never the project's context. A path inside a
+#: top-level folder whose name starts with a dot is one (`.serena/`, `.copilot/`, `.venv/`,
+#: `.aws/`, `.idea/`, `.vscode/`, `.cursor/`, `.mypy_cache/`, ...), except in the folders
+#: below (deploy / CI, framegate's and Claude Code's own, the dev container) and except a
+#: path the configuration names ([paths], `[protected] extra`, ...: named_paths). Dot files at
+#: the repository root (`.gitignore`, `.gitlab-ci.yml`) are project files. A project adds
+#: paths with `[git] machine_files` and takes a dot folder back with `[git]
+#: project_folders`. framegate never holds a machine file against anything: is_machine_file.
+PROJECT_DOT_FOLDERS = (
+    *DEPLOY_CI_FOLDERS,
+    ".gitlab/",
+    ".azuredevops/",
+    ".buildkite/",
+    ".framegate/",
+    ".claude/",
+    ".devcontainer/",
+)
+#: a language's setup files that lie in a dot folder (adapter.setup_paths): project files
+LANGUAGE_DOT_PATHS: dict[str, tuple[str, ...]] = {"dotnet": (".config/dotnet-tools.json",)}
 PHASES = (
     "SPEC",
     "SPEC_UPDATE",
@@ -141,6 +162,8 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "work_prefix": (str,),
         "pipeline_prefix": (str,),
         "publish_code_map": (bool,),
+        "machine_files": (list,),
+        "project_folders": (list,),
     },
     "notify": {"toast": (bool,)},
     "phases": {},
@@ -438,6 +461,11 @@ class Config:
     #: [git] publish_code_map: the code map ([docs] code_map) is product documentation and
     #: goes to the pull request (default: it is one of framegate's files)
     publish_code_map: bool = False
+    #: [git] machine_files: paths that are tool state of this machine on top of the dot
+    #: folders (a file, a folder `x/`, a glob, `**/<name>` at any depth): is_machine_file
+    machine_files: list[str] = field(default_factory=list)
+    #: [git] project_folders: top-level dot folders that are project context here (`.config/`)
+    project_folders: list[str] = field(default_factory=list)
     #: [notify] toast: Windows toast at each gate, DONE and on error (no-op elsewhere / on failure)
     toast: bool = True
     #: [references] name -> folder the agents may read (see Reference)
@@ -567,6 +595,113 @@ def _norm(p: str) -> str:
     while p.startswith("./"):
         p = p[2:]
     return p
+
+
+GLOB_CHARS = ("*", "?", "[")
+
+
+def named_paths(cfg: Config) -> list[str]:
+    """The paths the configuration names (posix, no trailing slash): source, tests, specs,
+    the run and metrics folders, the knowledge file, the code map, the roles' folder and the
+    the entries of `[protected] extra` / `paths` and `[generic] protected` that are plain
+    paths (no glob), and the language's setup files that lie in a dot folder. Such a path,
+    and what lies in it, is project context also inside a dot folder."""
+    p = cfg.paths
+    wanted = [*cfg.src_roots, p.tests, p.review_tests, p.specs, p.out, p.metrics]
+    wanted += [cfg.knowledge, cfg.code_map, cfg.roles_extra_dir or ""]
+    listed = [*cfg.protected_extra, *(cfg.protected_paths or [])]
+    listed += [str(x) for x in cfg.language_options.get("generic", {}).get("protected", [])]
+    wanted += [e for e in listed if not any(ch in e for ch in GLOB_CHARS)]
+    wanted += LANGUAGE_DOT_PATHS.get(cfg.language, ())
+    return [n for n in (_norm(x).strip("/") for x in wanted) if n]
+
+
+def _entry_matches(rel: str, entry: str) -> bool:
+    """`rel` is the file `entry`, lies in the folder `entry`, or matches the glob `entry`
+    (`*` also matches `/`; `**/<name>`: a file name at any depth; case-insensitive)."""
+    if entry.startswith("**/"):
+        return fnmatch.fnmatchcase(rel.lower().rsplit("/", 1)[-1], entry[3:].lower())
+    if any(ch in entry for ch in GLOB_CHARS):
+        return fnmatch.fnmatchcase(rel.lower(), entry.lower())
+    plain = entry.rstrip("/")
+    return rel == plain or rel.startswith(plain + "/")
+
+
+def is_machine_file(cfg: Config, rel: str) -> bool:
+    """True when the repo-relative path `rel` is a machine file: tool state of this machine,
+    not project context (PROJECT_DOT_FOLDERS has the rule). The one place that decides it;
+    every step that looks at the working tree or at changed files leaves these out."""
+    rel = _norm(rel)
+    if any(_entry_matches(rel, e) for e in cfg.machine_files):
+        return True
+    top, sep, _ = rel.partition("/")
+    if not sep or not top.startswith(".") or top in (".", ".."):
+        return False  # not in a dot folder (a dot file at the root is a project file)
+    folder = top + "/"
+    if folder in PROJECT_DOT_FOLDERS or folder in cfg.project_folders:
+        return False
+    return not any(rel == n or rel.startswith(n + "/") for n in named_paths(cfg))
+
+
+def drop_machine_files(cfg: Config, paths: Iterable[str]) -> list[str]:
+    """`paths` (repo-relative) without the machine files, in the order given."""
+    return [p for p in paths if not is_machine_file(cfg, p)]
+
+
+#: how to change the rule, for messages
+MACHINE_FILES_HINT = (
+    f"[git] machine_files in {CONFIG_FILE} adds a path, [git] project_folders takes a dot "
+    "folder back as project context"
+)
+
+
+def machine_write_problem(phase: str, rel: str) -> str:
+    """The write guard's refusal for a machine file, in any phase."""
+    return (
+        f"[{phase}] Blocked write to {rel}: it is a machine file (tool state of this "
+        "machine, e.g. a dot folder such as .serena/, .vscode/, .venv/), not part of the "
+        "project and never part of a task. Do not change it and do not work around this; "
+        "reading it is fine. If the task really needs this path, tell the user: "
+        f"{MACHINE_FILES_HINT}."
+    )
+
+
+def _machine_files(cfg: Config, value: Any) -> list[str]:
+    """`[git] machine_files`: relative paths or globs, none of them a path the workflow
+    lives on."""
+    out: list[str] = []
+    taken = [CONFIG_FILE, ".framegate", ".claude", *named_paths(cfg)]
+    for raw in _str_list("[git] machine_files", value):
+        entry = _norm(raw.strip())
+        plain = entry.strip("/")
+        if not plain or entry.startswith("/") or ".." in plain.split("/") or ":" in plain:
+            raise ConfigError(
+                f"[git] machine_files: '{raw}' must be a path inside the repository (a file, "
+                "a folder `x/`, or a glob), relative to its root"
+            )
+        hit = next((n for n in taken if _entry_matches(n, entry)), None)
+        if hit:
+            raise ConfigError(
+                f"[git] machine_files: '{raw}' would cover {hit}, which the workflow needs: "
+                "name the tool's own file or folder instead"
+            )
+        out.append(entry)
+    return out
+
+
+def _project_folders(value: Any) -> list[str]:
+    """`[git] project_folders`: names of top-level dot folders, kept as `.name/`."""
+    out: list[str] = []
+    for raw in _str_list("[git] project_folders", value):
+        name = _norm(raw.strip()).strip("/")
+        if not name.startswith(".") or "/" in name or name in (".", "..", ".git"):
+            raise ConfigError(
+                f"[git] project_folders: '{raw}' must be a top-level folder whose name "
+                'starts with a dot (e.g. ".config/"); any other folder is project context '
+                "already"
+            )
+        out.append(name + "/")
+    return out
 
 
 def _as_prefix(p: str) -> str:
@@ -845,6 +980,8 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
             "[git] branch = false has no effect with [git] state_branch: framegate creates "
             "the local work branch itself (remove the line)"
         )
+    cfg.project_folders = _project_folders(git_cfg.get("project_folders", []))
+    cfg.machine_files = _machine_files(cfg, git_cfg.get("machine_files", []))
     cfg.toast = data.get("notify", {}).get("toast", cfg.toast)
     cfg.references = parse_references(data.get("references", {}))
     for section in LANGUAGE_SECTIONS:

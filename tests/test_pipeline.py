@@ -241,6 +241,56 @@ def test_changes_from_before_the_task_are_not_held_against_it(
     assert not (repo / ".git/framegate/pipeline-before/infra.json").exists()
 
 
+def test_machine_files_are_never_the_pipeline_tasks_business(
+    repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Seen live: a tool rewrites its own tracked config (`.serena/project.yml`). Uncommitted
+    before the task, changed again during it, untracked tool folders next to it: the start
+    switches the branch all the same, nothing lists or asks about them, the check and the
+    approval leave them out, and the task may not write them."""
+    write(repo, ".serena/project.yml", "name: demo\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "tool config")
+    write(repo, ".serena/project.yml", "name: demo\nlanguages: [python]\n")
+    write(repo, ".vscode/settings.json", "{}\n")
+    capsys.readouterr()
+    assert af("pipeline", "infra") == 0  # a branch switch: main -> pipeline/infra
+    assert branch(repo) == "pipeline/infra"
+    out = capsys.readouterr().out
+    assert "Changed before this task started" not in out and ".serena" not in out
+    assert not (repo / ".git/framegate/pipeline-before/infra.json").exists()
+    write(repo, "specs/infra/pipeline_followup.md", "- [ ] ci/tests.yml: add a test (new)\n")
+    write(repo, "ci/tests.yml", CI + "      - run: pytest tests/test_a.py -q\n")
+    write(repo, ".serena/project.yml", "name: demo\nlanguages: [python, yaml]\n")  # again
+    write(repo, ".venv/Lib/pkg/Dockerfile", "FROM python\n")
+    assert af("pipeline-check", "infra") == 0
+    out = capsys.readouterr().out
+    assert "Pipeline check infra: OK; 1 deploy / CI file(s) changed" in out
+    assert ".serena" not in out and ".venv" not in out and ".vscode" not in out
+    assert pipeline.changed_files(load_config(repo), "infra") == ["ci/tests.yml"]
+    code, msg = guard(repo, ".serena/project.yml")
+    assert code == 2 and "[PIPELINE] Blocked write to .serena/project.yml: it is a machine" in msg
+    assert "machine file" in pipeline.write_problem(load_config(repo), "infra", ".venv/x.cfg")
+    assert af("pipeline-approve", "infra") == 0
+    assert ".serena" not in capsys.readouterr().out
+    committed = set(git(repo, "show", "--name-only", "--format=", "HEAD").split())
+    assert not [f for f in committed if f.startswith(".")]
+    assert git(repo, "status", "--porcelain", "-uno").split() == ["M", ".serena/project.yml"]
+    # back on main with the file still changed: the next start switches again
+    git(repo, "checkout", "-q", "main")
+    assert af("pipeline", "other") == 0 and branch(repo) == "pipeline/other"
+    # a project file changed the same way still refuses, with the three ways out
+    assert af("unlock") == 0
+    git(repo, "checkout", "-q", "main")
+    write(repo, "src/demo/__init__.py", '"""Demo."""\nMINE = 1\n')
+    capsys.readouterr()
+    assert af("pipeline", "third") == 1
+    err = capsys.readouterr().err
+    assert "Uncommitted changes to tracked files on main" in err and "src/demo/__init__.py" in err
+    assert "commit it, restore it (git restore <file>), or, when it is tool state" in err
+    assert "[git] machine_files" in err and ".serena" not in err
+
+
 def test_yml_is_always_parsed(tmp_path: pathlib.Path) -> None:
     """PyYAML is a dependency: every document of a file is parsed, tags of the file's own
     dialect pass, a template that is no plain YAML is a note and never a problem."""

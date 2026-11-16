@@ -17,7 +17,7 @@ import fnmatch
 import re
 
 from framegate.adapters.base import CheckResult, LanguageAdapter
-from framegate.config import CONFIG_FILE, Config
+from framegate.config import CONFIG_FILE, Config, drop_machine_files, is_machine_file
 from framegate.state import GitError, commit_paths, git, tag_exists
 
 #: the workflow's own files, protected in every project. The built-in deploy / CI paths
@@ -167,7 +167,10 @@ def own_folders(cfg: Config) -> list[str]:
 
 def maybe_pipeline_file(cfg: Config, path: str) -> bool:
     """is_pipeline_file without the setup-file question (no adapter needed): True for every
-    deploy / CI file, and for a setup file that `[protected] extra` also lists."""
+    deploy / CI file, and for a setup file that `[protected] extra` also lists. Never for a
+    machine file (a `Dockerfile` inside `.venv/` is tool state, not the project's deploy)."""
+    if is_machine_file(cfg, path):
+        return False
     if path_matches(path, list(cfg.protected_extra)):
         return True
     return path_matches(path, cfg.deploy_ci_paths()) and not path_matches(path, own_folders(cfg))
@@ -266,10 +269,14 @@ def forbidden_regex(adapter: LanguageAdapter) -> re.Pattern[str] | None:
 
 
 def changed_files(cfg: Config, ref: str) -> tuple[set[str], set[str]]:
-    """(all changed files since ref incl. untracked, untracked files)."""
-    untracked = set(git(cfg, "ls-files", "--others", "--exclude-standard").splitlines())
-    changed = set(git(cfg, "diff", "--name-only", ref).splitlines()) | untracked
-    return changed, untracked
+    """(all changed files since ref incl. untracked, untracked files), without the machine
+    files (config.is_machine_file): tool state of this machine is no change of a task, so
+    no check built on this (frame, setup state, coverage, structure, mutation, smells,
+    formatting) ever sees one."""
+    listed = git(cfg, "ls-files", "--others", "--exclude-standard").splitlines()
+    untracked = set(drop_machine_files(cfg, listed))
+    tracked = drop_machine_files(cfg, git(cfg, "diff", "--name-only", ref).splitlines())
+    return set(tracked) | untracked, untracked
 
 
 def changed_src_files(adapter: LanguageAdapter, ref: str) -> list[str]:
