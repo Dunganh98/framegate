@@ -792,7 +792,8 @@ def test_migration_of_a_feature_branch_that_holds_framegate_files(
     origin = tmp_path / "origin.git"
     git(root, "checkout", "-q", "-b", "feature/skel")
     assert af(root, "init") == 0
-    configure(root, '[git]\nbase = "origin/dev"\nbranch_prefix = "feature/"\n')
+    # `branch = false` (the user made the branch): no effect once the state branch is on
+    configure(root, '[git]\nbase = "origin/dev"\nbranch_prefix = "feature/"\nbranch = false\n')
     git(root, "add", "-A")  # everything, .gitignore included, as the setup said then
     git(root, "commit", "-q", "-m", "framegate setup")
     assert af(root, "spec", "skel") == 0
@@ -818,11 +819,14 @@ def test_migration_of_a_feature_branch_that_holds_framegate_files(
     assert git(root, "rev-parse", "--abbrev-ref", "HEAD").strip() == "framegate-work/skel"
     assert not ok(root, "rev-parse", "--verify", "-q", "refs/heads/feature/skel")
     assert "Push guard installed" in out
+    assert ".gitignore: took out the lines framegate once added" in out
+    assert "out/" in (root / ".git" / "info" / "exclude").read_text(encoding="utf-8")
     assert top_level(root, "framegate/dev") <= WORKFLOW_TOP
     assert "specs/skel/requirements.md" in files(root, "framegate/dev")
     assert af(root, "publish", "skel", "--dry-run") == 0
     out = capsys.readouterr().out
-    assert "M .gitignore" in out  # the setup's change to a product file shows before it goes
+    # the run-file lines the setup once put into .gitignore are gone from the product
+    assert ".gitignore" not in out
     assert af(root, "publish", "skel") == 0
 
     assert set(refs(origin)) == {

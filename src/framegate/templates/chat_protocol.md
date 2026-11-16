@@ -144,7 +144,8 @@ fail for no reason. Reading files and git log/diff/status are fine.
      this checkout, which is the local work branch `framegate-work/<f>`; name the ones that are not source or tests, e.g.
      `.gitignore` or a packaging file, so the user can say no), that framegate's own files
      go to the state branch and never to the pull request, and where the pull request would
-     go. Ask: "Publish it and create the pull request?", default no ("publish without a
+     go. The pull request gets one commit; the commits of this feature stay on the local
+     work branch, which publish never rewrites: do not offer a backup branch. Ask: "Publish it and create the pull request?", default no ("publish without a
      pull request" is a valid answer).
    - In both cases also: "Clean up the run files now (specs and metrics stay)?", default
      yes.

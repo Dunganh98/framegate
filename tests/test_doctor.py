@@ -97,6 +97,20 @@ def test_doctor_warns_about_an_outdated_template_copy(demo_repo: DemoRepo) -> No
     }
 
 
+def test_doctor_is_fine_without_a_template_copy(demo_repo: DemoRepo) -> None:
+    """No specs/_template/ in the project: framegate's own templates are used, which is what
+    the outdated-copy warning recommends (seen live: the deleted copy was reported missing)."""
+    import shutil
+
+    r = demo_repo
+    shutil.rmtree(r.root / "specs" / "_template")
+    _, out = run(r)
+    assert "[OK] spec templates in specs/_template/" in out
+    assert "no project copy: framegate's own templates are used" in out
+    _, brief = run(r, brief=True)
+    assert "spec templates" not in brief
+
+
 def test_doctor_checks_the_chat_side(demo_repo: DemoRepo) -> None:
     """The allow rules the chat skills need, and framegate.toml on the base branch."""
     r = demo_repo

@@ -552,6 +552,20 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
   `runner-skeleton`: state_branch in framegate.toml, `framegate state init` (renames the
   branch, installs the guard), `publish --dry-run`, `publish`.
 
+- **First live publish (da-argos `runner-skeleton`, 2026-11-16; 0.11.1):** `state init`,
+  `publish --dry-run`, `publish` ran on a real repository (Azure DevOps): origin got
+  `feat/runner-skeleton` (one commit on dev, 12 product files, no framegate path) and
+  `framegate/dev` (11 files, no shared history with dev); the push guard was in place. The
+  pull request was opened by hand (az not used). What it showed, fixed in 0.11.1: with
+  `[git] branch = false` the work branch was never renamed (the setting now has no effect
+  with a state branch; doctor says to remove it); the dry run listed `.gitignore` with the
+  run-file lines of the old setup (`state init` now takes them out and commits that); doctor
+  reported the deleted template copy as "missing" (now OK: the packaged templates are used);
+  the chat offered a backup branch before the squash (the protocol now says the local
+  commits stay). Open: on 2026-11-15 the working tree lost two committed changes
+  (`state_branch` line, reference_followup.md) with no reflog entry and no framegate event;
+  it matches a tree restored from a stash made on the commit before them; not traced.
+
 ## User decisions so far
 1. Two human gates, forward only: spec and final (2026-11-10, after the first FCSim feature;
    was three). The test reviewer checks the tests against the spec; its questions, objections

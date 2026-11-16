@@ -365,7 +365,13 @@ def run(
             )
         )
     stale = outdated_templates(cfg)
-    tpl_notes = [f"missing: {', '.join(missing)}"] if missing else []
+    # no copy at all: the packaged templates are used (what the WARN below recommends);
+    # a copy with a file missing falls back to the packaged one for that file only
+    no_copy = len(missing) == 3
+    if no_copy:
+        missing = []
+    tpl_notes = ["no project copy: framegate's own templates are used"] if no_copy else []
+    tpl_notes += [f"missing: {', '.join(missing)} (framegate's own is used)"] if missing else []
     tpl_notes += [f"{name} lacks: {', '.join(secs)}" for name, secs in stale.items()]
     if stale:
         tpl_notes.append(
@@ -374,7 +380,7 @@ def run(
         )
     add(
         Item(
-            "WARN" if missing or stale else "OK",
+            "WARN" if stale else "OK",
             f"spec templates in {cfg.paths.specs}/_template/",
             "\n".join(tpl_notes),
         )

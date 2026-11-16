@@ -767,6 +767,13 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
             "[git] work_prefix must not be empty or equal to branch_prefix: with state_branch "
             "the local work branch and the pushed product branch have different names"
         )
+    if cfg.state_branch and not cfg.git_branch:
+        # the work branch must never carry the product branch's name (user decision 18)
+        cfg.git_branch = True
+        cfg.renamed.append(
+            "[git] branch = false has no effect with [git] state_branch: framegate creates "
+            "the local work branch itself (remove the line)"
+        )
     cfg.toast = data.get("notify", {}).get("toast", cfg.toast)
     cfg.references = parse_references(data.get("references", {}))
     for section in LANGUAGE_SECTIONS:

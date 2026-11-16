@@ -300,6 +300,38 @@ def ensure_excludes(cfg: Config, extra: Sequence[str] = ()) -> list[str]:
     return _add_lines(cfg, "exclude", wanted)
 
 
+def drop_ignore_lines(cfg: Config, n: Names, wanted: Sequence[str], echo: Echo) -> bool:
+    """The migration of an old-style feature branch: `.gitignore` lines for the run files
+    that this branch added (they are not on the base) are taken out again and committed:
+    `.gitignore` is a product file, and the clone ignores them through `.git/info/exclude`
+    now. Nothing is done when the file has uncommitted changes or is not tracked."""
+    root = cfg.root
+    path = root / ".gitignore"
+    if not path.is_file() or _run(root, "ls-files", "--error-unmatch", ".gitignore").returncode:
+        return False
+    if _run(root, "status", "--porcelain", "--", ".gitignore").stdout.strip():
+        return False
+    base = _run(root, "show", f"{cfg.git_base}:.gitignore")
+    on_base = {x.strip() for x in base.stdout.splitlines()} if base.returncode == 0 else set()
+    drop = {w for w in wanted if w not in on_base}
+    raw = path.read_bytes()
+    lines = raw.splitlines(keepends=True)
+    kept = [x for x in lines if x.decode("utf-8", "replace").strip() not in drop]
+    if len(kept) == len(lines):
+        return False
+    if base.returncode != 0 and not b"".join(kept).strip():
+        path.unlink()  # the base has none, and nothing else is in it
+    else:
+        path.write_bytes(b"".join(kept))
+    _git(root, "add", "--", ".gitignore")
+    _git(root, "commit", "-q", "-m", ".gitignore: framegate's run files are ignored locally")
+    echo(
+        ".gitignore: took out the lines framegate once added "
+        f"({', '.join(sorted(drop))}) and committed that: it is a product file."
+    )
+    return True
+
+
 def ensure_union_merge(cfg: Config) -> None:
     """The metrics file gets one row per feature at its end: two features finished side
     by side both add one, which git reports as a conflict. The rows are independent, so
@@ -518,6 +550,8 @@ def state_init(
     sha = _commit_tree(cfg.root, tree, [], f"framegate: workflow files ({n.state} created)")
     _git(cfg.root, "update-ref", n.state_ref, sha, "")
     added = ensure_excludes(cfg, extra_ignores)
+    wanted = [cfg.paths.out + "/", cfg.paths.phase_file, cfg.paths.reqs_file, *extra_ignores]
+    drop_ignore_lines(cfg, n, wanted, echo)
     install_guard(cfg, n, echo)
     _record(cfg, n, sha)
     echo(f"Created the state branch {n.state} with {len(files)} file(s): {_listed(files, 12)}")

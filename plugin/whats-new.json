@@ -1,4 +1,5 @@
 {
+  "0.11.1": "with a state branch the local work branch is always renamed (also with branch = false), the migration cleans framegate's lines out of .gitignore, and doctor no longer warns when the project has no template copy.",
   "0.11.0": "shared repositories: framegate's files can live on a separate framegate/<base> branch and `framegate publish` pushes a product-only branch for the pull request; ports get stubs from the reference, kept quirks and a reference follow-up.",
   "0.10.0": "every feature, bug fix and refactor now starts with a check that brings the command-line tool and the project's tools to this version; agents use the project's own Python and commands; the PR phase is now called SUMMARY.",
   "0.9.0": "setup files (pyproject.toml, pytest.ini, framegate.toml) are edited in the spec phase and committed with \"spec OK\"; specs can name read-only reference projects and what is ported from them; deploy / CI changes become a pipeline follow-up.",
