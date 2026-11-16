@@ -1,4 +1,5 @@
 {
+  "0.12.2": "\"ok\" at the end of a task now publishes and creates the pull request, with a short description written for reviewers that survives the cleanup; a follow-up item can be closed as not needed.",
   "0.12.1": "the pipeline check no longer counts files that were already changed before the task started; the start names them and asks once what to do with them.",
   "0.12.0": "new /framegate:pipeline does the deploy / CI changes a task leaves (same pull request, or pipeline/<name>); setup is one table to confirm, filled by `framegate probe`; Dockerfile, compose and CI files are locked by name.",
   "0.11.2": "the final brief lists the spec's steps one by one with how each went, then struggles and decisions; brief lines name the file to open; both briefs are shown the same way.",
