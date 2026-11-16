@@ -187,16 +187,26 @@ def features(orch: Orchestrator) -> list[str]:
 
 
 def pipeline_line(orch: Orchestrator, feature: str) -> str:
-    """The pipeline follow-up of a task, when something is left of it ("" otherwise)."""
+    """The pipeline follow-up of a task, when something is left of it ("" otherwise): the
+    open items in the repository (the pipeline task's work), and counted apart the unticked
+    ones outside it (by hand; no command does them)."""
     cfg = orch.cfg
     n = followup.open_count(cfg, feature)
+    outside = followup.outside_count(cfg, feature)
     going = (read_phase(cfg) or "") == f"PIPELINE {feature}"
+    by_hand = (
+        f"outside the repository: {outside} item(s) to do by hand "
+        f"({cfg.paths.specs}/{feature}/{followup.PIPELINE.file})"
+        if outside
+        else ""
+    )
     if not n and not going:
-        return ""
+        return by_hand
     return (
         f"pipeline follow-up: {n} open item(s)"
         + (", pipeline task in progress" if going else "")
         + f" -> /framegate:pipeline {feature}"
+        + (f"; {by_hand}" if by_hand else "")
     )
 
 

@@ -74,7 +74,10 @@ Mode: refactor
      never changed by a feature, not even now: they stay locked. What must change there
      BECAUSE of this feature is a separate step after it; note it here so it is not lost
      (the final summary raises it). One bullet per change: `- <file>: <what must change>
-     (<why>)`. Only deploy / CI files: nothing else belongs here. "None." when the feature
+     (<why>)`. Something that is no file of this repository
+     (a CI variable, a secret in the vault, a migration of the real database, an environment
+     switch): `- OUTSIDE [<where>]: <what must be done> (<why>)`; a person does it by hand.
+     Only deploy / CI files and such outside steps: nothing else belongs here. "None." when the feature
      needs no such change. -->
 None.
 

@@ -7,6 +7,8 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
     "tomli>=2.0; python_version < '3.11'",
+    # the pipeline check parses the changed yml files (pipeline.py)
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +28,7 @@ dev = [
     "diff-cover>=9",
     "ruff>=0.6",
     "mypy>=1.10",
+    "types-pyyaml>=6.0",
 ]
 
 [build-system]

@@ -317,7 +317,10 @@ PIPELINE_NOTE = (
     "line to your step note, `- PIPELINE FOLLOW-UP [<file>]: <what must change and why>`. It "
     "is raised at the final gate as a separate step after the feature. Park only if your "
     "step cannot be done without that change. Only for such a file: a note about anything "
-    "else (the code, the spec, another project, an idea) is not a pipeline follow-up."
+    "else (the code, the spec, another project, an idea) is not a pipeline follow-up. If "
+    "the work needs something that is no file of this repository (a CI variable, a secret "
+    "in the vault, a migration of the real database, an environment switch), write `- "
+    "OUTSIDE [<where>]: <what must be done> (<why>)` instead: a person does it by hand."
 )
 NO_STOP = (
     "Nobody answers questions during the run. Where the spec is ambiguous, assume what fits the "
@@ -3572,9 +3575,13 @@ class Orchestrator:
             if not todo:
                 continue
             log_event(self.cfg, feature, kind.name, items=[it.line() for it in todo])
+            repo, outside = followup.split(todo)
+            counts = [f"{len(repo)} item(s) {kind.done}"] if repo else []
+            if outside:
+                counts.append(f"{len(outside)} item(s) outside the repository (by hand)")
             self.progress(
                 feature,
-                f"{kind.section}, {len(todo)} item(s) {kind.done}: "
+                f"{kind.section}, {', '.join(counts)}: "
                 f"{self.cfg.paths.specs}/{feature}/{kind.file}",
             )
 

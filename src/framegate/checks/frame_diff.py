@@ -20,10 +20,16 @@ from framegate.adapters.base import CheckResult, LanguageAdapter
 from framegate.config import CONFIG_FILE, Config
 from framegate.state import GitError, commit_paths, git, tag_exists
 
-#: the CI files every project has protected; with `[protected] extra` (deploy, CI and
-#: generated files of the project) they are what the pipeline task may change
-CI_PATHS = (".github/", ".gitlab-ci.yml", "azure-pipelines.yml")
-CORE_PROTECTED = (".claude/", ".framegate/", "CLAUDE.md", CONFIG_FILE, *CI_PATHS)
+#: the workflow's own files, protected in every project. The built-in deploy / CI paths
+#: (config.DEPLOY_CI_FOLDERS / DEPLOY_CI_NAMES, minus `[protected] builtin_off`) come on top:
+#: core_protected. With `[protected] extra` those are what the pipeline task may change.
+WORKFLOW_PROTECTED = (".claude/", ".framegate/", "CLAUDE.md", CONFIG_FILE)
+
+
+def core_protected(cfg: Config) -> list[str]:
+    """What every project has protected: the workflow's own files and the built-in deploy /
+    CI paths this project did not take off the list."""
+    return [*WORKFLOW_PROTECTED, *cfg.deploy_ci_paths()]
 
 
 def approved_tag(feature: str) -> str:
@@ -70,7 +76,7 @@ def protected_paths(adapter: LanguageAdapter) -> list[str]:
     if cfg.protected_paths is not None:
         base = list(cfg.protected_paths)
     else:
-        base = [cfg.paths.tests + "/", cfg.paths.specs + "/", *CORE_PROTECTED]
+        base = [cfg.paths.tests + "/", cfg.paths.specs + "/", *core_protected(cfg)]
         if cfg.roles_extra_dir:
             base.append(cfg.roles_extra_dir.rstrip("/") + "/")
         base += adapter.default_protected_paths()
@@ -80,9 +86,9 @@ def protected_paths(adapter: LanguageAdapter) -> list[str]:
 def spec_locked(cfg: Config) -> list[str]:
     """Protected entries that stay locked in the spec phase too: the tests, the specs (the
     spec dialogue writes them through its own permission), the workflow's own rules and the
-    CI files."""
+    built-in deploy / CI paths."""
     locked = [cfg.paths.tests + "/", cfg.paths.specs + "/"]
-    locked += [e for e in CORE_PROTECTED if e != CONFIG_FILE]
+    locked += [e for e in core_protected(cfg) if e != CONFIG_FILE]
     if cfg.roles_extra_dir:
         locked.append(cfg.roles_extra_dir.rstrip("/") + "/")
     return locked
@@ -127,23 +133,71 @@ def extra_locked(adapter: LanguageAdapter, path: str) -> bool:
 
 
 def pipeline_entries(cfg: Config) -> list[str]:
-    """The deploy / CI paths as configured (prefixes / globs): the built-in CI paths and
-    `[protected] extra`."""
-    return [*CI_PATHS, *cfg.protected_extra]
+    """The deploy / CI paths as entries for path_matches: the built-in ones and `[protected]
+    extra`."""
+    return [*cfg.deploy_ci_paths(), *cfg.protected_extra]
+
+
+def pipeline_entries_text(cfg: Config) -> str:
+    """The deploy / CI paths in a few words, for messages."""
+    extra = f"; [protected] extra: {', '.join(cfg.protected_extra)}" if cfg.protected_extra else ""
+    return f"the built-in names: Dockerfile, compose files, Jenkinsfile, CI yml and folders{extra}"
+
+
+def own_folders(cfg: Config) -> list[str]:
+    """Folders where a built-in deploy / CI name is not a deploy file: the tests (test data),
+    the specs and the workflow's own folders."""
+    p = cfg.paths
+    return [p.tests + "/", p.specs + "/", p.out + "/", ".claude/", ".framegate/"]
+
+
+def maybe_pipeline_file(cfg: Config, path: str) -> bool:
+    """is_pipeline_file without the setup-file question (no adapter needed): True for every
+    deploy / CI file, and for a setup file that `[protected] extra` also lists."""
+    if path_matches(path, list(cfg.protected_extra)):
+        return True
+    return path_matches(path, cfg.deploy_ci_paths()) and not path_matches(path, own_folders(cfg))
 
 
 def is_pipeline_file(adapter: LanguageAdapter, path: str) -> bool:
-    """A deploy / CI file: under a built-in CI path or `[protected] extra`, and not a setup
-    file. No feature, bug fix or refactor changes one; the pipeline task changes nothing
-    else (pipeline.py)."""
-    return path_matches(path, pipeline_entries(adapter.cfg)) and not is_setup_file(adapter, path)
+    """A deploy / CI file: a built-in deploy / CI path (not under the tests, the specs or
+    the workflow's own folders) or under `[protected] extra`, and not a setup file. No
+    feature, bug fix or refactor changes one, in any phase and also inside a source folder;
+    the pipeline task changes nothing else (pipeline.py). A source file of the project's
+    language is one only through `[protected] extra` (source_named)."""
+    if not maybe_pipeline_file(adapter.cfg, path) or is_setup_file(adapter, path):
+        return False
+    return not source_named(adapter, path)
+
+
+def source_named(adapter: LanguageAdapter, path: str) -> bool:
+    """A source file of the project's language that `[protected] extra` does not list: when
+    a built-in deploy / CI name matches it (`dockerfile.py`, `Dockerfile.cs` and the name
+    `Dockerfile.*`), it is source all the same, not a deploy file."""
+    suffixes = tuple(adapter.source_suffixes)
+    return (
+        bool(suffixes)
+        and path.endswith(suffixes)
+        and not path_matches(path, list(adapter.cfg.protected_extra))
+    )
+
+
+def is_protected(adapter: LanguageAdapter, path: str, protected: list[str]) -> bool:
+    """`path` matches the protected entries; a source file that only a built-in deploy / CI
+    name matches (source_named) does not count."""
+    if not path_matches(path, protected):
+        return False
+    if not source_named(adapter, path):
+        return True
+    builtin = set(adapter.cfg.deploy_ci_paths())
+    return path_matches(path, [e for e in protected if e not in builtin])
 
 
 def setup_state(adapter: LanguageAdapter) -> tuple[list[str], list[str]]:
     """Uncommitted (changed, deleted or untracked) protected files, split in two:
     (setup files: `approve-spec` commits them with the spec; stray files: protected, not a
-    setup file and not in a path the workflow commits, e.g. CLAUDE.md, .claude/, CI files,
-    or in `[protected] extra` wherever it lies (deploy, CI, generated files): `approve-spec`
+    setup file and not in a path the workflow commits, e.g. CLAUDE.md, .claude/, or a deploy
+    / CI file wherever it lies (the built-in names, `[protected] extra`): `approve-spec`
     refuses while one is there, because it must not commit it and every later frame check
     would fail on it). The per-machine files (MACHINE_FILES) are neither."""
     cfg = adapter.cfg
@@ -158,8 +212,8 @@ def setup_state(adapter: LanguageAdapter) -> tuple[list[str], list[str]]:
             setup.append(path)
         elif path_matches(path, exceptions):
             continue
-        elif extra_locked(adapter, path) or (
-            path_matches(path, protected)
+        elif is_pipeline_file(adapter, path) or (
+            is_protected(adapter, path, protected)
             and not any(path == p or path.startswith(p + "/") for p in committed)
         ):
             stray.append(path)
@@ -172,9 +226,14 @@ GLOB_CHARS = ("*", "?", "[")
 def path_matches(path: str, entries: list[str]) -> bool:
     """True if `path` (posix, relative to the root) starts with one of the prefix entries or
     matches one of the glob entries (entries containing * ? [; `*` also matches `/`, so
-    `*.csproj` matches a project file at any depth; case-insensitive)."""
+    `*.csproj` matches a project file at any depth; case-insensitive). An entry `**/<name>`
+    is a file name at any depth, the root included: `**/Dockerfile`, `**/compose*.yml`
+    (`<name>` is matched against the last part of the path)."""
     for entry in entries:
-        if any(ch in entry for ch in GLOB_CHARS):
+        if entry.startswith("**/"):
+            if fnmatch.fnmatchcase(path.lower().rsplit("/", 1)[-1], entry[3:].lower()):
+                return True
+        elif any(ch in entry for ch in GLOB_CHARS):
             if fnmatch.fnmatchcase(path.lower(), entry.lower()):
                 return True
         elif path.startswith(entry):
@@ -229,7 +288,7 @@ def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
     problems = [
         f"{PROTECTED_CHANGED}{f}"
         for f in sorted(changed)
-        if path_matches(f, protected)
+        if is_protected(adapter, f, protected)
         and not path_matches(f, exceptions)
         and f not in spec_ok
         and f not in MACHINE_FILES

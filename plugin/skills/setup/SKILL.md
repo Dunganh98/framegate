@@ -135,7 +135,11 @@ How the rows are filled:
   code. The default is the probe's "suggested" (yes when the remote is shared with a team,
   no for a repository of your own or without a remote); "no remote" under From when there
   is none.
-- Row 10: the locked paths plus the probe's lock candidates (they will be locked on "ok").
+- Row 10: the exact files and folders the probe names: its locked paths ("built in" ones
+  such as Dockerfile, compose files and CI yml are locked in every project, nothing to write)
+  plus its lock candidates (on "ok" they go into `[protected] extra`). The user takes one
+  out: a candidate is left out of `extra`; a built-in name goes into `[protected]
+  builtin_off`.
 - Rows 11 and 12: "none" when the probe found none.
 
 Below the table, a line "Blocker:" only for what the repository cannot answer and the setup

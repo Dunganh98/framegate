@@ -142,7 +142,15 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 #                                  # (pyproject.toml, pytest.ini, ruff.toml, *.csproj, ...) are
 #                                  # setup files: writable in the spec phase, committed by
 #                                  # approve-spec, frozen from then on; listing one of them
-#                                  # here does not change that.
+#                                  # here does not change that. `**/<name>` = a file name at
+#                                  # any depth.
+# builtin_off = ["Dockerfile"]     # takes a built-in deploy / CI name off the list. Built in
+#                                  # (locked in every project, nothing to write; file names at
+#                                  # any depth): .github/ .circleci/ .azure-pipelines/
+#                                  # Dockerfile Dockerfile.* *.dockerfile .dockerignore
+#                                  # docker-compose*.yml docker-compose*.yaml compose*.yml
+#                                  # compose*.yaml Jenkinsfile bitbucket-pipelines.yml
+#                                  # azure-pipelines*.yml .gitlab-ci*.yml .travis.yml
 # exceptions = ["tests/review/"]           # default: [paths] review_tests
 
 # [frame]

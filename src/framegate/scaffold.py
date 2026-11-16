@@ -6,7 +6,7 @@ import os
 import pathlib
 from collections.abc import Callable
 
-from framegate import references
+from framegate import followup, references
 from framegate.adapters import detect_language, get_adapter
 from framegate.adapters.base import LanguageAdapter
 from framegate.config import (
@@ -243,14 +243,24 @@ def spec_brief(cfg: Config, feature: str) -> str:
                 if cfg.env_refresh
                 else "."
             ),
-            "- Pipeline follow-up: deploy and CI files (Dockerfile, compose, k8s, CI yml / "
-            "scripts"
+            "- Pipeline follow-up: deploy and CI files (by name, at any depth: Dockerfile*, "
+            "*.dockerfile, .dockerignore, compose / docker-compose yml, Jenkinsfile, CI yml "
+            "and folders such as .github/"
             + (f"; here also [protected] extra: {', '.join(cfg.protected_extra)}" if extra else "")
+            + (
+                f"; not here ([protected] builtin_off): {', '.join(cfg.protected_builtin_off)}"
+                if cfg.protected_builtin_off
+                else ""
+            )
             + ") are never changed by a feature, not even now; they stay locked. If the feature "
             "means one must change (a new folder the image must copy, a new dependency it must "
             "install, a new test selection for CI), write it under 'Pipeline follow-up' in "
             "requirements.md (file, what, why) and show it on the spec brief: it is done as a "
-            "separate step after the feature and raised again in the final summary.",
+            "separate step after the feature and raised again in the final summary. Something "
+            "the feature needs that is no file of this repository (a CI variable, a secret, a "
+            "migration of the real database, an environment switch) goes there as "
+            f"`{followup.OUTSIDE_FORMAT}` and on the spec brief as 'outside the repository: by "
+            "hand': a person does it, never framegate.",
             *references.brief_lines(cfg),
             "",
             adapter.conventions_brief().rstrip(),

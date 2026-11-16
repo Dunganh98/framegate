@@ -10,8 +10,10 @@ itself, inside a guard phase of its own:
 - `framegate pipeline <name>`: switch to the branch, set the phase `PIPELINE <name>` and
   remember the commit it started on (a private ref). In that phase the write guard
   (hooks/protect_paths.py) allows only deploy / CI files (frame_diff.is_pipeline_file: the
-  built-in CI paths and `[protected] extra`) that the list names, the list itself and the
-  brief ({out}/<name>/pipeline_brief.md). Everything else stays locked.
+  built-in deploy / CI names and `[protected] extra`) that the list names, the list itself
+  and the brief ({out}/<name>/pipeline_brief.md). Everything else stays locked.
+- A list line `OUTSIDE [<where>]: ...` (followup.py) is no file of this repository: the
+  task shows it under a line of its own and never does, counts or checks it.
 - `framegate pipeline-check <name>`: mechanical checks, no agent (check).
 - `framegate pipeline-approve <name>` (after the user's OK on the brief): the check again,
   the done items ticked, the files and the list committed, the phase cleared.
@@ -24,19 +26,24 @@ pushes it.
 
 from __future__ import annotations
 
-import importlib
-import importlib.util
 import json
 import re
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+import yaml
 
 from framegate import followup, procs, publish
 from framegate.adapters import get_adapter
 from framegate.adapters.base import LanguageAdapter
-from framegate.checks.frame_diff import is_pipeline_file, path_matches, pipeline_entries
+from framegate.checks.frame_diff import (
+    is_pipeline_file,
+    path_matches,
+    pipeline_entries,
+    pipeline_entries_text,
+)
 from framegate.config import CONFIG_FILE, Config, ConfigError, load_config
 from framegate.state import (
     GitError,
@@ -94,7 +101,7 @@ def write_problem(cfg: Config, name: str, rel: str) -> str:
     may): only a deploy / CI file that the list names, the list and the brief."""
     if rel in (list_rel(cfg, name), brief_rel(cfg, name)):
         return ""
-    entries = ", ".join(pipeline_entries(cfg))
+    entries = pipeline_entries_text(cfg)
     try:
         pipeline_file = is_pipeline_file(get_adapter(cfg), rel)
     except ConfigError:
@@ -105,7 +112,9 @@ def write_problem(cfg: Config, name: str, rel: str) -> str:
             f"only ({entries}). Source, tests, setup files, specs and framegate's own files "
             "stay locked: such a change is a feature, a bug fix or a refactor. If this is a "
             "deploy / CI file of the project, tell the user: its folder belongs in "
-            f"[protected] extra of {CONFIG_FILE} (changed outside this task)."
+            f"[protected] extra of {CONFIG_FILE} (changed outside this task). Something that "
+            "is no file of this repository (a CI variable, a secret, a database) is never "
+            f"done here: it is a line `{followup.OUTSIDE_FORMAT}` of the list, for a person."
         )
     if not any(it.covers(rel) for it in followup.read_list(cfg, name)):
         return (
@@ -114,6 +123,19 @@ def write_problem(cfg: Config, name: str, rel: str) -> str:
             f"line `{followup.LINE_FORMAT}` to the list first, then edit it."
         )
     return ""
+
+
+def outside_lines(outside: list[followup.ListItem]) -> list[str]:
+    """The list's items outside the repository, under a line of their own: never this
+    task's work, never counted, never a problem ([] when there is none)."""
+    if not outside:
+        return []
+    todo = [it for it in outside if not it.ticked]
+    return [
+        f"Outside the repository: by hand, not this task: {len(todo)} to do"
+        + (f", {len(outside) - len(todo)} ticked" if len(todo) < len(outside) else ""),
+        *(f"  - {'[x] ' if it.ticked else ''}{it.shown()}" for it in outside),
+    ]
 
 
 # ---------- start ----------
@@ -215,19 +237,25 @@ def start(orch: Orchestrator, name: str) -> int:
         + (", continued." if resumed else ".")
     )
     echo(
-        f"May be written: deploy / CI files ({', '.join(pipeline_entries(cfg))}), of those "
+        f"May be written: deploy / CI files ({pipeline_entries_text(cfg)}), of those "
         f"only the ones on the list; the list ({list_rel(cfg, name)}); the brief "
         f"({brief_rel(cfg, name)}). Everything else is locked."
     )
     if not items:
         echo(
             f"No list yet: write it to {list_rel(cfg, name)}, one line per change "
-            f"(`{followup.LINE_FORMAT}`), and show it for an OK before any edit."
+            f"(`{followup.LINE_FORMAT}`; something that is no file of this repository: "
+            f"`- [ ] {followup.OUTSIDE_FORMAT[2:]}`, never done here), and show it for an OK "
+            "before any edit."
         )
         return 0
+    outside = [it for it in items if it.outside]
+    items = [it for it in items if not it.outside]
     todo = [it for it in items if not it.ticked]
     echo(f"List ({list_rel(cfg, name)}): {len(todo)} open of {len(items)} item(s)")
     adapter = get_adapter(cfg)
+    for line in outside_lines(outside):
+        echo(line)
     for i, it in enumerate(items, 1):
         note = ""
         if it.ticked:
@@ -258,6 +286,8 @@ class Result:
     changed: list[str] = field(default_factory=list)
     #: the changed deploy / CI files that the list names: what the approval commits
     done: list[str] = field(default_factory=list)
+    #: the list's items outside the repository (outside_lines): shown, never checked
+    outside: list[str] = field(default_factory=list)
 
 
 def changed_files(cfg: Config, name: str) -> list[str]:
@@ -277,10 +307,28 @@ def changed_files(cfg: Config, name: str) -> list[str]:
     return sorted(tracked - {list_rel(cfg, name), brief_rel(cfg, name)})
 
 
+class _TagLoader(yaml.SafeLoader):
+    """SafeLoader that takes any tag of the file's own dialect (`!reference` in GitLab CI,
+    `!Ref` in CloudFormation) as a plain value: the check asks whether the file parses, not
+    what a tag means."""
+
+
+def _any_tag(loader: yaml.Loader, suffix: str, node: yaml.Node) -> Any:
+    if isinstance(node, yaml.MappingNode):
+        return loader.construct_mapping(node, deep=True)
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node, deep=True)
+    return node.value
+
+
+_TagLoader.add_multi_constructor("!", _any_tag)
+
+
 def parse_problem(cfg: Config, rel: str) -> tuple[str, str]:
     """(problem, note) of a changed yml / json / toml file that does not parse. YAML is
-    parsed with PyYAML when it is installed next to framegate (it is no dependency);
-    without it only tabs in the indentation are found."""
+    parsed with PyYAML (every document of the file; tags of the file's own dialect are
+    accepted). A yml file that is a template (Helm, Jinja: `{{- ... }}`, `{% ... %}`) and
+    does not parse as plain YAML is a note, not a problem."""
     path = cfg.root / rel
     if not path.is_file():
         return "", ""
@@ -292,23 +340,16 @@ def parse_problem(cfg: Config, rel: str) -> tuple[str, str]:
         elif suffix == ".toml":
             tomllib.loads(text)
         elif suffix in YAML_SUFFIXES:
-            if not yaml_parser():
-                for n, line in enumerate(text.splitlines(), 1):
-                    if "\t" in line[: len(line) - len(line.lstrip())]:
-                        return f"DOES NOT PARSE: {rel}:{n}: a tab in the indentation", ""
-                return "", ""
-            list(importlib.import_module("yaml").safe_load_all(text))
+            list(yaml.load_all(text, Loader=_TagLoader))
     except Exception as e:  # each parser has its own error type
-        first = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
+        lines = [x.strip() for x in str(e).splitlines() if x.strip()]
+        first = lines[0] if lines else type(e).__name__
         if suffix in YAML_SUFFIXES and re.search(r"\{\{-|\{%|^\s*\{\{", text, re.M):
             return "", f"{rel} is a template, not plain YAML: not parsed ({first})"
-        return f"DOES NOT PARSE: {rel}: {first}", ""
+        mark = getattr(e, "problem_mark", None)  # a YAML error knows its line
+        where = f"{rel}:{mark.line + 1}" if mark is not None else rel
+        return f"DOES NOT PARSE: {where}: {first}", ""
     return "", ""
-
-
-def yaml_parser() -> bool:
-    """PyYAML is importable (it is no dependency of framegate: used when it is there)."""
-    return importlib.util.find_spec("yaml") is not None
 
 
 def missing_paths(cfg: Config, name: str, rel: str) -> list[str]:
@@ -338,16 +379,19 @@ def check(cfg: Config, name: str) -> Result:
     """The mechanical checks of the pipeline task: every changed file is a deploy / CI file
     and on the list, nothing else changed since the start, yml / json / toml files parse,
     every open item is done (its file changed) or left open with a reason. Not blocking
-    (notes): repo paths the added lines name that do not exist."""
+    (notes): repo paths the added lines name that do not exist. Items outside the repository
+    (`OUTSIDE [..]`) are no work of this task: listed, never open, never a problem."""
     if not _exists(cfg, publish.pipeline_start_ref(name)):
         raise PipelineError(
             f"No pipeline task '{name}' is open here (start it: /framegate:pipeline {name})."
         )
     res = Result()
     adapter: LanguageAdapter = get_adapter(cfg)
-    items = followup.read_list(cfg, name)
+    listed = followup.read_list(cfg, name)
+    items = [it for it in listed if not it.outside]
+    res.outside = outside_lines([it for it in listed if it.outside])
     res.changed = changed_files(cfg, name)
-    if not items:
+    if not listed:
         res.problems.append(f"NO LIST: {list_rel(cfg, name)} has no `- [ ]` line")
     for rel in res.changed:
         if not is_pipeline_file(adapter, rel):
@@ -379,11 +423,6 @@ def check(cfg: Config, name: str) -> Result:
                 f"OPEN ITEM {i}: its file did not change (do it, or end its line with "
                 f"`{followup.LEFT_OPEN_FORMAT}`): {it.text}"
             )
-    if any(rel.lower().endswith(YAML_SUFFIXES) for rel in res.done) and not yaml_parser():
-        res.notes.append(
-            "yml files: no YAML parser is installed next to framegate (PyYAML), so only tabs "
-            "in the indentation were looked for"
-        )
     return res
 
 
@@ -395,6 +434,8 @@ def report(cfg: Config, name: str, res: Result, echo: Echo) -> None:
     )
     for line in res.items:
         echo(f"  {line}")
+    for line in res.outside:
+        echo(line)
     for line in res.problems:
         echo(f"- {line}")
     for line in res.notes:
@@ -439,6 +480,8 @@ def approve(cfg: Config, name: str, echo: Echo = print) -> int:
     )
     for line in res.notes:
         echo(f"NOTE: {line}")
+    for line in res.outside:
+        echo(line)
     if not res.done:
         return 0
     if cfg.state_branch:

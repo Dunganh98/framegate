@@ -15,6 +15,28 @@ else:  # pragma: no cover - exercised only on 3.10
     import tomli as tomllib
 
 CONFIG_FILE = "framegate.toml"
+
+#: The built-in deploy / CI paths: names that can only mean one thing. No feature, bug fix
+#: or refactor changes one; the pipeline task does (frame_diff.is_pipeline_file). Folders at
+#: the repository root, and file names (globs, case-insensitive) at any depth. A project
+#: takes one off the list with `[protected] builtin_off` and adds its own folders (`deploy/`,
+#: `ci/`, `k8s/`, `helm/`: names that can mean something else) with `[protected] extra`.
+DEPLOY_CI_FOLDERS = (".github/", ".circleci/", ".azure-pipelines/")
+DEPLOY_CI_NAMES = (
+    "Dockerfile",
+    "Dockerfile.*",
+    "*.dockerfile",
+    ".dockerignore",
+    "docker-compose*.yml",
+    "docker-compose*.yaml",
+    "compose*.yml",
+    "compose*.yaml",
+    "Jenkinsfile",
+    "bitbucket-pipelines.yml",
+    "azure-pipelines*.yml",
+    ".gitlab-ci*.yml",
+    ".travis.yml",
+)
 PHASES = (
     "SPEC",
     "SPEC_UPDATE",
@@ -101,7 +123,12 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "never_auto": (list,),
     },
     "docs": {"code_map": (str,)},
-    "protected": {"paths": (list,), "extra": (list,), "exceptions": (list,)},
+    "protected": {
+        "paths": (list,),
+        "extra": (list,),
+        "exceptions": (list,),
+        "builtin_off": (list,),
+    },
     "frame": {"forbidden_patterns": (list,)},
     "spec": {"id_pattern": (str,)},
     "roles": {"extra_dir": (str,)},
@@ -378,6 +405,9 @@ class Config:
     protected_paths: list[str] | None = None  # None -> core + adapter defaults
     protected_extra: list[str] = field(default_factory=list)
     protected_exceptions: list[str] | None = None  # None -> [review_tests]
+    #: [protected] builtin_off: built-in deploy / CI names (DEPLOY_CI_FOLDERS / _NAMES) this
+    #: project takes off the list, as written there
+    protected_builtin_off: list[str] = field(default_factory=list)
     forbidden_patterns: list[str] | None = None  # None -> adapter defaults
     id_pattern: str = DEFAULT_ID_PATTERN
     phase_write: dict[str, list[str]] = field(default_factory=dict)
@@ -516,6 +546,16 @@ class Config:
         }
         return [_as_prefix(x) for x in defaults.get(phase, [])]
 
+    def deploy_ci_paths(self) -> list[str]:
+        """The built-in deploy / CI paths of this project, as entries for
+        frame_diff.path_matches (a folder `x/`, a file name at any depth `**/<name>`):
+        DEPLOY_CI_FOLDERS and DEPLOY_CI_NAMES without `[protected] builtin_off`."""
+        off = set(self.protected_builtin_off)
+        return [
+            *(d for d in DEPLOY_CI_FOLDERS if d not in off),
+            *(f"**/{n}" for n in DEPLOY_CI_NAMES if n not in off),
+        ]
+
     def frame_exceptions(self) -> list[str]:
         if self.protected_exceptions is not None:
             return [_norm(x) for x in self.protected_exceptions]
@@ -556,6 +596,26 @@ def _check_types(section: str, data: dict[str, Any]) -> None:
         if (isinstance(value, bool) and bool not in types) or not isinstance(value, types):
             names = "/".join(t.__name__ for t in types)
             raise ConfigError(f"[{section}] {key} must be {names}, got {type(value).__name__}")
+
+
+def _builtin_off(value: Any) -> list[str]:
+    """`[protected] builtin_off`: each entry is one of the built-in deploy / CI names, as
+    listed (case and a leading `**/` do not matter)."""
+    known = {n.lower(): n for n in (*DEPLOY_CI_FOLDERS, *DEPLOY_CI_NAMES)}
+    out: list[str] = []
+    for raw in _str_list("[protected] builtin_off", value):
+        key = _norm(raw).strip().lower()
+        key = key[3:] if key.startswith("**/") else key
+        name = known.get(key) or known.get(key + "/")
+        if name is None:
+            raise ConfigError(
+                f"[protected] builtin_off: '{raw}' is not a built-in deploy / CI name. It "
+                f"takes one of these off the list: {', '.join(known.values())}. To lock a "
+                "path of your own use [protected] extra."
+            )
+        if name not in out:
+            out.append(name)
+    return out
 
 
 def _str_list(where: str, value: Any) -> list[str]:
@@ -734,6 +794,7 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     cfg.protected_extra = [_norm(x) for x in _str_list("[protected] extra", prot.get("extra", []))]
     if "exceptions" in prot:
         cfg.protected_exceptions = _str_list("[protected] exceptions", prot["exceptions"])
+    cfg.protected_builtin_off = _builtin_off(prot.get("builtin_off", []))
 
     frame = data.get("frame", {})
     if "forbidden_patterns" in frame:

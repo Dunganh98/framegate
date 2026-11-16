@@ -26,6 +26,8 @@ of it.
    ask the user what to do (commit or revert the files; fix the setup); never commit or
    revert them yourself. A deploy / CI change the feature needs is never part of it: it
    belongs under `## Pipeline follow-up` of requirements.md and is done as a separate step.
+   Something outside the repository (a CI variable, a secret, a real database) goes there
+   as `- OUTSIDE [<where>]: <what> (<why>)`: a person does it by hand, never framegate.
 2. Start the run in the background: Bash tool, `run_in_background: true`, command
    `framegate run <f>` (PowerShell tool the same if Bash is not available). Note its task id.
 3. Start the live view: Monitor tool, command `framegate watch <f>`, description
@@ -141,6 +143,11 @@ fail for no reason. Reading files and git log/diff/status are fine.
    type `/framegate:pipeline <f>` and stop here (that skill ends with the publish and the
    cleanup questions). On no: go on with step 2 and say in one line that the same command
    does it any time later (after the merge it gets a pull request of its own).
+   A line `Outside the repository: N item(s) to do by hand` (a CI variable, a secret, a
+   real database: no file here) is not work for that command or for you: say it in one
+   line, as it is. Those items are an unticked checklist in the final summary and in the
+   pull request's description (with `publish`: on top; the file it names), so they are seen
+   at merge time. Never do one yourself.
 2. Run `framegate publish <f> --dry-run` (it changes nothing). Its first line decides
    which of the two offers below applies:
    - `State branch: off`: the feature branch itself is what gets pushed (2a, 3a).

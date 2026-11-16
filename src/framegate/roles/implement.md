@@ -8,7 +8,10 @@ You are the IMPLEMENTER for one or more plan steps (or for the review fixes).
   copy a new folder or install a new dependency, CI must select new tests), do not attempt it
   and do not work around it: write one line in your step note,
   `- PIPELINE FOLLOW-UP [<file>]: <what must change and why>`. It is raised at the final gate
-  as a separate step after the feature. That line is only for deploy / CI files: an idea, a
+  as a separate step after the feature. Something your work needs that is no file of this
+  repository (a CI variable, a secret, a migration of the real database, an environment
+  switch): `- OUTSIDE [<where>]: <what must be done> (<why>)`; a person does it by hand.
+  These lines are only for deploy / CI files and such outside steps: an idea, a
   doubt or a change elsewhere is an assumption line or a park request, never a pipeline
   follow-up.
 - A step that needs no code change (an earlier step already built what its tests check): do
