@@ -11,7 +11,7 @@ import subprocess
 import time
 from typing import Any
 
-from framegate.config import Config, phase_name
+from framegate.config import Config, is_machine_file, phase_name
 
 
 class GitError(Exception):
@@ -34,6 +34,57 @@ def git(cfg: Config, *args: str) -> str:
     if r.returncode != 0:
         raise GitError(f"git {' '.join(args)} failed: {(r.stderr or r.stdout).strip()}")
     return r.stdout
+
+
+# ---------- the working tree, without the machine files ----------
+def dirty_lines(cfg: Config, untracked: str = "no") -> list[str]:
+    """What `git status --porcelain` lists, one `XY path` line each, without the machine
+    files (config.is_machine_file: tool state of this machine, never held against a step).
+    `untracked`: git's --untracked-files mode ("no": tracked files only). The one helper
+    every "is the working tree clean?" question goes through."""
+    out = git(cfg, "status", "--porcelain", "-z", f"--untracked-files={untracked}")
+    parts = [x for x in out.split("\0") if x]
+    lines: list[str] = []
+    i = 0
+    while i < len(parts):
+        code, path = parts[i][:2], parts[i][3:]
+        i += 2 if "R" in code or "C" in code else 1  # a rename is followed by its old name
+        if not is_machine_file(cfg, path):
+            lines.append(f"{code} {path}")
+    return lines
+
+
+def dirty_machine_files(cfg: Config) -> list[str]:
+    """The tracked machine files with uncommitted changes."""
+    names = git(cfg, "diff", "--no-renames", "--name-only", "-z", "HEAD").split("\0")
+    return sorted(n for n in names if n and is_machine_file(cfg, n))
+
+
+#: one line for a refusal over uncommitted changes: the three ways out
+DIRTY_CHOICES = (
+    "For each file: commit it, restore it (git restore <file>), or, when it is tool state of "
+    "this machine and not the project's, add it to [git] machine_files in framegate.toml "
+    "(framegate then leaves it alone)."
+)
+
+
+def switch_branch(cfg: Config, *args: str) -> None:
+    """`git checkout -q <args>` for a branch switch. Uncommitted machine files do not stop
+    it: git carries them over. Only when the other branch holds another version of such a
+    file git refuses; that is said in one line that names the file and the fix."""
+    try:
+        git(cfg, "checkout", "-q", *args)
+    except GitError as e:
+        text = str(e)
+        if "overwritten by checkout" not in text:
+            raise
+        named = [x.strip() for x in text.splitlines() if x.startswith("\t")]
+        named = named or dirty_machine_files(cfg) or ["<file>"]
+        raise GitError(
+            f"Cannot switch the branch: {', '.join(named)} has uncommitted changes here and "
+            "the other branch holds another version of it. Restore it (git restore "
+            f"{named[0]}) or commit it, then run the command again."
+        ) from e
 
 
 def _marker_ref(name: str) -> str:

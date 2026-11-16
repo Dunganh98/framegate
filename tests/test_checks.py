@@ -124,6 +124,63 @@ def test_frame_config(framed: pathlib.Path) -> None:
     )
 
 
+def test_frame_ignores_machine_files(framed: pathlib.Path) -> None:
+    """Seen live: a tool rewrites its own tracked config (`.serena/project.yml`) during a
+    run. Tool state of this machine is no change of the task: not a frame violation, also
+    where a protected glob or a built-in deploy name would match it, tracked or not,
+    committed or not; not in the changed-file lists either."""
+    write(framed, ".serena/project.yml", "name: x\n")
+    write(framed, "conf/app.yml", "a: 1\n")
+    write(framed, "local.settings.json", "{}\n")
+    git(framed, "add", "-A")
+    git(framed, "commit", "-q", "-m", "tool state")
+    git(framed, "tag", "-f", "tests-approved/f")
+    data = {
+        "protected": {"extra": ["*.yml", "*.json"]},
+        "git": {"machine_files": ["local.settings.json"]},
+    }
+    a = adapter_for(framed, data)
+    write(framed, ".serena/project.yml", "name: x\nlanguage: python\n")  # tracked, modified
+    write(framed, ".vscode/settings.json", "{}\n")  # untracked
+    write(framed, ".venv/Lib/pkg/Dockerfile", "FROM python\n")
+    write(framed, ".idea/src.py", "x = 1  # noqa\n")
+    write(framed, "local.settings.json", '{"a": 1}\n')
+    assert frame_diff.check(a, "f") == CheckResult("PASS", "Frame intact.")
+    assert frame_diff.setup_state(a) == ([], [])
+    assert frame_diff.changed_files(a.cfg, "tests-approved/f") == (set(), set())
+    assert not frame_diff.maybe_pipeline_file(a.cfg, ".venv/Lib/pkg/Dockerfile")
+    git(framed, "add", "-A")
+    git(framed, "commit", "-q", "-m", "someone committed the tool state")
+    assert frame_diff.check(a, "f").status == "PASS"
+    # the same change in a project file is still caught; so is a dot folder taken back
+    write(framed, "conf/app.yml", "a: 2\n")
+    out = frame_diff.check(a, "f").output
+    assert out == "PROTECTED PATH CHANGED: conf/app.yml"
+    back = adapter_for(framed, {**data, "git": {"project_folders": [".serena/"]}})
+    assert "PROTECTED PATH CHANGED: .serena/project.yml" in frame_diff.check(back, "f").output
+
+
+def test_dirty_lines_leave_machine_files_out(framed: pathlib.Path) -> None:
+    """The one "is the working tree clean?" helper: git's status without the tool state."""
+    from framegate.state import dirty_lines, dirty_machine_files
+
+    cfg = adapter_for(framed).cfg
+    write(framed, ".serena/project.yml", "name: x\n")
+    write(framed, "docs/my notes.md", "a\n")
+    git(framed, "add", "-A")
+    git(framed, "commit", "-q", "-m", "more")
+    assert dirty_lines(cfg) == [] and dirty_lines(cfg, "all") == []
+    write(framed, ".serena/project.yml", "name: y\n")
+    write(framed, ".vscode/settings.json", "{}\n")
+    assert dirty_lines(cfg) == [] and dirty_lines(cfg, "all") == []
+    assert dirty_machine_files(cfg) == [".serena/project.yml"]
+    write(framed, "docs/my notes.md", "b\n")
+    git(framed, "mv", "src/pkg/a.py", "src/pkg/moved.py")
+    write(framed, "new.txt", "x\n")
+    assert dirty_lines(cfg) == [" M docs/my notes.md", "R  src/pkg/moved.py"]
+    assert dirty_lines(cfg, "all")[-1] == "?? new.txt" and len(dirty_lines(cfg, "all")) == 3
+
+
 def test_changed_src_files(framed: pathlib.Path) -> None:
     write(framed, "src/pkg/a.py", "A = 1\n")
     write(framed, "src/pkg/new.py", "B = 1\n")

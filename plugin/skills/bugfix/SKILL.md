@@ -73,7 +73,9 @@ the language, how tests are written here, the code map and the project knowledge
 ## Part 1: the bug report dialogue
 
 1. Read what the user reports, then find out everything you can yourself: read the code map,
-   the code on the path from the input to the wrong result, and the project knowledge above.
+   the code on the path from the input to the wrong result, and the project knowledge above
+   (dot folders of tools such as `.serena/`, `.vscode/`, `.venv/` are machine files, not
+   project context: do not read through them, and no spec names one).
    - Reproduce it: run today's code with the reported input (the project's run / scan command,
      or the smallest existing test) and copy the wrong result. If you cannot reproduce it, say
      so and ask for the exact input; do not write a report from a guess.

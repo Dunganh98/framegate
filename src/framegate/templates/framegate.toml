@@ -193,6 +193,15 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 #                                  # is pushed as <pipeline_prefix><name>
 # publish_code_map = false        # with state_branch: true = the code map is product
 #                                  # documentation and goes to the pull request
+# Machine files: tool state of this machine, never the project's. framegate ignores them
+# everywhere (no check, no refusal, no agent write, never in a pull request). By rule: what
+# lies in a top-level folder whose name starts with a dot (.serena/, .vscode/, .idea/,
+# .venv/, .aws/, ...), except .github/ .circleci/ .azure-pipelines/ .gitlab/ .azuredevops/
+# .buildkite/ .devcontainer/ .claude/ .framegate/ and a path this file names ([paths],
+# [protected] extra). Dot files at the root (.gitignore, .gitlab-ci.yml) are project files.
+# machine_files = ["local.settings.json", "tools/cache/"]   # more of them: a file, a folder
+#                                  # `x/`, a glob, `**/<name>` = a file name at any depth
+# project_folders = [".config/"]   # a dot folder that is project context here after all
 
 [notify]
 # toast = true                     # Windows toast at each gate, DONE and on error (env

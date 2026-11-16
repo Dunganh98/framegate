@@ -75,7 +75,9 @@ the language, how tests are written here, the code map and the project knowledge
 ## Part 1: the scope dialogue
 
 1. Read what the user wants, then decide everything you can yourself: read the code map, the
-   code in question, its callers and its existing tests, and the project knowledge above.
+   code in question, its callers and its existing tests, and the project knowledge above
+   (dot folders of tools such as `.serena/`, `.vscode/`, `.venv/` are machine files, not
+   project context: do not read through them, and no spec names one).
    - Scope: the files / types / methods that change and what happens to each (split into,
      moved to, renamed, merged). Everything else stays untouched.
    - Behavior to preserve: what callers and users rely on in that code: outputs for given

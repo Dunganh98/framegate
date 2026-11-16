@@ -691,6 +691,36 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
     used); `az repos pr create` with the new file (the old cut copy is gone); a project
     whose CI folder is not in `[protected] extra` turns a right agent note into "not a
     deploy / CI matter" (the brief line says where it belongs).
+- **Machine files: framegate never cares about them (2026-11-16, branch fix/machine-files,
+  not merged, no version bump):** seen live three times in one repository: a tracked
+  `.serena/project.yml` that its tool rewrites blocked `pipeline-check`, made the chat ask,
+  and made `publish` refuse. The owner's decision: dot folders of tools are not project
+  context.
+  - **The rule, one function (`config.is_machine_file`):** a path inside a top-level folder
+    whose name starts with a dot. Not: `.github/`, `.circleci/`, `.azure-pipelines/`,
+    `.gitlab/`, `.azuredevops/`, `.buildkite/`, `.framegate/`, `.claude/`, `.devcontainer/`
+    (`config.PROJECT_DOT_FOLDERS`); a path the config names (`config.named_paths`: [paths],
+    knowledge, code map, roles folder, plain `[protected] extra` / `paths` entries, dotnet's
+    `.config/dotnet-tools.json`); dot files at the root. `[git] machine_files` adds paths,
+    `[git] project_folders` takes a dot folder back.
+  - **Where it is used:** `state.dirty_lines` (every "is the tree clean?" question: `spec`,
+    `pipeline`, `publish`, `state save`), `state.switch_branch` (the checkout; one line when
+    the other branch holds another version of the file), `frame_diff.changed_files` (frame
+    check, stray files of `approve-spec`, doctor, coverage / structure / mutation / smells /
+    format lists), `frame_diff.maybe_pipeline_file`, `pipeline.changed_files` /
+    `remember_dirty`, `risk` paths, the write guard (refused in every phase), the probe (one
+    line, no lock candidate, not read), `publish` (a machine file committed on the work
+    branch is left out: the product keeps the base's version, one line says so).
+  - **Not done on purpose:** no `skip-worktree` / `assume-unchanged`, nothing in
+    `.git/info/exclude` for tracked files. `.claude/settings.local.json` keeps its own
+    handling (`frame_diff.MACHINE_FILES`): `publish` still refuses while it is tracked and
+    changed. The dotnet mutation worktree still mirrors uncommitted machine files, and
+    `_csproj_files` still walks dot folders before it filters them.
+  - **Not yet seen live:** all of it. Watch: a project that keeps real project files in a
+    dot folder not on the list (`.husky/`, `.config/` beyond dotnet-tools.json,
+    `.storybook/`, `.cargo/`): the probe line names the tracked ones at setup, the fix is
+    `project_folders`; whether the chat still asks about a tool file outside a dot folder
+    instead of proposing `machine_files`.
 
 ## User decisions so far
 1. Two human gates, forward only: spec and final (2026-11-10, after the first FCSim feature;

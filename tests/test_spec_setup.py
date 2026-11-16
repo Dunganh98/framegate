@@ -320,6 +320,68 @@ def test_the_first_code_after_a_skipped_review_is_reviewed(demo_repo: DemoRepo) 
     assert [e["passed"] for e in r.events() if e["kind"] == "final_gates"] == [True]
 
 
+# ---------- machine files ----------
+def test_spec_switches_the_branch_with_a_machine_file_uncommitted(
+    demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Seen live: a tool rewrites its own tracked config (`.serena/project.yml`); the chat
+    had to ask what to do with it. Tool state of this machine does not block `framegate
+    spec`: git carries it to the new branch. Only when the other branch holds another
+    version git itself cannot switch: one line names the file and the fix."""
+    r = demo_repo
+    git(r.root, "checkout", "-q", "main")
+    append(r, ".serena/project.yml", "name: demo\n")
+    git(r.root, "add", ".serena")
+    git(r.root, "commit", "-q", "-m", "tool config")
+    append(r, ".serena/project.yml", "languages: [python]\n")
+    append(r, ".vscode/settings.json", "{}\n")
+    capsys.readouterr()
+    assert r.af("spec", "other") == 0
+    assert git(r.root, "rev-parse", "--abbrev-ref", "HEAD").strip() == "feat/other"
+    assert "languages" in (r.root / ".serena/project.yml").read_text(encoding="utf-8")
+    assert git(r.root, "status", "--porcelain", "-uno").split() == ["M", ".serena/project.yml"]
+    # feat/demo was created before the tool's file existed: it holds another version (none)
+    capsys.readouterr()
+    assert r.af("spec", "demo") == 1
+    err = capsys.readouterr().err.strip()
+    assert err.endswith(
+        "Cannot switch the branch: .serena/project.yml has uncommitted changes here and the "
+        "other branch holds another version of it. Restore it (git restore "
+        ".serena/project.yml) or commit it, then run the command again."
+    )
+    assert git(r.root, "rev-parse", "--abbrev-ref", "HEAD").strip() == "feat/other"
+    git(r.root, "restore", ".serena/project.yml")
+    assert r.af("spec", "demo") == 0
+
+
+def test_machine_files_are_no_stray_files_of_an_approval(
+    demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Uncommitted tool state is not a protected file the approval must refuse or commit,
+    also where a `[protected] extra` glob would match it."""
+    r = demo_repo
+    r.set_toml("protected", "extra", '["*.yml", "*.json"]')
+    append(r, ".serena/project.yml", "name: demo\n")
+    git(r.root, "add", ".serena")
+    git(r.root, "commit", "-q", "-m", "tool config")
+    append(r, ".serena/project.yml", "languages: [python]\n")
+    append(r, ".vscode/settings.json", "{}\n")
+    adapter = get_adapter(load_config(r.root))
+    assert frame_diff.setup_state(adapter) == ([], [])
+    capsys.readouterr()
+    assert r.af("spec-check", "demo") == 0
+    out = capsys.readouterr().out
+    assert "protected file(s) have uncommitted changes" not in out and ".serena" not in out
+    assert r.af("approve-spec", "demo") == 0
+    assert marker(r.root, "spec-approved/demo")
+    assert git(r.root, "show", "HEAD:.serena/project.yml") == "name: demo\n"  # not swept in
+    status = git(r.root, "status", "--porcelain").split()
+    assert status == ["M", ".serena/project.yml", "??", ".vscode/"]
+    # a project file the same glob matches still refuses
+    append(r, "conf/app.yml", "a: 1\n")
+    assert frame_diff.setup_state(adapter) == ([], ["conf/app.yml"])
+
+
 # ---------- doctor ----------
 def test_doctor_warns_about_uncommitted_protected_files(demo_repo: DemoRepo) -> None:
     r = demo_repo

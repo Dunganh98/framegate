@@ -19,7 +19,7 @@ from framegate import cli, doctor, hosts, publish
 from framegate.adapters import get_adapter
 from framegate.checks import frame_diff
 from framegate.config import Config, ConfigError, load_config, parse_config
-from framegate.orchestrator import Orchestrator
+from framegate.orchestrator import EXIT_GATE, Orchestrator
 from framegate.state import commit, save_progress, set_marker, tag_exists
 
 IMPL = STUB.replace(
@@ -508,6 +508,153 @@ def test_publish_refuses_what_is_not_ready(team: Team, capsys: pytest.CaptureFix
     git(r, "checkout", "-q", "framegate-work/demo")
     assert team.af("publish", "demo") == 0
     assert (r / "notes.md").is_file()
+
+
+# ---------- machine files ----------
+SERENA = ".serena/project.yml"
+
+
+def test_machine_files_never_block_a_publish_and_never_reach_the_product(
+    team: Team, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Seen live: `publish` refused over ` M .serena/project.yml`, a tool's own file. Tool
+    state of this machine, uncommitted or untracked, is not held against a publish or a
+    state save. One that someone committed on the work branch is left out: the product
+    keeps what the base has (here: nothing), and one line says so."""
+    r, o = team.root, team.origin
+    (r / ".serena").mkdir()
+    (r / SERENA).write_text("name: demo\n", encoding="utf-8")
+    (r / "local.settings.json").write_text("{}\n", encoding="utf-8")
+    git(r, "add", ".serena", "local.settings.json")
+    git(r, "commit", "-q", "-m", "committed by hand")
+    toml = r / "framegate.toml"
+    text = toml.read_text(encoding="utf-8").replace(
+        "[git]\n", '[git]\nmachine_files = ["local.settings.json"]\n', 1
+    )
+    toml.write_text(text, encoding="utf-8")
+    git(r, "commit", "-q", "-m", "config", "framegate.toml")
+    (r / SERENA).write_text("name: demo\nlanguages: [python]\n", encoding="utf-8")
+    (r / "local.settings.json").write_text('{"a": 1}\n', encoding="utf-8")
+    (r / ".vscode").mkdir()
+    (r / ".vscode" / "settings.json").write_text("{}\n", encoding="utf-8")
+    dirty = git(r, "status", "--porcelain")
+    capsys.readouterr()
+    assert team.af("state", "save") == 0
+    assert team.af("publish", "demo", "--dry-run") == 0
+    assert team.af("publish", "demo") == 0
+    out = capsys.readouterr().out
+    assert "Product branch feature/demo: 2 file(s), one commit" in out
+    assert (
+        "Left out of the pull request: 2 machine file(s) committed on this branch (tool "
+        f"state of this machine, as on dev there): {SERENA}, local.settings.json. Wrong? "
+        "[git] machine_files in framegate.toml adds a path, [git] project_folders takes"
+    ) in out
+    assert "  A\t.serena" not in out and "A .serena" not in out
+    assert changed(o, "feature/demo") == {"src/demo/__init__.py", "tests/test_demo.py"}
+    for rev in ("feature/demo", "framegate/dev"):
+        assert not {f for f in files(o, rev) if f.startswith((".serena", ".vscode", "local."))}
+    assert git(r, "status", "--porcelain") == dirty  # nothing of it was touched
+    # again: nothing to do, still no refusal
+    there = refs(o)
+    assert team.af("publish", "demo") == 0 and refs(o) == there
+
+    # a project file is still refused, and the refusal names the three ways out
+    (r / "pyproject.toml").write_text(PYPROJECT + "# wip\n", encoding="utf-8")
+    capsys.readouterr()
+    assert team.af("publish", "demo") == 1
+    err = capsys.readouterr().err
+    assert "Uncommitted changes: what is not committed cannot be published." in err
+    assert "commit it, restore it (git restore <file>), or, when it is tool state" in err
+    assert "add it to [git] machine_files in framegate.toml" in err
+    assert " M pyproject.toml" in err and ".serena" not in err and "local.settings" not in err
+
+
+def test_a_machine_file_of_the_base_stays_as_the_base_has_it(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The live case, whole: the base tracks `.serena/project.yml` and the tool rewrites it
+    on its own, before the task and during it. spec -> approve -> run to DONE (fake agent)
+    -> pipeline task -> publish: nothing blocks, nothing lists the file, and the product
+    branch holds the base's version of it."""
+    scenario = tmp_path / "scenario.json"
+    scenario.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("FRAMEGATE_CLAUDE", str(FAKE_CLAUDE))
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", str(scenario))
+    root = build_base(tmp_path)
+    origin = tmp_path / "origin.git"
+    (root / ".serena").mkdir()
+    (root / SERENA).write_text("name: demo\n", encoding="utf-8")
+    git(root, "add", ".serena")
+    git(root, "commit", "-q", "-m", "tool config")
+    git(root, "push", "-q", "origin", "dev")
+    monkeypatch.chdir(root)
+    assert af(root, "init") == 0
+    git(root, "checkout", "--", ".gitignore")
+    configure(root, STATE_ON)
+    toml = root / "framegate.toml"
+    toml.write_text(
+        toml.read_text(encoding="utf-8")
+        .replace("[gates]\n", '[gates]\ntests = "auto"\n', 1)
+        .replace("[agents]\n", "[agents]\nstep_batch_ids = 0\ndiagnose_after = 0\n", 1)
+        + "\n[gates.commands]\nlint = []\nformat = []\ntypecheck = []\n",
+        encoding="utf-8",
+    )
+    assert af(root, "state", "init") == 0
+
+    def rewrite(n: int) -> str:
+        """The tool rewrites its file, as it does whenever it likes."""
+        text = f"name: demo\nrewritten: {n}\n"
+        (root / SERENA).write_text(text, encoding="utf-8")
+        return text
+
+    rewrite(1)
+    capsys.readouterr()
+    assert af(root, "spec", "demo") == 0  # the branch switch, with the file uncommitted
+    assert git(root, "rev-parse", "--abbrev-ref", "HEAD").strip() == "framegate-work/demo"
+    write_spec(root)
+    (root / "src" / "demo" / "__init__.py").write_text(STUB, encoding="utf-8")
+    assert af(root, "approve-spec", "demo") == 0
+    rewrite(2)
+    assert af(root, "run", "demo") == EXIT_GATE  # the final gate; every check ran
+    assert af(root, "finish", "demo", "--no-retro") == 0
+    assert load_config(root) and (root / "out/demo/progress.json").is_file()
+    events = (root / "out" / "events.jsonl").read_text(encoding="utf-8")
+    assert '"kind": "finished"' in events and ".serena" not in events
+    for name in ("final_facts.md", "final_summary.md", "gate_report.md"):
+        report = root / "out" / "demo" / name
+        if report.is_file():
+            assert ".serena" not in report.read_text(encoding="utf-8"), name
+    # the pipeline task, as the chat does it
+    rewrite(3)
+    assert af(root, "pipeline", "demo") == 0
+    listed = root / "specs" / "demo" / "pipeline_followup.md"
+    listed.write_text(f"# Pipeline follow-up: demo\n\n- [ ] {CI_ITEM}\n", encoding="utf-8")
+    (root / CI_FILE).parent.mkdir(parents=True, exist_ok=True)
+    (root / CI_FILE).write_text(CI_TEXT, encoding="utf-8")
+    rewrite(4)
+    assert af(root, "pipeline-check", "demo") == 0
+    assert af(root, "pipeline-approve", "demo") == 0
+    last = rewrite(5)
+    assert af(root, "publish", "demo", "--dry-run") == 0
+    assert af(root, "publish", "demo", "--title", "demo: add two ints") == 0
+    said = capsys.readouterr()
+    assert ".serena" not in said.out + said.err  # nothing listed it, asked about it, refused
+    assert "Uncommitted changes" not in said.out + said.err
+    assert "Changed before this task started" not in said.out
+    # the product: the feature and the CI file; the tool's file as the base has it
+    assert show(origin, "feature/demo", SERENA) == "name: demo\n"
+    assert not git(origin, "diff", "--name-only", "dev", "feature/demo", "--", ".serena")
+    assert set(git(origin, "diff", "--name-only", "dev", "feature/demo").split()) == {
+        "src/demo/__init__.py",
+        "tests/test_demo.py",
+        CI_FILE,
+    }
+    assert not top_level(origin, "feature/demo") & WORKFLOW_TOP
+    assert SERENA not in files(origin, "framegate/dev")
+    # the work branch never committed it either; the tool's last version is still there
+    assert not git(root, "log", "--format=%h", "dev..HEAD", "--", ".serena").strip()
+    assert (root / SERENA).read_text(encoding="utf-8") == last
+    assert git(root, "status", "--porcelain", "-uno").split() == ["M", SERENA]
 
 
 def test_publish_refuses_a_base_that_holds_framegate_files(

@@ -53,7 +53,10 @@ written (and the list and your brief); source, tests, setup files and specs are 
   leave them until the publish? (default: leave)". A file of framegate's own that the user
   changed on purpose (framegate.toml) is committed on its own (`git commit <file> -m
   "framegate: <what>"`) after this task's approval; a tool's own file (an editor or MCP
-  config) is usually restored. `framegate publish` refuses while any is left.
+  config) is usually restored. `framegate publish` refuses while any is left. Files in a
+  tool's dot folder (`.serena/`, `.vscode/`, ...) are machine files: framegate ignores them,
+  they are never on this list and never asked about; a tool file elsewhere that keeps
+  coming back belongs in `[git] machine_files` (propose it once, default yes).
 - `No list yet`: a change of its own. Ask what should change if the user has not said it.
   Read the deploy / CI files concerned, then write the list to the file the output names,
   one line per change: `- [ ] <file>: <what must change> (<why>)`. Show it numbered and ask:

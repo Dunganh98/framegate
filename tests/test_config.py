@@ -7,10 +7,116 @@ import pytest
 from framegate.config import (
     DEFAULT_ID_PATTERN,
     ConfigError,
+    drop_machine_files,
     find_root,
+    is_machine_file,
     load_config,
     parse_config,
 )
+
+MACHINE = (
+    *(".serena/project.yml", ".copilot/state.json", ".venv/Lib/site-packages/x/Dockerfile"),
+    *(".aws/config", ".idea/workspace.xml", ".vscode/settings.json", ".cursor/rules/a.mdc"),
+    *(".mypy_cache/3.12/a.json", ".config/dotnet-tools.json", ".husky/pre-commit"),
+)
+PROJECT = (
+    *(".github/workflows/ci.yml", ".circleci/config.yml", ".azure-pipelines/build.yml"),
+    *(".gitlab/ci/build.yml", ".azuredevops/pr.yml", ".buildkite/pipeline.yml"),
+    *(".framegate/project.md", ".claude/settings.json", ".claude/settings.local.json"),
+    ".devcontainer/devcontainer.json",
+    # dot files at the root are project files
+    *(".gitignore", ".dockerignore", ".gitlab-ci.yml", ".pre-commit-config.yaml"),
+    *(".env.example", ".editorconfig", ".venv"),
+    *("src/pkg/a.py", "src/.hidden/a.py", "tests/.data/x.yml", "local.settings.json"),
+)
+
+
+def test_machine_files_the_rule(tmp_path: pathlib.Path) -> None:
+    """What lies in a top-level dot folder is tool state of this machine, except the deploy
+    / CI folders, framegate's and Claude Code's own and the dev container; dot files at the
+    root and dot folders deeper down are the project's."""
+    cfg = parse_config(tmp_path, {})
+    assert [p for p in MACHINE if not is_machine_file(cfg, p)] == []
+    assert [p for p in PROJECT if is_machine_file(cfg, p)] == []
+    assert is_machine_file(cfg, ".serena\\project.yml") and is_machine_file(cfg, "./.idea/x")
+    assert drop_machine_files(cfg, [".serena/a", "src/a.py", ".gitignore"]) == [
+        "src/a.py",
+        ".gitignore",
+    ]
+
+
+def test_machine_files_follow_the_config(tmp_path: pathlib.Path) -> None:
+    """A path the config names is project context also in a dot folder; `[git]
+    machine_files` adds paths, `[git] project_folders` takes a dot folder back."""
+    cfg = parse_config(
+        tmp_path,
+        {
+            "paths": {"src": [".app/src", "lib"], "tests": ".app/tests", "specs": ".specs"},
+            "protected": {"extra": [".deploy/", ".tools/ci.yml", "*.yml"]},
+        },
+    )
+    project = (".app/src/a.py", ".app/tests/test_a.py", ".specs/f/plan.md", ".deploy/job.yml")
+    assert [p for p in (*project, ".tools/ci.yml") if is_machine_file(cfg, p)] == []
+    # only the named path, not the whole dot folder; a glob in `extra` takes nothing back
+    assert is_machine_file(cfg, ".app/notes.md") and is_machine_file(cfg, ".tools/other.yml")
+    assert is_machine_file(cfg, ".serena/project.yml")
+
+    cfg = parse_config(
+        tmp_path,
+        {
+            "git": {
+                "machine_files": ["local.settings.json", "tools/cache/", "*.user", "**/.DS_Store"],
+                "project_folders": [".config/", ".husky"],
+            }
+        },
+    )
+    assert cfg.machine_files == ["local.settings.json", "tools/cache/", "*.user", "**/.DS_Store"]
+    assert cfg.project_folders == [".config/", ".husky/"]
+    machine = ("local.settings.json", "tools/cache/a/b.bin", "src/App/App.csproj.user")
+    machine = (*machine, "src/.DS_Store", ".DS_Store")
+    assert [p for p in machine if not is_machine_file(cfg, p)] == []
+    kept = ("local.settings.json.bak", "tools/cached.txt", ".config/x.json", ".husky/pre-commit")
+    assert [p for p in kept if is_machine_file(cfg, p)] == []
+    assert is_machine_file(cfg, ".vscode/settings.json")
+    # the dotnet adapter's own setup file in a dot folder is a project file
+    dotnet = parse_config(tmp_path, {"project": {"language": "dotnet"}})
+    assert not is_machine_file(dotnet, ".config/dotnet-tools.json")
+    assert is_machine_file(dotnet, ".config/other.json")
+
+
+@pytest.mark.parametrize(
+    ("section", "needle"),
+    [
+        ({"machine_files": "x"}, "[git] machine_files must be list, got str"),
+        ({"machine_files": [1]}, "[git] machine_files must be a list of strings"),
+        ({"machine_files": [""]}, "must be a path inside the repository"),
+        ({"machine_files": ["/abs/x"]}, "must be a path inside the repository"),
+        ({"machine_files": ["../x"]}, "must be a path inside the repository"),
+        ({"machine_files": ["C:/x"]}, "must be a path inside the repository"),
+        ({"machine_files": ["src/"]}, "would cover src, which the workflow needs"),
+        ({"machine_files": ["*.toml"]}, "would cover framegate.toml"),
+        ({"machine_files": [".framegate/"]}, "would cover .framegate"),
+        ({"machine_files": ["**/project.md"]}, "would cover .framegate/project.md"),
+        ({"project_folders": ["config/"]}, "must be a top-level folder whose name starts with"),
+        ({"project_folders": [".a/b"]}, "must be a top-level folder whose name starts with"),
+        ({"project_folders": [".git"]}, "must be a top-level folder whose name starts with"),
+    ],
+)
+def test_machine_file_settings_are_validated(
+    tmp_path: pathlib.Path, section: dict[str, object], needle: str
+) -> None:
+    with pytest.raises(ConfigError) as e:
+        parse_config(tmp_path, {"git": section})
+    assert needle in str(e.value)
+
+
+def test_the_template_names_the_machine_file_settings() -> None:
+    import framegate
+
+    template = pathlib.Path(framegate.__file__).parent / "templates" / "framegate.toml"
+    text = template.read_text(encoding="utf-8")
+    assert '# machine_files = ["local.settings.json", "tools/cache/"]' in text
+    assert '# project_folders = [".config/"]' in text
 
 
 def test_defaults_match_the_guide(tmp_path: pathlib.Path) -> None:

@@ -14,7 +14,9 @@ of a task, the spec phase too, also inside a source folder: such a change is a s
 noted as a pipeline follow-up.
 A path outside the repository is blocked for the agents of a run only: a chat session keeps
 its memory folder and scratch files in every phase. A `[references]` folder is read-only for
-both.
+both. A machine file (config.is_machine_file: tool state of this machine, `.serena/`,
+`.vscode/`, `.venv/`, `[git] machine_files`) is never written in any phase: it is outside
+every task.
 
 The pipeline task (`.phase` = `PIPELINE <name>`, set by `framegate pipeline <name>`) is the
 chat's too, and the reverse of every other phase: only deploy / CI files that its list names
@@ -145,6 +147,11 @@ def evaluate(stdin_text: str) -> tuple[int, str]:
         return 2, f"[{phase}] Blocked: {raw} is outside the repository" + (
             f" (reference '{reference}': read-only)." if reference else "."
         )
+    from framegate.config import is_machine_file, machine_write_problem
+
+    if is_machine_file(cfg, rel):
+        # tool state of this machine: outside every task, whatever the phase may write
+        return 2, machine_write_problem(phase.split(" ")[0] or "?", rel)
     if phase.startswith("PIPELINE "):
         # a pipeline task (pipeline.py): deploy / CI files on its list, nothing else
         from framegate.pipeline import write_problem

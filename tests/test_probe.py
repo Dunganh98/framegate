@@ -307,6 +307,77 @@ def test_deploy_and_ci_paths_are_named_exactly(tmp_path: pathlib.Path) -> None:
     assert len(opened) == probe.READ_MAX
 
 
+def test_machine_files_are_named_and_never_looked_into(
+    fake_tools: FakeTools, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tracked tool state (seen live: `.serena/project.yml`; a `.venv` someone committed)
+    is no source or test folder and no lock candidate, no file in it is read, and one line
+    names it with the two settings that change the rule."""
+    root = fake_tools.root
+    manifest = "apiVersion: apps/v1\nkind: Deployment\n"
+    files = {
+        ".serena/project.yml": "name: argos\n",
+        ".vscode/k8s.yml": manifest,
+        ".idea/chart/Chart.yaml": "name: x\n",
+        ".idea/infra/main.tf": "",
+        ".venv/Lib/site-packages/pkg/Dockerfile": "FROM python\n",
+        ".venv/Lib/site-packages/pkg/__init__.py": "",
+        ".venv/Lib/site-packages/pkg/compose.yml": "services: {}\n",
+        ".venv/Lib/site-packages/pkg/deploy.yml": manifest,
+        ".github/workflows/ci.yml": "jobs: {}\n",
+        ".gitlab-ci.yml": "build: {}\n",
+        "settings/app.yml": "debug: true\n",  # a project yml: this one is looked into
+    }
+    for rel, text in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text, encoding="utf-8")
+    init_git(root)
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "one")
+    opened: list[str] = []
+    head = probe._head
+
+    def recording_head(base: pathlib.Path, rel: str) -> str:
+        opened.append(rel)
+        return head(base, rel)
+
+    monkeypatch.setattr(probe, "_head", recording_head)
+    data = probe.collect(root)
+    assert data["machine_files"] == [
+        ".idea/chart/Chart.yaml",
+        ".idea/infra/main.tf",
+        ".serena/project.yml",
+        ".venv/ (5 files)",  # the four above and the fixture's python.exe
+        ".vscode/k8s.yml",
+    ]
+    builtin = [".github/", ".gitlab-ci.yml", "Dockerfile", "azure-pipelines.yml"]
+    assert data["locked_builtin"] == builtin
+    assert data["lock_candidates"] == ["deploy/"]
+    assert [p["path"] for p in data["src"]] == ["orchestrator", "runner"]
+    assert opened and not [rel for rel in opened if rel.startswith((".venv", ".vscode", ".idea"))]
+    line = next(x for x in probe.render(data) if x.startswith("Machine files"))
+    assert line.startswith(
+        "Machine files (tracked, ignored by framegate): .idea/chart/Chart.yaml, "
+        ".idea/infra/main.tf, .serena/project.yml, .venv/ (5 files), .vscode/k8s.yml (dot folders"
+    )
+    assert "[git] machine_files adds a path" in line and "[git] project_folders takes" in line
+    # the two settings change the rule
+    (root / "framegate.toml").write_text(
+        '[project]\nlanguage = "python"\n[paths]\nsrc = ["orchestrator", "runner"]\n'
+        '[git]\nmachine_files = ["deploy/"]\nproject_folders = [".idea/"]\n',
+        encoding="utf-8",
+    )
+    data = probe.collect(root)
+    assert data["machine_files"][:2] == [".serena/project.yml", ".venv/ (5 files)"]
+    assert "deploy/job.yml" in data["machine_files"]
+    assert data["lock_candidates"] == [".idea/chart/", ".idea/infra/"]
+    # none tracked: the line says so
+    data["machine_files"] = []
+    assert "Machine files (tracked, ignored by framegate): none (dot" in "\n".join(
+        probe.render(data)
+    )
+
+
 def test_the_interpreter_is_the_runs_own(demo_repo: DemoRepo) -> None:
     """The probe names the interpreter the adapter runs everything with: one piece of code."""
     adapter = get_adapter(load_config(demo_repo.root))

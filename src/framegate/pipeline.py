@@ -45,16 +45,27 @@ from framegate.checks.frame_diff import (
     pipeline_entries,
     pipeline_entries_text,
 )
-from framegate.config import CONFIG_FILE, Config, ConfigError, load_config
+from framegate.config import (
+    CONFIG_FILE,
+    Config,
+    ConfigError,
+    drop_machine_files,
+    is_machine_file,
+    load_config,
+    machine_write_problem,
+)
 from framegate.state import (
+    DIRTY_CHOICES,
     GitError,
     clear_phase,
     commit_paths,
+    dirty_lines,
     feature_finished,
     git,
     log_event,
     read_phase,
     set_phase,
+    switch_branch,
 )
 
 if sys.version_info >= (3, 11):
@@ -102,6 +113,8 @@ def write_problem(cfg: Config, name: str, rel: str) -> str:
     may): only a deploy / CI file that the list names, the list and the brief."""
     if rel in (list_rel(cfg, name), brief_rel(cfg, name)):
         return ""
+    if is_machine_file(cfg, rel):
+        return machine_write_problem(PHASE, rel)
     entries = pipeline_entries_text(cfg)
     try:
         pipeline_file = is_pipeline_file(get_adapter(cfg), rel)
@@ -184,17 +197,17 @@ def work_branch(orch: Orchestrator, name: str) -> None:
         if not publish.contained(cfg.root, tree, start, tip):
             orch.feature_branch(name)  # not merged yet: one more commit on its branch
             return
-    dirty = git(cfg, "status", "--porcelain", "--untracked-files=no").rstrip()
+    dirty = "\n".join(dirty_lines(cfg))
     if dirty:
         raise PipelineError(
-            f"Uncommitted changes to tracked files on {current}; commit or stash them before "
-            f"framegate switches to {own}:\n{dirty[:1500]}"
+            f"Uncommitted changes to tracked files on {current}, before framegate switches "
+            f"to {own}. {DIRTY_CHOICES}\n{dirty[:1500]}"
         )
     if _exists(cfg, f"refs/heads/{own}"):
-        git(cfg, "checkout", "-q", own)
+        switch_branch(cfg, own)
         orch.echo(f"Switched to the pipeline branch {own}.")
         return
-    git(cfg, "checkout", "-q", "--no-track", "-b", own, tip)
+    switch_branch(cfg, "--no-track", "-b", own, tip)
     git(cfg, "config", f"branch.{own}.framegateFeature", name)
     orch.echo(f"Created the pipeline branch {own} from {cfg.git_base} ({tip[:8]}).")
 
@@ -255,7 +268,8 @@ def start(orch: Orchestrator, name: str) -> int:
         echo(
             "Changed before this task started (uncommitted; not part of it, the check leaves "
             f"them out while they stay as they are): {', '.join(earlier)}. Ask the user once "
-            "what to do with them; `framegate publish` needs them committed or restored."
+            "what to do with them; `framegate publish` needs them committed or restored (tool "
+            "state of this machine instead: [git] machine_files)."
         )
     if not items:
         echo(
@@ -324,9 +338,11 @@ def _blob(cfg: Config, rel: str) -> str:
 def remember_dirty(cfg: Config, name: str) -> None:
     """Keep what is uncommitted at the start of the task (tracked files): those changes are
     not the task's, and the check must not hold them against it (seen live: a tool's own
-    config file and an edit of the user blocked the check)."""
+    config file and an edit of the user blocked the check). Machine files are not kept:
+    the check never sees them, changed before or during the task."""
     path = _before_file(cfg, name)
     dirty = git(cfg, "diff", "--no-renames", "--name-only", "HEAD").splitlines()
+    dirty = drop_machine_files(cfg, dirty)
     if not dirty:
         path.unlink(missing_ok=True)
         return
@@ -344,17 +360,24 @@ def changed_before(cfg: Config, name: str) -> list[str]:
         was = json.loads(_before_file(cfg, name).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
-    return sorted(rel for rel, blob in was.items() if _blob(cfg, rel) == blob)
+    return sorted(
+        rel
+        for rel, blob in was.items()
+        if _blob(cfg, rel) == blob and not is_machine_file(cfg, rel)
+    )
 
 
 def changed_files(cfg: Config, name: str) -> list[str]:
     """What changed since the pipeline task started: tracked files (committed or not), and
     untracked ones where a commit or a publish would look (the user's own notes elsewhere
-    are not the task's business). The list and the brief are the task's own files."""
+    are not the task's business). The list and the brief are the task's own files. Machine
+    files (config.is_machine_file) are never the task's: left out."""
     ref = publish.pipeline_start_ref(name)
-    tracked = set(git(cfg, "diff", "--no-renames", "--name-only", ref).splitlines())
+    listed = git(cfg, "diff", "--no-renames", "--name-only", ref).splitlines()
+    tracked = set(drop_machine_files(cfg, listed))
     tracked -= set(changed_before(cfg, name))
     untracked = git(cfg, "ls-files", "--others", "--exclude-standard").splitlines()
+    untracked = drop_machine_files(cfg, untracked)
     watched = [p.rstrip("/") for p in (*commit_paths(cfg), *publish.workflow_paths(cfg))]
     entries = pipeline_entries(cfg)
     for path in untracked:

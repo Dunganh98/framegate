@@ -21,6 +21,7 @@ from typing import Any
 from framegate.adapters.base import LanguageAdapter
 from framegate.checks.existing_members import base_ref
 from framegate.checks.frame_diff import path_matches
+from framegate.config import drop_machine_files
 from framegate.specs import feature_mode
 from framegate.state import GitError, git
 
@@ -98,7 +99,7 @@ def change_stats(adapter: LanguageAdapter, feature: str) -> dict[str, Any] | Non
     try:
         numstat = git(cfg, "diff", "--numstat", ref, "--", *cfg.src_roots)
         modified = git(cfg, "diff", "--numstat", "--diff-filter=M", ref, "--", *cfg.src_roots)
-        names = git(cfg, "diff", "--name-only", ref).split()
+        names = drop_machine_files(cfg, git(cfg, "diff", "--name-only", ref).split())
     except GitError:
         return None
 

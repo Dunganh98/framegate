@@ -770,6 +770,45 @@ files. A source, test or spec folder (or one that holds them) is never proposed 
 there the single file is. The budget: the tracked file names (`git ls-files`) and at most
 40 files read, the first 8 KB of each; no deeper look.
 
+**Machine files: framegate never cares about them.** Tool state of this machine is not
+project context. One definition (`config.is_machine_file`), used by every step:
+
+| Part | What | Where it is set |
+|---|---|---|
+| the rule | a path inside a top-level folder whose name starts with a dot: `.serena/`, `.copilot/`, `.vscode/`, `.idea/`, `.cursor/`, `.venv/`, `.aws/`, `.mypy_cache/`, ... | nothing to write |
+| not machine files | the dot folders `.github/`, `.circleci/`, `.azure-pipelines/`, `.gitlab/`, `.azuredevops/`, `.buildkite/` (deploy / CI), `.framegate/`, `.claude/`, `.devcontainer/`; a path the config names (`[paths]` src / tests / specs / out / metrics, the knowledge file, the code map, `[roles] extra_dir`, plain entries of `[protected] extra` / `paths` and `[generic] protected`; dotnet: `.config/dotnet-tools.json`); every dot *file* at the root (`.gitignore`, `.dockerignore`, `.gitlab-ci.yml`, `.pre-commit-config.yaml`, `.env.example`, `.editorconfig`) | nothing to write |
+| more of them | a tool's file elsewhere | `[git] machine_files = ["local.settings.json", "tools/cache/"]` (a file, a folder `x/`, a glob, `**/<name>` = a file name at any depth; an entry that would cover `framegate.toml`, `.framegate/`, `.claude/` or a configured path is a config error) |
+| taken back | a dot folder that is project context here | `[git] project_folders = [".config/"]` (top-level dot folders only) |
+
+What "never cares" means, tracked or not, changed before or during a task:
+- **No refusal.** `framegate spec` / `pipeline` switch the branch with a machine file
+  uncommitted (git carries it over); `publish` and `state save` do not count it as an
+  uncommitted change. Only when the other branch holds another version of that file does
+  git itself refuse the switch: one line names the file and the fix (`git restore <file>`,
+  or commit it).
+- **No check sees it.** The frame check, `approve-spec`'s stray-file check, doctor's
+  "uncommitted protected files", `pipeline-check` (also the "changed before this task"
+  list), the changed-file lists behind diff coverage, structure, mutation, smells and
+  formatting, and the risk paths (`never_auto`) leave machine files out. A built-in deploy /
+  CI name inside one (`.venv/.../Dockerfile`) is no deploy file.
+- **No agent writes it.** The write guard refuses a machine file in every phase, the spec
+  phase and the pipeline task included ("it is a machine file ..."). Reads are not limited.
+- **Never in a pull request.** framegate's commits never hold one (they commit the workflow's
+  paths only). A change someone committed on the work branch by hand is left out by
+  `publish`: the product commit keeps the base's version of that file, and one line says so
+  ("Left out of the pull request: N machine file(s) ..."). It stays on the local work branch.
+- **Setup.** `framegate probe` never proposes a machine folder as a lock candidate and reads
+  no file in one; its line "Machine files (tracked, ignored by framegate): ..." names the
+  tracked ones (a folder with more than 3 as `name/ (N files)`), and the setup shows it
+  under its table.
+
+Not used: `git update-index --skip-worktree` / `--assume-unchanged` and
+`.git/info/exclude` for tracked files (hidden git state in your repository). `git status`
+shows these files as ever. `.claude/settings.local.json` is handled apart, as before: the
+frame check and the approval leave it out. A step that still refuses over uncommitted
+changes names the three ways out: commit the file, restore it, or add it to
+`[git] machine_files`.
+
 `approve-spec` then, in this order: (1) spec check; (2) refuses while a protected file that is
 neither a setup file nor in a path the workflow commits has uncommitted changes or is untracked
 (e.g. an edited `CLAUDE.md`, a changed CI file), and likewise for a changed `[protected] extra`

@@ -104,12 +104,14 @@ from framegate.specs import (
     template_dir,
 )
 from framegate.state import (
+    DIRTY_CHOICES,
     GitError,
     clear_phase,
     clear_reqs,
     commit,
     commit_paths,
     delete_marker,
+    dirty_lines,
     fresh_progress,
     git,
     load_progress,
@@ -121,6 +123,7 @@ from framegate.state import (
     set_marker,
     set_phase,
     set_reqs,
+    switch_branch,
     tag_exists,
 )
 from framegate.usage_limit import UsageLimit, detect_usage_limit
@@ -307,7 +310,9 @@ LOOK_AROUND = (
     "Look around with the Read, Glob and Grep tools (never `ls`, `cat`, `head`, `grep` or "
     "`git show` in a shell). The shell is only for the commands your task and the conventions "
     "name, one plain command per call. Write files with the Write / Edit tools, never with shell "
-    "redirection (`>`, `>>`, heredocs)."
+    "redirection (`>`, `>>`, heredocs). Dot folders of tools (`.serena/`, `.vscode/`, `.venv/`, "
+    "...) are tool state of this machine, not project context: do not search them and never "
+    "write them."
 )
 #: names left out of the orientation's file lists
 ORIENTATION_SKIP = {"prompts", "progress.log", "progress.cursor", "progress.json", "parked"}
@@ -3627,14 +3632,16 @@ class Orchestrator:
                 f"{self.cfg.paths.specs}/{feature}/ on it, not created by `framegate spec`). "
                 "Rename or delete that branch, or choose another feature name."
             )
-        dirty = git(self.cfg, "status", "--porcelain", "--untracked-files=no").rstrip()
+        # machine files (tool state: .serena/, .vscode/, ...) are left out: git carries them
+        dirty = "\n".join(dirty_lines(self.cfg))
         if dirty:
             raise WorkflowError(
-                f"Uncommitted changes to tracked files on {current}; commit or stash them before "
-                f"framegate switches to {name} (untracked files are fine):\n{dirty[:1500]}"
+                f"Uncommitted changes to tracked files on {current}, before framegate "
+                f"switches to {name} (untracked files are fine). {DIRTY_CHOICES}\n"
+                f"{dirty[:1500]}"
             )
         if exists:
-            git(self.cfg, "checkout", "-q", name)
+            switch_branch(self.cfg, name)
             self.echo(f"Switched to the feature branch {name}.")
             return name
         base = self.cfg.git_base
@@ -3646,14 +3653,14 @@ class Orchestrator:
                 "(or [git] branch = false to stay on the current branch)."
             ) from e
         if not self.cfg.state_branch:
-            git(self.cfg, "checkout", "-q", "-b", name, base)
+            switch_branch(self.cfg, "-b", name, base)
             git(self.cfg, "config", f"branch.{name}.framegateFeature", feature)
             self.echo(f"Created the feature branch {name} from {base}.")
             return name
         # [git] state_branch: the base holds no framegate file; the new branch gets them
         # from the state branch (fetched first: without it the branch would have no config)
         publish.require_state(self.cfg, self.echo)
-        git(self.cfg, "checkout", "-q", "--no-track", "-b", name, base)
+        switch_branch(self.cfg, "--no-track", "-b", name, base)
         try:
             publish.join_state(self.cfg, self.echo, self.adapter.gitignore_entries())
         except GitError:
