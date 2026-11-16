@@ -445,10 +445,8 @@ def test_an_item_that_is_not_needed_is_closed(
     assert "- x:" not in capsys.readouterr().out
     described = (repo / "specs/x/pipeline_pr_description.md").read_text(encoding="utf-8")
     assert "- ci/tests.yml: add the new test file (CI does not select it)\n" in described
-    assert (
-        "- not needed: `deploy/Dockerfile`: COPY the new folder (the image lacks it) "
-        "(the image copies src/)\n"
-    ) in described
+    # closed without a change: no news for a reviewer (seen live: it was noise on the PR)
+    assert "not needed" not in described and "deploy/Dockerfile" not in described
     assert "To do by hand" not in described and not git(repo, "status", "--porcelain").strip()
     skill = (ROOT / "plugin/skills/pipeline/SKILL.md").read_text(encoding="utf-8")
     assert '"<item>: not needed: <reason>? (default: yes)"' in skill
