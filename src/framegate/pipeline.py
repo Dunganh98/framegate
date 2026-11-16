@@ -27,6 +27,7 @@ pushes it.
 from __future__ import annotations
 
 import json
+import pathlib
 import re
 import sys
 from collections.abc import Callable
@@ -225,9 +226,10 @@ def start(orch: Orchestrator, name: str) -> int:
         set_phase(cfg, phase_text(name))
         log_event(cfg, name, "pipeline_started", branch=_current(cfg))
     # the commit the check compares with; one left by a task given up elsewhere is replaced
+    echo = orch.echo
     if not _exists(cfg, ref) or not publish.is_ancestor(cfg.root, ref, "HEAD"):
         git(cfg, "update-ref", ref, "HEAD")
-    echo = orch.echo
+        remember_dirty(cfg, name)
     items = followup.read_list(cfg, name)
     after = (cfg.spec_dir(name) / "requirements.md").is_file()
     echo(
@@ -241,6 +243,13 @@ def start(orch: Orchestrator, name: str) -> int:
         f"only the ones on the list; the list ({list_rel(cfg, name)}); the brief "
         f"({brief_rel(cfg, name)}). Everything else is locked."
     )
+    earlier = changed_before(cfg, name)
+    if earlier:
+        echo(
+            "Changed before this task started (uncommitted; not part of it, the check leaves "
+            f"them out while they stay as they are): {', '.join(earlier)}. Ask the user once "
+            "what to do with them; `framegate publish` needs them committed or restored."
+        )
     if not items:
         echo(
             f"No list yet: write it to {list_rel(cfg, name)}, one line per change "
@@ -290,12 +299,51 @@ class Result:
     outside: list[str] = field(default_factory=list)
 
 
+def _before_file(cfg: Config, name: str) -> pathlib.Path:
+    rel = git(cfg, "rev-parse", "--git-path", f"framegate/pipeline-before/{name}.json").strip()
+    return (cfg.root / rel).resolve()
+
+
+def _blob(cfg: Config, rel: str) -> str:
+    """The content of a working-tree file as git would store it ("" when it is gone)."""
+    if not (cfg.root / rel).is_file():
+        return ""
+    return git(cfg, "hash-object", "--", rel).strip()
+
+
+def remember_dirty(cfg: Config, name: str) -> None:
+    """Keep what is uncommitted at the start of the task (tracked files): those changes are
+    not the task's, and the check must not hold them against it (seen live: a tool's own
+    config file and an edit of the user blocked the check)."""
+    path = _before_file(cfg, name)
+    dirty = git(cfg, "diff", "--no-renames", "--name-only", "HEAD").splitlines()
+    if not dirty:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({rel: _blob(cfg, rel) for rel in dirty}), encoding="utf-8")
+
+
+def forget_dirty(cfg: Config, name: str) -> None:
+    _before_file(cfg, name).unlink(missing_ok=True)
+
+
+def changed_before(cfg: Config, name: str) -> list[str]:
+    """The files that were changed before the task started and still look the same."""
+    try:
+        was = json.loads(_before_file(cfg, name).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return sorted(rel for rel, blob in was.items() if _blob(cfg, rel) == blob)
+
+
 def changed_files(cfg: Config, name: str) -> list[str]:
     """What changed since the pipeline task started: tracked files (committed or not), and
     untracked ones where a commit or a publish would look (the user's own notes elsewhere
     are not the task's business). The list and the brief are the task's own files."""
     ref = publish.pipeline_start_ref(name)
     tracked = set(git(cfg, "diff", "--no-renames", "--name-only", ref).splitlines())
+    tracked -= set(changed_before(cfg, name))
     untracked = git(cfg, "ls-files", "--others", "--exclude-standard").splitlines()
     watched = [p.rstrip("/") for p in (*commit_paths(cfg), *publish.workflow_paths(cfg))]
     entries = pipeline_entries(cfg)
@@ -469,6 +517,7 @@ def approve(cfg: Config, name: str, echo: Echo = print) -> int:
     if committed:
         git(cfg, "commit", "-q", "-m", publish.pipeline_title(name), "--", *paths)
     git(cfg, "update-ref", "-d", publish.pipeline_start_ref(name))
+    forget_dirty(cfg, name)
     if active(cfg) == name:
         clear_phase(cfg)
     left = followup.open_count(cfg, name)

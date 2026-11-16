@@ -199,6 +199,40 @@ def test_a_pipeline_task_of_its_own(repo: pathlib.Path, capsys: pytest.CaptureFi
 
 
 # ---------- the yml check ----------
+def test_changes_from_before_the_task_are_not_held_against_it(
+    repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Seen live: a tool's config file and an edit of the user, both uncommitted before the
+    task started, blocked the check. They stay out while they look as they did."""
+    git(repo, "checkout", "-q", "-b", "pipeline/infra")
+    write(repo, "src/demo/__init__.py", '"""Demo."""\nMINE = 1\n')
+    write(repo, "framegate.toml", (repo / "framegate.toml").read_text("utf-8") + "\n# mine\n")
+    assert af("pipeline", "infra") == 0
+    out = capsys.readouterr().out
+    assert "Changed before this task started (uncommitted; not part of it" in out
+    assert "framegate.toml, src/demo/__init__.py. Ask the user once" in out
+    write(repo, "specs/infra/pipeline_followup.md", "- [ ] ci/tests.yml: add a test (new)\n")
+    write(repo, "ci/tests.yml", CI + "      - run: pytest tests/test_a.py -q\n")
+    assert af("pipeline-check", "infra") == 0
+    assert "Pipeline check infra: OK; 1 deploy / CI file(s) changed" in capsys.readouterr().out
+    # a further change to one of them is the task's doing again
+    write(repo, "src/demo/__init__.py", '"""Demo."""\nMINE = 2\n')
+    assert af("pipeline-check", "infra") == 1
+    out = capsys.readouterr().out
+    assert "- NOT A DEPLOY / CI FILE: src/demo/__init__.py changed" in out
+    assert "framegate.toml changed" not in out
+    write(repo, "src/demo/__init__.py", '"""Demo."""\nMINE = 1\n')
+    assert af("pipeline-approve", "infra") == 0
+    capsys.readouterr()
+    committed = set(git(repo, "show", "--name-only", "--format=", "HEAD").split())
+    assert committed == {"ci/tests.yml", "specs/infra/pipeline_followup.md"}
+    # the user's changes are still there, uncommitted; the snapshot is gone
+    assert git(repo, "status", "--porcelain", "-uno").split() == [
+        *("M", "framegate.toml", "M", "src/demo/__init__.py")
+    ]
+    assert not (repo / ".git/framegate/pipeline-before/infra.json").exists()
+
+
 def test_yml_is_always_parsed(tmp_path: pathlib.Path) -> None:
     """PyYAML is a dependency: every document of a file is parsed, tags of the file's own
     dialect pass, a template that is no plain YAML is a note and never a problem."""

@@ -1,4 +1,5 @@
 {
+  "0.12.1": "the pipeline check no longer counts files that were already changed before the task started; the start names them and asks once what to do with them.",
   "0.12.0": "new /framegate:pipeline does the deploy / CI changes a task leaves (same pull request, or pipeline/<name>); setup is one table to confirm, filled by `framegate probe`; Dockerfile, compose and CI files are locked by name.",
   "0.11.2": "the final brief lists the spec's steps one by one with how each went, then struggles and decisions; brief lines name the file to open; both briefs are shown the same way.",
   "0.11.1": "with a state branch the local work branch is always renamed (also with branch = false), the migration cleans framegate's lines out of .gitignore, and doctor no longer warns when the project has no template copy.",

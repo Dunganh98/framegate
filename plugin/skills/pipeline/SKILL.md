@@ -15,9 +15,9 @@ is no spec, no test and no background run here: a yml change has no unit test.
 
 ## Start check (your first step)
 
-This plugin is version 0.12.0. Before anything else run this command yourself:
+This plugin is version 0.12.1. Before anything else run this command yourself:
 
-    framegate preflight $ARGUMENTS --check --plugin-version 0.12.0
+    framegate preflight $ARGUMENTS --check --plugin-version 0.12.1
 
 `Start check: ok` and `KEPT:` lines: without a word. A `TELL THE USER:` line (the plugin was
 updated while this session ran: restart Claude Code): say it as it is and stop. A `PROBLEM:`
@@ -26,7 +26,7 @@ command, or `framegate pipeline` below, fails with `invalid choice`, the install
 command-line tool is older than this plugin. Bring it to this version, then repeat the
 command:
 
-    uv tool install --force "git+https://github.com/Dunganh98/framegate@v0.12.0"
+    uv tool install --force "git+https://github.com/Dunganh98/framegate@v0.12.1"
 
 ## 1. Start: the list
 
@@ -44,6 +44,13 @@ written (and the list and your brief); source, tests, setup files and specs are 
   repository (a CI variable, a secret, a real database, an environment). You never do them,
   not even when you could. Show them under their own line, after the numbered items: "By
   hand, outside the repository: ...". They are never open work of this task.
+- `Changed before this task started`: files with uncommitted changes that are not this
+  task's. The check leaves them out, so do not stash, restore or commit them yourself. Ask
+  once, now, with the list: "<files> were changed before; commit them, restore them, or
+  leave them until the publish? (default: leave)". A file of framegate's own that the user
+  changed on purpose (framegate.toml) is committed on its own (`git commit <file> -m
+  "framegate: <what>"`) after this task's approval; a tool's own file (an editor or MCP
+  config) is usually restored. `framegate publish` refuses while any is left.
 - `No list yet`: a change of its own. Ask what should change if the user has not said it.
   Read the deploy / CI files concerned, then write the list to the file the output names,
   one line per change: `- [ ] <file>: <what must change> (<why>)`. Show it numbered and ask:
