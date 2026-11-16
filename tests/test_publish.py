@@ -372,7 +372,11 @@ def test_publish_sends_the_product_and_the_state_apart(
 
     # the pull request: not asked for; a local path is no known host
     assert "Pull request feature/demo -> dev: not created: no tool for this host" in out
-    assert "out/demo/final_summary.md (copy it before the cleanup)" in out
+    # its description is one of framegate's files: kept with the spec, on the state branch
+    assert "its description: specs/demo/pr_description.md." in out
+    assert "copy it before the cleanup" not in out
+    assert "specs/demo/pr_description.md" in state
+    assert "specs/demo/pr_description.md" not in product
 
     # again: nothing left to do, nothing moves
     there, head = refs(o), sha(r, "HEAD")
@@ -893,9 +897,11 @@ def test_pull_request_on_github(
     page = "https://github.com/acme/widgets/compare/dev...feature/demo?expand=1"
     # not asked for, or no gh: where to open it and where its text is
     assert publish.pull_request(cfg, n, "demo", "demo: add", lines.append, create=True)
+    described = r / "specs" / "demo" / "pr_description.md"
+    assert described.is_file()  # written at DONE, with the metrics row
     assert lines[-1] == (
         "Pull request feature/demo -> dev: not created: `gh` is not installed; open it at "
-        f"{page}; its description: out/demo/final_summary.md (copy it before the cleanup)."
+        f"{page}; its description: specs/demo/pr_description.md."
     )
     tool = Tool("https://github.com/acme/widgets/pull/7\n")
     monkeypatch.setattr(publish, "which", lambda name: f"/bin/{name}")
@@ -907,7 +913,7 @@ def test_pull_request_on_github(
         [
             *("/bin/gh", "pr", "create", "--repo", "acme/widgets", "--base", "dev"),
             *("--head", "feature/demo", "--title", "demo: add"),
-            *("--body-file", str(r / "out" / "demo" / "final_summary.md")),
+            *("--body-file", str(described)),
         ]
     ]
     assert lines[-1] == (
@@ -918,43 +924,67 @@ def test_pull_request_on_github(
     assert not publish.pull_request(cfg, n, "demo", "demo: add", lines.append, create=True)
     assert "`gh pr create` failed (boom); open it at " + page in lines[-1]
 
-    # what is left to do by hand outside the repository: an unticked checklist on top of the
-    # description, for the task's pull request and for a pipeline-only one
+    # what is left to do by hand outside the repository: an unticked checklist near the top
+    # of the description, for the task's pull request and for a pipeline-only one; one
+    # closed as not needed, or ticked, is not on it
     kept = r / "specs" / "demo" / "pipeline_followup.md"
     kept.write_text(
         "- [x] .github/workflows/ci.yml: run the new tests\n"
         "- [ ] OUTSIDE [CI variable group]: add DEMO_TOKEN (the job reads it)\n"
-        "- [x] OUTSIDE [vault]: done already\n",
+        "- [x] OUTSIDE [vault]: done already\n"
+        "- [ ] OUTSIDE [database]: migrate (not needed: the table exists)\n",
         encoding="utf-8",
     )
-    described = r / "out" / "demo" / "pr_description.md"
+    before = described.read_text(encoding="utf-8")
     tool = Tool("https://github.com/acme/widgets/pull/9\n")
     monkeypatch.setattr(publish, "run_tool", tool)
     del lines[:]
-    assert publish.pull_request(
-        cfg, n, "demo", "demo: add", lines.append, create=False, write=False
-    )  # a dry run: said, nothing written
-    assert lines[0].startswith("Outside the repository: 1 item(s) to do by hand; an unticked")
-    assert not described.exists()
+    assert publish.write_description(cfg, "demo", lines.append, dry_run=True) == (
+        "specs/demo/pr_description.md"
+    )  # a dry run: nothing written
+    assert described.read_text(encoding="utf-8") == before
+    git(r, "add", "-A")
+    git(r, "commit", "-q", "-m", "the list")
+    assert publish.write_description(cfg, "demo", lines.append) == "specs/demo/pr_description.md"
+    assert not git(r, "status", "--porcelain").strip()  # committed, only that file
+    assert git(r, "log", "-1", "--format=%s").strip() == "demo: pull request description"
     assert publish.pull_request(cfg, n, "demo", "demo: add", lines.append, create=True)
+    assert lines[0].startswith("Outside the repository: 1 item(s) to do by hand; an unticked")
     (call,) = tool.calls
     assert call[call.index("--body-file") + 1] == str(described)
     text = described.read_text(encoding="utf-8")
-    summary = (r / "out" / "demo" / "final_summary.md").read_text(encoding="utf-8")
-    head = "## Outside the repository, by hand (framegate does not do them): 1\n\n"
-    assert text.startswith(head + "- [ ] CI variable group: add DEMO_TOKEN (the job reads it)\n")
-    assert "vault" not in text and summary.strip() in text
+    head = "## To do by hand outside the repository: 1\n\n"
+    assert head + "- [ ] CI variable group: add DEMO_TOKEN (the job reads it)\n" in text
+    assert text.index(head) < text.index("## Changes")
+    assert "vault" not in text and "migrate" not in text
+    deploy = "## Deploy / CI changes (the second commit of this pull request)\n\n"
+    assert deploy + "- .github/workflows/ci.yml: run the new tests\n" in text
+    # a deploy / CI change with a pull request of its own: the approved brief is its text
     brief = r / "out" / "demo" / "pipeline_brief.md"
     brief.write_text("**What was asked**\n1. run the new tests\n", encoding="utf-8")
+    body = publish.write_description(cfg, "demo", lines.append, own=True)
+    assert body == "specs/demo/pipeline_pr_description.md"
     assert publish.pull_request(
         *(cfg, n, "demo", "demo: deploy / CI changes", lines.append),
         create=False,
         head="pipeline/demo",
-        body="out/demo/pipeline_brief.md",
+        body=body,
     )
-    assert "its description: out/demo/pr_description.md (copy it before the cleanup)" in lines[-1]
-    text = described.read_text(encoding="utf-8")
-    assert text.startswith(head) and text.endswith("**What was asked**\n1. run the new tests\n")
+    assert "its description: specs/demo/pipeline_pr_description.md." in lines[-1]
+    text = (r / body).read_text(encoding="utf-8")
+    assert text.startswith(head) and "**What was asked**\n1. run the new tests\n" in text
+    assert "(a pull request of their own)" in described.read_text(encoding="utf-8")
+    # the brief is gone with the cleanup: the text stays, the checklist follows the list
+    brief.unlink()
+    kept.write_text(
+        kept.read_text("utf-8").replace("- [ ] OUTSIDE [CI", "- [x] OUTSIDE [CI"), "utf-8"
+    )
+    git(r, "commit", "-q", "-am", "ticked by hand")
+    publish.write_description(cfg, "demo", lines.append, own=True)
+    text = (r / body).read_text(encoding="utf-8")
+    assert (
+        text.startswith("**What was asked**\n1. run the new tests\n") and "DEMO_TOKEN" not in text
+    )
 
 
 def test_pull_request_on_azure_devops(
@@ -965,9 +995,20 @@ def test_pull_request_on_azure_devops(
     url = "https://contoso@dev.azure.com/contoso/Data%20Platform/_git/da-argos"
     git(r, "remote", "set-url", "origin", url)
     n = publish.names(cfg)
-    summary = r / "out" / "demo" / "final_summary.md"
-    summary.write_text("line of the summary\n" * 400, encoding="utf-8")  # over the host's limit
+    # a run with far more to say than the host's limit takes: the description still fits
+    final = r / "out" / "demo" / "final_brief.md"
+    long = "".join(f"- point {i}: " + "a long line of words " * 12 + "\n" for i in range(40))
+    final.write_text(
+        "## Steps\n1. add(): as planned (src/demo/__init__.py)\n\n## Decisions I made\n"
+        + long
+        + "\n## Proven\n"
+        + long
+        + "\n## Not proven\n"
+        + long,
+        encoding="utf-8",
+    )
     lines: list[str] = []
+    publish.write_description(cfg, "demo", lines.append)
     tool = Tool("412\n")
     monkeypatch.setattr(publish, "which", lambda name: f"C:/tools/{name}.cmd")
     monkeypatch.setattr(publish, "run_tool", tool)
@@ -976,7 +1017,7 @@ def test_pull_request_on_azure_devops(
     assert probe == [
         *("C:/tools/az.cmd", "extension", "show", "--name", "azure-devops", "--output", "none")
     ]
-    short = r / "out" / "demo" / "pr_description.md"
+    short = r / "specs" / "demo" / "pr_description.md"
     assert create == [
         *("C:/tools/az.cmd", "repos", "pr", "create", "--detect", "false"),
         *("--organization", "https://dev.azure.com/contoso"),
@@ -987,7 +1028,14 @@ def test_pull_request_on_azure_devops(
         *("--query", "pullRequestId", "--output", "tsv"),
     ]
     text = short.read_text(encoding="utf-8")
-    assert len(text) <= hosts.AZURE_DESCRIPTION_MAX and "full text: final_summary.md" in text
+    # shortened by whole lines of the least important sections; every section is still
+    # there with its heading, the steps are complete, and it says so once
+    assert len(text) <= hosts.AZURE_DESCRIPTION_MAX
+    assert text.count("(shortened)") == 1 and text.rstrip().endswith("(shortened)")
+    for title in ("What", "Changes", "How it is proven", "Not proven / check by hand"):
+        assert f"## {title}\n" in text, title
+    assert "1. add(): as planned (src/demo/__init__.py)\n" in text
+    assert text.count("- point ") < 120 and "full text" not in text
     base = "https://dev.azure.com/contoso/Data%20Platform/_git/da-argos"
     assert lines[-1] == f"Pull request feature/demo -> dev created: {base}/pullrequest/412"
 
@@ -1003,6 +1051,81 @@ def test_pull_request_on_azure_devops(
     assert len(bare.calls) == 1 and "`az` has no azure-devops extension" in lines[-1]
     assert (
         f"open it at {base}/pullrequestcreate?sourceRef=feature%2Fdemo&targetRef=dev" in lines[-1]
+    )
+
+
+def test_a_cleaned_up_task_still_gets_its_pull_request(
+    team: Team, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Seen live: the chat published without a pull request, cleaned up, and the summary
+    that was its text was gone. The description is kept with the spec, and `publish` needs
+    nothing of the out folder: any order works."""
+    r, o = team.root, team.origin
+    described = r / "specs" / "demo" / "pr_description.md"
+    before = described.read_text(encoding="utf-8")
+    assert team.af("cleanup", "demo") == 0  # first the cleanup
+    assert not (r / "out" / "demo").exists() and described.read_text(encoding="utf-8") == before
+    github = hosts.Host(hosts.GITHUB, "acme", "", "widgets")
+    monkeypatch.setattr(hosts, "parse_remote", lambda url: github)
+    tool = Tool("https://github.com/acme/widgets/pull/3\n")
+    monkeypatch.setattr(publish, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(publish, "run_tool", tool)
+    capsys.readouterr()
+    assert team.af("publish", "demo", "--pr", "--title", "demo: add two ints") == 0
+    out = capsys.readouterr().out
+    assert "Pushed feature/demo to origin" in out and "The description is short" not in out
+    assert "Pull request feature/demo -> dev created: https://github.com/acme/widgets/pull/3" in out
+    (call,) = tool.calls
+    assert call[call.index("--body-file") + 1] == str(described)
+    assert described.read_text(encoding="utf-8") == before
+    assert "specs/demo/pr_description.md" in files(o, "framegate/dev")
+    # published and cleaned up, the pull request wanted later: nothing new is pushed
+    there = refs(o)
+    assert team.af("publish", "demo", "--pr") == 0
+    assert refs(o) == there and len(tool.calls) == 2
+    # the tool fails (not logged in): exit 1 and the reason, never "created"
+    monkeypatch.setattr(publish, "run_tool", Tool(code=1))
+    capsys.readouterr()
+    assert team.af("publish", "demo", "--pr") == 1
+    out = capsys.readouterr().out
+    assert "`gh pr create` failed (boom); open it at " in out and " created: " not in out
+    assert "its description: specs/demo/pr_description.md." in out
+
+
+def test_a_task_finished_before_there_was_a_description(
+    team: Team, capsys: pytest.CaptureFixture[str]
+) -> None:
+    r, o = team.root, team.origin
+    described = r / "specs" / "demo" / "pr_description.md"
+    git(r, "rm", "-q", "specs/demo/pr_description.md")
+    git(r, "commit", "-q", "-m", "as an older framegate left it")
+    assert team.af("cleanup", "demo") == 0
+    note = "The description is short: the run files of demo are gone"
+    capsys.readouterr()
+    assert team.af("publish", "demo", "--dry-run") == 0
+    out = capsys.readouterr().out
+    assert note in out and "specs/demo/pr_description.md (written by the publish)" in out
+    assert not described.exists()  # a dry run writes nothing
+    assert team.af("publish", "demo") == 0
+    out = capsys.readouterr().out
+    assert out.count(note) == 1 and "its description: specs/demo/pr_description.md." in out
+    text = described.read_text(encoding="utf-8")
+    assert "## What\n\nDemo\n" in text and "## Changes\n\n1. add\n" in text
+    assert text.rstrip().endswith("; 2 tests")
+    assert not git(r, "status", "--porcelain").strip()
+    assert show(o, "framegate/dev", "specs/demo/pr_description.md") == text
+    # with the out folder still there the full one is written: `pr-description` does it
+    write = r / "out" / "demo" / "spec_brief.md"
+    write.parent.mkdir(parents=True)
+    write.write_text("**Task** — add() sums two whole numbers.\n", encoding="utf-8")
+    capsys.readouterr()
+    assert team.af("pr-description", "demo") == 0
+    out = capsys.readouterr().out
+    assert "Pull request description: specs/demo/pr_description.md (updated, committed)" in out
+    assert "## What\n\nadd() sums two whole numbers.\n" in described.read_text(encoding="utf-8")
+    assert team.af("pr-description", "demo") == 0
+    assert capsys.readouterr().out.strip() == (
+        "Pull request description: specs/demo/pr_description.md"
     )
 
 
@@ -1050,7 +1173,20 @@ def test_the_chat_offers_the_publish_only_with_a_state_branch() -> None:
     assert "framegate publish <f> --dry-run" in wrap_up
     assert "framegate publish <f> --pr" in wrap_up
     assert "State branch: off" in wrap_up and "gh pr create" in wrap_up  # the old offer stays
-    assert "Never push without that yes" in wrap_up
+    # one question, default yes, the pull request in it; nothing is pushed before the reply,
+    # nothing has to be copied before the cleanup, and "created" needs the address
+    flat = " ".join(wrap_up.split())
+    assert "its default is yes, and the yes includes the pull request" in flat
+    assert "Nothing is pushed before the user's reply to it" in flat
+    assert "'publish without a pull request' and 'no' are fine too" in flat
+    assert "<specs>/<f>/pr_description.md" in flat and "default no" not in flat
+    assert "copy it before the cleanup" not in " ".join(text.split())
+    assert "Never say a pull request was created without its address" in flat
+    skill = (pathlib.Path(__file__).parents[1] / "plugin/skills/pipeline/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "default no" not in " ".join(skill.split()) and "pipeline_brief.md`; on" not in skill
+    assert "Publish it and create the pull request? (default: yes)" in " ".join(skill.split())
     # the pipeline follow-up is offered before the publish: both commits in the first push
     offer = wrap_up.index("Do the pipeline follow-up now? (`/framegate:pipeline <f>`)")
     assert offer < wrap_up.index("framegate publish <f> --dry-run")
@@ -1175,7 +1311,10 @@ def test_pipeline_of_a_merged_task_gets_its_own_branch_and_pull_request(
     out = capsys.readouterr().out
     assert "Pipeline branch infra/demo (the product is merged): 1 deploy / CI file(s)" in out
     assert "Pull request infra/demo -> dev: not created: no tool for this host" in out
-    assert "its description: out/demo/pipeline_brief.md (copy it before the cleanup)" in out
+    own_text = "specs/demo/pipeline_pr_description.md"
+    assert f"its description: {own_text}." in out
+    assert "**What was asked**\n1. run the new tests\n" in (r / own_text).read_text("utf-8")
+    assert own_text in files(o, "framegate/dev") and own_text not in files(o, "infra/demo")
     # its own branch: one commit on the commit the work started from, the CI file only
     tip = sha(o, "infra/demo")
     assert parents(o, tip) == [start] and changed(o, tip) == {CI_FILE}
@@ -1186,7 +1325,9 @@ def test_pipeline_of_a_merged_task_gets_its_own_branch_and_pull_request(
     there = refs(o)
     assert team.af("publish", "demo") == 0  # again: in line
     assert refs(o) == there
-    # the pull request, when the host has a tool: this branch, the approved brief as its text
+    # the pull request, when the host has a tool: this branch, the approved brief as its
+    # text; also after the cleanup took the brief away
+    assert team.af("cleanup", "demo") == 0 and not brief.exists()
     cfg = load_config(r)
     git(r, "remote", "set-url", "origin", "git@github.com:acme/widgets.git")
     tool = Tool("https://github.com/acme/widgets/pull/8\n")
@@ -1196,11 +1337,13 @@ def test_pipeline_of_a_merged_task_gets_its_own_branch_and_pull_request(
         *(cfg, publish.names(cfg), "demo", "demo: deploy / CI changes", lambda s: None),
         create=True,
         head="infra/demo",
-        body="out/demo/pipeline_brief.md",
+        body=publish.write_description(cfg, "demo", lambda s: None, own=True),
     )
     (call,) = tool.calls
     assert call[call.index("--head") + 1] == "infra/demo"
-    assert call[call.index("--body-file") + 1] == str(brief)
+    assert call[call.index("--body-file") + 1] == str(r / own_text)
+    assert "**What was asked**\n1. run the new tests\n" in (r / own_text).read_text("utf-8")
+    assert not git(r, "status", "--porcelain").strip()
     assert team.af("cleanup", "demo", "--tags") == 0
     assert publish.pipeline_ref("demo") not in refs(r)
     with pytest.raises(ConfigError, match="pipeline_prefix"):
@@ -1222,7 +1365,10 @@ def test_a_pipeline_task_of_its_own_with_a_state_branch(
     assert team.af("publish", "ci-cache") == 0  # no spec, no metrics row: nothing to be DONE
     out = capsys.readouterr().out
     assert "Pipeline branch pipeline/ci-cache (this branch changed nothing else)" in out
-    assert "its description: specs/ci-cache/pipeline_followup.md." in out
+    own_text = "specs/ci-cache/pipeline_pr_description.md"
+    assert f"its description: {own_text}." in out
+    text = (r / own_text).read_text(encoding="utf-8")  # no brief: written from the list
+    assert f"## Deploy / CI changes\n\n- {CI_FILE}: cache the packages (slow builds)\n" in text
     tip = sha(o, "pipeline/ci-cache")
     assert parents(o, tip) == [sha(o, "dev")] and changed(o, tip) == {CI_FILE}
     assert not top_level(o, "pipeline/ci-cache") & WORKFLOW_TOP

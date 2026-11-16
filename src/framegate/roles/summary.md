@@ -9,7 +9,7 @@ approved at the spec gate: the plan in words, what is proven and not, the decisi
 them), {specs}/{feature}/, {out}/{feature}/test_summary.md, steps.md, review.md, triage.md,
 final_gates.md, mutation_survivors.md and answers.md if present.
 
-## 1. {out}/{feature}/final_summary.md (the detailed file; the PR description)
+## 1. {out}/{feature}/final_summary.md (the detailed file: the run's report)
 
 Sections:
 1. Summary (3–5 lines): what was built; overall state (all gates passed / what failed / what is parked)

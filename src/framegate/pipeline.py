@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
-from framegate import followup, procs, publish
+from framegate import description, followup, procs, publish
 from framegate.adapters import get_adapter
 from framegate.adapters.base import LanguageAdapter
 from framegate.checks.frame_diff import (
@@ -131,11 +131,18 @@ def outside_lines(outside: list[followup.ListItem]) -> list[str]:
     task's work, never counted, never a problem ([] when there is none)."""
     if not outside:
         return []
-    todo = [it for it in outside if not it.ticked]
+    todo = [it for it in outside if it.open]
+    ticked = [it for it in outside if it.ticked and not it.not_needed]
+    closed = len(outside) - len(todo) - len(ticked)
+
+    def mark(it: followup.ListItem) -> str:
+        return f"[not needed: {it.not_needed}] " if it.not_needed else "[x] " if it.ticked else ""
+
     return [
         f"Outside the repository: by hand, not this task: {len(todo)} to do"
-        + (f", {len(outside) - len(todo)} ticked" if len(todo) < len(outside) else ""),
-        *(f"  - {'[x] ' if it.ticked else ''}{it.shown()}" for it in outside),
+        + (f", {len(ticked)} ticked" if ticked else "")
+        + (f", {closed} not needed" if closed else ""),
+        *(f"  - {mark(it)}{it.shown()}" for it in outside),
     ]
 
 
@@ -260,14 +267,16 @@ def start(orch: Orchestrator, name: str) -> int:
         return 0
     outside = [it for it in items if it.outside]
     items = [it for it in items if not it.outside]
-    todo = [it for it in items if not it.ticked]
+    todo = [it for it in items if it.open]
     echo(f"List ({list_rel(cfg, name)}): {len(todo)} open of {len(items)} item(s)")
     adapter = get_adapter(cfg)
     for line in outside_lines(outside):
         echo(line)
     for i, it in enumerate(items, 1):
         note = ""
-        if it.ticked:
+        if it.not_needed:
+            note = f"  [not needed: {it.not_needed}]"
+        elif it.ticked:
             note = "  [done earlier]"
         elif it.reason:
             note = f"  [left open: {it.reason}]"
@@ -279,7 +288,8 @@ def start(orch: Orchestrator, name: str) -> int:
     echo(
         f"Then: framegate pipeline-check {name}; after the user's OK on the brief: framegate "
         f"pipeline-approve {name}. An item not done: `{followup.LEFT_OPEN_FORMAT}` at the "
-        "end of its line."
+        "end of its line; one that is already in place or cannot be done as written, on the "
+        f"user's OK: `{followup.NOT_NEEDED_FORMAT}` (closed)."
     )
     return 0
 
@@ -352,7 +362,9 @@ def changed_files(cfg: Config, name: str) -> list[str]:
             path == w or path.startswith(w + "/") for w in watched
         ):
             tracked.add(path)
-    return sorted(tracked - {list_rel(cfg, name), brief_rel(cfg, name)})
+    own = {list_rel(cfg, name), brief_rel(cfg, name)}
+    own |= {description.rel(cfg, name), description.rel(cfg, name, pipeline=True)}
+    return sorted(tracked - own)
 
 
 class _TagLoader(yaml.SafeLoader):
@@ -458,7 +470,9 @@ def check(cfg: Config, name: str) -> Result:
                     "the pipeline itself? else a typo)"
                 )
     for i, it in enumerate(items, 1):
-        if it.ticked:
+        if it.not_needed:
+            res.items.append(f"{i}. not needed ({it.not_needed}): {it.text}")
+        elif it.ticked:
             res.items.append(f"{i}. done earlier: {it.text}")
         elif it.reason:
             res.items.append(f"{i}. left open ({it.reason}): {it.text}")
@@ -469,7 +483,8 @@ def check(cfg: Config, name: str) -> Result:
             res.items.append(f"{i}. OPEN: {it.text}")
             res.problems.append(
                 f"OPEN ITEM {i}: its file did not change (do it, or end its line with "
-                f"`{followup.LEFT_OPEN_FORMAT}`): {it.text}"
+                f"`{followup.LEFT_OPEN_FORMAT}`, or with `{followup.NOT_NEEDED_FORMAT}` when "
+                f"the user agrees it is already in place): {it.text}"
             )
     return res
 
@@ -510,8 +525,13 @@ def approve(cfg: Config, name: str, echo: Echo = print) -> int:
         report(cfg, name, res, echo)
         echo("Not approved: fix the problem(s) above first.")
         return 1
-    ticked = followup.tick(cfg, name, set(res.done))
+    ticked, closed = followup.tick(cfg, name, set(res.done))
     paths = [*res.done, list_rel(cfg, name)]
+    # the pull request's description: its deploy / CI section changed (description.py)
+    written = [description.refresh_pipeline(cfg, name)]
+    if (cfg.spec_dir(name) / "requirements.md").is_file():
+        written.append(description.refresh(cfg, name))
+    paths += [w.rel for w in written]
     git(cfg, "add", "-A", "--", *paths)
     committed = bool(git(cfg, "diff", "--cached", "--name-only", "--", *paths).strip())
     if committed:
@@ -521,10 +541,14 @@ def approve(cfg: Config, name: str, echo: Echo = print) -> int:
     if active(cfg) == name:
         clear_phase(cfg)
     left = followup.open_count(cfg, name)
-    log_event(cfg, name, "pipeline_done", files=res.done, ticked=ticked, left_open=left)
+    log_event(
+        cfg, name, "pipeline_done", files=res.done, ticked=ticked, not_needed=closed, left_open=left
+    )
     branch = _current(cfg)
     echo(
-        f"Pipeline task {name} approved: {ticked} item(s) ticked, {left} left open; "
+        f"Pipeline task {name} approved: {ticked} item(s) ticked, "
+        + (f"{closed} closed as not needed, " if closed else "")
+        + f"{left} left open; "
         + (f"{len(res.done)} file(s) committed on {branch}." if committed else "nothing to commit.")
     )
     for line in res.notes:
@@ -541,7 +565,7 @@ def approve(cfg: Config, name: str, echo: Echo = print) -> int:
     elif branch == publish.pipeline_branch(cfg, name):
         echo(
             f"Next: push {branch} and open its own pull request into {cfg.git_base} "
-            f"(description: {brief_rel(cfg, name)})."
+            f"(description: {description.rel(cfg, name, pipeline=True)})."
         )
     else:
         echo(

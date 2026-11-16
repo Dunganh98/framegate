@@ -35,6 +35,16 @@ is shown apart ("outside the repository: by hand"), never counted as open work o
 pipeline task, and put as an unticked checklist into the final summary and on top of the
 pull request's description, so it is seen at merge time.
 
+**Only deploy / CI matters.** An agent's `PIPELINE FOLLOW-UP [<file>]` line whose file is no
+deploy / CI file of this project (frame_diff.is_pipeline_file) is not put on the pipeline list:
+the pipeline task could never do it (seen live: a packaging / environment remark). It is kept
+apart as a note and shown once on the final brief and in final_facts.md ("not a deploy / CI
+matter"), so nothing is silently lost. The spec's own section is the user's and stays as it is.
+
+**Closed without a change.** A line of the kept list that ends with `(not needed: <reason>)`
+is closed: already in place, or impossible as written. It never counts as open, and the
+approval of a pipeline task ticks it.
+
 After DONE each list is kept in `{specs}/<f>/pipeline_followup.md` / `reference_followup.md`
 (written with the metrics row; `framegate cleanup` keeps the spec folder) and in a
 `pipeline_followup` / `reference_followup` event.
@@ -199,40 +209,109 @@ def parse_run(text: str, kind: Kind = PIPELINE) -> list[str]:
     """`- PIPELINE FOLLOW-UP [<file>]: <what, why>` (or `- REFERENCE FOLLOW-UP [...]: ...`)
     lines of a run file -> "<file>: <what>"; for the pipeline list also `- OUTSIDE [<where>]:
     <what>` lines -> "OUTSIDE [<where>]: <what>"."""
-    out = []
+    return [item for _, item in run_entries(text, kind)]
+
+
+def run_entries(text: str, kind: Kind = PIPELINE) -> list[tuple[str | None, str]]:
+    """parse_run with what each line names in its brackets: (the file(s), the item); None
+    for an `OUTSIDE [..]` line, "" when the brackets are empty or say "none"."""
+    out: list[tuple[str | None, str]] = []
     for line in text.splitlines():
         bullet = _BULLET.match(line) if kind is PIPELINE else None
         if bullet and outside_parts(bullet.group(1)):
-            out.append(_canonical(bullet.group(1)))
+            out.append((None, _canonical(bullet.group(1))))
             continue
         m = kind.line_re.match(line)
         if m:
             where = m.group(1).strip().strip("`")
-            out.append(
-                f"{where}: {m.group(2)}" if where and where.lower() != "none" else m.group(2)
-            )
+            if not where or where.lower() == "none":
+                out.append(("", m.group(2)))
+            else:
+                out.append((where, f"{where}: {m.group(2)}"))
     return out
+
+
+_NAME_SPLIT = re.compile(r"[,;\s]+")
+
+
+def _deploy_ci(cfg: Config, where: str) -> bool:
+    """True when one of the names in a line's brackets is a deploy / CI file (or folder) of
+    this project. A config without a usable adapter: no opinion, the line stays."""
+    from framegate.adapters import get_adapter  # this module stays a leaf
+    from framegate.checks.frame_diff import is_pipeline_file
+    from framegate.config import ConfigError
+
+    try:
+        adapter = get_adapter(cfg)
+    except ConfigError:
+        return True
+    for raw in _NAME_SPLIT.split(where):
+        name = raw.strip("`'()").replace("\\", "/")
+        while name.startswith("./"):
+            name = name[2:]
+        if name and is_pipeline_file(adapter, name):
+            return True
+    return False
 
 
 def _read(path: pathlib.Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
 
 
-def items(cfg: Config, feature: str, kind: Kind = PIPELINE) -> list[Item]:
-    """Every follow-up of the feature of one kind: the spec's first, then the run's, each
-    once."""
+def _sorted(cfg: Config, feature: str, kind: Kind) -> tuple[list[Item], list[Item]]:
+    """(the follow-ups of one kind, the agents' pipeline lines that are no deploy / CI
+    matter): the spec's first, then the run's, each once."""
     spec = _read(cfg.spec_dir(feature) / "requirements.md")
     found = [Item(x, "spec") for x in parse_spec(spec, kind)]
+    aside: list[Item] = []
     for name, who in kind.run_files:
-        found += [Item(x, who) for x in parse_run(_read(cfg.feature_out(feature) / name), kind)]
+        for where, text in run_entries(_read(cfg.feature_out(feature) / name), kind):
+            mine = kind is not PIPELINE or where is None or _deploy_ci(cfg, where)
+            (found if mine else aside).append(Item(text, who))
+    # a note that the spec lists anyway is on the list: nothing to show apart
+    listed = {_key(it) for it in found}
+    return _once(found), _once([it for it in aside if _key(it) not in listed])
+
+
+def _key(it: Item) -> str:
+    return " ".join(it.text.lower().split())
+
+
+def _once(found: list[Item]) -> list[Item]:
     seen: set[str] = set()
     out = []
     for it in found:
-        key = " ".join(it.text.lower().split())
+        key = _key(it)
         if key not in seen:
             seen.add(key)
             out.append(it)
     return out
+
+
+def items(cfg: Config, feature: str, kind: Kind = PIPELINE) -> list[Item]:
+    """Every follow-up of the feature of one kind: the spec's first, then the run's, each
+    once. An agent's pipeline line that names no deploy / CI file is not one (notes)."""
+    return _sorted(cfg, feature, kind)[0]
+
+
+def notes(cfg: Config, feature: str) -> list[Item]:
+    """The agents' `PIPELINE FOLLOW-UP [..]` lines that name no deploy / CI file of this
+    project: no work for the pipeline task, kept apart and shown once."""
+    return _sorted(cfg, feature, PIPELINE)[1]
+
+
+NOTES_TITLE = "Not a deploy / CI matter (an agent's note; not on the pipeline list)"
+
+
+def note_lines(found: list[Item]) -> list[str]:
+    """The block of the final brief for those notes ([] when there is none)."""
+    if not found:
+        return []
+    return [
+        f"{NOTES_TITLE}: {len(found)}; nothing to answer (a deploy / CI folder of yours? "
+        "then it belongs in [protected] extra)",
+        *(f"  - {it.shown()}" for it in found),
+    ]
 
 
 def split(found: list[Item]) -> tuple[list[Item], list[Item]]:
@@ -320,7 +399,7 @@ def pr_checklist(cfg: Config, feature: str) -> list[str]:
     outside lines of the kept list, or (no list yet: the task is not DONE) the spec's and the
     run's."""
     if list_path(cfg, feature).is_file():
-        return [it.shown() for it in read_list(cfg, feature) if it.outside and not it.ticked]
+        return [it.shown() for it in read_list(cfg, feature) if it.outside and it.open]
     return [it.shown() for it in items(cfg, feature) if it.outside]
 
 
@@ -349,10 +428,12 @@ def write(cfg: Config, feature: str, durable: bool = False, kind: Kind = PIPELIN
 # ---------- the kept pipeline list: the input of the pipeline task (pipeline.py) ----------
 _LIST_LINE = re.compile(r"^(\s*[-*]\s*\[)([ xX])(\]\s*)(.+?)\s*$")
 _LEFT_OPEN = re.compile(r"\s*\(\s*left open\s*:\s*(.*?)\s*\)\s*$", re.I)
+_NOT_NEEDED = re.compile(r"\s*\(\s*not needed\s*:\s*(.*?)\s*\)\s*$", re.I)
 _ITEM_FILE = re.compile(r"^`?([^\s:`]+)`?\s*:(?:\s|$)")
 #: how a line of the list is written, for messages
 LINE_FORMAT = "- [ ] <file>: <what must change> (<why>)"
 LEFT_OPEN_FORMAT = "(left open: <reason>)"
+NOT_NEEDED_FORMAT = "(not needed: <reason>)"
 
 
 @dataclass(frozen=True)
@@ -369,6 +450,13 @@ class ListItem:
     reason: str
     #: `OUTSIDE [<where>]: ...`: no file of this repository; by hand, never the task's work
     outside: bool = False
+    #: `(not needed: <reason>)` at the end of the line ("" = none): closed without a change
+    not_needed: str = ""
+
+    @property
+    def open(self) -> bool:
+        """Still to do: not ticked, and not closed as not needed."""
+        return not self.ticked and not self.not_needed
 
     def shown(self) -> str:
         """The item for a reader (an outside item without its marker)."""
@@ -389,7 +477,10 @@ def _list_item(line: str) -> ListItem | None:
     if not m:
         return None
     text = m.group(4)
-    left = _LEFT_OPEN.search(text)
+    closed = _NOT_NEEDED.search(text)
+    if closed:
+        text = text[: closed.start()].rstrip()
+    left = None if closed else _LEFT_OPEN.search(text)
     if left:
         text = text[: left.start()].rstrip()
     outside = outside_parts(text) is not None
@@ -398,7 +489,8 @@ def _list_item(line: str) -> ListItem | None:
     while file.startswith("./"):
         file = file[2:]
     reason = left.group(1) if left else ""
-    return ListItem(_canonical(text), file, m.group(2) != " ", reason, outside)
+    why = closed.group(1) if closed else ""
+    return ListItem(_canonical(text), file, m.group(2) != " ", reason, outside, why)
 
 
 def read_list(cfg: Config, feature: str) -> list[ListItem]:
@@ -409,31 +501,37 @@ def read_list(cfg: Config, feature: str) -> list[ListItem]:
 
 def open_count(cfg: Config, feature: str) -> int:
     """How many items of the kept pipeline list are open work for the pipeline task: not
-    ticked, and a file of this repository."""
-    return sum(1 for it in read_list(cfg, feature) if not it.ticked and not it.outside)
+    ticked, not closed as not needed, and a file of this repository."""
+    return sum(1 for it in read_list(cfg, feature) if it.open and not it.outside)
 
 
 def outside_count(cfg: Config, feature: str) -> int:
-    """How many items of the kept pipeline list are outside the repository and not ticked
-    (done by hand; the user ticks them)."""
-    return sum(1 for it in read_list(cfg, feature) if it.outside and not it.ticked)
+    """How many items of the kept pipeline list are outside the repository and still to do
+    (done by hand; the user ticks them, or closes one as not needed)."""
+    return sum(1 for it in read_list(cfg, feature) if it.outside and it.open)
 
 
-def tick(cfg: Config, feature: str, changed: set[str]) -> int:
+def tick(cfg: Config, feature: str, changed: set[str]) -> tuple[int, int]:
     """Tick the open items whose file is in `changed` (one left open with a reason stays
-    open); returns how many."""
+    open) and the ones closed as not needed (an outside one too); returns how many of
+    each."""
     path = list_path(cfg, feature)
-    out, count = [], 0
+    out, done, closed = [], 0, 0
     for line in _read(path).splitlines():
         it, m = _list_item(line), _LIST_LINE.match(line)
-        done = it and m and not it.ticked and not it.reason and any(it.covers(f) for f in changed)
-        if done and m:
-            line = f"{m.group(1)}x{m.group(3)}{m.group(4)}"
-            count += 1
+        if it and m and not it.ticked:
+            if it.not_needed:
+                closed += 1
+            elif not it.reason and any(it.covers(f) for f in changed):
+                done += 1
+            else:
+                m = None
+            if m:
+                line = f"{m.group(1)}x{m.group(3)}{m.group(4)}"
         out.append(line)
-    if count:
+    if done or closed:
         path.write_text("\n".join(out) + "\n", encoding="utf-8")
-    return count
+    return done, closed
 
 
 # ---------- both lists ----------
@@ -455,6 +553,8 @@ def all_brief_lines(cfg: Config, feature: str) -> list[str]:
         if repo and kind is PIPELINE:  # after the repository's items, before the outside ones
             lines.insert(repo + 1, f"  after this task: /framegate:pipeline {feature} does them")
         out += lines
+        if kind is PIPELINE:
+            out += note_lines(notes(cfg, feature))
     return out
 
 
@@ -483,4 +583,16 @@ def facts_lines(cfg: Config, feature: str) -> list[str]:
                 "or a 'Left out' line. framegate shows the list on the final brief and appends "
                 "it to final_summary.md itself.",
             ]
+    aside = notes(cfg, feature)
+    if aside:
+        out += [
+            *([""] if out else []),
+            f"## {NOTES_TITLE}: {len(aside)}",
+            "",
+            *(f"- {it.shown()}" for it in aside),
+            "",
+            "Written as a pipeline follow-up, but the file it names is no deploy / CI file of "
+            "this project: the pipeline task will not do it. Not a gate item: no question, no "
+            "decision, no 'Left out' line. framegate shows it once on the final brief.",
+        ]
     return out

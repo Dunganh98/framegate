@@ -37,7 +37,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 
-from framegate import followup, hosts
+from framegate import description, followup, hosts
 from framegate.config import CONFIG_FILE, Config, ConfigError, parse_config
 from framegate.state import GitError, commit_paths, feature_finished
 
@@ -59,12 +59,9 @@ PRODUCT_REF = "refs/framegate/product/{feature}"
 PIPELINE_REF = "refs/framegate/pipeline-product/{feature}"
 #: set while a pipeline task is open (pipeline.py): the commit it started on
 PIPELINE_START_REF = "refs/framegate/pipeline/{feature}"
-#: the pipeline task's brief ({out}/<f>/): the description of its own pull request
-PIPELINE_BRIEF_FILE = "pipeline_brief.md"
-#: the kept pipeline list ({specs}/<f>/; followup.py)
-LIST_FILE = "pipeline_followup.md"
-SUMMARY_FILE = "final_summary.md"
-PR_DESCRIPTION_FILE = "pr_description.md"
+#: the pipeline task's brief ({out}/<f>/): what the description of its own pull request is
+#: written from (description.py)
+PIPELINE_BRIEF_FILE = description.PIPELINE_BRIEF
 LIST_MAX = 30
 
 #: replaced in the tests: nothing there calls gh or az
@@ -1107,35 +1104,29 @@ def pull_request(
     `body` (a repo-relative file): another branch and description than the product's (the
     pipeline's own).
 
-    What the task left to do by hand outside the repository (followup.pr_checklist) goes on
-    top of the description as an unticked checklist, so it is seen at merge time: the
-    description is then {out}/<f>/pr_description.md (`write` False, a dry run: only said)."""
+    The description is {specs}/<f>/pr_description.md (description.py: written at DONE and
+    by `publish`, kept by the cleanup, short enough for every host). What the task left to
+    do by hand outside the repository is an unticked checklist in it, so it is seen at merge
+    time. `write` False (a dry run): the file may not be written yet."""
     head = head or product_branch(cfg, feature)
     if not n.remote:
         return True
     host = hosts.parse_remote(_git(cfg.root, "remote", "get-url", n.remote).strip())
     link = hosts.pr_url(host, n.base, head)
-    rel = body or f"{cfg.paths.out}/{feature}/{SUMMARY_FILE}"
+    rel = body or description.rel(cfg, feature)
     summary = cfg.root / rel
-    full = summary.name  # where a shortened description says the whole text is
     outside = followup.pr_checklist(cfg, feature)
     if outside:
         echo(
             f"Outside the repository: {len(outside)} item(s) to do by hand; an unticked "
-            "checklist on top of the pull request's description."
+            "checklist in the pull request's description."
         )
-        if write:
-            old = summary.read_text(encoding="utf-8", errors="replace") if summary.is_file() else ""
-            summary = cfg.feature_out(feature) / PR_DESCRIPTION_FILE
-            summary.parent.mkdir(parents=True, exist_ok=True)
-            summary.write_text(followup.with_checklist(old, outside), encoding="utf-8")
-            rel = f"{cfg.paths.out}/{feature}/{PR_DESCRIPTION_FILE}"
-    kept = rel.startswith(cfg.paths.specs + "/")  # the cleanup deletes the out folder only
-    text_at = (
-        f"its description: {rel}" + ("" if kept else " (copy it before the cleanup)")
-        if summary.is_file()
-        else f"no description file ({rel} is gone)"
-    )
+    if summary.is_file():
+        text_at = f"its description: {rel}"
+    elif write:
+        text_at = f"no description file ({rel} is missing)"
+    else:
+        text_at = f"its description: {rel} (written by the publish)"
     by_hand = f"open it at {link}" if link else f"open it on your host: {head} -> {n.base}"
     tool = hosts.pr_tool(host)
     exe = which(tool) if tool else None
@@ -1153,15 +1144,7 @@ def pull_request(
         how = "not created (publish with --pr creates it)" if exe else f"not created: {why}"
         echo(f"Pull request {head} -> {n.base}: {how}; {by_hand}; {text_at}.")
         return True
-    body = ""
-    if summary.is_file():
-        body = str(summary)
-        if host.kind == hosts.AZURE:
-            short = cfg.feature_out(feature) / PR_DESCRIPTION_FILE
-            short.parent.mkdir(parents=True, exist_ok=True)
-            text = summary.read_text(encoding="utf-8", errors="replace")
-            short.write_text(hosts.azure_description(text, full), encoding="utf-8")
-            body = str(short)
+    body = str(summary) if summary.is_file() else ""
     cmd = hosts.pr_command(host, n.base, head, _batch_safe(exe, title), body)
     r = run_tool([exe, *cmd[1:]], cwd=cfg.root, capture_output=True, text=True)
     if r.returncode != 0:
@@ -1173,6 +1156,57 @@ def pull_request(
     page = hosts.azure_pr_page(host, out) if host.kind == hosts.AZURE and out else out
     echo(f"Pull request {head} -> {n.base} created: {page}")
     return True
+
+
+def write_description(
+    cfg: Config,
+    feature: str,
+    echo: Echo,
+    *,
+    own: bool = False,
+    dry_run: bool = False,
+) -> str:
+    """Bring the pull request's description up to date and commit it when it changed (only
+    that file: it is one of framegate's, kept with the spec). `own`: the deploy / CI change
+    gets a pull request of its own, with its own text. Returns the file the pull request
+    uses (repo-relative). A dry run writes nothing."""
+    alone = not (cfg.spec_dir(feature) / "requirements.md").is_file()
+    pipeline = own or alone
+    body = description.rel(cfg, feature, pipeline=pipeline)
+    if dry_run:
+        note = "" if alone else description.compose(cfg, feature, own=own)[1]
+        if note:
+            echo(note)
+        return body
+    written = [description.refresh_pipeline(cfg, feature)] if pipeline else []
+    if not alone:
+        written.append(description.refresh(cfg, feature, own=own))
+    for w in written:
+        if w.note:
+            echo(w.note)
+    changed = [w.rel for w in written if w.changed]
+    if changed:
+        _git(cfg.root, "add", "--", *changed)
+        message = f"{feature}: pull request description"
+        _git(cfg.root, "commit", "-q", "-m", message, "--", *changed)
+    return body
+
+
+def describe(cfg: Config, feature: str, echo: Echo = print, *, pipeline: bool = False) -> int:
+    """`framegate pr-description <f> [--pipeline]`: write the description again from what is
+    there now, commit it when it changed, and say where it is. For a pull request that is
+    created without `framegate publish` (no `[git] state_branch`)."""
+    if not cfg.spec_dir(feature).is_dir():
+        raise PublishError(f"No feature '{feature}' here ({cfg.paths.specs}/{feature}/ missing).")
+    before = _rev(cfg.root, "HEAD")
+    try:
+        rel = write_description(cfg, feature, echo, own=pipeline)
+        state = " (updated, committed)" if _rev(cfg.root, "HEAD") != before else ""
+    except GitError as e:  # ignored by the project, no identity: the file is there all the same
+        rel = description.rel(cfg, feature, pipeline=pipeline)
+        state = f" (written, not committed: {str(e).splitlines()[-1]})"
+    echo(f"Pull request description: {rel}{state}")
+    return 0
 
 
 def publish(
@@ -1189,7 +1223,8 @@ def publish(
     """`framegate publish <f>`: framegate's files of the feature -> the state branch (one
     commit, pushed); the product -> the product branch (one commit on the base, checked,
     pushed as `<branch_prefix><f>`); with `pr` the pull request. Run again, it finds
-    nothing left to do."""
+    nothing left to do. It needs the spec folder and git, never the out folder: a task
+    that is cleaned up can still be published, and get its pull request."""
     if not enabled(cfg):
         if dry_run:
             echo(
@@ -1251,7 +1286,7 @@ def publish(
     first = tree_with(cfg, tree, start, pipe)
     no_product = first == _tree(root, start)
     own = bool(pipe) and (no_product or contained(root, first, start, base_tip(cfg, n)))
-    ref, body = product_ref(feature), ""
+    ref = product_ref(feature)
     verify: Callable[[str], None] = partial(verify_product, cfg)
     if own:
         branch, ref = pipeline_branch(cfg, feature), pipeline_ref(feature)
@@ -1259,9 +1294,9 @@ def publish(
             title = pipeline_title(feature)
         tree, first = tree_with(cfg, _tree(root, start), "HEAD", pipe), ""
         verify = partial(verify_pipeline, cfg, start=start, paths=pipe)
-        # its pull request: the brief the user approved, else the list itself
-        brief = f"{cfg.paths.out}/{feature}/{PIPELINE_BRIEF_FILE}"
-        body = brief if (root / brief).is_file() else f"{cfg.paths.specs}/{feature}/{LIST_FILE}"
+    # the pull request's description (its own text for a pipeline branch): one of
+    # framegate's files, so the commit moves the work branch and never the product
+    body = write_description(cfg, feature, echo, own=own, dry_run=dry_run)
 
     there = _remote_tip(cfg, n, branch)
     product = _product_commit(

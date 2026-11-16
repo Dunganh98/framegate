@@ -1,7 +1,8 @@
 # framegate run protocol (chat)
 
 Standing instructions for the rest of the conversation. `<f>` is the feature slug, `<out>` the
-out folder (`[paths] out`, default `out`; `framegate gate-summary` prints the paths). Run every
+out folder (`[paths] out`, default `out`; `framegate gate-summary` prints the paths), `<specs>`
+the spec folder (`[paths] specs`, default `specs`). Run every
 command from the repository root, one command per call. The user never types `framegate`
 commands.
 
@@ -12,8 +13,8 @@ not read specs, gate files or logs. Every message you write to them:
 - uses plain words: no spec ID, test name or file path without its meaning in words ("the
   'no shot without a free kick' rule", not "FK-R-004").
 "More detail" / "show me X": show the relevant part of the file (final_summary.md,
-final_gates.md, tests_gate.md, test_summary.md, the spec files, retro_proposals.md), not all
-of it.
+final_gates.md, tests_gate.md, test_summary.md, the spec files, retro_proposals.md, the pull
+request's description `<specs>/<f>/pr_description.md`), not all of it.
 
 ## A. Start (after "spec OK") and continue (after every gate decision)
 
@@ -145,46 +146,58 @@ fail for no reason. Reading files and git log/diff/status are fine.
    does it any time later (after the merge it gets a pull request of its own).
    A line `Outside the repository: N item(s) to do by hand` (a CI variable, a secret, a
    real database: no file here) is not work for that command or for you: say it in one
-   line, as it is. Those items are an unticked checklist in the final summary and in the
-   pull request's description (with `publish`: on top; the file it names), so they are seen
-   at merge time. Never do one yourself.
+   line, as it is. Those items are an unticked checklist in the final summary and near the
+   top of the pull request's description, so they are seen at merge time. Never do one
+   yourself.
 2. Run `framegate publish <f> --dry-run` (it changes nothing). Its first line decides
    which of the two offers below applies:
    - `State branch: off`: the feature branch itself is what gets pushed (2a, 3a).
    - `Publish <f> (dry run ...)`: the project keeps framegate's files apart from the code
      (`[git] state_branch`): the pull request gets a branch with the product only (2b, 3b).
-   Then ask in one message, each with its default.
-   - 2a. When the remote is on GitHub (`git remote get-url origin` names github.com): "Create
-     the PR with the final summary as its description? (pushes <branch>)", default no.
-     Any other host (Azure DevOps, GitLab, ...): "Push <branch>, so you can open the pull
-     request there?", default no.
+   Then ask in one message, each with its default. The publish question is ONE question,
+   its default is yes, and the yes includes the pull request: the user finished a task to
+   get it reviewed. Nothing is pushed before the user's reply to it.
+   - 2a. "Push <branch> and create the pull request into <base>? (default: yes; 'publish
+     without a pull request' and 'no' are fine too)". Its description is
+     `<specs>/<f>/pr_description.md`: what the task is, the changes, how it is proven, what
+     is left to check or do by hand; framegate wrote it at DONE.
    - 2b. Say in two or three lines what the dry run found: how many product files go to the
      branch for the team (the dry run's `Product branch <name>`; it is not the branch of
      this checkout, which is the local work branch `framegate-work/<f>`; name the ones that are not source or tests, e.g.
      `.gitignore` or a packaging file, so the user can say no), that framegate's own files
-     go to the state branch and never to the pull request, and where the pull request would
-     go. The pull request gets one commit; the commits of this feature stay on the local
-     work branch, which publish never rewrites: do not offer a backup branch. Ask: "Publish it and create the pull request?", default no ("publish without a
-     pull request" is a valid answer).
+     go to the state branch and never to the pull request, and where the pull request
+     goes. The pull request gets one commit; the commits of this feature stay on the local
+     work branch, which publish never rewrites: do not offer a backup branch. Ask: "Publish
+     it and create the pull request into <base>? (default: yes; 'publish without a pull
+     request' and 'no' are fine too)".
    - In both cases also: "Clean up the run files now (specs and metrics stay)?", default
-     yes.
-3. Only on an explicit yes, and before the cleanup (the cleanup deletes the final summary).
-   Never push without that yes.
-   - 3a. `git push -u origin <branch>`. Then, on GitHub only:
+     yes. The order of the two does not matter: the description is kept with the spec, so
+     a cleaned-up task can still be published and get its pull request later.
+3. Map the reply to the publish question. "ok" / "yes" / "go" / "defaults": publish and
+   create the pull request. "publish without a pull request" / "push only": publish, no
+   pull request. "no" / "not yet": nothing is pushed; say in one line that
+   `/framegate:resume <f>` offers it again. No reply to that question: never push.
+   - 3a. `framegate pr-description <f>` (it brings the description up to date and prints
+     its file), then `git push -u origin <branch>`. With a pull request, on GitHub:
      `gh pr create --base <[git] base, default main> --head <branch> --title "<f>: <one line>"
-     --body-file <out>/<f>/final_summary.md`. On any other host do not create the pull
-     request: print the branch name and say that `<out>/<f>/final_summary.md` is the text for
-     its description (copy it before the cleanup).
+     --body-file <the file it printed>`. On any other host there is no tool here: give the
+     branch name, the address to open the pull request if the host shows one, and the
+     description file as its text.
    - 3b. `framegate publish <f> --pr --title "<f>: <one line>"` (without `--pr` when the
      user wants no pull request). Never `git push` yourself here: the work branch in this
      checkout (`framegate-work/<f>`) holds framegate's files and stays local (a pre-push
      guard refuses it; never use `--no-verify`); `publish` builds and pushes the product
-     branch and the state branch. Relay its result in two lines: what was pushed,
-     and the pull request's address, or (no `gh` / `az` on this machine, another host) the
-     address to open it by hand and that `<out>/<f>/final_summary.md` is its description
-     (copy it before the cleanup). If it refuses (uncommitted changes, a remote branch of
-     that name with other content, a state branch that moved): its reason in one line and
-     the decision with your default; `--force-with-lease` only when the user says to
-     replace the remote branch.
-4. Cleanup on yes: `framegate cleanup <f>`. Its result in one line.
+     branch and the state branch, and creates the pull request with `gh` (GitHub) or `az`
+     (Azure DevOps). If it refuses (uncommitted changes, a remote branch of that name with
+     other content, a state branch that moved): its reason in one line and the decision
+     with your default; `--force-with-lease` only when the user says to replace the remote
+     branch.
+   - The result, in two lines: what was pushed, and the pull request's address as the
+     command printed it (`Pull request ... created: <address>`). Any other line about the
+     pull request means it does NOT exist yet (`not created: <why>`: the tool is missing,
+     not logged in, another host; `... failed (<why>)`): say so with the reason in one
+     line, and give the address to open it by hand and the description file. Never say a
+     pull request was created without its address from the command.
+4. Cleanup on yes: `framegate cleanup <f>`. Its result in one line. Nothing has to be
+   copied or saved first.
 5. One line: after the PR is merged, `/framegate:status <f>` offers removing the feature's tags.

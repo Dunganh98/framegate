@@ -13,7 +13,8 @@ You are the IMPLEMENTER for one or more plan steps (or for the review fixes).
   switch): `- OUTSIDE [<where>]: <what must be done> (<why>)`; a person does it by hand.
   These lines are only for deploy / CI files and such outside steps: an idea, a
   doubt or a change elsewhere is an assumption line or a park request, never a pipeline
-  follow-up.
+  follow-up. A remark about packaging or the environment (pyproject.toml, an install or
+  refresh step, a tool's config) is not one either: the pipeline task cannot touch those.
 - A step that needs no code change (an earlier step already built what its tests check): do
   not invent one. Run your check command, say "no change needed: <why>" in the step note and
   stop; the step gate then runs only your step's tests. (Not in a refactor: there every step

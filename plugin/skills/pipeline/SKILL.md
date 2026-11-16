@@ -38,8 +38,9 @@ written (and the list and your brief); source, tests, setup files and specs are 
   changes): its reason in one line, and the one decision needed with your default.
 - `List (...): N open of M item(s)`: the list is the input; there is no new dialogue. Show the
   open items, numbered, in plain words, one line each, and go on with step 2. An item marked
-  `[not a deploy / CI file here ...]` or `[names no file ...]` cannot be done from here: say
-  so in one line with your default ("leave it open") and wait for the answer to that only.
+  `[not a deploy / CI file here ...]` or `[names no file ...]` cannot be done from here as
+  written: it becomes a question of the brief (step 4), with "not needed: <reason>" as its
+  default. An item marked `[not needed: ...]` is closed: show it as such, do nothing.
 - `Outside the repository: by hand, not this task: N to do`: items that are no file of this
   repository (a CI variable, a secret, a real database, an environment). You never do them,
   not even when you could. Show them under their own line, after the numbered items: "By
@@ -71,7 +72,14 @@ Make each open item's change yourself, with the Edit / Write tools:
   Say in one line what was blocked and why; the user decides.
 - An item you cannot do or should not guess (it needs a secret, an access right, a value
   only the team knows): do not attempt it. End its line in the list with
-  `(left open: <reason>)`.
+  `(left open: <reason>)`. It stays open and comes up again.
+- An item that turns out to be already in place (read the file: the change is there), or
+  that cannot be done as written (it names no deploy / CI file): change nothing, and do not
+  ask an open "what should happen?". Propose it in the brief's Questions as
+  "<item>: not needed: <reason>? (default: yes)". When the user agrees (an "ok" does), end
+  its line in the list with `(not needed: <reason>)`: that closes it for good, where
+  `(left open: ...)` would keep it open in every status. Until the answer the check lists
+  it as open; write the brief all the same.
 - Never start a pipeline, a deployment or a build from here.
 
 ## 3. The check
@@ -79,7 +87,9 @@ Make each open item's change yourself, with the Edit / Write tools:
 Run `framegate pipeline-check $ARGUMENTS` (no agent, a few seconds). Fix what its `- ...`
 lines name (a file changed that is not on the list or not a deploy / CI file: revert it; a
 file that does not parse: fix it; an open item: do it or mark it left open) and run it again
-until it says `OK`. `NOTE:` lines do not block: each one goes into the brief.
+until it says `OK`, or until the only lines left are `OPEN ITEM` lines of items you propose
+as not needed (they close with the user's answer to the brief). `NOTE:` lines do not block:
+each one goes into the brief.
 
 ## 4. The brief (the one decision)
 
@@ -91,7 +101,7 @@ Exactly these sections:
 
     **What was asked** — the list, numbered, one line each
     **What changed** — per item, same numbers: what was changed, with its source; an item
-      left open: "left open: <reason>"
+      left open: "left open: <reason>"; one you propose to close: "not needed: <reason>"
     **Outside the repository: by hand** — the `Outside the repository` items of the check,
       one line each (where: what); nobody did them here ("None.")
     **Checks** — what the check proved, one or two lines (only listed deploy / CI files
@@ -99,52 +109,64 @@ Exactly these sections:
     **Not proven** — first line, as it is:
       "The pipeline itself has not run: the pull request's CI run is the proof."
       Then at most two things only that run can show
-    **Questions** — real decisions still open, each with a default ("None.")
+    **Questions** — real decisions still open, each with a default ("None."); an item
+      that is already in place or impossible as written:
+      "<item>: not needed: <reason>? (default: yes)", never an open "what should happen?"
 
-Ask: "Are the changes OK? (the diff on request)", default yes. The diff on request:
+Ask: "Are the changes OK? (the diff on request)", default yes. An "ok" takes every default:
+write `(not needed: <reason>)` at the end of those items' lines now, and run the check once
+more (it must say `OK`). The diff on request:
 `git diff -- <file>` for that file (a new file: show its content). Changes wanted: make them,
 run the check again, show the changed lines of the brief, ask again. Never approve yourself.
 
 ## 5. After the OK
 
 Run `framegate pipeline-approve $ARGUMENTS`: it checks once more, ticks the done items in the
-list, commits the deploy / CI files and closes the phase. Its result in one line.
+list (and the ones closed as not needed), commits the deploy / CI files, writes the pull
+request's description again and closes the phase. Its result in one line.
 
 ## 6. How it reaches the team
 
-Run `framegate publish $ARGUMENTS --dry-run` (it changes nothing). Push or publish only on
-an explicit yes. Items outside the repository must be seen at merge time: `publish` puts
-them on top of the pull request's description as an unticked checklist (`- [ ] ...`) and
-says so; where you create the pull request yourself (`State branch: off`), put that
-checklist on top of its text.
+Run `framegate publish $ARGUMENTS --dry-run` (it changes nothing). Then one question whose
+default is yes and includes the pull request; nothing is pushed before the user's reply to
+it ("publish without a pull request" and "no" are fine answers). The description is a file
+framegate writes and keeps in the folder of the list (`pr_description.md` for the task's
+pull request, `pipeline_pr_description.md` for a deploy / CI change of its own: your brief,
+with what is left to do by hand outside the repository as an unticked checklist on top).
+The cleanup does not delete it: nothing has to be copied first.
 
 - `State branch: off`: the branch of this checkout is what gets pushed; the `Next:` line of
   step 5 names it.
-  - A branch of its own (`pipeline/...`): ask "Push it and open its pull request?", default
-    no. On yes `git push -u origin <branch>`; on GitHub then `gh pr create --base <base>
-    --head <branch> --title "$ARGUMENTS: deploy / CI changes" --body-file
-    <out>/$ARGUMENTS/pipeline_brief.md`; on any other host say the branch and that the
-    brief file is the text for the pull request.
-  - The task's own branch: the change is one more commit on it. Ask "Push <branch>?",
-    default no; a pull request that is open gets the commit. No pull request yet: the
-    task's own wrap-up creates it (`/framegate:resume $ARGUMENTS`).
+  - A branch of its own (`pipeline/...`): ask "Push it and create its pull request?
+    (default: yes)". On yes `git push -u origin <branch>`; on GitHub then `gh pr create
+    --base <base> --head <branch> --title "$ARGUMENTS: deploy / CI changes" --body-file
+    <the description file the `Next:` line names>`; on any other host say the branch and
+    that this file is the text for the pull request.
+  - The task's own branch: the change is one more commit on it. Ask "Push <branch>?
+    (default: yes)"; a pull request that is open gets the commit. No pull request yet: say
+    so, and create it as above with the file `framegate pr-description $ARGUMENTS` prints
+    as its text.
 - `Publish $ARGUMENTS (dry run ...)`: say in two lines what it found, then ask.
   - `Product branch <name>: ... deploy / CI files in a commit of their own`: the task is
     not merged yet, so its pull request carries two commits: the product, then the deploy /
-    CI change. With the line `<name> is on origin already`: ask "Publish it?" (default no),
-    then `framegate publish $ARGUMENTS`, and say in one line that the pull request now has
-    a second commit. Without that line nothing was published yet: ask "Publish it and
-    create the pull request?" (default no), then `framegate publish $ARGUMENTS --pr --title
-    "$ARGUMENTS: <one line>"` (without `--pr` when the user wants none).
+    CI change. With the line `<name> is on origin already`: ask "Publish it? (default:
+    yes)", then `framegate publish $ARGUMENTS` (no `--pr`: the branch's pull request, if
+    one is open, now has a second commit; say that in one line. If the user says none is
+    open yet, run it with `--pr`). Without that line nothing was published yet: ask "Publish it and create the pull request? (default:
+    yes)", then `framegate publish $ARGUMENTS --pr --title "$ARGUMENTS: <one line>"`
+    (without `--pr` when the user wants none).
   - `Pipeline branch <name> (...)`: the task is merged already, or there was none: the
-    change gets a branch and a pull request of its own, with the brief as its text. Ask
-    "Publish it and create the pull request?" (default no), then `framegate publish
-    $ARGUMENTS --pr` (without `--pr` when the user wants none).
+    change gets a branch and a pull request of its own. Ask "Publish it and create the
+    pull request? (default: yes)", then `framegate publish $ARGUMENTS --pr` (without
+    `--pr` when the user wants none).
   - Never `git push` yourself here: the branch of this checkout holds framegate's files and
     stays local. If `publish` refuses, its reason in one line and the decision with your
     default; `--force-with-lease` only when the user says to replace the remote branch.
-  Relay the result in two lines: what was pushed, and the pull request's address or where
-  to open it by hand.
+  Relay the result in two lines: what was pushed, and the pull request's address as the
+  command printed it (`Pull request ... created: <address>`). Any other line about the pull
+  request (`not created: <why>`, `... failed (<why>)`) means it does not exist yet: say so
+  with the reason in one line, and give the address to open it by hand and the description
+  file. Never say a pull request was created without its address from the command.
 
 Last, when the publish is done or declined: "Clean up the run files now (the list and the
 specs stay)?", default yes; on yes `framegate cleanup $ARGUMENTS`, its result in one line. If

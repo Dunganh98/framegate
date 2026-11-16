@@ -12,7 +12,7 @@ import time
 from typing import Any
 
 from framegate import brief as briefs
-from framegate import followup, ported, procs, publish, references, risk
+from framegate import description, followup, ported, procs, publish, references, risk
 from framegate.orchestrator import (
     PROGRESS_CURSOR,
     PROGRESS_LOG,
@@ -576,13 +576,7 @@ def _outcomes(
     )
     if last.get("skipped"):
         verdict += f"; skipped: {', '.join(last['skipped'])}"
-    scores = [
-        f"{name} {_clip(res, 90)}"
-        for name, res in (last.get("results") or {}).items()
-        if ("coverage" in name or "mutation" in name)
-        and "regression" not in name
-        and not res.startswith("SKIPPED")
-    ]
+    scores = description.final_scores(last)  # the pull request's description has them too
     fails = sum(1 for e in events if e.get("kind") == "gate" and not e.get("passed"))
     lines = [
         f"Outcomes: {verdict}; {fails} failed attempt(s), {len(prog.get('parked') or [])} "
@@ -668,9 +662,11 @@ def cleanup(orch: Orchestrator, feature: str, tags: bool = False, force: bool = 
     if logs:
         removed.append(f"{len(logs)} run log file(s) in {orch.cfg.paths.out}/runs/")
     print("Removed: " + (", ".join(removed) if removed else "nothing (already clean)"))
+    kept = description.rel(orch.cfg, feature)
     print(
-        f"Kept: {orch.cfg.paths.specs}/{feature}/, the metrics row, "
-        f"{orch.cfg.paths.out}/events.jsonl"
+        f"Kept: {orch.cfg.paths.specs}/{feature}/"
+        + (" (with the pull request's description)" if (orch.cfg.root / kept).is_file() else "")
+        + f", the metrics row, {orch.cfg.paths.out}/events.jsonl"
     )
     if tags:
         names = feature_tags(orch, feature)

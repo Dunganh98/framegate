@@ -99,6 +99,20 @@ def spec_locked(cfg: Config) -> list[str]:
 #: approval, and a change to it does not fail the frame check. The agents still cannot write
 #: it (no phase's write paths hold `.claude/`).
 MACHINE_FILES = (".claude/settings.local.json",)
+#: what framegate itself writes into {specs}/<f>/ when the task ends and after it: the kept
+#: follow-up lists (followup.py; the pipeline task ticks them) and the pull request's
+#: descriptions (description.py). No agent can write them (the spec folder is locked), and
+#: nothing in a run reads them: they are records, not part of the frame.
+GENERATED_SPEC_FILES = (
+    "pipeline_followup.md",
+    "reference_followup.md",
+    "pr_description.md",
+    "pipeline_pr_description.md",
+)
+
+
+def generated_spec_files(cfg: Config, feature: str) -> set[str]:
+    return {f"{cfg.paths.specs}/{feature}/{name}" for name in GENERATED_SPEC_FILES}
 
 
 def setup_entries(adapter: LanguageAdapter) -> list[str]:
@@ -283,6 +297,7 @@ def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
         spec_ok = allowed_spec_changes(cfg, feature, untracked)
     except GitError as e:
         return CheckResult("FAIL", str(e))
+    spec_ok |= generated_spec_files(cfg, feature)
     protected = protected_paths(adapter)
     exceptions = cfg.frame_exceptions()
     problems = [

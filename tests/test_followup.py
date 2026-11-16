@@ -318,6 +318,7 @@ def test_pipeline_followup_reaches_the_final_brief_and_survives_cleanup(
     step and not as a gate item, and keeps the list in the spec folder after DONE."""
     r = demo_repo
     r.add_toml(FAST)
+    r.set_toml("protected", "extra", '["ci/"]')  # the reviewer's file is a CI file here
     write(
         r,
         "specs/demo/requirements.md",
@@ -381,6 +382,16 @@ def test_pipeline_followup_reaches_the_final_brief_and_survives_cleanup(
     assert r.af("finish", "demo", "--no-retro") == 0
     kept = r.root / "specs/demo/pipeline_followup.md"
     assert all(f"- [ ] {x}" in kept.read_text(encoding="utf-8") for x in listed)
+    # the pull request's description is written with it, and committed with the metrics row
+    described = (r.root / "specs/demo/pr_description.md").read_text(encoding="utf-8")
+    assert "## To do by hand outside the repository: 1\n\n- [ ] CI variable group demo-dev" in (
+        described
+    )
+    assert "- not done yet, a separate step after this pull request: " + SPEC_ITEM in described
+    assert "## Changes\n\n1. " in described and "out/demo" not in described
+    assert "specs/demo/pr_description.md" in git(
+        r.root, "show", "--name-only", "--format=%s", "HEAD"
+    )
     assert "specs/demo/pipeline_followup.md" in git(
         r.root, "show", "--name-only", "--format=%s", "HEAD"
     )
@@ -395,10 +406,65 @@ def test_pipeline_followup_reaches_the_final_brief_and_survives_cleanup(
         "repository: 1 item(s) to do by hand (specs/demo/pipeline_followup.md)"
     ) in capsys.readouterr().out
     assert r.af("cleanup", "demo") == 0
+    assert "Kept: specs/demo/ (with the pull request's description)" in capsys.readouterr().out
     assert not (r.root / "out/demo").exists() and kept.is_file()
+    assert (r.root / "specs/demo/pr_description.md").read_text(encoding="utf-8") == described
     # ticked by the user: no longer counted, no longer in a pull request
     kept.write_text(kept.read_text("utf-8").replace("- [ ] OUTSIDE", "- [x] OUTSIDE"), "utf-8")
     assert followup.outside_count(cfg, "demo") == 0 and followup.pr_checklist(cfg, "demo") == []
+
+
+def test_an_agents_line_that_names_no_deploy_or_ci_file_is_a_note(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Seen live: the implementer filed a packaging / environment remark as a pipeline
+    follow-up. The pipeline task could never do it; it is not on the list, and not lost."""
+    remark = "pyproject.toml / env refresh: `python -m runner` needs `pip install -e .`"
+    write_run = (
+        "## Step 1\n"
+        f"- PIPELINE FOLLOW-UP [pyproject.toml / env refresh]: {remark.split(': ', 1)[1]}\n"
+        "- PIPELINE FOLLOW-UP [`docker/Dockerfile`, compose.yml]: COPY the runner folder\n"
+        "- PIPELINE FOLLOW-UP [ci/tests.yml]: select the new tests\n"
+        "- PIPELINE FOLLOW-UP [none]: think about caching\n"
+        "- OUTSIDE [vault]: add RUNNER_KEY (the job reads it)\n"
+    )
+    (tmp_path / "out/demo").mkdir(parents=True)
+    (tmp_path / "out/demo/steps.md").write_text(write_run, encoding="utf-8")
+    cfg = parse_config(tmp_path, {})
+    assert [it.line() for it in followup.items(cfg, "demo")] == [
+        "docker/Dockerfile`, compose.yml: COPY the runner folder (implementer)",
+        "OUTSIDE [vault]: add RUNNER_KEY (the job reads it) (implementer)",
+    ]
+    assert [it.text for it in followup.notes(cfg, "demo")] == [
+        remark,
+        "ci/tests.yml: select the new tests",
+        "think about caching",
+    ]
+    # shown once on the final brief, under a line of its own; told to the summary agent
+    brief = followup.all_brief_lines(cfg, "demo")
+    head = "Not a deploy / CI matter (an agent's note; not on the pipeline list): 3; nothing"
+    at = next(i for i, x in enumerate(brief) if x.startswith(head))
+    assert brief[at + 1] == f"  - {remark} (implementer)" and len(brief) == at + 4
+    facts = "\n".join(followup.facts_lines(cfg, "demo"))
+    assert "## Not a deploy / CI matter (an agent's note; not on the pipeline list): 3" in facts
+    assert "the pipeline task will not do it" in facts
+    # never on the kept list, so never open work in `framegate status`
+    (tmp_path / "specs/demo").mkdir(parents=True)
+    assert len(followup.write(cfg, "demo", durable=True)) == 2
+    assert followup.open_count(cfg, "demo") == 1 and "pyproject" not in (
+        tmp_path / "specs/demo/pipeline_followup.md"
+    ).read_text(encoding="utf-8")
+    # a folder the project names as its CI folder: that line is a follow-up again
+    named = parse_config(tmp_path, {"protected": {"extra": ["ci/"]}})
+    assert "ci/tests.yml: select the new tests" in [it.text for it in followup.items(named, "demo")]
+    assert len(followup.notes(named, "demo")) == 2
+    # the spec's own section is the user's: it stays as written
+    (tmp_path / "specs/demo/requirements.md").write_text(
+        "## Pipeline follow-up\n- ci/tests.yml: select the new tests (CI misses them)\n", "utf-8"
+    )
+    assert followup.items(cfg, "demo")[0].source == "spec"
+    for role in ("implement", "review"):
+        assert "packaging or the environment" in package_text("roles", f"{role}.md"), role
 
 
 def test_no_followup_no_lines(demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]) -> None:
