@@ -259,6 +259,12 @@ WHOLE_SUITE_CHECKS = ("regression", "full test suite")
 FIX_OWNER_RE = re.compile(r"^\W*Fix owner\W*:\W*(src|tests|spec|config|setup)\b", re.I | re.M)
 #: fix owners no implementer attempt can serve: the work parks, the proposal is its question
 PARKING_OWNERS = ("tests", "spec", "config", "setup")
+#: the gate question of a step parked on checks only another role can fix (seen live: the
+#: default "ok" redid the step unchanged, and it parked again)
+UNFIXABLE_QUESTION = {
+    "tests": "Default: the test writer fixes the failing checks in its test files (named "
+    "above), then the step is redone. Never 'ok' without saying who fixes them.",
+}
 #: a park request (or diagnosis) saying only the frozen tests are wrong, and which ones
 TESTS_WRONG_RE = re.compile(r"^\W*Park kind\W*:\W*tests[ -]wrong\b", re.I | re.M)
 CONTESTED_RE = re.compile(r"^\W*Contested tests\W*:\s*(.+)$", re.I | re.M)
@@ -1537,12 +1543,14 @@ class Orchestrator:
                 return True
             unfixable = self.unfixable(rep)
             if unfixable:
+                owner = self.unfixable_owner(rep)
                 self.park(
                     feature,
                     prog,
-                    self.not_the_implementers(feature, item),
+                    self.not_the_implementers(feature, item, owner),
                     f"unfixable in IMPLEMENT: {unfixable}",
                     attempts=attempt,
+                    question=UNFIXABLE_QUESTION.get(owner, ""),
                     failed=rep.failed,
                     excerpt=rep.excerpt(),
                 )
@@ -1725,6 +1733,17 @@ class Orchestrator:
                 else f"{name} fails only in files it may not edit: {', '.join(sorted(paths))}"
             )
         return "; ".join(parts)
+
+    def unfixable_owner(self, rep: Any) -> str:
+        """ "tests" when every file the failing checks name is a test file."""
+        paths = set().union(
+            *(
+                self.failure_paths(rep.full_outputs.get(n) or rep.outputs.get(n, ""))
+                for n in rep.failed
+            )
+        )
+        folders = [f.rstrip("/") + "/" for f in (self.cfg.paths.tests, self.cfg.paths.review_tests)]
+        return "tests" if paths and all(path_matches(p, folders) for p in paths) else ""
 
     def failure_paths(self, text: str) -> set[str]:
         """Repository files (posix, relative) named in a check's output."""

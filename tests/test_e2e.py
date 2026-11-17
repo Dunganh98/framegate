@@ -711,6 +711,8 @@ def test_a_check_on_files_the_implementer_may_not_edit_parks_at_once(demo_repo: 
     assert p["attempts"] == 1 and p["reason"] == (
         "unfixable in IMPLEMENT: format fails only in files it may not edit: tests/test_demo.py"
     )
+    # whose fix it is: the default answer names the test writer, never a bare "ok"
+    assert p["owner"] == "tests" and p["question"].startswith("Default: the test writer fixes")
 
 
 def test_answers_that_need_a_test_change_reach_the_tests(demo_repo: DemoRepo) -> None:
