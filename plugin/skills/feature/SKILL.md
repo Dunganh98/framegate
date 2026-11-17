@@ -33,8 +33,11 @@ at load: a command-line tool older than this plugin does not have it yet):
 It compares this plugin with the command-line tool and with the workflow tools in the
 project's environment, updates what it may and prints the rest. Act on every line, then go on:
 
-- `Start check: ok ...` and `KEPT: ...` lines: without a word (work in progress keeps the
-  versions it was started with; the next new feature, bug fix or refactor brings them in line).
+- `Start check: ok ...`: without a word.
+- `KEPT: ...` lines: an update is waiting. A task in progress (this one or another one, also
+  in another repository) keeps the versions it was started with, so nothing was updated.
+  One line to the user in all: which update waits for which task, and that
+  `/framegate:update` does it now. Never run an install command for a `KEPT:` line.
 - `UPDATED: ...`: one line to the user: what was brought to which version; a `CHANGED
   versions` part as it is (a pinned package moved: the user decides whether to keep it).
 - `RUN: <command>`: the command-line tool is not at this plugin's version and cannot replace

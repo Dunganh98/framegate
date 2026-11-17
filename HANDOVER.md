@@ -721,6 +721,39 @@ Design: docs/AGENTIC_WORKFLOW_SETUP.md; usage: README.md; plugin facts: docs/plu
     `.storybook/`, `.cargo/`): the probe line names the tracked ones at setup, the fix is
     `project_folders`; whether the chat still asks about a tool file outside a dot folder
     instead of proposing `machine_files`.
+- **No update under a task in progress; the usage-limit wait can be woken (2026-11-17,
+  branch fix/self-update-and-limit-wait; findings 6 and 7 of the replay pilot on three
+  repositories).**
+  - **Finding 6 (tasks went 0.12.0 -> 0.12.1 -> 0.12.2 during their runs, a `status` failed
+    on an import).** Cause in the code: the start check kept the versions of the feature it
+    was called for only (`preflight.in_progress(cfg, feature)`), but the command-line tool
+    is one per machine. The start check of the next task (same repository or another one)
+    printed `RUN: uv tool install --force ...`, the skill ran it, and the tool was replaced
+    under the tasks still running. The pilot's logs were not read for this: it is the path
+    the code leaves open, not a proven trace. Now: "spec OK" writes the version into
+    progress.json (`framegate`) and the task into `<claude config>/framegate/tasks/` (one
+    file per task; `framegate run` adds a task of an older version; both from cli.py, the
+    orchestrator is untouched). `preflight` keeps the tool while that list or this checkout
+    has a task between "spec OK" and DONE, and the project's tools while this checkout has
+    one; `KEPT:` now means "an update is waiting" and the skills pass it on in one line.
+    `framegate update` still updates with tasks in progress, but not while a run is active
+    (`PROBLEM:`). Switch: `[update] check = false`, env `FRAMEGATE_UPDATE_CHECK=0`.
+  - **Still open there:** `/framegate:setup` step 0 installs the tool with `--force` when
+    its version differs from the plugin's, whatever is in progress (plugin/skills/setup,
+    not touched here: another branch works on it). A task whose spec is not approved yet is
+    still brought up to date (by design: nothing runs yet). A task abandoned after "spec
+    OK" holds updates back until `cleanup --force` or `/framegate:update`. Tasks an older
+    version started in another repository are in no list until their next `framegate run`.
+  - **Finding 7 (a run slept 1 h 40 min after the limit was refilled).** The wait is now a
+    loop: every `[agents] limit_probe_minutes` (5) the refused run itself is started again
+    (`run_agent_once(probe=True)`). A refused try costs nothing and leaves no event and no
+    run files; the one that gets through is the run, so no extra call is paid. No separate
+    small probe call: a cheaper model could pass while the run's model is still limited.
+    `framegate wake <f>` deletes `out/<f>/limit_wait.json`, the run tries again within 5 s
+    (chat protocol B: only when the user says the limit is back). `usage_limit_over` event
+    (`how`, `waited_s`, `probes`). Max wait and the 4-waits stop as before.
+  - **Not seen live:** both. Whether a real refused `claude -p` reports no cost (the fake
+    does; with a cost the try is recorded like a run), and how long a refused start takes.
 
 ## User decisions so far
 1. Two human gates, forward only: spec and final (2026-11-10, after the first FCSim feature;

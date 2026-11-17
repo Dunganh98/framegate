@@ -79,6 +79,13 @@ PHASE_ALIASES = {"PR": "SUMMARY"}
 ROLE_ALIASES = {"summary": "pr"}
 
 
+def update_check_off() -> bool:
+    """Env FRAMEGATE_UPDATE_CHECK=0 (false / no / off): no version check on this machine,
+    whatever framegate.toml says, also where there is no framegate.toml."""
+    value = os.environ.get("FRAMEGATE_UPDATE_CHECK", "").strip().lower()
+    return value in ("0", "false", "no", "off")
+
+
 def phase_name(phase: str) -> str:
     """Today's name of a phase (an earlier version's name is mapped, any other kept)."""
     return PHASE_ALIASES.get(phase, phase)
@@ -112,6 +119,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "step_batch_ids": (int,),
         "diagnose_after": (int,),
         "limit_wait_max_hours": (int, float),
+        "limit_probe_minutes": (int, float),
     },
     "gates": {
         "tests": (str,),
@@ -166,6 +174,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "project_folders": (list,),
     },
     "notify": {"toast": (bool,)},
+    "update": {"check": (bool,)},
     "phases": {},
     # name -> path, or name -> {path, note}: checked in parse_references
     "references": {},
@@ -377,6 +386,10 @@ class Config:
     #: reset (e.g. a weekly limit) stops the run like Ctrl+C (resume: framegate run). 0 = never
     #: wait
     limit_wait_max_hours: float = 6.0
+    #: [agents] limit_probe_minutes: during that wait the refused run is tried again this
+    #: often and goes on as soon as it gets through (the limit was refilled, or lifted before
+    #: the time claude named); a refused try costs nothing. 0 = no tries, one wait
+    limit_probe_minutes: float = 5.0
     #: [project] knowledge: the project's knowledge file (architecture rules, things that
     #: must never change, test-harness facts, tools); read by the agents, grown by the retro
     knowledge: str = ".framegate/project.md"
@@ -468,6 +481,12 @@ class Config:
     project_folders: list[str] = field(default_factory=list)
     #: [notify] toast: Windows toast at each gate, DONE and on error (no-op elsewhere / on failure)
     toast: bool = True
+    #: [update] check: the start check of the chat skills (`framegate preflight`) and
+    #: `framegate status` compare the versions of the plugin, the command-line tool and the
+    #: project's workflow tools. False (or env FRAMEGATE_UPDATE_CHECK=0): nothing is compared
+    #: and nothing updated (a pinned setup, a replay of old tasks); `framegate update`, which
+    #: the user asks for, still works
+    update_check: bool = True
     #: [references] name -> folder the agents may read (see Reference)
     references: dict[str, Reference] = field(default_factory=dict)
     #: raw, type-checked adapter sections, e.g. {"dotnet": {"configuration": "Release"}}
@@ -843,6 +862,9 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     cfg.limit_wait_max_hours = float(agents.get("limit_wait_max_hours", cfg.limit_wait_max_hours))
     if cfg.limit_wait_max_hours < 0:
         raise ConfigError("[agents] limit_wait_max_hours must be >= 0 (0 = never wait)")
+    cfg.limit_probe_minutes = float(agents.get("limit_probe_minutes", cfg.limit_probe_minutes))
+    if cfg.limit_probe_minutes < 0:
+        raise ConfigError("[agents] limit_probe_minutes must be >= 0 (0 = no tries)")
 
     gates = data.get("gates", {})
     cfg.tests_gate = gates.get("tests", cfg.tests_gate)
@@ -983,6 +1005,7 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     cfg.project_folders = _project_folders(git_cfg.get("project_folders", []))
     cfg.machine_files = _machine_files(cfg, git_cfg.get("machine_files", []))
     cfg.toast = data.get("notify", {}).get("toast", cfg.toast)
+    cfg.update_check = data.get("update", {}).get("check", cfg.update_check)
     cfg.references = parse_references(data.get("references", {}))
     for section in LANGUAGE_SECTIONS:
         if section in data:
@@ -1031,6 +1054,8 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     env_claude = os.environ.get("FRAMEGATE_CLAUDE")
     if env_claude:
         cfg.claude = env_claude
+    if update_check_off():
+        cfg.update_check = False
     return cfg
 
 

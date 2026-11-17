@@ -14,7 +14,7 @@ import pytest
 
 import framegate
 from conftest import DemoRepo
-from framegate import cli, preflight, pytools
+from framegate import cli, preflight, procs, pytools
 from framegate.adapters import get_adapter
 from framegate.adapters.python import PythonAdapter
 from framegate.config import load_config
@@ -274,6 +274,163 @@ def test_a_finished_task_is_updated_like_new_work(
     assert code == 0 and lines[1].startswith("RUN: uv tool install --force")
     code, lines = check("demo", V)
     assert tools.updates == 1 and lines[1].startswith("UPDATED: the project environment")
+
+
+def other_task(home: pathlib.Path, root: pathlib.Path, feature: str, phase: str) -> pathlib.Path:
+    """A task of another repository in this machine's list, as its "spec OK" wrote it."""
+    progress = root / "out" / feature / "progress.json"
+    progress.parent.mkdir(parents=True, exist_ok=True)
+    progress.write_text(json.dumps({"phase": phase, "framegate": OTHER}), encoding="utf-8")
+    entry = home / "framegate" / "tasks" / f"{feature}.json"
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    data = {"root": str(root), "feature": feature, "progress": str(progress)}
+    entry.write_text(json.dumps(data), encoding="utf-8")
+    return entry
+
+
+def test_spec_ok_writes_down_the_version_the_task_runs_with(
+    demo_repo: DemoRepo, claude_home: pathlib.Path
+) -> None:
+    r = demo_repo
+    assert not list(claude_home.glob("framegate/tasks/*.json"))
+    assert r.af("approve-spec", "demo") == 0
+    assert r.progress()["framegate"] == V
+    [entry] = claude_home.glob("framegate/tasks/*.json")
+    data = json.loads(entry.read_text(encoding="utf-8"))
+    assert (data["feature"], data["framegate"]) == ("demo", V)
+    assert pathlib.Path(data["root"]) == r.root.resolve()
+    cfg = load_config(r.root)
+    [task] = preflight.tasks_in_progress(cfg)
+    assert (task.feature, task.version, task.pid) == ("demo", V, 0)
+    # a task an older version approved: a run writes down what is missing, and only that
+    progress = r.root / "out" / "demo" / "progress.json"
+    progress.write_text(json.dumps({"phase": "IMPLEMENT"}), encoding="utf-8")
+    entry.unlink()
+    preflight.record_start(cfg, "demo")
+    assert r.progress() == {"phase": "IMPLEMENT", "framegate": V}
+    progress.write_text(json.dumps({"phase": "IMPLEMENT", "framegate": OTHER}), encoding="utf-8")
+    preflight.record_start(cfg, "demo")
+    assert r.progress()["framegate"] == OTHER and entry.is_file()
+    # DONE: the task leaves the list
+    progress.write_text(json.dumps({"phase": "DONE"}), encoding="utf-8")
+    assert preflight.tasks_in_progress(cfg) == [] and not entry.exists()
+    # no spec OK yet: nothing to write down
+    preflight.record_start(cfg, "nothing-here")
+    assert not list(claude_home.glob("framegate/tasks/*.json"))
+
+
+def test_a_new_task_does_not_replace_the_tool_under_a_task_in_progress_here(
+    demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Seen on a replay: tasks went from 0.12.0 to 0.12.2 during their runs. The check kept
+    the versions of the feature it was called for only; the start check of the next task
+    got the install command."""
+    r = demo_repo
+    assert r.af("approve-spec", "demo") == 0
+    tools = Tools(monkeypatch, OTHER)
+    code, lines = check("next-task", NEWER)
+    assert code == 0 and tools.updates == 0 and len(lines) == 3
+    assert not any(line.startswith("RUN:") for line in lines)
+    assert lines[1].startswith(f"KEPT: the command-line tool is {V}, the plugin {NEWER} (demo is")
+    assert "The update waits until it is DONE; /framegate:update does it now." in lines[1]
+    assert lines[2].startswith(f"KEPT: the project environment has framegate {OTHER}")
+    assert "(demo is in progress" in lines[2]
+    # the task itself: the version it was started with is named
+    code, lines = check("demo", NEWER)
+    assert f"(demo is in progress (started with framegate {V}) and keeps" in lines[1]
+    assert "The update waits until it is DONE" in lines[1]
+
+
+def test_a_task_in_another_repository_keeps_the_tool_of_this_machine(
+    demo_repo: DemoRepo,
+    monkeypatch: pytest.MonkeyPatch,
+    claude_home: pathlib.Path,
+    tmp_path: pathlib.Path,
+) -> None:
+    """One command-line tool per machine: a task in progress elsewhere keeps it. The
+    workflow tools of this project are its own and follow the tool."""
+    tools = Tools(monkeypatch, OTHER)
+    elsewhere = tmp_path / "elsewhere"
+    entry = other_task(claude_home, elsewhere, "port-x", "IMPLEMENT")
+    other_task(claude_home, elsewhere, "second", "REVIEW")
+    code, lines = check("demo", NEWER)
+    assert code == 0 and not any(line.startswith("RUN:") for line in lines)
+    assert lines[1].startswith(
+        f"KEPT: the command-line tool is {V}, the plugin {NEWER} (port-x in {elsewhere} and 1 "
+        "more is in progress and keeps the tool it was started with). The update waits"
+    )
+    assert tools.updates == 1 and lines[2].startswith("UPDATED: the project environment")
+    # resume / status of this project: nothing is updated from there, as before
+    code, lines = check(None, NEWER)
+    assert "nothing is updated from here" in lines[1]
+    # both DONE (or cleaned up): the next start check updates, and the list is cleared
+    for name in ("port-x", "second"):
+        other_task(claude_home, elsewhere, name, "DONE")
+    code, lines = check("demo", NEWER)
+    assert lines[1].startswith("RUN: uv tool install --force") and not entry.exists()
+    other_task(claude_home, elsewhere, "port-x", "IMPLEMENT")
+    (elsewhere / "out" / "port-x" / "progress.json").unlink()
+    assert check("demo", NEWER)[1][1].startswith("RUN:") and not entry.exists()
+
+
+def test_update_waits_for_a_run_that_is_going(
+    demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`framegate update` keeps nothing back, but replacing a running tool breaks the run
+    (seen: a `status` failed on an import)."""
+    r = demo_repo
+    assert r.af("approve-spec", "demo") == 0
+    cfg = load_config(r.root)
+    procs.write_lock(cfg.out_dir, "demo")  # this process: alive
+    tools = Tools(monkeypatch, OTHER)
+    code, lines = check(None, NEWER, update=True)
+    assert code == 0 and len(lines) == 2
+    assert lines[1].startswith("PROBLEM: a framegate run is active (demo, pid ")
+    assert "replacing the command-line tool now would break it" in lines[1]
+    code, lines = check(None, V, update=True)
+    assert tools.updates == 0 and "replacing the project's workflow tools now" in lines[1]
+    # everything in line: nothing to say about the run
+    tools.version = V
+    assert check(None, V, update=True)[1][0].startswith("Start check: ok")
+    procs.remove_lock(cfg.out_dir)
+    tools.version = OTHER
+    assert check(None, NEWER, update=True)[1][1].startswith("RUN: uv tool install")
+
+
+@pytest.mark.parametrize("how", ["env", "toml"])
+def test_the_update_check_can_be_switched_off(
+    demo_repo: DemoRepo,
+    monkeypatch: pytest.MonkeyPatch,
+    claude_home: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    how: str,
+) -> None:
+    """A pinned setup, a replay of old tasks: nothing is compared, nothing updated."""
+    r = demo_repo
+    if how == "env":
+        monkeypatch.setenv("FRAMEGATE_UPDATE_CHECK", "0")
+    else:
+        r.add_toml("[update]\ncheck = false\n")
+    assert load_config(r.root).update_check is False
+    tools = Tools(monkeypatch, OTHER)
+    plugin_on_disk(claude_home, "100.0.0")  # no restart notice either
+    for feature, only in (("demo", False), (None, False), ("demo", True)):
+        assert check(feature, NEWER, check_only=only) == (
+            0,
+            [f"Start check: ok (framegate {V}; the update check is off)."],
+        )
+    assert tools.updates == 0
+    capsys.readouterr()
+    assert cli.main(["status"]) == 0
+    assert "/framegate:update" not in capsys.readouterr().out
+    # what would stop a run at once is still said
+    tools.version = ""
+    assert check("demo", NEWER)[1][1].startswith("PROBLEM: the project environment has no")
+    # the user's own `framegate update` still works
+    plugin_on_disk(claude_home, NEWER)
+    tools.version = OTHER
+    code, lines = check(None, NEWER, update=True)
+    assert lines[1].startswith("RUN: uv tool install --force")
 
 
 def test_update_keeps_nothing(

@@ -20,8 +20,8 @@ a terminal.
 | `framegate init` | write the starter files (config, spec templates, project facts, .gitignore lines) | once per repo |
 | `framegate install-tools [--dry-run] [--update]` | install what the workflow needs into the project's environment (python: the framegate pytest plugin, pytest, pytest-cov, hypothesis, diff-cover, and with a framegate.toml the lint / format / type tools its gate commands name); `--update` also brings the framegate pytest plugin there to the command-line tool's version; reports versions it changed; works before `init` | first step of `/framegate:setup`, after config changes |
 | `framegate probe [--json]` | the project facts every run depends on, from instant checks only (no test run, no linter over the code, no agent): language, the interpreter the run uses, the test / lint / format / type commands with where each comes from and whether the tool answers `--version` there, source and test folders, base branch, remote and host, deploy / CI paths locked or to lock, editable install, references; works before `init` (proposals from the project's own files) and with a framegate.toml (the configured values); always exit 0 | step 1 of `/framegate:setup` |
-| `framegate update [--plugin-version X]` | bring this machine in line with the installed plugin at any time: prints the install command for the command-line tool (it cannot replace itself while it runs), then updates the project's workflow tools; `/framegate:update` does both in the chat. A task between "spec OK" and DONE is the only thing the start check leaves alone; `update` does not |
-| `framegate preflight [<f>] [--plugin-version X] [--check]` | the start check: the command-line tool at the plugin's version (prints the install command for the chat), the project environment's workflow tools at the tool's version (updated here, unless the feature's spec is approved, `--check` is given or no feature is named), a session with outdated skills told to restart, a short setup check; one line when all is in line; always exit 0 | first step of `/framegate:feature`, `:bugfix`, `:refactor`; `:resume` with `--check` |
+| `framegate update [--plugin-version X]` | bring this machine in line with the installed plugin at any time: prints the install command for the command-line tool (it cannot replace itself while it runs), then updates the project's workflow tools; `/framegate:update` does both in the chat. Tasks between "spec OK" and DONE are the only thing the start check leaves alone; `update` does not, except while a run is active (it says so and updates nothing that run uses) |
+| `framegate preflight [<f>] [--plugin-version X] [--check]` | the start check: the command-line tool at the plugin's version (prints the install command for the chat), the project environment's workflow tools at the tool's version (updated here), a session with outdated skills told to restart, a short setup check; one line when all is in line; always exit 0. Nothing is updated while a task is in progress, with `--check` or without a feature: the update waits (`KEPT:`), "The start check and updates" below | first step of `/framegate:feature`, `:bugfix`, `:refactor`, `:pipeline`, `:resume` |
 | `framegate doctor [--full] [--brief]` | check the setup without agents; ends with a verdict and only what needs action (`--brief`: only that); `--full` also runs the whole test suite | after setup or config changes |
 | `framegate spec <f> [--mode feature\|bugfix\|refactor]` | create the branch `feat/<f>` and open the spec phase with the mode's templates | start of a feature |
 | `framegate spec-check <f>` | mechanical checks of the spec tables and the stubs (below); lists the setup files the approval commits; exit 1 on a problem | internal |
@@ -29,6 +29,7 @@ a terminal.
 | `framegate approve-spec <f> [--force]` | spec-check, `[env] refresh`, then freeze the spec and the setup files ("spec OK"); restarts the feature if the spec changed later | gate 1 |
 | `framegate run <f>` | run the agents until the next human gate or DONE | after every decision |
 | `framegate watch <f>` | follow the progress lines of a run | while it runs |
+| `framegate wake <f>` | a run that waits for the Claude usage limit tries again now ("Usage limit" below) | the limit was refilled before the time the run waits for |
 | `framegate status [f] [--brief]` | state of one or all features | any time |
 | `framegate gate-summary <f>` | the brief of the waiting gate (decision and default first, plain words) | at a gate |
 | `framegate approve <f>` | accept the gate: final gate -> retro, then DONE (tests gate -> implement) | at a gate |
@@ -634,8 +635,10 @@ framegate update [--plugin-version X]       # tool and project tools at the plug
 framegate preflight [<f>] [--plugin-version X] [--check]
                                             # the skills' start check: tool at the plugin's
                                             # version (prints the install command), project
-                                            # tools at the tool's version (updates them unless
-                                            # <f> is in progress / --check), restart notice
+                                            # tools at the tool's version; a task in progress
+                                            # or --check: nothing is updated, the update
+                                            # waits; restart notice; off: [update] check =
+                                            # false, FRAMEGATE_UPDATE_CHECK=0
 framegate spec <f> [--mode feature|bugfix|refactor]
                                             # branch feat/<f> from [git] base + SPEC phase,
                                             # with the mode's spec templates
@@ -649,6 +652,7 @@ framegate approve-spec <f> [--force]        # spec-check, [env] refresh, commit 
 framegate run <f>                           # runs to the next gate (tests, final) or DONE;
                                             # progress lines on stdout + out/<f>/progress.log
 framegate watch <f>                         # live view: new progress lines until the run ends
+framegate wake <f>                          # a run waiting for the usage limit tries again now
 framegate status [<f>] [--brief]            # all features / one; --brief = short, for the chat
 framegate gate-summary <f>                  # chat digest of the waiting gate
 framegate approve <f>                       # tests gate -> implement; final gate -> retro
@@ -1071,6 +1075,53 @@ one minute (15 minutes when claude names no time; progress line and toast), then
 task again. A reset further away than `[agents] limit_wait_max_hours` (default 6; `0` = never
 wait), e.g. a weekly limit, or a limit still there after 4 waits, stops the run like Ctrl+C
 (exit 130, `interrupted` with the reset time); `framegate run <f>` after the reset goes on.
+
+The time claude names is the latest end of the wait, not the only one (seen live: a run slept
+1 h 40 min after the limit had been refilled). Two things end it early:
+
+- **A try that gets through.** Every `[agents] limit_probe_minutes` (default 5; `0` = no
+  tries) framegate starts the refused run again. Claude refuses a run at the limit before
+  any model call, so a refused try costs nothing; it leaves no `agent_run` event and no run
+  files. The try that gets through is the run itself (the same task, the same model): no
+  extra call is paid for, and the run goes on from there.
+- **`framegate wake <f>`.** The waiting run tries again within 5 seconds (in the chat: tell
+  it the limit is back). While a run waits, `out/<f>/limit_wait.json` exists; the command
+  deletes it, and so may you. A run that is not waiting: exit 1, nothing happens. If the
+  limit is still there, the run is refused again and a new wait starts (it counts as one of
+  the 4).
+
+Ctrl+C / a stop during the wait behaves as before (exit 130, state kept). The end of a wait is
+a `usage_limit_over` event (`how`: `reset`, `probe` or `wake`; `waited_s`; `probes`).
+
+**The start check and updates.** Three pieces run at one version: the plugin (Claude Code
+updates it), the command-line tool (one per machine) and the project environment's workflow
+tools (one per project). The start check (`framegate preflight`) brings the last two to the
+plugin's version, but never under a task in progress:
+
+- "spec OK" (`approve-spec`) writes the framegate version into the task's `progress.json`
+  (`framegate`) and the task into a list for this machine (`<claude config>/framegate/tasks/`,
+  one small file per task; `framegate run` adds a task an older version approved). A task
+  leaves the list when it is DONE or its run files are gone (`cleanup`).
+- While any task on this machine is in the list, or a task in this checkout is between
+  "spec OK" and DONE, no start check prints the install command for the command-line tool:
+  also not the start check of a new task, here or in another repository. The workflow
+  tools of a project are kept while a task of that project is in progress. The check says
+  so in one `KEPT:` line (an update is waiting, and for which task); the next start check
+  after DONE updates.
+- `framegate update` / `/framegate:update` updates at once, tasks in progress or not. It
+  refuses only while a run is active (`PROBLEM: a framegate run is active ...`): replacing
+  the files of a running tool breaks that run.
+- Off altogether: `[update] check = false` in framegate.toml (this project) or env
+  `FRAMEGATE_UPDATE_CHECK=0` (this machine or session; it wins over the file). Then
+  `preflight` and `status` compare nothing and update nothing (`Start check: ok (...; the
+  update check is off)`); a missing framegate part in the project environment and a missing
+  claude CLI are still named. `framegate update` still works. For a pinned setup or a
+  replay of old tasks.
+
+Seen on a replay over three repositories (0.12.0): tasks went to 0.12.1 and 0.12.2 during
+their runs and a `status` failed on an import. The check kept the versions of the feature it
+was called for only, so the start check of the next task replaced the one tool of the
+machine under the tasks still running.
 
 API / connection error: a run of any phase that did no work because the API could not be
 reached (an error result whose text starts with "API Error:", e.g. "API Error: Can't reach

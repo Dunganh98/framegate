@@ -277,6 +277,38 @@ def test_env_overrides_claude(tmp_path: pathlib.Path, monkeypatch: pytest.Monkey
     assert parse_config(tmp_path, {"agents": {"claude": "x"}}).claude == "/opt/fake-claude"
 
 
+def test_update_check_and_limit_tries(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("FRAMEGATE_UPDATE_CHECK", raising=False)
+    cfg = parse_config(tmp_path, {})
+    assert cfg.update_check is True and cfg.limit_probe_minutes == 5
+    cfg = parse_config(tmp_path, {"update": {"check": False}, "agents": {"limit_probe_minutes": 0}})
+    assert cfg.update_check is False and cfg.limit_probe_minutes == 0
+    # the environment switches it off whatever the file says, never on
+    for value in ("0", "false", "No", "off"):
+        monkeypatch.setenv("FRAMEGATE_UPDATE_CHECK", value)
+        assert parse_config(tmp_path, {"update": {"check": True}}).update_check is False
+    monkeypatch.setenv("FRAMEGATE_UPDATE_CHECK", "1")
+    assert parse_config(tmp_path, {}).update_check is True
+    assert parse_config(tmp_path, {"update": {"check": False}}).update_check is False
+    for data, message in (
+        ({"update": {"check": "no"}}, "must be bool"),
+        ({"update": {"every": 1}}, "unknown key 'every'"),
+        ({"agents": {"limit_probe_minutes": -1}}, "limit_probe_minutes must be >= 0"),
+        ({"agents": {"limit_probe_minutes": "5"}}, "must be int/float"),
+    ):
+        with pytest.raises(ConfigError, match=message):
+            parse_config(tmp_path, data)
+    import framegate
+
+    file = pathlib.Path(framegate.__file__).parent / "templates" / "framegate.toml"
+    template = file.read_text(encoding="utf-8")
+    assert "# limit_probe_minutes = 5" in template and "framegate wake" in template
+    assert "# [update]" in template and "# check = true" in template
+    assert "FRAMEGATE_UPDATE_CHECK=0" in template
+
+
 @pytest.mark.parametrize(
     ("data", "message"),
     [
