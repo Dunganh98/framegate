@@ -1150,6 +1150,17 @@ brief always shows): run the final checks again (any answer does; the default), 
 is. The .NET adapter starts a failed Stryker run a second time first (with `--diag` when
 Stryker's output offers it; the first output is kept in `out/<f>/stryker/<project>.first.log`).
 
+Not measured: a mutation check whose tool cannot run on this machine (Python on Windows: no
+WSL, or no WSL distribution with `python3`, or the venv for mutmut cannot be built; `native`
+runner: mutmut is not installed, or the machine is Windows; .NET: Stryker.NET is not installed)
+is `NOT MEASURED`, not SKIPPED and not FAIL. The gate report shows `[NOT MEASURED] mutation
+score` with the reason and the one-line fix (`... Fix: ...`), its last line says `ALL GATES
+PASSED (NOT MEASURED, the tool cannot run here: ...)`, and the `final_gates` event lists the
+check in `not_measured` (its `results` entry has the reason and the fix). No repair run and no
+question. The brief shows it with the scores and on the risk line; a pull request's
+description shows it with the reason. `framegate stats` marks the run (`PASS (not measured:
+...)`). A check the config leaves out (`mutation_tool = "none"`) stays SKIPPED.
+
 Spec check (`framegate spec-check <f>`, also the first step of `approve-spec`, which refuses
 while it finds something; `--force` approves anyway and logs `spec_check` with `forced`). It
 reads columns of the spec templates' tables; a spec without them is not checked:
@@ -1190,6 +1201,12 @@ tests that failed>`; the `risk` event and the `human_gate` event (`risk`) record
 your decision, so you can compare before switching on `[gates] final = "auto"`: then a low-risk
 feature passes the final gate without a stop (`human_gate` with `auto: true`, retro, DONE;
 nothing is pushed, the PR stays yours). Everything else stops as before.
+A check that is NOT MEASURED (the tool cannot run on this machine, see "Not measured") is no
+reason for `elevated`: it says nothing about the feature. It is no proof either. The brief
+shows `Risk: low for what was measured (...); mutation score NOT MEASURED: <reason>. Fix:
+<fix>` (or, next to real reasons, `Risk: elevated: <reasons>. Not a reason: ...`), the `risk`
+event has it in `not_measured`, and `[gates] final = "auto"` does not pass the gate without a
+stop. A score below the threshold and a check the config switched off are reasons as before.
 
 Several source folders: `[paths] src` takes one folder or a list (`["core", "autoload",
 "scenes"]`). The implementer may write all of them; the frame diff, the forbidden patterns,
@@ -1315,10 +1332,12 @@ question is open; otherwise it stops as in human mode).
 
 Python projects: add framegate (pinned) to the dev dependencies; its pytest plugin provides the
 `req` marker and `--req ID,ID` selection. mutmut needs fork, so on Windows the mutation gate runs
-through WSL (`[gates] mutation_runner = "auto"`, default; `[env] wsl_distro` picks the
-distribution) in a WSL-side venv with the project's dependencies. Install once inside WSL:
-`curl -LsSf https://astral.sh/uv/install.sh | sh` (or `sudo apt install python3-venv`). Without
-WSL the gate is SKIPPED with the reason. Details: docs/adapters.md.
+through WSL (`[gates] mutation_runner = "auto"`, default) in a WSL-side venv with the project's
+dependencies. `[env] wsl_distro` picks the distribution; without it the default one is used,
+or, when that one has no `python3` (Docker Desktop's `docker-desktop`), the first other one
+that has. Install once inside WSL: `curl -LsSf https://astral.sh/uv/install.sh | sh` (or `sudo
+apt install python3-venv`). Without a usable WSL the check is NOT MEASURED with the reason and
+the fix, and `framegate doctor` warns (`tool: mutmut (mutation)`). Details: docs/adapters.md.
 
 .NET projects (xUnit, `language = "dotnet"`, detected from a root `*.sln`/`*.slnx`/`*.csproj`):
 install framegate with the `dotnet` extra (`pip install "framegate[dotnet]"`, brings diff-cover)

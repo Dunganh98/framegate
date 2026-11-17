@@ -44,6 +44,8 @@ class FinalRun:
     seconds: float
     durations: dict[str, float]
     tool_failures: list[str] = field(default_factory=list)
+    #: checks whose tool could not run on the machine: the run passed without them
+    not_measured: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -116,6 +118,7 @@ class FeatureStats:
                     "passed": r.passed,
                     "failed": r.failed,
                     "tool_failures": r.tool_failures,
+                    "not_measured": r.not_measured,
                     "seconds": round(r.seconds),
                     "durations": r.durations,
                 }
@@ -192,6 +195,7 @@ def feature_stats(feature: str, events: list[dict[str, Any]]) -> FeatureStats:
                     float(e.get("seconds") or 0),
                     {str(k): float(v) for k, v in (e.get("durations") or {}).items()},
                     [str(x) for x in e.get("tool_failures") or []],
+                    [str(x) for x in e.get("not_measured") or []],
                 )
             )
         elif kind == "final_repair":
@@ -363,7 +367,9 @@ def detail(st: FeatureStats) -> list[str]:
         slow = sorted(r.durations.items(), key=lambda kv: -kv[1])[:3]
         slowest = ", ".join(f"{n} {duration(s)}" for n, s in slow if s >= 1)
         lines.append(
-            f"  {i}. {'PASS' if r.passed else 'FAIL: ' + failed}, {duration(r.seconds)}"
+            f"  {i}. {'PASS' if r.passed else 'FAIL: ' + failed}"
+            + (f" (not measured: {', '.join(r.not_measured)})" if r.not_measured else "")
+            + f", {duration(r.seconds)}"
             + (f" (slowest: {slowest})" if slowest else "")
         )
     lines.append(

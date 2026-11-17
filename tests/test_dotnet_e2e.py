@@ -222,7 +222,7 @@ def test_dotnet_full_flow(dotnet_repo: DemoRepo) -> None:
         survivors = (r.root / "out/demo/mutation_survivors.md").read_text(encoding="utf-8")
         assert survivors.startswith("# Mutation survivors")
     else:
-        assert "[SKIPPED] mutation score" in final
+        assert "[NOT MEASURED] mutation score" in final
     assert [c["phase"] for c in r.calls()] == [
         "TESTS",
         "TEST_REVIEW",

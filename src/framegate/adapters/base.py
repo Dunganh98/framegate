@@ -114,7 +114,8 @@ class TestScope:
 
 @dataclass
 class CheckResult:
-    """status: PASS | FAIL | SKIPPED. A SKIPPED check never fails the gate but is reported."""
+    """status: PASS | FAIL | SKIPPED | NOT MEASURED. A SKIPPED or NOT MEASURED check never
+    fails the gate but is reported."""
 
     status: str
     output: str = ""
@@ -123,6 +124,18 @@ class CheckResult:
     #: a FAIL because the tool gave no result (it crashed, could not build its own copy, was
     #: cut short): it says nothing about the code or the tests, so no agent is sent to fix it
     tool_failure: bool = False
+
+
+#: status of a check whose tool cannot run on this machine (not_measured)
+NOT_MEASURED = "NOT MEASURED"
+
+
+def not_measured(reason: str, fix: str, log: str = "") -> CheckResult:
+    """The check's tool cannot run on this machine, so nothing was measured. That is not a
+    FAIL (it says nothing about the code or the tests) and not a SKIPPED (nobody chose to
+    leave the check out). The gate passes; the gate report, the brief and the risk line show
+    the reason and the one-line fix, and the risk rating is not raised for it (risk.py)."""
+    return CheckResult(NOT_MEASURED, log, summary=f"{reason}. Fix: {fix}")
 
 
 @dataclass
@@ -652,7 +665,8 @@ class LanguageAdapter(abc.ABC):
     ) -> CheckResult:
         """Mutation score on the changed source files (>= cfg.mutation_score), killing mutants
         only with the tests of `scope` (None = the whole suite); write survivors to
-        <out>/<feature>/mutation_survivors.md. SKIPPED with a reason if unavailable."""
+        <out>/<feature>/mutation_survivors.md. SKIPPED with a reason when the config leaves
+        it out; `not_measured(reason, fix)` when the tool cannot run on this machine."""
 
     # ---------- frame ----------
     @abc.abstractmethod
