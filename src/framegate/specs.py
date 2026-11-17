@@ -53,6 +53,15 @@ def feature_mode(cfg: Config, feature: str) -> str:
     return mode if mode in MODES else "feature"
 
 
+def baseline_on(cfg: Config, feature: str) -> bool:
+    """[gates] regression_baseline for this task: the setting when framegate.toml has one;
+    without it, on for a bug fix only. A bug fix starts on a tree that is red on purpose (the
+    bug may have a failing test already); a feature or a refactor starts on a green one."""
+    if cfg.regression_baseline is not None:
+        return cfg.regression_baseline
+    return bool(feature) and feature_mode(cfg, feature) == "bugfix"
+
+
 def template_dir(mode: str) -> str:
     """The spec template folder of a mode, under [paths] specs or in the package."""
     return "_template" if mode == "feature" else f"_template_{mode}"

@@ -285,6 +285,20 @@ def final_facts(
     if fixed:
         out.append(f"- valid findings fixed: {', '.join(fixed[-1].get('tests') or [])}")
 
+    debt: dict[str, int] = {}
+    for e in ev:
+        if e.get("kind") == "format_debt":
+            for name, n in (e.get("files") or {}).items():
+                debt[str(name)] = debt.get(str(name), 0) + int(n)
+    if debt:
+        out += ["", f"## Formatted beyond the task's lines: {len(debt)} file(s)", ""]
+        out.append(
+            "These files were not formatted before the task. The format fix formatted them "
+            "whole, so the diff holds lines the task did not change in substance. Say so in "
+            "one line of the summary:"
+        )
+        out += [f"- {name}: {n} line(s)" for name, n in sorted(debt.items())]
+
     out += ["", f"## Parked items: {len(parked)}", ""]
     for p in parked:
         out.append(f"- {p.get('label')} ({p.get('kind')}): {p.get('reason')}")

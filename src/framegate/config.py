@@ -386,10 +386,13 @@ class Config:
     #: [gates.commands] format_fix: the project's own formatter for that fix, `{files}` = the
     #: changed files (e.g. black where the project checks with black, not ruff format)
     format_fix_command: list[str] = field(default_factory=list)
-    #: [gates] regression_baseline: `approve-spec` runs the whole suite once and records the
-    #: tests that already fail; the final regression check then fails only on other failures
-    #: (for a repository whose suite is not green locally, e.g. tests that need services)
-    regression_baseline: bool = False
+    #: [gates] regression_baseline: `approve-spec` runs the whole suite and the lint / format
+    #: / typecheck / imports checks once and records what already fails (gates.py,
+    #: red_tree.py); the gates then fail only on what is new. Seen live in three of three
+    #: replay runs: a tree that was red before the task, every step gate blamed the feature.
+    #: false: nothing is run at the approval and every failure counts. Not set (None): on
+    #: for a bug fix, off for a feature and a refactor (specs.baseline_on)
+    regression_baseline: bool | None = None
     #: [gates.extra] name -> command: project checks run at the final gates and shown at the
     #: final gate, never blocking (e.g. a balance measurement)
     extra_checks: dict[str, list[str]] = field(default_factory=dict)

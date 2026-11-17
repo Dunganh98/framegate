@@ -69,6 +69,9 @@ Scenario keys:
     DEMO-E-001 row with the answer reference), "new_id" (edit + a new row DEMO-E-002, added to
     plan.md Covers; TESTS then writes a test for it), "renumber" (DEMO-E-001 -> DEMO-E-009),
     "stray" (edit + writes specs/other/requirements.md and specs/demo/notes.md), "none"
+  config_update: text SPEC_UPDATE appends to a copy of framegate.toml, written to
+    out/demo/config_update.toml when its task asks for that file (an approved diagnosis with
+    `Fix owner: config`); "bad" -> a file that is no valid TOML
 """
 
 import json
@@ -412,6 +415,10 @@ def main() -> int:
         if mode != "none":
             req.write_text(text, encoding="utf-8")
         write("out/demo/spec_update.md", f"- DEMO-E-001: {mode}{tag}\n")
+        change = scen.get("config_update")
+        if change and "config_update.toml" in prompt:
+            toml = pathlib.Path("framegate.toml").read_text(encoding="utf-8")
+            write("out/demo/config_update.toml", "[gates\n" if change == "bad" else toml + change)
     if phase == "TESTS":
         rel, text = lang["tests"]
         if two:

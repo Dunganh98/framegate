@@ -250,11 +250,13 @@ def demo_repo(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> DemoRe
     # The tests gate stops here ("human") and every plan step gets its own implementer run;
     # the defaults ("defer", step batches) have their own tests (DemoRepo.defer_tests_gate,
     # set_toml("agents", "step_batch_ids", ...)); no diagnosis runs unless a test sets
-    # [agents] diagnose_after.
+    # [agents] diagnose_after. Nothing is run at the spec approval ([gates]
+    # regression_baseline, on for a bug fix by default, has its own tests: tests/test_red_tree.py).
+    gates = '[gates]\nmutation_runner = "native"\ntests = "human"\nregression_baseline = false\n'
     toml = root / "framegate.toml"
     toml.write_text(
         toml.read_text(encoding="utf-8")
-        .replace("[gates]\n", '[gates]\nmutation_runner = "native"\ntests = "human"\n', 1)
+        .replace("[gates]\n", gates, 1)
         .replace("[agents]\n", "[agents]\nstep_batch_ids = 0\ndiagnose_after = 0\n", 1),
         encoding="utf-8",
     )

@@ -22,7 +22,12 @@ request's description `<specs>/<f>/pr_description.md`), not all of it.
    the spec (they are mechanical: add the missing spec ID, copy the code line as it is) and
    approve again; `--force` only when the user says so. It commits the setup files changed in
    the spec phase with the spec (it prints which) and runs `[env] refresh` if the project has
-   one. If it refuses because of other uncommitted protected files (e.g. CLAUDE.md, CI or
+   one. For a bug fix (and where framegate.toml sets `regression_baseline = true`) it
+   then checks the tree as it is (the whole suite and the lint / format checks, once;
+   this can take minutes). If it prints "Already red on the untouched tree: ...",
+   pass that line on to the user in your next status message, in plain words (what fails
+   today, and that the run counts only what is new against it). Do not stop for it and do
+   not ask: going on is the default. If it refuses because of other uncommitted protected files (e.g. CLAUDE.md, CI or
    deploy files, `[protected] extra`) or a failed refresh: say which and why in one line and
    ask the user what to do (commit or revert the files; fix the setup); never commit or
    revert them yourself. A deploy / CI change the feature needs is never part of it: it

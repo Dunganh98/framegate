@@ -128,7 +128,7 @@ def dotnet_repo(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Demo
     text = (
         toml.read_text(encoding="utf-8")
         .replace('# review_tests = "tests/review"', 'review_tests = "tests/Demo.Tests/Review"')
-        .replace("[gates]\n", '[gates]\ntests = "human"\n', 1)
+        .replace("[gates]\n", '[gates]\ntests = "human"\nregression_baseline = false\n', 1)
     )
     toml.write_text(text + 'base_filter = "Category!=Slow"\n', encoding="utf-8")
     git(root, "add", "-A")

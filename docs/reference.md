@@ -714,7 +714,7 @@ forget, silent if it fails. `cleanup` keeps `specs/<f>/`, the metrics row and th
 `out/events.jsonl`, refuses while the feature's run is active or before DONE (`--force`), and
 prints the `git push origin --delete` line for tags that were pushed (`[git] markers = "tags"`).
 
-**Markers, commits, known failures.** `spec-approved/<f>`, `tests-approved/<f>`, `spec-update/<f>`, `tests-update/<f>` and `knowledge-update/<f>` are private refs (`refs/<name>`) by default: `git diff tests-approved/<f>` resolves them like a tag, but no `git push`, `--tags` or `--all` publishes them to a shared remote. `[git] markers = "tags"` stores git tags instead (needed for a CI job that runs `framegate gates`); tags left by an older framegate are still read and replaced on the next write. A workflow commit stages only the workflow's paths (`[paths] src`, `tests`, `specs`, `metrics`, the knowledge file, the code map), never the whole working tree: your notes and unrelated edits stay out. `[gates] regression_baseline = true`: `approve-spec` runs the whole suite once and records the tests that already fail (`out/<f>/regression_baseline.json`, kept on a second approval); the final regression check then fails only on other failures (with the default `coverage_scope = "feature"`).
+**Markers, commits, known failures.** `spec-approved/<f>`, `tests-approved/<f>`, `spec-update/<f>`, `tests-update/<f>`, `knowledge-update/<f>` and `config-update/<f>` are private refs (`refs/<name>`) by default: `git diff tests-approved/<f>` resolves them like a tag, but no `git push`, `--tags` or `--all` publishes them to a shared remote. `[git] markers = "tags"` stores git tags instead (needed for a CI job that runs `framegate gates`); tags left by an older framegate are still read and replaced on the next write. A workflow commit stages only the workflow's paths (`[paths] src`, `tests`, `specs`, `metrics`, the knowledge file, the code map), never the whole working tree: your notes and unrelated edits stay out. `[gates] regression_baseline`: `approve-spec` checks the tree as it is before the task. Not set, it is on for a bug fix and off for a feature and a refactor: a bug fix may start on a red tree (the bug can have a failing test already), a feature and a refactor start on a green one (a test this machine cannot run, or code that does not follow the project's checks, is a matter for the setup or for a refactor of its own). `true` / `false` in framegate.toml sets it for every mode. It runs the whole suite once and records the tests that already fail (`out/<f>/regression_baseline.json`; never a test tagged with one of the feature's own spec IDs), and it runs the lint / format / typecheck / imports checks once and records, per failing check, how many output lines name each file (`out/<f>/lint_baseline.json`). Both records are kept on a second approval. It prints one line ("Already red on the untouched tree: ...") and goes on. From then on the gates count only what is new: the step gates and the final regression check (with the default `coverage_scope = "feature"`) leave the recorded tests out; a failing lint / format / typecheck / imports check passes while no file is named more often than at the approval, and when it fails, its output holds only the files that got worse. Limits: a new finding in a file that already had some counts only by number, and an old failure that changes its cause does not show. `regression_baseline = false`: nothing is run at the approval and every failure counts. Formatting debt, in every mode: the format fix formats a changed file whole, so debt from before the task in a file the task touches is fixed with it, without a question. The lines the formatter rewrote outside the task's own lines are counted (`format_debt` event) and listed in final_facts.md ("Formatted beyond the task's lines"), for one line in the summary. Files the task does not touch are left as they are.
 
 **The spec phase covers the setup.** Everything the human adds or changes happens before
 "spec OK"; after it the frame is locked and no agent (and no later hand edit) may change a
@@ -973,7 +973,10 @@ Between the gates nothing stops:
   using up its attempts. The same for a step gate whose frame check reports nothing but
   `PROTECTED PATH CHANGED` on paths the implementer may not write: it can neither have caused
   nor fix that, so it parks after that attempt, without a diagnosis run, and the reason names
-  the files (a `SUPPRESSION ADDED` is its own line to remove: normal retry).
+  the files (a `SUPPRESSION ADDED` is its own line to remove: normal retry). The frame
+  check counts a suppression by its text, per file: a line that the formatter re-wrapped,
+  or whose comment was shortened, removes one and adds the same one, which is no new
+  suppression; more of the same than before are still reported.
 - When every plan step is parked (none done, none provisional) there is nothing to review:
   the reviewer, the final checks and the summary run are skipped (`review_skipped` event,
   counted by `framegate stats <f>`), and the final gate comes at once with the parked items;
@@ -981,12 +984,35 @@ Between the gates nothing stops:
   The first round that builds something goes through the whole review.
 - When the same checks fail `[agents] diagnose_after` attempts in a row (default 2), a
   diagnosis run (Opus, `roles/diagnosis.md`) reads everything, runs the tests and changes
-  nothing: it writes the root cause, the fix owner (`src` / `tests` / `spec`) and one
-  proposed fix (`out/<f>/diagnoses/<item>.md`, `diagnosis` event). `src`: the proposal goes
-  to the implementer's next attempt (it always gets that attempt). `tests` / `spec`: the item
-  parks at once with the proposal as its question; at the final gate one reply approves it,
-  and the redo sends it to the phase that owns the file (spec updater, test writer,
-  implementer).
+  nothing: it writes the root cause, the fix owner (`src` / `tests` / `spec` / `config`) and
+  one proposed fix (`out/<f>/diagnoses/<item>.md`, `diagnosis` event). `src`: the proposal
+  goes to the implementer's next attempt (it always gets that attempt). `tests` / `spec` /
+  `config`: the item parks at once with the proposal as its question; at the final gate one
+  reply approves it, and the redo sends it to the phase that owns the file (spec updater,
+  test writer, implementer).
+- `Fix owner: config` is a change to framegate.toml (a check's command, what it leaves
+  out, a threshold, a timeout). No agent may write that file. When the answer approves the
+  proposal, the spec updater writes the whole new file to `out/<f>/config_update.toml`;
+  framegate checks that it loads, puts it in place, commits it alone (`<f>: framegate.toml
+  updated from answers ANS-n`), tags it `config-update/<f>` and goes on with the new
+  config (`config_update` event; the changed lines are listed under "Spec changes from
+  your answers" at the next gate). The frame check accepts framegate.toml while it is
+  exactly the tagged file. A file that does not load is not applied.
+- A redo that cannot end differently is not run. Work that parked on something no
+  implementer run can change ("unfixable in IMPLEMENT", or a diagnosis with owner `tests`
+  / `spec` / `config`) keeps a digest of what the gates read outside the source folders:
+  every tracked file outside `[paths] src`, the review tests, the out folder and the code
+  map (the spec, the frozen tests, framegate.toml, packaging and tool config), uncommitted
+  changes to such files, and the two records of what was red at the spec approval. When
+  the answer only approves ("ok", "Approved: apply the proposed fix as written") and the
+  digest is still the same after the spec updater and the test writer ran, the approved
+  change was not made: the item parks again at once ("not redone: nothing changed since it
+  parked", `redo_result` with `unchanged`), without an implementer or a diagnosis run, and
+  its question says what is missing. An answer that says more than an approval is new
+  information and its redo always runs; so does "redo anyway" (for a change framegate
+  cannot see: an installed package, a service). Seen live in three of three replay runs:
+  an approved framegate.toml change nobody could apply, redone with the same failed
+  attempts and a second diagnosis that found the same thing.
 - Provisional steps: when only named frozen tests are wrong (park.md starts with `Park kind:
   tests-wrong` and `Contested tests: A, B`, or a diagnosis says `Fix owner: tests` with a
   `Contested tests:` line) and the step's code passes every other check of its step gate, the

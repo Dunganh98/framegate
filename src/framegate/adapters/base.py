@@ -329,6 +329,24 @@ def changed_lines(cfg: Config, base_ref: str, rel: str) -> set[int] | None:
     return {n for a, b in diff_hunks(diff) for n in range(a, b + 1)}
 
 
+def lines_beyond(before: str, after: str, lines: set[int]) -> int:
+    """How many lines of `before` a formatter rewrote (`after` is its output) outside
+    `lines` (1-based lines of `before`: the ones the task changed). That is formatting
+    debt from before the task, fixed with it."""
+    import difflib
+
+    a, b = before.splitlines(keepends=True), after.splitlines(keepends=True)
+    count = 0
+    for tag, i1, i2, _, _ in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if tag == "equal":
+            continue
+        if i2 > i1:
+            count += sum(1 for k in range(i1 + 1, i2 + 1) if k not in lines)
+        elif i1 not in lines and i1 + 1 not in lines:  # lines put in between two old ones
+            count += 1
+    return count
+
+
 def merge_scoped(before: str, after: str, lines: set[int]) -> str:
     """`after` (a formatter's output for `before`) applied only where it touches `lines` (1-based
     lines of `before`): formatting a changed file must not reformat the code nobody touched."""
@@ -486,6 +504,8 @@ class LanguageAdapter(abc.ABC):
     #: the format / lint checks report only findings on changed lines, and the format fix keeps
     #: only the formatter's changes on changed lines (no churn in code nobody touched)
     line_scoped_format: ClassVar[bool] = False
+    #: set by format_files: file -> lines the formatter rewrote outside the task's own
+    format_beyond: dict[str, int] = {}  # noqa: RUF012 (replaced per call, not changed)
 
     def format_fix_enabled(self) -> bool:
         """[gates] format_fix, with the adapter's own format check or with a configured
@@ -509,7 +529,10 @@ class LanguageAdapter(abc.ABC):
         """Before the checks of a gate: format the source files changed since base_ref, so a
         formatting slip costs no implementer attempt, and the changed review tests (the frame
         exceptions: written by the reviewer, which nobody formats otherwise and the implementer
-        may not edit). Frozen tests are never touched. Returns a one-line note ("" = nothing)."""
+        may not edit). Frozen tests are never touched. A changed file is formatted whole: old
+        formatting debt in it is fixed with the work (format_beyond counts those lines for
+        the final summary). Returns a one-line note ("" = nothing)."""
+        self.format_beyond = {}
         if not self.format_fix_enabled() or not base_ref:
             return ""
         from framegate.checks.frame_diff import changed_files, path_matches
@@ -528,7 +551,10 @@ class LanguageAdapter(abc.ABC):
     def format_files(self, files: Sequence[str], base_ref: str | None = None) -> str:
         """Format `files` (posix, relative to the root; other suffixes and missing files are
         left out) with the adapter's formatter. With line_scoped_format and a base_ref, only
-        the formatter's changes on lines changed since base_ref are kept. Returns a note."""
+        the formatter's changes on lines changed since base_ref are kept. Returns a note.
+        Sets format_beyond: file -> lines the formatter rewrote that were not changed since
+        base_ref (formatting debt from before the task, fixed with it)."""
+        self.format_beyond = {}
         files = [
             f
             for f in files
@@ -543,7 +569,8 @@ class LanguageAdapter(abc.ABC):
         if not cmds:
             return ""
         scoped = self.line_scoped_format and bool(base_ref)
-        before = {f: (self.root / f).read_bytes() for f in files} if scoped else {}
+        before = {f: (self.root / f).read_bytes() for f in files} if base_ref else {}
+        task_lines = {f: changed_lines(self.cfg, str(base_ref), f) for f in before}
         failed = []
         for cmd in cmds:
             code, out = run_command(cmd, self.root, env=self.tool_env(), timeout=900)
@@ -552,10 +579,17 @@ class LanguageAdapter(abc.ABC):
         for f, old in before.items():
             path = self.root / f
             new = path.read_bytes()
-            lines = changed_lines(self.cfg, str(base_ref), f) if new != old else None
-            if lines is not None:
-                merged = merge_scoped(old.decode("utf-8"), new.decode("utf-8"), lines)
-                path.write_bytes(merged.encode("utf-8"))
+            lines = task_lines[f] if new != old else None
+            if lines is None:
+                continue
+            try:
+                was, now = old.decode("utf-8"), new.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            if scoped:
+                path.write_bytes(merge_scoped(was, now, lines).encode("utf-8"))
+            elif n := lines_beyond(was, now, lines):
+                self.format_beyond = {**self.format_beyond, f: n}
         note = f"formatted {len(files)} changed file(s)" + (
             " (changed lines only)" if scoped else ""
         )

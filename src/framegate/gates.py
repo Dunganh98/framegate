@@ -31,7 +31,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from framegate import references
+from framegate import red_tree, references
 from framegate.adapters.base import (
     Check,
     CheckResult,
@@ -53,8 +53,8 @@ from framegate.checks import (
 from framegate.config import Config
 from framegate.failure_filter import filter_failure_output
 from framegate.report import short_name
-from framegate.specs import feature_ids, plan_steps
-from framegate.state import load_progress, read_contested, read_reqs
+from framegate.specs import baseline_on, feature_ids, plan_steps
+from framegate.state import load_progress, log_event, read_contested, read_reqs
 
 #: most lines of a failing check's output in the gate report (and so in the fix prompt)
 OUTPUT_LINES = 40
@@ -155,6 +155,10 @@ def record_regression_baseline(adapter: LanguageAdapter, feature: str) -> tuple[
         failing: list[str] = []
     elif run.status == "failed" and run.cases is not None:
         failing = sorted({c.name for c in run.cases if c.outcome in ("failed", "error")})
+        # never the feature's own tests (a record taken after they were written: they are
+        # red by design then, and the regression check would skip one that breaks later)
+        own = later_step_tests(adapter, feature, []) if failing else []
+        failing = [n for n in failing if not is_test_at(n, own)]
     else:
         return 0, f"the suite run gave no per-test results ({run.status})"
     path = adapter.cfg.feature_out(feature) / BASELINE_FILE
@@ -163,10 +167,19 @@ def record_regression_baseline(adapter: LanguageAdapter, feature: str) -> tuple[
     return len(failing), ""
 
 
+def baseline_recorded(cfg: Config, feature: str) -> bool:
+    """Is there a record of the tests that failed when the spec was approved?"""
+    return bool(
+        feature
+        and baseline_on(cfg, feature)
+        and (cfg.feature_out(feature) / BASELINE_FILE).is_file()
+    )
+
+
 def regression_baseline(cfg: Config, feature: str) -> set[str]:
     """Names of the tests that already failed when the spec was approved (empty: none
     recorded, or [gates] regression_baseline is off)."""
-    if not cfg.regression_baseline or not feature:
+    if not feature or not baseline_on(cfg, feature):
         return set()
     path = cfg.feature_out(feature) / BASELINE_FILE
     if not path.is_file():
@@ -343,11 +356,19 @@ def step_suite(adapter: LanguageAdapter, feature: str, covered: list[str]) -> Ch
             other.append(c.name)
     note = f"left out (later steps, contested, failing before the feature): {left_out}"
     if other:
+        blame = (
+            "they passed when the spec was approved. Your change broke them: fix the code, "
+            "not the tests."
+            if baseline_recorded(cfg, feature)
+            else "the tests that failed before this feature were not recorded ([gates] "
+            "regression_baseline is off, or its run gave no result), so they cannot be told "
+            "apart from tests your change broke. Fix what your change broke; a test that "
+            "fails for another reason is not yours to fix: say so in your step note."
+        )
         return CheckResult(
             "FAIL",
             run.output
-            + f"\n\nTests outside this step fail ({len(other)}); they passed before it. Your "
-            f"change broke them: fix the code, not the tests.\n{_listed(other)}",
+            + f"\n\nTests outside this step fail ({len(other)}); {blame}\n{_listed(other)}",
             note,
         )
     return CheckResult("PASS", run.output, note + "; no other failure")
@@ -406,7 +427,9 @@ def checks(
     # an idle step (scope "idle"): the code is the one the last green gate checked, so only
     # the step's own tests are new; lint, the frame check and the whole suite are its results
     idle = scope == "idle"
-    c = [] if idle else list(adapter.lint_checks(tag))
+    # lint, format, typecheck, imports: only what is new against the spec approval counts
+    lint = [] if idle else adapter.lint_checks(tag)
+    c = [red_tree.against_baseline(adapter, feature, k) for k in lint]
     if not idle:
         c.append(Check(frame_diff.CHECK_NAME, lambda: frame_diff.check(adapter, feature)))
     if scope in ("step", "fix", "idle"):
@@ -581,6 +604,8 @@ def gate_report(
         note = f"skipped ({type(e).__name__}: {e})"
     if note:
         emit(f"Format fix: {note}")
+    if scope != "idle" and getattr(adapter, "format_beyond", None):
+        log_event(adapter.cfg, feature, "format_debt", files=adapter.format_beyond)
     for check in checks(adapter, feature, scope, skip_mutation, exp):
         t0 = time.monotonic()
         blockers = red_blockers(failed) if check.needs_green else []

@@ -72,10 +72,12 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 #                                  # the whole suite with coverage (slow on big suites)
 # mutation_scope = "feature"       # tests the mutation run uses: "feature" | "suite"
 # regression_timeout = 3600        # seconds for the uninstrumented whole-suite run
-# regression_baseline = false      # true: approve-spec runs the whole suite once and records
-#                                  # the tests that already fail; the final regression check
-#                                  # then fails only on other failures (a suite that is not
-#                                  # green on this machine, e.g. tests that need services)
+# regression_baseline = true       # approve-spec runs the whole suite and the lint / format /
+#                                  # typecheck / imports checks once and records what already
+#                                  # fails; the gates then fail only on what is new. false:
+#                                  # nothing is run at the approval, every failure counts.
+#                                  # Not set: on for a bug fix (it may start on a red tree),
+#                                  # off for a feature and a refactor (they start on a green one)
 # coverage_timeout = 1800          # seconds per coverage run; killed -> "ERROR: test run incomplete"
 # mutation_timeout = 3600          # seconds per mutation run (same)
 # format_fix = true                # the gates format the changed source files (and review

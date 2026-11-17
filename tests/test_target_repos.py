@@ -116,8 +116,10 @@ def test_baseline_is_recorded_at_spec_approval_and_used_by_the_final_gates(
     assert json.loads(path.read_text(encoding="utf-8"))["failing"] == ["kept"]
 
 
-def test_baseline_off_by_default(demo_repo: DemoRepo) -> None:
-    r = demo_repo
+def test_baseline_off_runs_nothing_at_the_approval(demo_repo: DemoRepo) -> None:
+    r = demo_repo  # the fixture sets regression_baseline = false
+    assert load_config(r.root).regression_baseline is False
+    assert parse_config(r.root, {}).regression_baseline is None  # the default: by mode
     assert r.af("approve-spec", "demo") == 0
     assert not (r.root / "out" / "demo" / gates.BASELINE_FILE).exists()
     cfg = load_config(r.root)
