@@ -32,7 +32,8 @@ version into the task's progress.json and the task into a list for this machine
 While the list names a task, no start check prints the install command, and none updates
 the workflow tools of a project that has a task in progress. `framegate update` (the user
 asked) still does, except while a run is active: replacing the files of a running tool
-breaks it.
+breaks it. A task without activity for STALE_DAYS (abandoned, forgotten) no longer holds an
+update back; `framegate status --all` lists every task of the list, stale ones marked.
 
 `[update] check = false` in framegate.toml or env FRAMEGATE_UPDATE_CHECK=0 turns the
 comparison off altogether (a pinned setup, a replay of old tasks).
@@ -71,6 +72,8 @@ from framegate.state import GitError, feature_finished, replace_file, tag_exists
 
 PLUGIN_NAME = "framegate"
 PROGRESS_FILE = "progress.json"
+#: a task without activity for this many days no longer holds an update back
+STALE_DAYS = 14
 
 
 def version_key(version: str) -> tuple[int, ...]:
@@ -93,6 +96,15 @@ class Task:
     version: str
     #: its run lock when a `framegate run` of it is alive
     pid: int = 0
+    phase: str = ""
+    #: its newest event; without one, when its progress.json was written
+    last: datetime.datetime | None = None
+
+    @property
+    def stale(self) -> bool:
+        """No activity for STALE_DAYS: it no longer holds an update back."""
+        age = datetime.datetime.now() - self.last if self.last else datetime.timedelta()
+        return not self.pid and age.days >= STALE_DAYS
 
     def where(self, here: pathlib.Path | None) -> str:
         return (
@@ -129,6 +141,43 @@ def _running(out_dir: pathlib.Path, feature: str) -> int:
     if procs.lock_alive(lock) and (lock or {}).get("feature") == feature:
         return int((lock or {}).get("pid") or 0)
     return 0
+
+
+def last_activity(progress: pathlib.Path) -> datetime.datetime | None:
+    """`progress` = {out}/<feature>/progress.json: the time of the feature's newest event in
+    {out}/events.jsonl; without one, when progress.json was written."""
+    feature = progress.parent.name
+    try:
+        lines = (progress.parent.parent / "events.jsonl").read_text("utf-8", "replace").split("\n")
+    except OSError:
+        lines = []
+    for line in reversed(lines):
+        if f'"{feature}"' not in line:
+            continue
+        try:
+            rec = json.loads(line)
+            if rec.get("feature") == feature:
+                return datetime.datetime.fromisoformat(str(rec.get("ts")))
+        except (ValueError, AttributeError):
+            continue
+    try:
+        return datetime.datetime.fromtimestamp(progress.stat().st_mtime)
+    except OSError:
+        return None
+
+
+def _task(
+    root: pathlib.Path, progress: pathlib.Path, prog: dict[str, object], version: str
+) -> Task:
+    feature = progress.parent.name
+    return Task(
+        root,
+        feature,
+        version,
+        _running(progress.parent.parent, feature),
+        str(prog.get("phase") or ""),
+        last_activity(progress),
+    )
 
 
 def record_start(cfg: Config, feature: str, restart: bool = False) -> None:
@@ -177,13 +226,12 @@ def listed_tasks() -> list[Task]:
             except OSError:
                 pass
             continue
-        feature = str(data.get("feature") or path.parent.name)
         found.append(
-            Task(
+            _task(
                 pathlib.Path(str(data.get("root") or path.parent.parent.parent)),
-                feature,
+                path,
+                prog,
                 str(prog.get("framegate") or data.get("framegate") or ""),
-                _running(path.parent.parent, feature),
             )
         )
     return found
@@ -199,9 +247,7 @@ def local_tasks(cfg: Config) -> list[Task]:
         prog = _progress(path)
         if prog is None or prog.get("phase") == "DONE" or not in_progress(cfg, feature):
             continue
-        found.append(
-            Task(cfg.root, feature, str(prog.get("framegate") or ""), _running(out, feature))
-        )
+        found.append(_task(cfg.root, path, prog, str(prog.get("framegate") or "")))
     return found
 
 
@@ -211,6 +257,38 @@ def tasks_in_progress(cfg: Config | None) -> list[Task]:
         if not any(same(task.root, t.root) and task.feature == t.feature for t in tasks):
             tasks.append(task)
     return tasks
+
+
+def _age(then: datetime.datetime | None) -> str:
+    if then is None:
+        return "?"
+    s = max((datetime.datetime.now() - then).total_seconds(), 0)
+    age = f"{int(s // 86400)} d" if s >= 86400 else f"{int(s // 3600)} h {int(s % 3600 // 60)} min"
+    return f"{then:%Y-%m-%d %H:%M} ({age} ago)"
+
+
+def status_all(echo: Callable[[str], None] = print) -> int:
+    """`framegate status --all`: every open task of this machine's list, one row each."""
+    from framegate.specs import feature_mode
+
+    rows = [("Repository", "Task", "Mode", "Phase", "Last activity", "")]
+    for t in sorted(listed_tasks(), key=lambda t: (str(t.root).lower(), t.feature)):
+        try:
+            mode = feature_mode(load_config(t.root), t.feature)
+        except (ConfigError, OSError):
+            mode = "?"
+        rows.append(
+            (str(t.root), t.feature, mode, t.phase, _age(t.last), "stale" if t.stale else "")
+        )
+    if len(rows) == 1:
+        echo("No open framegate task on this machine.")
+        return 0
+    widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
+    for r in rows:
+        echo("  ".join(c.ljust(w) for c, w in zip(r, widths, strict=True)).rstrip())
+    if any(r[5] for r in rows):
+        echo(f"stale: no activity for {STALE_DAYS} days; it no longer holds an update back.")
+    return 0
 
 
 def installed_plugin_version(home: pathlib.Path | None = None) -> str | None:
@@ -337,7 +415,7 @@ def run(
     working = cfg is not None and in_progress(cfg, feature)
     named = [t for t in tasks if root is not None and t.feature == feature and same(t.root, root)]
     mine = named[0] if named and working else None
-    others = [t for t in tasks if t not in named]
+    others = [t for t in tasks if t not in named and not t.stale]
     here = [t for t in others if root is not None and same(t.root, root)]
     waits = "The update waits until it is DONE; /framegate:update does it now"
 

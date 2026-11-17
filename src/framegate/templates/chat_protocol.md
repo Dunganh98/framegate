@@ -16,6 +16,11 @@ not read specs, gate files or logs. Every message you write to them:
 final_gates.md, tests_gate.md, test_summary.md, the spec files, retro_proposals.md, the pull
 request's description `<specs>/<f>/pr_description.md`), not all of it.
 
+**Notes for the retro.** The retro reads the run's events, not this chat. Record in one line
+each, with `framegate note <f> '<text>'`: a question you asked the user outside a gate brief
+and the reply (`asked: ... -> user: ...`), anything you did by hand (`did: ...`), anything
+you or the user refused (`refused: ...`). Gate answers and approvals are recorded already.
+
 ## A. Start (after "spec OK") and continue (after every gate decision)
 
 1. Only the first time: `framegate approve-spec <f>`. If it lists spec-check problems, fix
@@ -74,6 +79,8 @@ fail for no reason. Reading files and git log/diff/status are fine.
     output file (Read); tell the user in one or two lines what failed, in words, and the one
     decision needed with your default (e.g. "Retry the run? (default: yes, it looks like a
     timeout)"). The lines themselves on request. Do not retry blindly.
+  - The user gives the task up before DONE: offer the retro of what happened (default
+    yes): `framegate retro <f>` (the task's state stays as it is), then D.1.
 
 ## C. At a gate
 
@@ -135,6 +142,8 @@ fail for no reason. Reading files and git log/diff/status are fine.
 
 ## D. DONE: wrap-up and cleanup
 
+0. `framegate status <f> --brief` printed `framegate: the plugin is X, the command-line tool
+   Y`: one line to the user: a framegate update is ready, `/framegate:update` gets it.
 1. If `<out>/<f>/retro_proposals.md` exists: show its `## Brief` (the proposals as a short
    numbered list: problem -> fix, with the retro's recommendation take / skip / fold into N),
    then its `## Project knowledge` facts (K1, ...) as short lines. Ask in one line: "Which

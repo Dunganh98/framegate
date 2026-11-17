@@ -2,13 +2,36 @@
 rejection, review finding, final-gate failure, permission denial, implementer assumption and
 parked item of a feature, with item IDs (Q1, F1, E1, R1, V1, G1, D1, A1, P1) the RETRO agent must
 address in retro_proposals.md. Built from out/events.jsonl (+ the assumptions in steps.md)
-before the RETRO agent runs."""
+before the RETRO agent runs. Two sections without IDs, as context: where a run stopped that
+did not reach DONE (`framegate retro`), and the chat's notes (`framegate note`: the engine
+sees its own events, not what the chat asked the user, was told, did by hand or refused)."""
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
 from typing import Any
+
+from framegate.config import Config
+from framegate.state import log_event
+
+#: the chat digest in retro_input.md: the newest notes, each one line of at most this length
+CHAT_NOTES = 40
+CHAT_NOTE_CHARS = 300
+
+
+def chat_note(cfg: Config, feature: str, text: str) -> int:
+    """`framegate note <f> <text>`: a `chat_note` event."""
+    log_event(cfg, feature, "chat_note", text=" ".join(text.split())[:CHAT_NOTE_CHARS])
+    return 0
+
+
+def chat_digest(events: list[dict[str, Any]]) -> list[str]:
+    notes = [e for e in events if e.get("kind") == "chat_note"]
+    left_out = len(notes) - CHAT_NOTES
+    lines = [f"({left_out} earlier note(s) left out)"] if left_out > 0 else []
+    return lines + [f"- {str(e.get('ts', ''))[:16]} {e.get('text')}" for e in notes[-CHAT_NOTES:]]
+
 
 ID_PREFIXES = {
     "Q": "Questions (spec gaps)",
@@ -315,10 +338,12 @@ def build(
     review_notes: str = "",
     assumptions: list[Any] | None = None,
     archive: str = "",
+    stopped: str = "",
 ) -> RetroInput:
     """Render retro_input.md from the feature's events (in order), the implementer's
     assumptions (report.Assumption: where, spec_id, text) and questions_archive.md (every
-    answer round, for the question -> answer lookup)."""
+    answer round, for the question -> answer lookup). `stopped`: the run did not reach DONE;
+    where it stands and why."""
     sections: dict[str, list[str]] = {k: [] for k in ID_PREFIXES}
     answer_rounds = archive_rounds(archive)
     ids: list[str] = []
@@ -523,9 +548,15 @@ def build(
         "Every item ID below (Q1, F1, ...) must appear in retro_proposals.md: in a proposal, or",
         'in the "Not acted on" list with a one-line reason.',
     ]
+    if stopped:
+        out += ["", "## Run state: stopped before DONE", "", stopped]
     for prefix, title in ID_PREFIXES.items():
         out += ["", f"## {title}", ""]
         out += ["\n\n".join(sections[prefix]) if sections[prefix] else "None."]
+    chat = chat_digest(events)
+    if chat:
+        out += ["", "## Chat (the chat's own notes: questions, replies, hand work, refusals)", ""]
+        out += chat
     if review_notes.strip():
         out += ["", "## Review notes (review.md, for context)", "", _block(review_notes, 2000)]
     return RetroInput("\n".join(out).rstrip() + "\n", ids, counts)

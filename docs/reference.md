@@ -729,6 +729,9 @@ framegate run <f>                           # runs to the next gate (tests, fina
 framegate watch <f>                         # live view: new progress lines until the run ends
 framegate wake <f>                          # a run waiting for the usage limit tries again now
 framegate status [<f>] [--brief]            # all features / one; --brief = short, for the chat
+framegate status --all                      # every open task on this machine, any repository
+framegate retro <f>                         # the retro of a run that stopped before DONE
+framegate note <f> <text>                   # one line of the chat, for the retro
 framegate gate-summary <f>                  # chat digest of the waiting gate
 framegate approve <f>                       # tests gate -> implement; final gate -> retro
 framegate reject <f> --reason "..."         # tests gate: writer + test reviewer re-run with it
@@ -1209,7 +1212,12 @@ plugin's version, but never under a task in progress:
   also not the start check of a new task, here or in another repository. The workflow
   tools of a project are kept while a task of that project is in progress. The check says
   so in one `KEPT:` line (an update is waiting, and for which task); the next start check
-  after DONE updates.
+  after DONE updates. At DONE, `framegate run` and `status --brief` name a waiting update
+  in one line (`/framegate:update`).
+- A task without activity for 14 days (its newest event; without one, the time its
+  `progress.json` was written) no longer holds an update back. It stays in the list.
+- `framegate status --all` shows the list as one table: repository, task, mode, phase,
+  last activity, `stale`. Works in any folder.
 - `framegate update` / `/framegate:update` updates at once, tasks in progress or not. It
   refuses only while a run is active (`PROBLEM: a framegate run is active ...`): replacing
   the files of a running tool breaks that run.
@@ -1422,6 +1430,17 @@ with their status), so the retro names a problem it sees again instead of propos
 The retro must mention every ID in `retro_proposals.md` (a proposal, or "Not acted on" with a
 one-line reason); if IDs are missing it is re-run once with them as feedback, then a warning is
 printed and logged (`retro_coverage` event).
+
+Two sections of retro_input.md carry no IDs:
+- `## Chat`: the chat's notes. The engine does not see the chat, so the skills record one
+  line per question to the user outside a gate brief (with the reply), per thing done by
+  hand and per refusal: `framegate note <f> <text>` (a `chat_note` event, 300 characters;
+  the retro gets the newest 40).
+- `## Run state: stopped before DONE`: only with `framegate retro <f>`, the retro of a run
+  that was given up, hit a cap or ended in an error. It works in any phase after "spec OK"
+  and before the final gate is passed, names the phase reached, why the run stopped and the
+  last progress lines, and leaves the task as it is: no metrics row, no commit,
+  `progress.json` unchanged. `keep` and `learn` work on its proposals as usual.
 
 Each `agent_run` event also has `role`, `step`, `attempt`, `session` and the token counts
 (`tokens_in`, `tokens_out`, `cache_read`, `cache_write`), so cost per step and attempt can be
