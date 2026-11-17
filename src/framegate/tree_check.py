@@ -11,8 +11,10 @@ imports results and the tool list are doctor's own: nothing runs twice. The resu
 plain lines for the setup chat, each kind with its prefix:
 
 - `TESTS:`     how many tests ran and failed
-- `LISTED:`    a test of [gates] unrunnable_tests with its reason (this machine cannot run it)
-- `PROBLEM:`   tests that fail and are not listed, or a suite that gave no result
+- `LISTED:`    a test of [gates] unrunnable_tests with its reason (this machine cannot run
+               it, or it is red before any task)
+- `PROBLEM:`   tests that fail and are not listed (the setup is not ready: doctor fails), or
+               a suite that gave no result
 - `DEBT:`      a lint / format / typecheck / imports check that fails, with its size
 - `MUTATION:`  the mutation tool cannot run on this machine
 - `  ->`       what the chat does about the lines above it
@@ -36,12 +38,16 @@ SHOWN_FILES = 3
 HEADING = "Tree check (the code as it is, before any task):"
 
 RED_TESTS_ADVICE = (
-    "  -> Per test: can this machine run it at all? No (it needs a database, a service, "
-    "another operating system): propose an entry { test, reason } for [gates] "
-    "unrunnable_tests (test: its file, or file::test), and write it once the user "
-    "confirmed. Yes: it is really red; "
-    "recommend fixing it first, as a bug fix (/framegate:bugfix <name>), before the first "
-    "feature."
+    "  -> The setup is not ready while one of them is left. Each test ends in one of: made "
+    "to run (install what it lacks), or an entry { test, reason } in [gates] "
+    "unrunnable_tests (test: its file, or file::test), proposed by you and written once "
+    "the user confirmed. Two kinds of reason: this machine cannot run it (a database, a "
+    f'service, another operating system), or "{unrunnable.DEBT}: <what>" (the machine '
+    "runs it and it fails: the project's own debt)."
+)
+LISTED_DEBT_ADVICE = (
+    "  -> {n} listed entry(ies) are red before any task. In your summary, suggest ONE task "
+    "that fixes them (/framegate:bugfix <name>, or /framegate:refactor <name>)."
 )
 DEBT_ADVICE = (
     "  -> Propose ONE task that cleans this up (/framegate:refactor <name>), as a follow-up "
@@ -79,7 +85,8 @@ def listed_lines(adapter: LanguageAdapter, run: TestRun) -> list[str]:
         out.append(
             f"LISTED: {test}: {reason}" + (" (matches no test of the suite)" if stale else "")
         )
-    return out
+    owed = len(unrunnable.debt(cfg))
+    return [*out, LISTED_DEBT_ADVICE.format(n=owed)] if owed else out
 
 
 def suite(adapter: LanguageAdapter, run: TestRun) -> Tree:
@@ -118,10 +125,10 @@ def suite(adapter: LanguageAdapter, run: TestRun) -> Tree:
         lines.append(f"  ... and {len(red) - SHOWN_TESTS} more")
     lines.append(RED_TESTS_ADVICE)
     detail = (
-        f"{len(red)} test(s) fail on the untouched tree: list the ones this machine cannot "
-        "run ([gates] unrunnable_tests), fix the others first (/framegate:bugfix)"
+        f"{len(red)} test(s) fail on the untouched tree: make each one run, or list it with "
+        "its reason after the user's OK ([gates] unrunnable_tests)"
     )
-    return Tree("WARN", detail, lines)
+    return Tree("FAIL", detail, lines)
 
 
 def _indent(text: str) -> list[str]:

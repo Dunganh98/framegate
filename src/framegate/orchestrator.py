@@ -250,9 +250,9 @@ FINAL_SRC_CHECKS = (*GATE_NAMES.values(), "regression", "coverage run", "full te
 FINAL_TESTS_CHECKS = ("diff coverage", "mutation score", "unreached assertions")
 #: final checks that run the whole suite: their repair run is checked with the suite too
 WHOLE_SUITE_CHECKS = ("regression", "full test suite")
-FIX_OWNER_RE = re.compile(r"^\W*Fix owner\W*:\W*(src|tests|spec|config)\b", re.I | re.M)
+FIX_OWNER_RE = re.compile(r"^\W*Fix owner\W*:\W*(src|tests|spec|config|setup)\b", re.I | re.M)
 #: fix owners no implementer attempt can serve: the work parks, the proposal is its question
-PARKING_OWNERS = ("tests", "spec", "config")
+PARKING_OWNERS = ("tests", "spec", "config", "setup")
 #: a park request (or diagnosis) saying only the frozen tests are wrong, and which ones
 TESTS_WRONG_RE = re.compile(r"^\W*Park kind\W*:\W*tests[ -]wrong\b", re.I | re.M)
 CONTESTED_RE = re.compile(r"^\W*Contested tests\W*:\s*(.+)$", re.I | re.M)
@@ -428,7 +428,7 @@ TASKS = {
     "Check with: {check}\n" + NO_STOP,
     "DIAGNOSIS": "Feature '{f}': '{label}' failed the same checks ({failed}) in {n} implementer "
     "attempts in a row. Find the root cause; do not fix anything. Write {out}/{f}/diagnosis.md "
-    "(Root cause / Fix owner: src | tests | spec | config / Proposed fix / Evidence). The "
+    "(Root cause / Fix owner: src | tests | spec | config | setup / Proposed fix / Evidence). The "
     "implementer's check command: {check}\nThe last gate output:\n{report}",
     "FIX": "Feature '{f}': make all currently failing tests pass without editing tests. "
     "Check with: {check}\n" + NO_STOP,
@@ -1227,8 +1227,9 @@ class Orchestrator:
 
     # ---------- live view: one short line per milestone ----------
     def cost_so_far(self, feature: str) -> float:
-        """USD of all agent runs of the current spec version."""
-        ev = since_spec_approval(read_events(self.cfg, feature))
+        """USD of all agent runs of the task (it does not start over when the spec is
+        approved again)."""
+        ev = read_events(self.cfg, feature)
         return sum(float(e.get("cost") or 0) for e in ev if e.get("kind") == "agent_run")
 
     def progress(self, feature: str, text: str) -> None:
@@ -1646,7 +1647,18 @@ class Orchestrator:
             failed=rep.failed,
             file=self.rel(kept),
         )
+        weaker = redos.needs_setup(self.cfg, text) if owner == "config" else []
+        if weaker:
+            # framegate would refuse this change after the approval: never offered
+            owner = "setup"
         self.progress(feature, f"[{label}] diagnosis ({owner}): {root}")
+        if owner == "setup":
+            what = "; ".join(weaker) or "see the proposed fix"
+            question = (
+                redos.NEEDS_SETUP.format(what=what, why=f"diagnosis: {self.rel(kept)}")
+                + f"\nRoot cause: {root}\nProposed fix (setup): {fix}"
+            )
+            return {"owner": owner, "text": text, "question": question}
         applies = (
             f" (approved: framegate changes {CONFIG_FILE} as proposed and redoes the step; "
             "not a change that weakens a check, that belongs to /framegate:setup)"
@@ -1952,10 +1964,9 @@ class Orchestrator:
         return sorted(f for f in changed if (self.cfg.root / f).is_file())
 
     def format_written_tests(self, feature: str) -> None:
-        """Format the test writer's files ([gates] format_fix): the implementer may not edit
-        tests, so a formatting slip in them would fail every later gate."""
-        if not self.adapter.format_fix_enabled():
-            return
+        """Format the test writer's files and apply the linter's safe fixes to them ([gates]
+        format_fix): the implementer may not edit tests, so a slip in them would fail every
+        later gate."""
         try:
             note = self.adapter.format_files(self.changed_tests(), "HEAD")
             if self.adapter.format_beyond:
@@ -2915,13 +2926,15 @@ class Orchestrator:
             **({"fidelity": rep.fidelity} if rep.fidelity else {}),
             **({"not_measured": rep.not_measured} if rep.not_measured else {}),
         )
-        names = [n + (" [tool failure]" if n in rep.tool_failures else "") for n in rep.failed]
+        blind = [
+            n + (" [tool failure]" if n in rep.tool_failures else "") for n in rep.not_measured
+        ]
         self.progress(
             feature,
             f"[REVIEW] final gates: {'PASSED' if rep.ok else 'FAILED'}"
-            + (f" ({', '.join(names)})" if names else "")
+            + (f" ({', '.join(rep.failed)})" if rep.failed else "")
             + (f"; skipped: {', '.join(rep.skipped)}" if rep.skipped else "")
-            + (f"; not measured: {', '.join(rep.not_measured)}" if rep.not_measured else "")
+            + (f"; not measured: {', '.join(blind)}" if blind else "")
             + (
                 "; project checks (not blocking): "
                 + ", ".join(f"{n} {'OK' if c == 0 else f'exit {c}'}" for n, c in rep.extra.items())
@@ -3564,7 +3577,7 @@ class Orchestrator:
             )
         self.agent("SPEC_UPDATE", feature, prog, task, role="spec_update")
         self.collect_questions(feature, "SPEC_UPDATE", "spec updater")
-        config_notes = self.apply_config_fix(feature, ref) if config_fix else []
+        config_notes = self.apply_config_fix(feature, prog, ref) if config_fix else []
         proposal.unlink(missing_ok=True)  # written without an approved config fix: not used
         stray = self.revert_spec_strays(allowed)
         after = self.defined_ids(feature)
@@ -3652,45 +3665,66 @@ class Orchestrator:
         )
         save_progress(self.cfg, feature, prog)
 
-    def apply_config_fix(self, feature: str, ref: str) -> list[str]:
+    def apply_config_fix(self, feature: str, prog: dict[str, Any], ref: str) -> list[str]:
         """An approved diagnosis with `Fix owner: config`: the spec updater's proposed
         framegate.toml is checked and put in place (redo.apply_config_update), and the run
-        goes on with the new config. Returns the notes for the next gate."""
+        goes on with the new config. Refused because it weakens a check: its work is not
+        redone (redo_pointless parks it again as setup work), unless the answer said more
+        than "approved". Returns the notes for the next gate."""
         fresh, notes, changes = redos.apply_config_update(self.cfg, feature, ref)
+        done = fresh is not None
         log_event(
-            self.cfg, feature, "config_update", ref=ref, applied=fresh is not None, changes=changes
+            self.cfg,
+            feature,
+            "config_update",
+            ref=ref,
+            applied=done,
+            changes=changes if done else [],
+            refused=[] if done else changes,
         )
         if fresh is not None:
             self.cfg = fresh
             self.adapter = get_adapter(fresh)
             self._claude = None
+            return notes
+        for r in prog.get("redo") or []:
+            if changes and r.get("owner") == "config" and not r.get("force_redo"):
+                r.update(owner="setup", refused="; ".join(changes))
         return notes
 
     def redo_pointless(
         self, feature: str, prog: dict[str, Any], redo: list[dict[str, Any]], item: dict[str, Any]
     ) -> bool:
         """A redo of work no implementer run can finish, with a bare approval as the answer,
-        while nothing the approved fix could have changed is different (redo.gate_inputs):
-        the same checks would fail the same way. It parks again at once, with what is
+        while nothing the approved fix could have changed is different (redo.gate_inputs),
+        or after framegate refused the approved config change: the same checks would fail
+        the same way. It parks again at once, with what is
         missing as its question, and costs no agent run. Seen live: three such redos, each a
         full cycle of failed attempts and a second diagnosis that found the same thing."""
-        if not redo or any(not r.get("inputs") or r.get("force_redo") for r in redo):
+        if not redo or any(r.get("force_redo") for r in redo):
             return False
         now = redos.gate_inputs(self.cfg, feature)
-        if not now or any(r["inputs"] != now for r in redo):
+        # an approved config fix that framegate refused: nothing changed, whatever git says
+        refused = next((str(r["refused"]) for r in redo if r.get("refused")), "")
+        if not refused and (not now or any(r.get("inputs") != now for r in redo)):
             return False
         first = redo[0]
         asked = str(first.get("asked") or first.get("question") or first.get("reason") or "")
+        if refused:  # what the diagnosis found stays, the offer to approve its fix goes
+            found = asked.partition("\n")[2]
+            asked = redos.NEEDS_SETUP.format(why="framegate refused the change", what=refused)
+            asked += f"\n{found}" if found else ""
         rec = dict(item, inputs=now, asked=asked)
         if first.get("owner"):
             rec["owner"] = first["owner"]
+        setup = first.get("owner") == "setup"  # its question already says what is missing
         self.park(
             feature,
             prog,
             rec,
-            "not redone: nothing changed since it parked",
+            "not redone: " + ("it needs the setup" if setup else "nothing changed since it parked"),
             attempts=0,
-            question=redos.UNCHANGED.format(config=CONFIG_FILE, question=asked),
+            question=asked if setup else redos.UNCHANGED.format(config=CONFIG_FILE, question=asked),
             failed=list(first.get("failed") or []),
         )
         log_event(
@@ -4571,7 +4605,7 @@ class Orchestrator:
             # a bare approval is redone only when the approved change was made (redo_pointless)
             by_n = {it["n"]: str(it.get("a") or "") for it in items}
             for n, p in enumerate(parked, start=1):
-                if p.get("inputs") and not redos.only_approves(by_n.get(n, "")):
+                if p.get("inputs") and redos.forces_redo(p, by_n.get(n, "")):
                     p["force_redo"] = True
             steps = [p for p in parked if p.get("kind") == "step"]
             # provisional steps: IMPLEMENT settles them first (contested tests pass now, or the

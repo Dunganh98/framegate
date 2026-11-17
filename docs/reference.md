@@ -110,27 +110,30 @@ failures".)
 
 `framegate doctor --tree` (`src/framegate/tree_check.py`) runs the whole suite once (the
 final gate's regression run) and uses doctor's own lint / format / typecheck / imports
-results and tool list; nothing runs twice. Failing tests are a WARN that needs a decision,
-not a FAIL: the setup works, the tree does not. After the verdict it prints plain lines:
+results and tool list; nothing runs twice. The setup ends on a green tree: a failing test
+that is not listed is a FAIL (verdict "not ready") until it is made to run or listed with
+its reason. After the verdict it prints plain lines:
 
 | Line | Meaning | What the setup chat does |
 |---|---|---|
 | `TESTS: 412 run, 3 fail (...)` | the count | |
-| `LISTED: <test>: <reason>` | an entry of `[gates] unrunnable_tests`, every time; "(matches no test of the suite)" when it is stale | names them once |
-| `PROBLEM: N test(s) fail on the untouched tree and are not listed:` then one line per test with the first line of its failure | red tests nobody decided about | per test: this machine cannot run it (it needs a database, a service, another operating system) -> proposes the entry, the user confirms, the chat writes it; else it is really red -> recommends a bug fix first (`/framegate:bugfix <name>`), before the first feature |
+| `LISTED: <test>: <reason>` | an entry of `[gates] unrunnable_tests`, every time; "(matches no test of the suite)" when it is stale | names them once; for the debt entries (a `->` line counts them) it suggests one bug-fix or refactor task |
+| `PROBLEM: N test(s) fail on the untouched tree and are not listed:` then one line per test with the first line of its failure | red tests nobody decided about (doctor FAILs) | per test: makes it run (a missing package), or proposes an entry, the user confirms, the chat writes it. Two kinds of reason: this machine cannot run it (a database, a service, another operating system), or `red before any task: ...` (the project's own debt) |
 | `PROBLEM: the whole suite did not run to the end` / `gave no per-test results` | nothing is known about the tests (doctor FAILs) | fixes the test command or `[gates] regression_timeout` first |
 | `DEBT: <check>: N line(s) in M file(s) (most in ...)` | a lint / format / typecheck / imports check fails on the code as it is; its size is the output lines that name a file | proposes ONE clean-up task (`/framegate:refactor <name>`) as a follow-up the user accepts or skips; no question per file |
 | `MUTATION: <tool> cannot run on this machine: <why>` | e.g. WSL has no `python3` (doctor's tool check; for mutmut in WSL it now asks WSL instead of waiting for the first mutation run) | makes it run, or asks once and writes `[gates] mutation_tool = "none"` |
 | `Tree: green.` / `Tree: not green (see the lines above).` | the last line | |
 
-`[gates] unrunnable_tests` (`src/framegate/unrunnable.py`): tests this machine cannot run,
-each with its reason:
+`[gates] unrunnable_tests` (`src/framegate/unrunnable.py`): the tests that are red before
+any task, each with its reason: this machine cannot run them, or they are the project's own
+debt (the reason then starts with "red before any task"):
 
 ```toml
 [gates]
 unrunnable_tests = [
   { test = "tests/test_db.py", reason = "needs a PostgreSQL server" },
   { test = "tests/test_tty.py::test_resize", reason = "Linux only" },
+  { test = "tests/test_todo.py", reason = "red before any task: placeholder tests" },
 ]
 ```
 
@@ -143,10 +146,10 @@ unrunnable_tests = [
   A **failure** of a listed test is left out, in every mode (feature, bug fix, refactor):
   at the step gates (the step's tests, the whole suite, the review tests), in the final
   regression check and in the record `[gates] regression_baseline` takes. The check's result
-  line says "cannot run on this machine, left out: N". Any other failing test still fails.
-- Named every time: the final gate report starts with "Tests this machine cannot run", and
-  final_facts.md has "Not checked on this machine" with each test and its reason, for one
-  line in the summary. A green result says nothing about these tests.
+  line says "listed in unrunnable_tests, left out: N". Any other failing test still fails.
+- Named every time: the final gate report starts with "Listed tests", and final_facts.md
+  has "Not checked" with each test and its reason, for one line in the summary. A green
+  result says nothing about these tests.
 - Limits: a run without per-test results cannot be told apart (it fails as before). A test
   file that cannot even be collected (an import that is missing here) stops the whole run:
   take it out of the test command (`[python] pytest_args = ["--ignore=..."]`). With
@@ -1068,8 +1071,8 @@ Between the gates nothing stops:
   The first round that builds something goes through the whole review.
 - When the same checks fail `[agents] diagnose_after` attempts in a row (default 2), a
   diagnosis run (Opus, `roles/diagnosis.md`) reads everything, runs the tests and changes
-  nothing: it writes the root cause, the fix owner (`src` / `tests` / `spec` / `config`) and
-  one proposed fix (`out/<f>/diagnoses/<item>.md`, `diagnosis` event). `src`: the proposal
+  nothing: it writes the root cause, the fix owner (`src` / `tests` / `spec` / `config` /
+  `setup`) and one proposed fix (`out/<f>/diagnoses/<item>.md`, `diagnosis` event). `src`: the proposal
   goes to the implementer's next attempt (it always gets that attempt). `tests` / `spec` /
   `config`: the item parks at once with the proposal as its question; at the final gate one
   reply approves it, and the redo sends it to the phase that owns the file (spec updater,
@@ -1088,6 +1091,12 @@ Between the gates nothing stops:
   something out (`--exclude`, `--ignore`, `-k` ...), and every key that is not known to be
   harmless (`mutation_tool`, `regression_baseline`, `[paths]`, `[protected]`, `[frame]`,
   `[risk]` ...). Such a change belongs to the setup (`/framegate:setup`), outside a task.
+  It is never offered for approval: the diagnosis names it with `Fix owner: setup`, and a
+  `config` proposal is checked when the diagnosis is read (the `[section]` and the TOML
+  line of its "Proposed fix"). The parked item's question is then "This needs the setup:
+  <key: old -> new> ... Run /framegate:setup ..., then continue this task"; its redo runs
+  once the gate inputs changed, or on "redo anyway". An approved change that is refused
+  all the same parks the work again with that question; nothing is redone.
 - A redo that cannot end differently is not run. Work that parked on something no
   implementer run can change ("unfixable in IMPLEMENT", or a diagnosis with owner `tests`
   / `spec` / `config`) keeps a digest of what the gates read outside the source folders:
@@ -1269,14 +1278,11 @@ Models and speed:
 - Small plans run in one implementer run: consecutive steps share a run while their spec IDs add
   up to at most `[agents] step_batch_ids` (15; 0 = one run per step). The batch is checked,
   committed, parked and redone as one unit (`steps 1, 2, 3`).
-- The implementer checks only with the step command (its steps' tests and the earlier ones); the
-  step gate runs everything else: after the step's tests it runs the whole suite (the
-  adapter's everyday selection: `[dotnet] base_filter`, `[python] pytest_args`), and fails on
-  any red test that is not a test of this feature's later or parked steps, a contested test,
-  or a test that already failed when the spec was approved (`regression_baseline`). Seen
-  live: a step made helpers public and broke another feature's frozen public-surface test;
-  both step gates passed and the break showed in a later fix run. `[gates] step_tests =
-  "feature"` keeps the step gate to the step's own tests (a suite too slow to run per step).
+- A step gate judges only what belongs to the task: the tests of the step's IDs and the
+  earlier steps'. The whole suite runs once, at the final gate (seen live: run at every step,
+  it failed each one on tests that were red before the task). `[gates] step_tests = "suite"`
+  runs it at every step gate too, leaving out this feature's later steps, contested tests
+  and tests that already failed when the spec was approved.
   The runs after the review (review fixes, structure fixes, a final-gate repair) are checked
   with the feature's tests (its spec IDs; with parked steps the done steps' IDs) and the
   review tests folder, not with the whole suite: the final gates run it right after (seen
@@ -1286,7 +1292,10 @@ Models and speed:
   Before checking, the gates format the changed source files
   and the changed review tests, and the test writer's files are formatted after each of its
   runs (`[gates] format_fix`, default on, only with the adapter's own format check), so a
-  formatting slip costs no attempt and never sits in a file the implementer may not edit. For
+  formatting slip costs no attempt and never sits in a file the implementer may not edit.
+  The same files first get the linter's safe fixes (import order, an unused import):
+  `ruff check --fix` when the lint command is ruff, else `[gates.commands] lint_fix` (with
+  `{files}`; `[]` = off; `[gates] format_fix = false` turns both fixes off). For
   .NET the format / lint checks report only findings on changed lines, and the format fix keeps
   only its changes there: no churn in code the feature did not touch. For Python the lint /
   format / typecheck / imports checks count only findings in files the task changed.
@@ -1312,9 +1321,10 @@ not started when the typecheck, the regression or the coverage run failed before
 with that reason): it needs a green build and green tests.
 
 Tool failures: a mutation check that fails without a score (the tool crashed, could not build
-its own copy, was cut short) is a tool failure, not a statement about the tests. The gate
-report says so under the check (`TOOL FAILURE: ...`), the `final_gates` event lists it in
-`tool_failures`, and no repair run is started for it. The final gate asks instead (an item the
+its own copy, was cut short) is a tool failure, not a statement about the tests: it is shown
+as `[NOT MEASURED]`, never as FAIL, with `TOOL FAILURE: ...` under the check. The
+`final_gates` event lists it in `tool_failures` and `not_measured`, and no repair run is
+started for it. The final gate asks instead (an item the
 brief always shows): run the final checks again (any answer does; the default), or approve as
 is. The .NET adapter starts a failed Stryker run a second time first (with `--diag` when
 Stryker's output offers it; the first output is kept in `out/<f>/stryker/<project>.first.log`).

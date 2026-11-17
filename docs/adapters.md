@@ -20,7 +20,7 @@ imported lazily). An adapter instance gets the loaded `Config` (`self.cfg`, `sel
 | `TestRun` | `status`, `returncode`, `output`, `cases`, `incomplete` | `status`: `passed` / `failed` / `no_tests` / `error` (collection, build or usage problem). `cases`: per-test outcomes when a JUnit report was requested, else `None`. `incomplete`: why the run was cut short (timeout, crashed host, killed, missing report / coverage file), `""` if it ran to the end |
 | `TestScope` | `req_ids`, `paths` | The tests a final coverage / mutation run uses: tagged with any of `req_ids` OR under `paths` (review tests); both empty = whole suite. `describe()` gives the text for the report header |
 | `TestCase` | `name`, `outcome`, `message` | `outcome`: `passed` / `failed` / `error` / `skipped`; `message`: failure/error text ("" if none) |
-| `CheckResult` | `status`, `output`, `summary`, `tool_failure` | `tool_failure`: set by the mutation check for a FAIL whose summary does not start with "Mutation score" (the tool gave no result): reported as a tool failure, never sent to a repair run. `status`: `PASS` / `FAIL` / `SKIPPED`. SKIPPED never fails a gate but is printed and lands in `final_gates.md` (the PR role must report it). `summary` (optional): one line shown under a `[PASS]` line, e.g. the mutation score |
+| `CheckResult` | `status`, `output`, `summary`, `tool_failure` | `tool_failure`: set by the mutation check for a FAIL whose summary does not start with "Mutation score" (the tool gave no result): the gates show it as NOT MEASURED with a tool-failure note, never as FAIL, and send it to no repair run. `status`: `PASS` / `FAIL` / `SKIPPED`. SKIPPED never fails a gate but is printed and lands in `final_gates.md` (the PR role must report it). `summary` (optional): one line shown under a `[PASS]` line, e.g. the mutation score |
 | `Check` | `name`, `run()`, `needs_green` | A named, lazily-run check for the gate runner. `needs_green` (the mutation check): not started, SKIPPED with the reason, when the typecheck, the regression or the coverage run failed before it |
 
 Helpers: `run_command(cmd, cwd, env=None, timeout=None)` (missing tool -> code 127, "Tool not
@@ -69,6 +69,7 @@ pytest `--junitxml` and the .NET `JunitXml.TestLogger`), `tool_path(name, near)`
 | `install_tools(dry_run, echo, update=False)` | default | `framegate install-tools`: install what the workflow needs into the project's environment; `update` also brings framegate's own part there to this version. Default: nothing to install |
 | `guess_layout(root)` (classmethod) / `interpreter()` / `env_facts()` / `test_runner()` / `detected_tools()` | defaults: `(["src"], "tests")` / `None` / `{}` / `[]` / `{}` | `framegate probe` (instant facts for `/framegate:setup`; nothing is run on the code): the source and test folders of a repository without a framegate.toml; the interpreter or toolchain executable every run uses and where it comes from (python: the same code the `python` property reads); one question to that environment (`version`, `editable` packages of the project, the `refresh` command); the command whose `--version` shows the test runner; per role (`test`, a `[gates.commands]` key, `format_fix`) the command the project's own config files point to and the file that says so (python: `adapters/python_probe.py`, e.g. black from `[tool.black]`). dotnet names its SDK and test runner; generic only its test runner |
 | `format_fix_commands(files)` | default | Commands that format `files` in place for the gates' format fix. `[gates.commands] format_fix` (with `{files}`) replaces them and keeps the fix on when `[gates.commands] format` is the project's own check (e.g. black) |
+| `lint_fix_commands(files)` | default | The linter's safe fixes on the same files, run before the formatter: `[gates.commands] lint_fix` (with `{files}`; `[]` = off), else `ruff check --fix --no-unsafe-fixes` when the lint command is ruff, else nothing |
 | `gitignore_entries()` | default | Extra `.gitignore` lines `init` adds: build outputs the orchestrator must never commit (it stages whole source and test folders) |
 | `init_note()` | default | Setup advice printed at the end of `init` |
 
@@ -147,7 +148,13 @@ WSL flow (`adapters/wsl.py`, `adapters/mutmut_runner.py`):
    `[tool.uv] dev-dependencies`, `requirements*.txt`; the project itself is not installed because
    mutmut puts its mutated copy on `sys.path`), `mutmut>=3`, `pytest`, and framegate (its pytest
    plugin) from this source tree when framegate runs from one (a project's own `framegate`
-   requirement is then dropped). Windows paths in requirements are translated.
+   requirement is then dropped). Windows paths in requirements are translated. An installed
+   framegate that the project does not name is not in the venv: its pytest plugin (`--req`)
+   then goes along as a file (`out/.mutmut/framegate_req_plugin.py`, on `PYTHONPATH`). Seen
+   live: without it pytest refused `--req` and the run gave no result.
+   Before the run the tracked files outside the source folders are copied into `mutants/`
+   (up to 5 MB each): mutmut copies only the sources, `tests/` and the packaging files, and
+   a test that reads `docs/x.md` would fail there.
 3. The venv is rebuilt when its stamp changes: sha256 of the requirement list, `pyproject.toml`,
    `uv.lock`, `poetry.lock`, `Pipfile.lock`, `pdm.lock`, the requirements files, the framegate
    version and `MUTMUT_ENV_VERSION`. Built with `uv` (PATH, `~/.local/bin`, `~/.cargo/bin`;

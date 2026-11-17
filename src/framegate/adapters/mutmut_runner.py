@@ -19,6 +19,9 @@ spec.json keys:
   requirement_files  `-r` files installed into the venv
   pytest_addopts     extra pytest options for every test run of mutmut (PYTEST_ADDOPTS), e.g.
                      the feature scope `--req ID,ID --req-paths tests/review`
+  pythonpath         a folder put on PYTHONPATH (framegate's pytest plugin as a file)
+  also_copy          files (relative to project) copied into `mutants/` before the run: what
+                     the tests read outside the source folders
 
 result.json keys: ok, stage ("setup" | "run"), error, hint, setup_log, venv_reused, python,
 run_code, run_output, results (`mutmut results --all true`), shows {name: diff}, seconds.
@@ -40,6 +43,8 @@ INSTALL_HINT = (
     "(or: sudo apt install python3-venv)"
 )
 SURVIVOR_STATUSES = ("survived", "no tests", "suspicious")
+#: an `also_copy` file larger than this stays out of mutmut's folder (data, not a test input)
+COPY_MAX_BYTES = 5_000_000
 LINE = re.compile(r"^\s*(\S+__mutmut_\d+):\s*(.+?)\s*$")
 
 
@@ -128,6 +133,11 @@ def run_mutmut(spec: dict, python: str) -> dict:
     shutil.rmtree(mutants, ignore_errors=True)
     patterns = list(spec.get("patterns", []))
     try:
+        for rel in spec.get("also_copy", []):
+            src, dst = os.path.join(project, rel), os.path.join(mutants, rel)
+            if os.path.isfile(src) and os.path.getsize(src) <= COPY_MAX_BYTES:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(src, dst)
         code, out = _run(
             [python, "-m", "mutmut", "run", *patterns],
             cwd=project,
@@ -171,6 +181,9 @@ def main(argv: list[str]) -> int:
     if spec.get("pytest_addopts"):
         extra = os.environ.get("PYTEST_ADDOPTS", "")
         os.environ["PYTEST_ADDOPTS"] = (extra + " " + spec["pytest_addopts"]).strip()
+    if spec.get("pythonpath"):
+        rest = os.environ.get("PYTHONPATH", "")
+        os.environ["PYTHONPATH"] = spec["pythonpath"] + (os.pathsep + rest if rest else "")
     result: dict = {"python": sys.executable}
     python = sys.executable
     if spec.get("venv"):

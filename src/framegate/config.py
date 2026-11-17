@@ -230,11 +230,11 @@ MARKER_KINDS = ("refs", "tags")
 #: tests the final coverage / mutation runs use: the feature's tests (its spec IDs + the review
 #: tests; the whole suite then runs once more without instrumentation) or the whole suite
 GATE_SCOPES = ("feature", "suite")
-#: [gates] step_tests: "suite" (default) = a step gate also runs the whole suite (the adapter's
-#: everyday selection), with the tests of this feature's later steps left out: a step that
-#: breaks another feature's tests fails at once, not at the final gate. "feature" = only the
-#: tests of the step's and the earlier steps' IDs (a suite too slow to run after every step)
-STEP_TESTS = ("suite", "feature")
+#: [gates] step_tests: "feature" (default) = a step gate runs only the tests of the step's and
+#: the earlier steps' IDs: a gate judges what belongs to the task, and the whole suite runs
+#: once, at the final gate. "suite" = every step gate also runs the whole suite (the adapter's
+#: everyday selection), with the tests of this feature's later steps left out
+STEP_TESTS = ("feature", "suite")
 #: [gates] tests: "defer" (default) = never stop at the tests gate: the test reviewer has checked
 #: the tests against the spec; open questions, objections left and failed test checks go to the
 #: final gate (two human gates: spec and final); "human" = always stop at the tests gate;
@@ -400,15 +400,21 @@ class Config:
     #: [gates.commands] format_fix: the project's own formatter for that fix, `{files}` = the
     #: changed files (e.g. black where the project checks with black, not ruff format)
     format_fix_command: list[str] = field(default_factory=list)
+    #: [gates.commands] lint_fix: the linter's safe fixes, applied where the format fix runs
+    #: (`{files}` = the changed files). None = `ruff check --fix` when the lint command is
+    #: ruff, else nothing; [] = off (LanguageAdapter.lint_fix_commands)
+    lint_fix_command: list[str] | None = None
     #: [gates] regression_baseline: `approve-spec` runs the whole suite once and records the
     #: tests that already fail (gates.py); the gates then fail only on other tests. false:
     #: nothing is run at the approval and every failing test counts. Not set (None): on for
     #: a bug fix, off for a feature and a refactor (specs.baseline_on)
     regression_baseline: bool | None = None
-    #: [gates] unrunnable_tests: test -> reason, for tests this machine cannot run (they need
-    #: a database, a service, another operating system). The setup finds them once and the
-    #: user confirms each reason. A failure of one is left out of every gate in every mode,
-    #: and the final facts name them with their reason each time (unrunnable.py)
+    #: [gates] unrunnable_tests: test -> reason, for tests that are red before any task: this
+    #: machine cannot run them (a database, a service, another operating system), or they are
+    #: the project's own debt ("red before any task: ..."). The setup finds them once, is not
+    #: ready while one is unlisted, and the user confirms each reason. A failure of one is
+    #: left out of every gate in every mode, and the final facts name them with their reason
+    #: each time (unrunnable.py)
     unrunnable_tests: dict[str, str] = field(default_factory=dict)
     #: [gates.extra] name -> command: project checks run at the final gates and shown at the
     #: final gate, never blocking (e.g. a balance measurement)
@@ -417,8 +423,8 @@ class Config:
     #: [gates] max_file_lines: a changed source file longer than this is listed in the final
     #: gate's structure report and asked about at the final gate (never blocking; 0 = off)
     max_file_lines: int = 400
-    #: [gates] step_tests: "suite" | "feature" (see STEP_TESTS)
-    step_tests: str = "suite"
+    #: [gates] step_tests: "feature" | "suite" (see STEP_TESTS)
+    step_tests: str = "feature"
     #: [gates] unreached_assertions: the final gate fails on an assertion of a test the
     #: feature added that the feature's own tests never ran (needs the coverage run)
     unreached_assertions: bool = True
@@ -961,17 +967,18 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     cfg.regression_baseline = gates.get("regression_baseline", cfg.regression_baseline)
     cfg.unrunnable_tests = _unrunnable_tests(root, gates.get("unrunnable_tests", []))
     for key, cmd in gates.get("commands", {}).items():
-        if key == "format_fix":
-            cfg.format_fix_command = _str_list("[gates.commands] format_fix", cmd)
-            if cfg.format_fix_command and "{files}" not in cfg.format_fix_command:
+        if key in ("format_fix", "lint_fix"):
+            fix = _str_list(f"[gates.commands] {key}", cmd)
+            if fix and "{files}" not in fix:
                 raise ConfigError(
-                    '[gates.commands] format_fix needs a "{files}" argument (the changed files)'
+                    f'[gates.commands] {key} needs a "{{files}}" argument (the changed files)'
                 )
+            setattr(cfg, f"{key}_command", fix)
             continue
         if key not in GATE_COMMAND_KEYS:
             raise ConfigError(
                 f"[gates.commands] unknown key '{key}' "
-                f"(allowed: {(*GATE_COMMAND_KEYS, 'format_fix')})"
+                f"(allowed: {(*GATE_COMMAND_KEYS, 'format_fix', 'lint_fix')})"
             )
         cfg.gate_commands[key] = _str_list(f"[gates.commands] {key}", cmd)
     for name, cmd in gates.get("extra", {}).items():

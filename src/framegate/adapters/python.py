@@ -554,6 +554,12 @@ class PythonAdapter(LanguageAdapter):
         status = "error" if reason else PYTEST_STATUS.get(code, "error")
         return TestRun(status, code, out, cases, incomplete=reason)
 
+    def _coverage_env(self) -> dict[str, str]:
+        """A coverage run's environment: its data file in the out folder (seen live: a
+        `.coverage` left untracked in the project root when the task was done)."""
+        data = self.root / self.cfg.paths.out / ".coverage"
+        return {**os.environ, "COVERAGE_FILE": str(data)}
+
     def scope_coverage_reports(
         self, req_ids: Sequence[str], files: Sequence[str]
     ) -> tuple[list[pathlib.Path], str]:
@@ -569,7 +575,7 @@ class PythonAdapter(LanguageAdapter):
         cmd += [f"--cov={root}" for root in self.cfg.src_roots]
         cmd += [f"--cov-report=xml:{xml}"]
         timeout = self.cfg.coverage_timeout
-        code, out = run_command(cmd, self.root, timeout=timeout)
+        code, out = run_command(cmd, self.root, env=self._coverage_env(), timeout=timeout)
         reason = incomplete_reason(code, out, timeout) or PYTEST_INCOMPLETE.get(code, "")
         if reason or not xml.is_file():
             return [], f"coverage run incomplete ({reason or 'no report'})"
@@ -628,7 +634,7 @@ class PythonAdapter(LanguageAdapter):
             else:
                 note = "\nSKIPPED coverage: pytest-cov is not installed in the project environment"
             timeout = self.cfg.coverage_timeout
-            code, out = run_command(cmd, self.root, timeout=timeout)
+            code, out = run_command(cmd, self.root, env=self._coverage_env(), timeout=timeout)
             reason = incomplete_reason(code, out, timeout) or PYTEST_INCOMPLETE.get(code, "")
             if not reason and collect and code in (0, 1) and not xml.is_file():
                 reason = "coverage file missing"
@@ -751,7 +757,17 @@ class PythonAdapter(LanguageAdapter):
             "pytest_addopts": " ".join(
                 _shell_quote(a) for a in [*self.pytest_args, *self.scope_args(scope)]
             ),
+            "also_copy": self._mutmut_also_copy(),
         }
+
+    def _mutmut_also_copy(self) -> list[str]:
+        """The tracked files outside the source folders. mutmut runs the tests in its own
+        folder with the sources, tests/ and the packaging files only; a test that reads
+        another file of the repository (`docs/x.md`) would fail there."""
+        cmd = ["git", "-c", "core.quotepath=off", "ls-files"]
+        code, out = run_command(cmd, self.root, timeout=120)
+        own = (*(r.rstrip("/") + "/" for r in self.cfg.src_roots), "tests/", "test/")
+        return [f for f in out.splitlines() if not f.startswith(own)] if code == 0 else []
 
     def _mutmut_wsl(
         self, feature: str, modules: Sequence[str], scope: TestScope | None = None
@@ -772,6 +788,15 @@ class PythonAdapter(LanguageAdapter):
 
         reqs, files, stamp = self._wsl_requirements(w)
         spec = self._mutmut_spec(modules, wsl_root, w(work / "result.json"), scope)
+        if scope_plugin_missing(reqs):
+            # seen live: an installed framegate and a project that does not name it left
+            # the venv without the plugin, and pytest refused `--req` (a run without a result)
+            plugin = importlib.resources.files("framegate").joinpath("pytest_plugin.py")
+            (work / f"{SCOPE_PLUGIN}.py").write_text(
+                plugin.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+            spec["pythonpath"] = w(work)
+            spec["pytest_addopts"] = f"{spec['pytest_addopts']} -p {SCOPE_PLUGIN}".strip()
         repo_key = hashlib.sha256(wsl_root.encode("utf-8")).hexdigest()[:16]
         spec.update(
             venv=f"~/.cache/framegate/venvs/{repo_key}",
@@ -975,6 +1000,16 @@ def write_survivors(path: pathlib.Path, tally: MutmutTally, shows: Mapping[str, 
 def req_name(req: str) -> str:
     m = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", req)
     return re.sub(r"[-_.]+", "-", m.group(1)).lower() if m else ""
+
+
+#: framegate's pytest plugin (`--req`), as a file of its own beside the mutmut runner
+SCOPE_PLUGIN = "framegate_req_plugin"
+
+
+def scope_plugin_missing(reqs: Sequence[str]) -> bool:
+    """Do the WSL venv's requirements leave framegate out (not run from a source tree, not
+    named by the project)? Then its pytest plugin goes along as a file."""
+    return framegate_source() is None and "framegate" not in map(req_name, reqs)
 
 
 def collect_requirements(root: pathlib.Path) -> tuple[list[str], list[pathlib.Path]]:

@@ -53,6 +53,35 @@ UNCHANGED = (
 )
 
 
+#: the question of parked work whose fix is a framegate.toml change no task may make (it
+#: weakens a check): there is nothing to approve. Seen live: such a fix was offered, approved,
+#: refused, and the steps were redone unchanged
+NEEDS_SETUP = (
+    "This needs the setup ({why}): {what}. A task never makes that change, and nothing is "
+    "redone until it is made. Run /framegate:setup and say what to change, then continue "
+    "this task."
+)
+
+
+def needs_setup(cfg: Config, diagnosis: str) -> list[str]:
+    """The framegate.toml changes a diagnosis proposes that weaken a check (`key: old ->
+    new`; config_change.proposed_weakening): setup work, not a fix to approve."""
+    try:
+        current = tomllib.loads((cfg.root / CONFIG_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        current = {}
+    return config_change.proposed_weakening(diagnosis, current)
+
+
+def forces_redo(rec: dict[str, object], answer: str) -> bool:
+    """Does the answer to parked work that kept its gate inputs make its redo run whatever
+    they say now? One that says more than "approved" is new information. Work that needs
+    the setup has no fix to approve: only "redo anyway" does."""
+    if rec.get("owner") == "setup":
+        return bool(REDO_ANYWAY_RE.search(answer))
+    return not only_approves(answer)
+
+
 def only_approves(answer: str) -> bool:
     """Does the answer to a parked item only approve what was proposed (one short line, or
     nothing at all), so a redo depends on that proposal having been applied? An answer that
@@ -114,7 +143,7 @@ def apply_config_update(
     only when it loads as a config and weakens no check (config_change.py); committed alone
     and tagged `config-update/<feature>`. Returns (the new config, or None when
     framegate.toml stays as it was; notes for the next gate; the applied changes as
-    `key: old -> new`)."""
+    `key: old -> new`, without a new config the ones refused because they weaken a check)."""
     proposal = cfg.feature_out(feature) / CONFIG_UPDATE_FILE
     where = f"{cfg.paths.out}/{feature}/{CONFIG_UPDATE_FILE}"
     if not proposal.is_file():
@@ -167,7 +196,7 @@ def apply_config_update(
                 f"({'; '.join(weaker)}). A task never does that: it belongs to the setup "
                 "(/framegate:setup), outside a task."
             ],
-            [],
+            weaker,
         )
     try:
         git(cfg, "add", "--", CONFIG_FILE)

@@ -12,6 +12,7 @@ import sys
 
 import pytest
 
+from conftest import git
 from framegate.adapters import mutmut_runner, wsl
 from framegate.adapters.base import NOT_MEASURED, TestScope
 from framegate.adapters.python import (
@@ -254,6 +255,20 @@ def test_runner_script_flow(fake_mutmut: pathlib.Path) -> None:
     a90 = adapter(fake_mutmut, {"gates": {"mutation_score": 90}})
     assert run_fake(a90, ["demo"])[0] == "FAIL"
     assert run_fake(a, ["other"])[1] == "No mutants generated for the changed files."
+
+
+def test_the_tests_find_the_repository_files_they_read(fake_mutmut: pathlib.Path) -> None:
+    """Seen live: a test read docs/x.md, and mutmut's folder holds only the sources and tests."""
+    root = fake_mutmut
+    for rel in ("docs/x.md", "src/demo.py", "tests/test_demo.py"):
+        (root / rel).parent.mkdir(exist_ok=True)
+        (root / rel).write_text("x", encoding="utf-8")
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    assert adapter(root)._mutmut_also_copy() == ["docs/x.md"]  # mutmut copies the others
+    spec = {"project": str(root), "also_copy": ["docs/x.md"], "keep_mutants": True}
+    mutmut_runner.run_mutmut(spec, sys.executable)
+    assert (root / "mutants/docs/x.md").is_file()
 
 
 def test_runner_script_failures(fake_mutmut: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:

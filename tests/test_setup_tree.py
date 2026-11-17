@@ -101,7 +101,7 @@ def test_a_failure_of_a_listed_test_is_left_out_and_counted(tmp_path: pathlib.Pa
     res = unrunnable.noted(gates.tests_expecting(kept, gates.ExpectedRed(), set()), off)
     assert res.status == "FAIL" and kept.status == "failed"
     assert "tests.test_x::test_new" in res.output and "\n  tests.test_db" not in res.output
-    assert res.summary.startswith("cannot run on this machine, left out: 1")
+    assert res.summary.startswith("listed in unrunnable_tests, left out: 1")
     # nothing listed, or no per-test results: the run is taken as it is
     plain = _run(("tests.test_db::test_connect", "failed"))
     assert unrunnable.leave_out(parse_config(tmp_path, {}), plain) == (plain, [])
@@ -128,9 +128,9 @@ def test_the_gates_of_every_mode_leave_the_listed_tests_out(demo_repo: DemoRepo)
     adapter = get_adapter(load_config(r.root))
     res = final_regression()
     assert res.status == "PASS", res.output
-    assert "cannot run on this machine, left out: 2" in res.summary
+    assert "listed in unrunnable_tests, left out: 2" in res.summary
     res = gates.step_suite(adapter, "demo", ["DEMO-R-001"])
-    assert res.status == "PASS" and "cannot run on this machine, left out: 2" in res.summary
+    assert res.status == "PASS" and "listed in unrunnable_tests, left out: 2" in res.summary
     assert gates.record_regression_baseline(adapter, "demo") == (0, "")
 
     # a test that is not on the list still fails the gates
@@ -139,7 +139,7 @@ def test_the_gates_of_every_mode_leave_the_listed_tests_out(demo_repo: DemoRepo)
     )
     res = final_regression()
     assert res.status == "FAIL" and "test_really_red" in res.output
-    assert "cannot run on this machine, left out: 2" in res.summary
+    assert "listed in unrunnable_tests, left out: 2" in res.summary
     assert gates.step_suite(adapter, "demo", ["DEMO-R-001"]).status == "FAIL"
 
 
@@ -149,10 +149,10 @@ def test_the_final_facts_name_the_listed_tests_every_time(tmp_path: pathlib.Path
     cfg.unrunnable_tests = {"tests/test_db.py": "needs a PostgreSQL server"}
     lines = unrunnable.facts_lines(cfg)
     facts = final_facts("demo", [], {}, [], [], "", "", unrunnable=lines)
-    assert "## Not checked on this machine: 1 test entry(ies)" in facts
+    assert "## Not checked: 1 listed test entry(ies)" in facts
     assert "- tests/test_db.py: needs a PostgreSQL server" in facts
-    assert "cannot run on this machine: <test> (<reason>)" in facts
-    assert "Not checked on this machine" not in final_facts("demo", [], {}, [], [], "", "")
+    assert "not checked: <test> (<reason>)" in facts
+    assert "Not checked" not in final_facts("demo", [], {}, [], [], "", "")
 
 
 # ---------- framegate doctor --tree ----------
@@ -170,16 +170,16 @@ def test_setup_says_what_is_red_on_the_untouched_tree(demo_repo: DemoRepo) -> No
     r.add_toml(COMMANDS)
 
     code, out = doctor_tree(r)
-    assert code == 0, out  # a red tree is a decision, not a broken setup
-    assert out.startswith("Verdict: ready (")
-    assert "- WARN tree: whole test suite on the code as it is: 2 test(s) fail" in out
+    assert code == 1, out  # not ready while a red test is neither made to run nor listed
+    assert out.startswith("Verdict: NOT READY (1 failure(s) to fix)")
+    assert "- FAIL tree: whole test suite on the code as it is: 2 test(s) fail" in out
     tree = out[out.index(tree_check.HEADING) :].splitlines()
     assert tree[1] == "TESTS: 3 run, 2 fail."
     assert tree[2] == "PROBLEM: 2 test(s) fail on the untouched tree and are not listed:"
     assert tree[3].startswith("  tests.test_db::test_connect | ")
     assert "no database on this machine" in tree[3]
     assert tree[4].startswith("  tests.test_db::test_query")
-    assert tree[5] == tree_check.RED_TESTS_ADVICE and "/framegate:bugfix" in tree[5]
+    assert tree[5] == tree_check.RED_TESTS_ADVICE and '"red before any task: <what>"' in tree[5]
     assert tree[6] == "DEBT: lint: 3 line(s) in 2 file(s) (most in legacy/old.py, legacy/older.py)"
     assert tree[7] == tree_check.DEBT_ADVICE and "/framegate:refactor" in tree[7]
     assert tree[-1] == "Tree: not green (see the lines above)."
@@ -210,12 +210,19 @@ def test_the_tree_lines_for_a_suite_without_a_result_and_a_stale_entry(
     tmp_path: pathlib.Path,
 ) -> None:
     cfg = parse_config(tmp_path, {})
-    cfg.unrunnable_tests = {"tests/test_gone.py": "needs a license server"}
+    cfg.unrunnable_tests = {
+        "tests/test_gone.py": "needs a license server",
+        "tests/test_x.py::test_todo": "red before any task: a placeholder",
+    }
     adapter = get_adapter(cfg)
-    seen = tree_check.suite(adapter, _run(("tests.test_x::test_fine", "passed")))
+    run = _run(("tests.test_x::test_fine", "passed"), ("tests.test_x::test_todo", "failed"))
+    seen = tree_check.suite(adapter, run)
     assert seen.status == "OK" and seen.lines == [
-        "TESTS: 1 run, 0 fail.",
+        "TESTS: 2 run, 1 fail (1 of them listed in [gates] unrunnable_tests, left out).",
         "LISTED: tests/test_gone.py: needs a license server (matches no test of the suite)",
+        "LISTED: tests/test_x.py::test_todo: red before any task: a placeholder",
+        # the project's own debt: the setup's summary suggests a task for it
+        tree_check.LISTED_DEBT_ADVICE.format(n=1),
     ]
     cut = TestRun("error", 124, "a\nb", None, incomplete="timeout after 3600 s")
     seen = tree_check.suite(adapter, cut)
