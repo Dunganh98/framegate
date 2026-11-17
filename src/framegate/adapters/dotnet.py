@@ -963,7 +963,7 @@ class DotnetAdapter(LanguageAdapter):
             parts.append(class_filter(classes))
         return combine_filters("|".join(parts), base)
 
-    def regression_run(self) -> TestRun:
+    def regression_run(self, skip: Sequence[str] = ()) -> TestRun:
         return self._dotnet_test(
             self.settings.final_filter, "regression", timeout=self.cfg.regression_timeout
         )

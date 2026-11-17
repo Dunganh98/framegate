@@ -255,7 +255,7 @@ class GenericAdapter(LanguageAdapter):
         # [generic] format_fix command, so a configured format check does not turn it off
         return self.cfg.format_fix and bool(self.opts.get("format_fix"))
 
-    def regression_run(self) -> TestRun:
+    def regression_run(self, skip: Sequence[str] = ()) -> TestRun:
         return self.run_tests()
 
     def coverage_checks(

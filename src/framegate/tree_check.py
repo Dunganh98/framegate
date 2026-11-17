@@ -27,13 +27,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from framegate import red_tree, unrunnable
+from framegate import known_red, red_tree, suite_run, unrunnable
 from framegate.adapters.base import CheckResult, LanguageAdapter, TestRun
 
-#: most failing tests named (the chat reads these lines; the full list is in the junit file)
+#: most failing tests named in the lines; the rest go to out/doctor/RED_LIST
 SHOWN_TESTS = 30
 #: most files named behind a debt line
 SHOWN_FILES = 3
+RED_LIST = "red_tests.txt"
 
 HEADING = "Tree check (the code as it is, before any task):"
 
@@ -118,11 +119,14 @@ def suite(adapter: LanguageAdapter, run: TestRun) -> Tree:
         )
         return Tree("OK", detail, lines)
     lines.append(f"PROBLEM: {len(red)} test(s) fail on the untouched tree and are not listed:")
-    for c in red[:SHOWN_TESTS]:
-        why = _first_line(c.message)
-        lines.append(f"  {c.name}" + (f" | {why}" if why else ""))
+    named = [f"  {c.name}" + (f" | {why}" if (why := _first_line(c.message)) else "") for c in red]
+    lines += named[:SHOWN_TESTS]
     if len(red) > SHOWN_TESTS:
-        lines.append(f"  ... and {len(red) - SHOWN_TESTS} more")
+        path = adapter.cfg.out_dir / "doctor" / RED_LIST
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(x.strip() for x in named) + "\n", encoding="utf-8")
+        rel = path.relative_to(adapter.cfg.root).as_posix()
+        lines.append(f"  ... and {len(red) - SHOWN_TESTS} more: all {len(red)} in {rel}")
     lines.append(RED_TESTS_ADVICE)
     detail = (
         f"{len(red)} test(s) fail on the untouched tree: make each one run, or list it with "
@@ -180,7 +184,9 @@ def run(
 ) -> Tree:
     """Run the whole suite once and put the lines together. `lint_red`: the failing lint /
     format / typecheck / imports checks doctor just ran; `tools`: its tool list."""
-    tree = suite(adapter, adapter.regression_run())
+    res = suite_run.whole_suite(adapter, skip_known_red=False)
+    known_red.record(adapter.cfg, res)
+    tree = suite(adapter, res)
     debt = debt_lines(adapter, lint_red)
     mutation = mutation_lines(tools)
     green = not debt and not any(x.startswith("PROBLEM:") for x in tree.lines)

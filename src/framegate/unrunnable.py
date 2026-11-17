@@ -14,9 +14,10 @@ tell "this machine lacks X" from "really broken"):
       { test = "tests/test_todo.py", reason = "red before any task: placeholder tests" },
     ]
 
-The tests still run with the suite (on a machine that has the database they pass and count).
-A failure of a listed test is left out of every gate, in every mode, and the final facts
-name the listed tests with their reason each time, so nobody reads "all green" into it.
+A listed test that failed on this machine at the setup is not run here again (known_red.py);
+on a machine that has the database it runs, and counts when it passes. A failure of a listed
+test is left out of every gate, in every mode, and the final facts name the listed tests with
+their reason each time, so nobody reads "all green" into it.
 
 A `test` names the file: a whole test file (`tests/test_db.py`) or one test in it
 (`tests/test_db.py::test_connect`). The config refuses a bare test name.
@@ -104,4 +105,8 @@ def facts_lines(cfg: Config) -> list[str]:
         "out of every gate, so the gates say nothing about them. Name them in the summary "
         'every time, with the reason ("not checked: <test> (<reason>)"):',
         *listed_lines(cfg),
+        "",
+        "Follow-up to offer (default: skip): ONE task that makes these tests run or pass "
+        "(/framegate:bugfix <name> for broken tests, /framegate:refactor <name> to make "
+        "tests that need a service runnable here), so the next tasks check them too.",
     ]

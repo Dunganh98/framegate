@@ -693,11 +693,20 @@ class LanguageAdapter(abc.ABC):
         return "\n".join(kept_lines), kept, ignored
 
     @abc.abstractmethod
-    def regression_run(self) -> TestRun:
+    def regression_run(self, skip: Sequence[str] = ()) -> TestRun:
         """The whole suite (the adapter's final selection) once, without coverage
         instrumentation (cfg.regression_timeout), with per-test results (TestRun.cases) where the
         framework reports them: the final gate tells a parked step's expected red tests from
-        real regressions by name."""
+        real regressions by name. `skip`: [gates] unrunnable_tests entries left out, where the
+        framework can deselect them."""
+
+    def suite_command(self) -> list[str] | None:
+        """What decides the whole suite's result besides the code (suite_run's key); None:
+        the result is never reused."""
+        return None
+
+    def env_stamp(self) -> str:
+        return ""
 
     def regression_check(self) -> Check:
         """Final scope with a feature-scoped coverage run: regression_run as a check."""

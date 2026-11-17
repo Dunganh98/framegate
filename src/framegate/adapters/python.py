@@ -23,7 +23,7 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised only on 3.10
     import tomli as tomllib
 
-from framegate import __version__, pytools, release_requirement
+from framegate import __version__, known_red, pytools, release_requirement
 from framegate.adapters import python_port, python_probe, wsl
 from framegate.adapters.base import (
     Check,
@@ -61,6 +61,17 @@ DETECTED = {"killed", "timeout", "caught by type check", "segfault"}
 SURVIVED = {"survived", "no tests", "suspicious"}
 MUTANT_LINE = re.compile(r"^\s*(\S+__mutmut_\d+):\s*(.+?)\s*$")
 PYTEST_STATUS = {0: "passed", 1: "failed", 5: "no_tests"}
+ENV_STAMP = (
+    "import importlib.metadata as m; "
+    "print(sorted(f\"{d.metadata['Name']}=={d.version}\" for d in m.distributions()))"
+)
+
+
+def deselect_args(entries: Sequence[str]) -> list[str]:
+    """pytest options that leave out these test files / node ids."""
+    return [a for e in entries for a in ("--deselect", e)]
+
+
 #: pytest exit codes of a run that did not reach the end
 PYTEST_INCOMPLETE = {2: "pytest interrupted (exit 2)", 3: "pytest internal error (exit 3)"}
 
@@ -541,18 +552,26 @@ class PythonAdapter(LanguageAdapter):
         args = ["--req", ",".join(scope.req_ids)] if scope.req_ids else []
         return args + (["--req-paths", ",".join(scope.paths)] if scope.paths else [])
 
-    def regression_run(self) -> TestRun:
+    def regression_run(self, skip: Sequence[str] = ()) -> TestRun:
         timeout = self.cfg.regression_timeout
         junit = self.root / self.cfg.paths.out / "regression.xml"
         junit.parent.mkdir(parents=True, exist_ok=True)
         junit.unlink(missing_ok=True)
         cmd = [self.python, "-m", "pytest", "-q", "-p", "no:cacheprovider", f"--junitxml={junit}"]
-        cmd += self.pytest_args
+        cmd += self.pytest_args + deselect_args(skip)
         code, out = run_command(cmd, self.root, timeout=timeout)
         reason = incomplete_reason(code, out, timeout) or PYTEST_INCOMPLETE.get(code, "")
         cases = parse_junit(junit) if junit.is_file() else None
         status = "error" if reason else PYTEST_STATUS.get(code, "error")
         return TestRun(status, code, out, cases, incomplete=reason)
+
+    def suite_command(self) -> list[str] | None:
+        return [self.python, *self.pytest_args]
+
+    def env_stamp(self) -> str:
+        """The installed packages (name-version of every dist-info / egg-info)."""
+        code, out = run_command([self.python, "-c", ENV_STAMP], self.root, timeout=60)
+        return out if code == 0 else ""
 
     def _coverage_env(self) -> dict[str, str]:
         """A coverage run's environment: its data file in the out folder (seen live: a
@@ -624,6 +643,8 @@ class PythonAdapter(LanguageAdapter):
             cmd = [self.python, "-m", "pytest", "-q", "-p", "no:cacheprovider"]
             cmd += self.pytest_args
             cmd += self.scope_args(scope)
+            if scope is None or scope.whole_suite:
+                cmd += deselect_args(known_red.entries(self.cfg))
             note = ""
             collect = self._has_module("pytest_cov")
             if collect:
