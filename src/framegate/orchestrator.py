@@ -259,6 +259,9 @@ WHOLE_SUITE_CHECKS = ("regression", "full test suite")
 FIX_OWNER_RE = re.compile(r"^\W*Fix owner\W*:\W*(src|tests|spec|config|setup)\b", re.I | re.M)
 #: fix owners no implementer attempt can serve: the work parks, the proposal is its question
 PARKING_OWNERS = ("tests", "spec", "config", "setup")
+SPLIT_RE = re.compile(
+    r"\b(split|move|extract|break (it )?up|into (two|three|separate)|one file (each|per))\b", re.I
+)
 #: the gate question of a step parked on checks only another role can fix (seen live: the
 #: default "ok" redid the step unchanged, and it parked again)
 UNFIXABLE_QUESTION = {
@@ -3100,10 +3103,53 @@ class Orchestrator:
         text = review.read_text(encoding="utf-8") if review.is_file() else ""
         pending = list(prog.get("structure_findings") or [])
         found = [x for x in section_bullets(text, "Structure findings") if x not in pending]
+        later = {x: big for x in found if (big := self.oversized_before(feature, x))}
+        if later:
+            self.ask_split_later(feature, later)
+            found = [x for x in found if x not in later]
         if found:  # (a resumed review run must not add the same findings twice)
             prog["structure_findings"] = [*pending, *found]
             log_event(self.cfg, feature, "structure_findings", findings=found)
             save_progress(self.cfg, feature, prog)
+
+    def oversized_before(self, feature: str, finding: str) -> tuple[str, int] | None:
+        """A finding that splits or moves code out of a source file that was over [gates]
+        max_file_lines before this feature: (that file, its lines then). Seen live: a one-line
+        bug fix split a 598-line file at review; the moved code then failed diff coverage."""
+        if not SPLIT_RE.search(finding):
+            return None
+        limit = self.cfg.max_file_lines
+        for rel in plan_files.named_files(finding):
+            if not self.cfg.in_src(rel):
+                continue
+            try:
+                old = git(self.cfg, "show", f"spec-approved/{feature}:{rel}")
+            except GitError:
+                continue
+            n = len(old.splitlines())
+            if n > limit:
+                return rel, n
+        return None
+
+    def ask_split_later(self, feature: str, later: dict[str, tuple[str, int]]) -> None:
+        """The final-gate question for each such finding, with the default "later"."""
+        lines = [
+            f"{rel} had {n} lines before this feature (limit {self.cfg.max_file_lines}); the "
+            f"reviewer proposes: {finding.strip()} Split it now? Default: leave it for a later "
+            "cleanup (this task does not split a file that was already too big)."
+            for finding, (rel, n) in later.items()
+        ]
+        with open(self.fdir(feature) / "open_questions.md", "a", encoding="utf-8") as fh:
+            for q in lines:
+                fh.write(f"- [{STRUCTURE_WHO}] {q}\n")
+        log_event(
+            self.cfg,
+            feature,
+            "questions",
+            phase="REVIEW",
+            who=STRUCTURE_WHO,
+            questions="\n".join(lines),
+        )
 
     def fix_structure(self, feature: str, prog: dict[str, Any]) -> None:
         """One implementer item (with attempts) that restructures the code as the pending
