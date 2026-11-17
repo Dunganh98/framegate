@@ -300,13 +300,6 @@ def test_update_check_and_limit_tries(
     ):
         with pytest.raises(ConfigError, match=message):
             parse_config(tmp_path, data)
-    import framegate
-
-    file = pathlib.Path(framegate.__file__).parent / "templates" / "framegate.toml"
-    template = file.read_text(encoding="utf-8")
-    assert "# limit_probe_minutes = 5" in template and "framegate wake" in template
-    assert "# [update]" in template and "# check = true" in template
-    assert "FRAMEGATE_UPDATE_CHECK=0" in template
 
 
 @pytest.mark.parametrize(

@@ -323,9 +323,6 @@ def test_spec_ok_writes_down_the_version_the_task_runs_with(
 def test_a_new_task_does_not_replace_the_tool_under_a_task_in_progress_here(
     demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Seen on a replay: tasks went from 0.12.0 to 0.12.2 during their runs. The check kept
-    the versions of the feature it was called for only; the start check of the next task
-    got the install command."""
     r = demo_repo
     assert r.af("approve-spec", "demo") == 0
     tools = Tools(monkeypatch, OTHER)
@@ -348,8 +345,6 @@ def test_a_task_in_another_repository_keeps_the_tool_of_this_machine(
     claude_home: pathlib.Path,
     tmp_path: pathlib.Path,
 ) -> None:
-    """One command-line tool per machine: a task in progress elsewhere keeps it. The
-    workflow tools of this project are its own and follow the tool."""
     tools = Tools(monkeypatch, OTHER)
     elsewhere = tmp_path / "elsewhere"
     entry = other_task(claude_home, elsewhere, "port-x", "IMPLEMENT")
@@ -377,8 +372,6 @@ def test_a_task_in_another_repository_keeps_the_tool_of_this_machine(
 def test_update_waits_for_a_run_that_is_going(
     demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`framegate update` keeps nothing back, but replacing a running tool breaks the run
-    (seen: a `status` failed on an import)."""
     r = demo_repo
     assert r.af("approve-spec", "demo") == 0
     cfg = load_config(r.root)
@@ -398,20 +391,14 @@ def test_update_waits_for_a_run_that_is_going(
     assert check(None, NEWER, update=True)[1][1].startswith("RUN: uv tool install")
 
 
-@pytest.mark.parametrize("how", ["env", "toml"])
 def test_the_update_check_can_be_switched_off(
     demo_repo: DemoRepo,
     monkeypatch: pytest.MonkeyPatch,
     claude_home: pathlib.Path,
     capsys: pytest.CaptureFixture[str],
-    how: str,
 ) -> None:
-    """A pinned setup, a replay of old tasks: nothing is compared, nothing updated."""
     r = demo_repo
-    if how == "env":
-        monkeypatch.setenv("FRAMEGATE_UPDATE_CHECK", "0")
-    else:
-        r.add_toml("[update]\ncheck = false\n")
+    r.add_toml("[update]\ncheck = false\n")  # or FRAMEGATE_UPDATE_CHECK=0: tests/test_config.py
     assert load_config(r.root).update_check is False
     tools = Tools(monkeypatch, OTHER)
     plugin_on_disk(claude_home, "100.0.0")  # no restart notice either

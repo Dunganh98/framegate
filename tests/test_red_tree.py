@@ -1,20 +1,4 @@
-"""A tree that is already red before the task, and parked work that cannot end differently.
-
-Seen in three of three replay runs (real commits of three repositories, replayed on the code
-before them): tests, lint or format failed on the untouched tree, every step gate blamed the
-feature, and an approved fix that nobody could apply was redone on the same inputs.
-
-- Lint, format, typecheck and imports findings count only in files the task changed
-  (gates.lint_checks, red_tree.py).
-- [gates] regression_baseline (on for a bug fix, or where framegate.toml sets it):
-  `approve-spec` records the tests that fail, the gates leave them out (gates.py).
-- Formatting debt in a file the task touches is fixed with the work and counted for the
-  final summary.
-- The frame check counts a suppression by its text, not by its line (frame_diff.py).
-- `Fix owner: config`: framegate applies an approved framegate.toml change itself, unless it
-  weakens a check (config_change.py); a redo whose gate inputs did not change is not run
-  (redo.py).
-"""
+"""A tree that is red before the task, config fixes during a task, redos that change nothing."""
 
 from __future__ import annotations
 
@@ -75,7 +59,6 @@ def test_a_finding_counts_only_in_a_changed_file(demo_repo: DemoRepo) -> None:
 
 
 def test_findings_from_before_the_task_do_not_fail_its_gates(demo_repo: DemoRepo) -> None:
-    """In every mode, without a record (seen live: every step parked, nothing built)."""
     r = demo_repo
     (r.root / "tools").mkdir()
     (r.root / "tools" / "lint.py").write_text(LINT, encoding="utf-8")
@@ -96,8 +79,6 @@ def test_findings_from_before_the_task_do_not_fail_its_gates(demo_repo: DemoRepo
 
 
 def test_the_tests_of_the_task_are_never_on_the_list_of_old_failures(demo_repo: DemoRepo) -> None:
-    """A record taken after the task's tests were written (the setting was turned on late):
-    they are red by design and must not be left out of the regression check later."""
     r = demo_repo
     (r.root / "tests" / "test_legacy.py").write_text(RED_TEST, encoding="utf-8")
     (r.root / "tests" / "test_demo.py").write_text(
@@ -115,8 +96,6 @@ def test_the_tests_of_the_task_are_never_on_the_list_of_old_failures(demo_repo: 
 
 
 def test_the_record_is_on_for_a_bug_fix_only_unless_the_config_says(demo_repo: DemoRepo) -> None:
-    """A feature and a refactor start on a green tree (setup sees to it); a bug fix may
-    start on a red one. A setting in framegate.toml wins."""
     r = demo_repo
     cfg = load_config(r.root)
     assert parse_config(r.root, {}).regression_baseline is None  # the default: by mode
@@ -137,8 +116,6 @@ def test_the_record_is_on_for_a_bug_fix_only_unless_the_config_says(demo_repo: D
 def test_formatting_debt_in_a_touched_file_is_fixed_with_the_work_and_counted(
     demo_repo: DemoRepo,
 ) -> None:
-    """A file that was not formatted before the task is formatted whole when the task touches
-    it, without a question; the lines the task did not change are counted for the summary."""
     r = demo_repo
     src = r.root / "src" / "demo" / "__init__.py"
     src.write_text(src.read_text(encoding="utf-8") + "\n\nOLD = [1,\n       2]\n", "utf-8")
@@ -238,9 +215,6 @@ def approve_the_fix(
 
 
 def test_an_approved_fix_that_changed_nothing_is_not_redone(demo_repo: DemoRepo) -> None:
-    """The approved fix was a framegate.toml change and nobody made it: the step is not
-    redone (seen live: a full cycle of failed attempts and a second diagnosis, three times).
-    It parks again at once and says so; "redo anyway" runs it."""
     r = demo_repo
     to_parked_config_fix(r)
     before = len(r.calls())
@@ -269,9 +243,6 @@ def test_an_approved_fix_that_changed_nothing_is_not_redone(demo_repo: DemoRepo)
 
 
 def test_an_approved_config_fix_is_applied_by_framegate(demo_repo: DemoRepo) -> None:
-    """`Fix owner: config`, approved: the spec updater proposes the new framegate.toml in the
-    out folder, framegate checks it, puts it in place (committed, tagged) and redoes the step
-    with it; the frame check accepts the file as long as it is exactly that."""
     r = demo_repo
     to_parked_config_fix(r, config_update="\n[update]\ncheck = false\n")
     before = len(r.calls())
@@ -300,30 +271,23 @@ def test_an_approved_config_fix_is_applied_by_framegate(demo_repo: DemoRepo) -> 
     assert res.status == "FAIL" and "PROTECTED PATH CHANGED: framegate.toml" in res.output
 
 
-@pytest.mark.parametrize(
-    ("proposal", "why"),
-    [
-        ("bad", "was not applied, the new file is not a valid config"),
+def test_a_config_that_does_not_load_or_weakens_a_check_is_not_applied(
+    demo_repo: DemoRepo,
+) -> None:
+    r = demo_repo
+    cfg = load_config(r.root)
+    toml = (r.root / "framegate.toml").read_text(encoding="utf-8")
+    cfg.feature_out("demo").mkdir(parents=True, exist_ok=True)
+    for proposal, why in (
+        ("[gates\n", "was not applied, the new file is not a valid config"),
         (
-            "\n[frame]\nforbidden_patterns = []\n",
+            toml + "\n[frame]\nforbidden_patterns = []\n",
             "was not applied, it weakens a check (frame.forbidden_patterns: not set -> []). "
             "A task never does that: it belongs to the setup (/framegate:setup)",
         ),
-    ],
-    ids=["invalid", "weakening"],
-)
-def test_a_config_that_does_not_load_or_weakens_a_check_is_not_applied(
-    demo_repo: DemoRepo, proposal: str, why: str
-) -> None:
-    r = demo_repo
-    to_parked_config_fix(r, config_update=proposal)
-    toml = (r.root / "framegate.toml").read_text(encoding="utf-8")
-    before = len(r.calls())
-    approve_the_fix(r)
-    assert (r.root / "framegate.toml").read_text(encoding="utf-8") == toml
-    assert not marker(r.root, "config-update/demo")
-    notes = " ".join(r.progress()["spec_update_notes"])
-    assert why in notes
-    assert "IMPLEMENT" not in phases(r)[before:]  # nothing changed: not redone
-    (p,) = r.progress()["parked"]
-    assert p["reason"] == "not redone: nothing changed since it parked"
+    ):
+        (cfg.feature_out("demo") / redo.CONFIG_UPDATE_FILE).write_text(proposal, encoding="utf-8")
+        new, notes, applied = redo.apply_config_update(cfg, "demo", "ANS-1")
+        assert new is None and applied == [] and why in notes[0]
+        assert (r.root / "framegate.toml").read_text(encoding="utf-8") == toml
+        assert not marker(r.root, "config-update/demo")

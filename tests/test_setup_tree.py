@@ -1,18 +1,8 @@
-"""The setup finds a red tree once, and leaves no file uncommitted.
-
-Seen in three of three replay runs (real commits of three repositories, replayed on the code
-before them): the untouched tree was red and the gates blamed the task; the setup ended with
-uncommitted files and the first `framegate spec` was refused.
-
-- `framegate doctor --tree` runs the whole suite once and says what is red in plain lines
-  (tree_check.py).
-- [gates] unrunnable_tests: tests this machine cannot run, each with a reason. A failure of
-  one is left out of every gate, and the final facts name them every time (unrunnable.py).
-- `framegate commit-setup` commits the setup's files in one commit of their own, and the
-  refusal of `framegate spec` over uncommitted files names the command to run.
-"""
+"""`doctor --tree`, [gates] unrunnable_tests and `commit-setup`: a red tree is found once."""
 
 from __future__ import annotations
+
+import pathlib
 
 import pytest
 
@@ -64,12 +54,11 @@ def doctor_tree(r: DemoRepo, brief: bool = True) -> tuple[int, str]:
 
 
 # ---------- [gates] unrunnable_tests: the config ----------
-def test_a_listed_test_needs_a_test_and_a_reason(demo_repo: DemoRepo) -> None:
-    root = demo_repo.root
+def test_a_listed_test_needs_its_file_and_a_reason(tmp_path: pathlib.Path) -> None:
     entry = {"test": "tests/test_db.py", "reason": "needs a database"}
-    cfg = parse_config(root, {"gates": {"unrunnable_tests": [entry]}})
+    cfg = parse_config(tmp_path, {"gates": {"unrunnable_tests": [entry]}})
     assert cfg.unrunnable_tests == {"tests/test_db.py": "needs a database"}
-    assert parse_config(root, {}).unrunnable_tests == {}
+    assert parse_config(tmp_path, {}).unrunnable_tests == {}
     for bad in (
         ["tests/test_db.py"],
         [{"test": "tests/test_db.py"}],
@@ -78,18 +67,15 @@ def test_a_listed_test_needs_a_test_and_a_reason(demo_repo: DemoRepo) -> None:
         [{"test": "tests/test_db.py", "reason": " "}],
     ):
         with pytest.raises(ConfigError, match="unrunnable_tests"):
-            parse_config(root, {"gates": {"unrunnable_tests": bad}})
+            parse_config(tmp_path, {"gates": {"unrunnable_tests": bad}})
+    for test in ("test_connect", "tests.test_db::test_connect", "tests/db"):
+        entry = {"test": test, "reason": "needs a database"}
+        with pytest.raises(ConfigError, match="must name the test file"):
+            parse_config(tmp_path, {"gates": {"unrunnable_tests": [entry]}})
 
 
-@pytest.mark.parametrize("test", ["test_connect", "tests.test_db::test_connect", "tests/db"])
-def test_a_listed_test_without_its_file_is_refused(demo_repo: DemoRepo, test: str) -> None:
-    entry = {"test": test, "reason": "needs a database"}
-    with pytest.raises(ConfigError, match="must name the test file"):
-        parse_config(demo_repo.root, {"gates": {"unrunnable_tests": [entry]}})
-
-
-def test_a_listed_test_is_a_file_or_a_test_in_it(demo_repo: DemoRepo) -> None:
-    cfg = load_config(demo_repo.root)
+def test_a_listed_test_is_a_file_or_a_test_in_it(tmp_path: pathlib.Path) -> None:
+    cfg = parse_config(tmp_path, {})
     name = "tests.db.test_pg.TestPool::test_connect[1]"
     for entry in ("tests/db/test_pg.py::TestPool::test_connect", "tests/db/test_pg.py"):
         assert unrunnable.matches(cfg, name, entry), entry
@@ -102,8 +88,8 @@ def test_a_listed_test_is_a_file_or_a_test_in_it(demo_repo: DemoRepo) -> None:
 
 
 # ---------- the gates leave a listed test's failure out ----------
-def test_a_failure_of_a_listed_test_is_left_out_and_counted(demo_repo: DemoRepo) -> None:
-    cfg = load_config(demo_repo.root)
+def test_a_failure_of_a_listed_test_is_left_out_and_counted(tmp_path: pathlib.Path) -> None:
+    cfg = parse_config(tmp_path, {})
     cfg.unrunnable_tests = {"tests/test_db.py": "needs a database"}
     run = _run(("tests.test_db::test_connect", "failed"), ("tests.test_x::test_fine", "passed"))
     kept, off = unrunnable.leave_out(cfg, run)
@@ -118,13 +104,12 @@ def test_a_failure_of_a_listed_test_is_left_out_and_counted(demo_repo: DemoRepo)
     assert res.summary.startswith("cannot run on this machine, left out: 1")
     # nothing listed, or no per-test results: the run is taken as it is
     plain = _run(("tests.test_db::test_connect", "failed"))
-    assert unrunnable.leave_out(load_config(demo_repo.root), plain) == (plain, [])
+    assert unrunnable.leave_out(parse_config(tmp_path, {}), plain) == (plain, [])
     blind = TestRun("failed", 1, "out", None)
     assert unrunnable.leave_out(cfg, blind) == (blind, [])
 
 
 def test_the_gates_of_every_mode_leave_the_listed_tests_out(demo_repo: DemoRepo) -> None:
-    """No [gates] regression_baseline here (a feature): the list alone does it."""
     r = demo_repo
     (r.root / "tests" / "test_db.py").write_text(DB_TESTS, encoding="utf-8")
     cfg = load_config(r.root)
@@ -158,8 +143,8 @@ def test_the_gates_of_every_mode_leave_the_listed_tests_out(demo_repo: DemoRepo)
     assert gates.step_suite(adapter, "demo", ["DEMO-R-001"]).status == "FAIL"
 
 
-def test_the_final_facts_name_the_listed_tests_every_time(demo_repo: DemoRepo) -> None:
-    cfg = load_config(demo_repo.root)
+def test_the_final_facts_name_the_listed_tests_every_time(tmp_path: pathlib.Path) -> None:
+    cfg = parse_config(tmp_path, {})
     assert unrunnable.facts_lines(cfg) == []
     cfg.unrunnable_tests = {"tests/test_db.py": "needs a PostgreSQL server"}
     lines = unrunnable.facts_lines(cfg)
@@ -222,9 +207,9 @@ def test_setup_says_what_is_red_on_the_untouched_tree(demo_repo: DemoRepo) -> No
 
 
 def test_the_tree_lines_for_a_suite_without_a_result_and_a_stale_entry(
-    demo_repo: DemoRepo,
+    tmp_path: pathlib.Path,
 ) -> None:
-    cfg = load_config(demo_repo.root)
+    cfg = parse_config(tmp_path, {})
     cfg.unrunnable_tests = {"tests/test_gone.py": "needs a license server"}
     adapter = get_adapter(cfg)
     seen = tree_check.suite(adapter, _run(("tests.test_x::test_fine", "passed")))

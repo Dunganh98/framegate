@@ -1,6 +1,4 @@
-"""The documentation files a plan step names (checks/plan_files.py): writable for the
-implementer in that step. Seen live: a step said "update docs/xyz.md", the write guard
-blocked the implementer and the step parked."""
+"""The documentation files a plan step names are writable for the implementer in that step."""
 
 from __future__ import annotations
 
@@ -25,41 +23,37 @@ def write_plan(r: DemoRepo, text: str) -> None:
 
 
 # ---------- the rule ----------
-@pytest.mark.parametrize(
-    ("rel", "doc"),
-    [
-        ("docs/guide.md", True),
-        ("doc/notes.md", True),
-        ("docs/usage.rst", False),  # Markdown only
-        ("packages/core/docs/intro.md", True),
-        ("README.md", True),
-        ("CHANGELOG.md", True),
-        ("docs/conf.py", False),
-        ("notes.md", False),  # no docs folder, no README / CHANGELOG
-        ("tests/README.md", False),
-        ("tests/docs/cases.md", False),
-        ("specs/demo/docs/more.md", False),
-        ("out/demo/docs/x.md", False),
-        ("CLAUDE.md", False),
-        ("docs/CLAUDE.md", False),
-        (".claude/docs/x.md", False),
-        (".github/README.md", False),
-        ("docs/code-map.md", False),  # the summary step writes it
-        ("docs/Dockerfile.md", False),  # a deploy / CI name
-        ("docs/locked/x.md", False),  # [protected] extra
-    ],
+DOCS = ("docs/guide.md", "doc/notes.md", "packages/core/docs/intro.md", "README.md", "CHANGELOG.md")
+NOT_DOCS = (
+    "docs/usage.rst",  # Markdown only
+    "docs/conf.py",
+    "notes.md",  # no docs folder, no README / CHANGELOG
+    "tests/README.md",
+    "tests/docs/cases.md",
+    "specs/demo/docs/more.md",
+    "out/demo/docs/x.md",
+    "CLAUDE.md",
+    "docs/CLAUDE.md",
+    ".claude/docs/x.md",
+    ".github/README.md",
+    "docs/code-map.md",  # the summary step writes it
+    "docs/Dockerfile.md",  # a deploy / CI name
+    "docs/locked/x.md",  # [protected] extra
 )
-def test_what_counts_as_a_documentation_file(demo_repo: DemoRepo, rel: str, doc: bool) -> None:
+
+
+def test_what_counts_as_a_documentation_file(demo_repo: DemoRepo) -> None:
     r = demo_repo
     toml = r.root / "framegate.toml"
     text = toml.read_text(encoding="utf-8")
     assert "[protected]\n" in text
     text = text.replace("[protected]\n", '[protected]\nextra = ["docs/locked/"]\n')
     toml.write_text(text, encoding="utf-8")
-    assert plan_files.is_doc_file(get_adapter(load_config(r.root)), rel) is doc
+    adapter = get_adapter(load_config(r.root))
+    assert [rel for rel in DOCS + NOT_DOCS if plan_files.is_doc_file(adapter, rel)] == list(DOCS)
 
 
-def test_a_step_may_name_any_file_and_only_its_docs_become_writable(
+def test_only_the_docs_a_step_names_become_writable_and_the_approval_freezes_them(
     demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
 ) -> None:
     r = demo_repo
@@ -75,12 +69,6 @@ def test_a_step_may_name_any_file_and_only_its_docs_become_writable(
         "Documentation files the plan makes writable (frozen with the spec): "
         "step 2: docs/guide.md, CHANGELOG.md\n" in capsys.readouterr().out
     )
-
-
-def test_the_approval_freezes_the_list(demo_repo: DemoRepo) -> None:
-    r = demo_repo
-    r.two_steps()
-    write_plan(r, DOCS_STEP2)
     adapter = get_adapter(load_config(r.root))
     assert plan_files.approved_docs(adapter, "demo", [1, 2]) == []  # not approved yet
     assert r.af("approve-spec", "demo") == 0

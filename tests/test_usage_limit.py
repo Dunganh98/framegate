@@ -1,7 +1,4 @@
-"""usage_limit: detect a `claude -p` run refused by the usage limit, and when it lifts; the
-wait ends early when a try gets through or the user wakes the run.
-
-Seen on a replay: a run slept 1 h 40 min after the user had refilled the limit."""
+"""usage_limit: a `claude -p` run refused by the usage limit, when it lifts, how the wait ends."""
 
 from __future__ import annotations
 
@@ -32,21 +29,24 @@ def implement_runs(r: DemoRepo) -> list[dict[str, object]]:
     return [e for e in r.events() if e["kind"] == "agent_run" and e["phase"] == "IMPLEMENT"]
 
 
-def test_a_try_during_the_wait_that_gets_through_is_the_run(
-    demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch
+def test_the_wait_ends_when_a_try_gets_through_or_the_user_wakes_the_run(
+    demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The limit is refilled long before the time claude named: the refused run is tried
-    again every 5 minutes. A refused try leaves no record; the one that gets through is the
-    run itself, so nothing is paid twice."""
+    """IMPLEMENT: refused, then tried every 5 minutes; the try that gets through is the run
+    itself. REVIEW: refused once, the user wakes the run."""
     r = demo_repo
-    r.scenario(usage_limit={"IMPLEMENT": 3}, usage_limit_reset_s=3600)
+    r.scenario(usage_limit={"IMPLEMENT": 3, "REVIEW": 1}, usage_limit_reset_s=3600)
     sleeps: list[float] = []
+    woken: list[int] = []
     marker = r.root / "out" / "demo" / LIMIT_WAIT_FILE
 
     def sleep(until: datetime.datetime, wake: pathlib.Path | None = None) -> bool:
         assert wake == marker and marker.is_file()  # what `framegate wake` deletes
-        sleeps.append((until - orchestrator.now_utc()).total_seconds())
-        return False
+        if len(sleeps) < 3:
+            sleeps.append((until - orchestrator.now_utc()).total_seconds())
+            return False
+        woken.append(r.af("wake", "demo"))  # from another window, while the run waits
+        return not marker.is_file()
 
     monkeypatch.setattr("framegate.orchestrator.sleep_until", sleep)
     to_implement(r)
@@ -58,40 +58,23 @@ def test_a_try_during_the_wait_that_gets_through_is_the_run(
     assert [bool(e.get("usage_limit")) for e in implement_runs(r)] == [True, False]
     prompts = list((r.root / "out" / "runs").glob("*-demo-IMPLEMENT.prompt.md"))
     assert len(prompts) == 2
-    assert len([e for e in r.events() if e["kind"] == "usage_limit"]) == 1
-    over = [e for e in r.events() if e["kind"] == "usage_limit_over"]
-    assert [(e["how"], e["probes"], e["phase"]) for e in over] == [("probe", 3, "IMPLEMENT")]
+    assert len([e for e in r.events() if e["kind"] == "usage_limit"]) == 2
     gates = [e for e in r.events() if e["kind"] == "gate" and e.get("step")]
     assert [(e["attempt"], e["passed"]) for e in gates] == [(1, True)]  # no failed attempt
     log = (r.root / "out/demo/progress.log").read_text(encoding="utf-8")
     assert "a try every 5 min (not a failed attempt)" in log and "framegate wake demo" in log
     assert "try 3 got through" in log and "agent run reported an error" not in log
-    assert not marker.exists()
 
-
-def test_the_user_wakes_a_waiting_run(
-    demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    r = demo_repo
-    r.scenario(usage_limit={"IMPLEMENT": 1}, usage_limit_reset_s=3600)
-    woken: list[int] = []
-
-    def sleep(until: datetime.datetime, wake: pathlib.Path | None = None) -> bool:
-        assert wake is not None
-        woken.append(r.af("wake", "demo"))  # from another window, while the run waits
-        return not wake.is_file()
-
-    monkeypatch.setattr("framegate.orchestrator.sleep_until", sleep)
-    to_implement(r)
-    assert r.af("run", "demo") == EXIT_GATE
     assert woken == [0]
     assert "Woke demo: the run tries again" in capsys.readouterr().out
-    assert len([c for c in r.calls() if c["phase"] == "IMPLEMENT"]) == 2
+    assert len([c for c in r.calls() if c["phase"] == "REVIEW"]) == 2
     over = [e for e in r.events() if e["kind"] == "usage_limit_over"]
-    assert [(e["how"], e["probes"]) for e in over] == [("wake", 0)]
-    assert "woken (framegate wake)" in (r.root / "out/demo/progress.log").read_text("utf-8")
+    assert [(e["how"], e["probes"], e["phase"]) for e in over] == [
+        ("probe", 3, "IMPLEMENT"),
+        ("wake", 0, "REVIEW"),
+    ]
+    assert "woken (framegate wake)" in log and not marker.exists()
     # nothing waits now: said so, exit 1; a file left by a killed run is removed
-    marker = r.root / "out" / "demo" / LIMIT_WAIT_FILE
     marker.write_text("{}", encoding="utf-8")
     assert r.af("wake", "demo") == 1
     assert "not waiting for the usage limit" in capsys.readouterr().out
