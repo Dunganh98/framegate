@@ -322,8 +322,9 @@ def problems(cfg: Config, feature: str, adapter: LanguageAdapter | None = None) 
     """Everything the spec check finds; [] = fine. With the adapter also the forbidden
     markers in the stubs."""
     from framegate import references  # it reads the spec tables with this module
-    from framegate.checks import red_stubs
+    from framegate.checks import plan_files, red_stubs
 
+    plan = _read(cfg.spec_dir(feature) / "plan.md")
     return [
         *references.spec_problems(cfg, feature),
         *red_stubs.green_problems(_read(cfg.spec_dir(feature) / "requirements.md")),
@@ -331,4 +332,5 @@ def problems(cfg: Config, feature: str, adapter: LanguageAdapter | None = None) 
         *assigned_as_problems(cfg, feature),
         *edge_case_fixture_problems(cfg, feature),
         *(stub_marker_problems(adapter) if adapter is not None else []),
+        *(plan_files.outside_problems(adapter, plan) if adapter is not None else []),
     ]

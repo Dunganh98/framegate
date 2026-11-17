@@ -56,9 +56,17 @@ branch (pushed by whoever set it up): do not draft anything. Say so in one line,
 to start with `/framegate:feature <name>` (it fetches the branch and brings the files in), and
 stop here. An error ("no framegate.toml found") or `State branch: off` means: go on.
 
-## 1. Probe, then read a little (no edits yet)
+## 1. Survey, probe, then read a little (no edits yet)
 
-Run `framegate probe`. In seconds, without running a test, a linter or an agent, it prints one
+Without a `framegate.toml` (or when the user asks to map the folders again), first run
+`framegate survey` (a few minutes; start it in the background and wait for it). An agent reads
+the code and the build and test files and maps the source folders, the test folder and what
+is not the project's code; every code file must end up in one of them. It prints one line
+each, with the file it took the answer from, and writes `out/survey.json`, which the probe
+then reads for its folder lines. A `PROBLEM:` line names code files under no folder: put
+them under the table as a question (default: add their folder to the source folders).
+
+Then run `framegate probe`. In seconds, without running a test, a linter or an agent, it prints one
 line per fact: the language, the interpreter every run uses, the test / lint / format / type
 commands with `[OK: <version>]` or `[MISSING]` (each tool was asked for `--version` in that
 interpreter) and where each comes from, the source and test folders, the base branch, the
@@ -71,6 +79,9 @@ probed value by one you assume.
 
 Then read, from files only (Read / Glob / Grep), just enough for the knowledge file and the
 code map; a few minutes, not a study:
+The code and the build files are the truth, the docs say where the project is heading, and
+comments or docstrings are no evidence of anything: write no fact into the knowledge file or
+the code map that rests only on a comment.
 - `CLAUDE.md`, the README, a contributing or architecture doc: rules, conventions, things
   that must not change, the test or lint commands the team documents (one that differs from
   a probed value goes into the table with its file as the source);
@@ -112,7 +123,7 @@ no toml and no file dumps:
     | 4 | Lint | python -m ruff check app tests | pyproject.toml [tool.ruff] | OK (ruff 0.6.9) |
     | 5 | Format | python -m black --check app tests | pyproject.toml [tool.black] | OK (black 24.8.0) |
     | 6 | Types | off | the project names no type checker | |
-    | 7 | Source / test folders | app / tests | the folders | |
+    | 7 | Source / test folders | app / tests | the survey (pyproject.toml packages) | |
     | 8 | Base branch | main | origin/HEAD | |
     | 9 | Shared repository: framegate's files on their own branch | yes, framegate/main | remote on Azure DevOps, 4 authors | |
     | 10 | Locked deploy / CI paths | azure-pipelines.yml, deploy/, Dockerfile | probe | |
@@ -136,6 +147,8 @@ How the rows are filled:
 - `MISSING` on a tool the project names: keep the row and write "MISSING, installed in step
   5" under Answers (for Python: ruff, mypy, black); for any other tool write "MISSING" and
   ask under the table how to get it.
+- Row 7: the survey's folders (the probe shows them), with the survey's evidence under From.
+  A probe that still says "guessed from the folders" means the survey did not run: run it.
 - Row 2, when the probe says "framegate's own interpreter: the project has no .venv": that is
   not the project's environment. Write "none found" and ask under the table which interpreter
   the project runs in (`[env] python`).

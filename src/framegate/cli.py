@@ -65,6 +65,9 @@ commands:
                           works before `init`; --dry-run: only list what is missing;
                           --update: also bring the framegate pytest plugin there to this
                           version
+  survey                  an agent reads the code and build files and maps the source and
+                          test folders and what is not the project's code; every code file
+                          must be accounted for (out/survey.json, read by probe); minutes
   probe [--json]          the project facts every run depends on, read in seconds: the
                           interpreter, the test / lint / format / type commands and whether
                           each tool answers --version, folders, base branch, remote, deploy
@@ -223,6 +226,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p = sub.add_parser("probe", help="the project facts every run depends on (instant checks)")
     p.add_argument("--json", action="store_true", help="the facts as JSON")
+    sub.add_parser("survey", help="an agent maps source / test folders from the code (setup)")
     p = sub.add_parser("preflight", help="the start step of the chat skills: versions, tools")
     p.add_argument("feature", nargs="?")
     p.add_argument("--plugin-version", default="", help="the version of the skill that asks")
@@ -320,6 +324,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             from framegate import probe
 
             return probe.run(as_json=args.json)
+        if args.command == "survey":
+            from framegate import survey
+
+            return survey.run()
         if args.command == "preflight":
             from framegate import preflight
 

@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import Any
 
-from framegate import hosts
+from framegate import hosts, survey
 from framegate.adapters import detect_language, get_adapter
 from framegate.adapters.base import GATE_NAMES, TIMEOUT_CODE, LanguageAdapter, run_command
 from framegate.agent_commands import command_text
@@ -405,6 +405,10 @@ def load(start: pathlib.Path) -> tuple[Config, LanguageAdapter | None, str]:
         from framegate.adapters import adapter_class
 
         src, tests = adapter_class(lang).guess_layout(start)
+        mapped = survey.load(parse_config(start, {}))
+        if mapped:
+            src = [s["path"] for s in mapped["src"]]
+            tests = (mapped.get("tests") or {}).get("path") or tests
         cfg = parse_config(start, {"project": {"language": lang}, "paths": {"src": src}})
         cfg.paths.tests = tests
         source = "detected from the project's files"
@@ -443,7 +447,13 @@ def collect(start: pathlib.Path | None = None) -> dict[str, Any]:
             data["tools_error"] = str(e)
     data["src"] = [{"path": p, "exists": (root / p).is_dir()} for p in cfg.src_roots]
     data["tests"] = {"path": cfg.paths.tests, "exists": (root / cfg.paths.tests).is_dir()}
-    data["layout_source"] = f"{CONFIG_FILE} [paths]" if has_config else "guessed from the folders"
+    data["layout_source"] = (
+        f"{CONFIG_FILE} [paths]"
+        if has_config
+        else "the survey, out/survey.json"
+        if survey.load(cfg)
+        else "guessed from the folders: run `framegate survey`"
+    )
 
     guess, guess_source = base_branch(root)
     data["base"] = (

@@ -112,6 +112,29 @@ def step_docs(adapter: LanguageAdapter, text: str) -> dict[int, list[str]]:
     return docs
 
 
+def outside_problems(adapter: LanguageAdapter, text: str) -> list[str]:
+    """A plan step that names an existing code file outside the source and test folders: the
+    implementer could not write it (seen live: the step was parked, the folder added later,
+    and the spec approved again by hand)."""
+    cfg = adapter.cfg
+    suffixes = tuple(adapter.source_suffixes)
+    test_dirs = [cfg.paths.tests, cfg.paths.review_tests]
+    out = []
+    for num, body in sorted(step_bodies(text).items()):
+        for rel in named_files(body):
+            if not rel.endswith(suffixes) or not (cfg.root / rel).is_file():
+                continue
+            if cfg.in_src(rel) or any(_under(rel, t) for t in test_dirs):
+                continue
+            folder = rel.rsplit("/", 1)[0] if "/" in rel else "."
+            out.append(
+                f"plan.md step {num} changes {rel}, which is outside the source folders "
+                f"([paths] src: {', '.join(cfg.src_roots)}). Add {folder} to [paths] src "
+                "(/framegate:setup) before the spec is approved, or change the plan"
+            )
+    return out
+
+
 def docs_line(adapter: LanguageAdapter, feature: str) -> str:
     """One line for `spec-check`: what the approval of plan.md (as it is now) makes
     writable, per step."""
