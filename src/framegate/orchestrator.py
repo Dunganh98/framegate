@@ -39,6 +39,7 @@ from framegate import (
     red_tree,
     references,
     risk,
+    unrunnable,
 )
 from framegate import brief as briefs
 from framegate import redo as redos
@@ -113,6 +114,7 @@ from framegate.state import (
     clear_phase,
     clear_reqs,
     commit,
+    commit_command,
     commit_paths,
     delete_marker,
     dirty_lines,
@@ -3098,6 +3100,7 @@ class Orchestrator:
             feature_mode(self.cfg, feature),
             parse_causes(steps.read_text(encoding="utf-8") if steps.is_file() else ""),
             followup.facts_lines(self.cfg, feature),
+            unrunnable.facts_lines(self.cfg),
         )
         (d / "final_facts.md").write_text(facts, encoding="utf-8")
 
@@ -3726,12 +3729,18 @@ class Orchestrator:
                 "Rename or delete that branch, or choose another feature name."
             )
         # machine files (tool state: .serena/, .vscode/, ...) are left out: git carries them
-        dirty = "\n".join(dirty_lines(self.cfg))
-        if dirty:
+        changed = dirty_lines(self.cfg)
+        if changed:
+            dirty = "\n".join(changed)
+            # seen in three of three replay runs: the setup left files uncommitted and the
+            # first `framegate spec` was refused without saying what to run
             raise WorkflowError(
                 f"Uncommitted changes to tracked files on {current}, before framegate "
                 f"switches to {name} (untracked files are fine). {DIRTY_CHOICES}\n"
-                f"{dirty[:1500]}"
+                f"{dirty[:1500]}\n"
+                "To commit them as they are, in one commit: "
+                + commit_command(changed, f"Changes before {feature}")
+                + f"\nThen run the command again: framegate spec {feature}"
             )
         if exists:
             switch_branch(self.cfg, name)

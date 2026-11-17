@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import pathlib
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from framegate import followup, references
 from framegate.adapters import detect_language, get_adapter
@@ -137,10 +137,10 @@ def init(
         echo("\nNote: " + note)
     echo(
         "\nNext: `framegate install-tools` (puts the tools the workflow needs into the "
-        "project's environment), `framegate doctor` (checks the configured tools and "
-        "commands, no agents), "
-        "commit these files, then in Claude Code (framegate plugin installed): "
-        "/framegate:feature <feature>"
+        "project's environment), `framegate doctor --tree` (checks the configured tools and "
+        "commands and what is red on the code as it is, no agents), "
+        "`framegate commit-setup` (these files in one commit of their own), then in Claude "
+        "Code (framegate plugin installed): /framegate:feature <feature>"
         '\nAllow the CLI for the chat skills: add "Bash(framegate *)" and '
         '"PowerShell(framegate *)" to permissions.allow in .claude/settings.local.json'
     )
@@ -175,6 +175,72 @@ def install_tools(
         echo(f"Nothing to install yet: {e}")
         return 0
     return adapter.install_tools(dry_run, echo, update=update)
+
+
+#: the message of the setup's own commit
+SETUP_COMMIT = "framegate: setup"
+
+
+def setup_files(cfg: Config, extra: Sequence[str] = ()) -> list[str]:
+    """What the setup wrote and nobody committed yet (changed, deleted or untracked, never
+    an ignored file): framegate.toml, the knowledge file, the code map, the spec templates,
+    `.gitignore`, the packaging / test / tool-config files the setup changed (python: the
+    `req` marker line in the pytest config), and the `extra` paths the chat names (a tag
+    helper it added). With `[git] state_branch` framegate's own files are left out: they
+    live on the state branch (`framegate state init`), never on the base."""
+    from framegate import publish
+    from framegate.checks.frame_diff import setup_state
+    from framegate.state import dirty_lines
+
+    specs = cfg.root / cfg.paths.specs
+    templates = sorted(p.name for p in specs.glob("_template*") if p.is_dir())
+    wanted = [CONFIG_FILE, cfg.knowledge, cfg.code_map, ".gitignore"]
+    wanted += [f"{cfg.paths.specs}/{name}" for name in templates]
+    wanted += [e.replace("\\", "/").rstrip("/") for e in extra if e.strip()]
+    changed = [line[3:] for line in dirty_lines(cfg, untracked="all")]
+    found = [path for path in changed if any(path == w or path.startswith(w + "/") for w in wanted)]
+    found += [path for path in setup_state(get_adapter(cfg))[0] if path not in found]
+    if publish.enabled(cfg):
+        found = [path for path in found if not publish.is_workflow(cfg, path)]
+    return sorted(found)
+
+
+def commit_setup(
+    cfg: Config,
+    extra: Sequence[str] = (),
+    dry_run: bool = False,
+    echo: Callable[[str], None] = print,
+) -> int:
+    """`framegate commit-setup`: the files the setup wrote, in one commit of their own.
+    Seen in three of three replay runs: the setup ended with uncommitted files and the first
+    `framegate spec` was refused. Only the setup's files are committed (setup_files); what
+    else is staged or changed stays as it is. `dry_run`: only list them."""
+    from framegate.state import GitError, git
+
+    try:
+        files = setup_files(cfg, extra)
+        branch = git(cfg, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    except GitError as e:
+        echo(f"error: the setup files cannot be read from git: {e}")
+        return 1
+    if not files:
+        echo("Setup files: nothing to commit.")
+        return 0
+    if dry_run:
+        echo(f"Setup files to commit ({len(files)}), on {branch}: {', '.join(files)}")
+        again = " ".join(["framegate commit-setup", *extra])
+        echo(f"Commit them in one commit of their own: {again}")
+        return 0
+    try:
+        git(cfg, "add", "-A", "--", *files)
+        git(cfg, "commit", "-q", "-m", SETUP_COMMIT, "--", *files)
+    except GitError as e:
+        echo(f"error: the setup files are not committed: {e}")
+        return 1
+    echo(
+        f'Committed {len(files)} setup file(s) on {branch} ("{SETUP_COMMIT}"): ' + ", ".join(files)
+    )
+    return 0
 
 
 def spec_brief(cfg: Config, feature: str) -> str:

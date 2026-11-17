@@ -356,9 +356,10 @@ class PythonAdapter(LanguageAdapter):
         if self.cfg.mutation_tool == "none":
             out.append(("mutmut (mutation)", True, "mutation off ([gates] mutation_tool = none)"))
         elif self.mutation_runner() == "wsl":
-            out.append(
-                ("mutmut (mutation)", True, "runs in WSL (checked by the first mutation run)")
-            )
+            # asked now, not by the first mutation run: seen live, a WSL without python3
+            # showed only at the first final gate
+            _, problem = wsl.probe(self.root, self.cfg.wsl_distro)
+            out.append(("mutmut (mutation)", not problem, problem or "runs in WSL"))
         else:
             ok = self._has_module("mutmut")
             out.append(("mutmut (mutation)", ok, self.python if ok else "install mutmut"))

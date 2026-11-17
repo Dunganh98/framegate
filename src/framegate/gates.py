@@ -31,7 +31,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from framegate import red_tree, references
+from framegate import red_tree, references, unrunnable
 from framegate.adapters.base import (
     Check,
     CheckResult,
@@ -148,7 +148,8 @@ def record_regression_baseline(adapter: LanguageAdapter, feature: str) -> tuple[
     """[gates] regression_baseline: run the whole suite once (as the final regression check
     does) and record the tests that fail today. Returns (number recorded, problem); with a
     problem ("" = fine) nothing is recorded and the final check stays strict."""
-    run = adapter.regression_run()
+    # a test this machine cannot run is left out by its own list, in every mode
+    run, _ = unrunnable.leave_out(adapter.cfg, adapter.regression_run())
     if run.incomplete:
         return 0, f"the suite run was cut short ({run.incomplete})"
     if run.status == "passed":
@@ -273,10 +274,11 @@ def regression_expecting(
     adapter: LanguageAdapter, exp: ExpectedRed, known: set[str] | frozenset[str] = frozenset()
 ) -> CheckResult:
     """The whole suite with parked steps / contested tests / tests that already failed when
-    the spec was approved: their failures are expected (counted, not failing); any other
-    failure fails the check."""
+    the spec was approved / tests this machine cannot run ([gates] unrunnable_tests): their
+    failures are expected (counted, not failing); any other failure fails the check."""
     names, problem = parked_test_names(adapter, exp)
-    res = tests_expecting(adapter.regression_run(), exp, names, known)
+    run, off = unrunnable.leave_out(adapter.cfg, adapter.regression_run())
+    res = unrunnable.noted(tests_expecting(run, exp, names, known), off)
     if problem and res.status == "FAIL":
         res.output += f"\n({problem})"
     return res
@@ -328,13 +330,13 @@ def step_suite(adapter: LanguageAdapter, feature: str, covered: list[str]) -> Ch
     """The whole suite (the adapter's everyday selection) at a step gate. Seen live: a step
     made helpers public and broke another feature's frozen public-surface test; both step
     gates passed (they ran only this feature's tests) and the break showed in a later fix
-    run. Failures of this feature's later steps, of contested tests and of tests that
-    already failed when the spec was approved are left out."""
+    run. Failures of this feature's later steps, of contested tests, of tests that already
+    failed when the spec was approved and of tests this machine cannot run are left out."""
     cfg = adapter.cfg
     later = later_step_tests(adapter, feature, covered)
-    run = adapter.run_tests(junit=cfg.out_dir / "step_suite.xml")
+    run, off = unrunnable.leave_out(cfg, adapter.run_tests(junit=cfg.out_dir / "step_suite.xml"))
     if run.status == "passed":
-        return CheckResult("PASS", run.output)
+        return unrunnable.noted(CheckResult("PASS", run.output), off)
     if run.status != "failed" or run.cases is None:
         if run.status == "failed" and later:
             return CheckResult(
@@ -355,6 +357,8 @@ def step_suite(adapter: LanguageAdapter, feature: str, covered: list[str]) -> Ch
         else:
             other.append(c.name)
     note = f"left out (later steps, contested, failing before the feature): {left_out}"
+    if off:
+        note = f"{unrunnable.LEFT_OUT}: {len(off)}; {note}"
     if other:
         blame = (
             "they passed when the spec was approved. Your change broke them: fix the code, "
@@ -404,8 +408,9 @@ def review_tests_checked(adapter: LanguageAdapter, feature: str) -> bool:
 
 
 def review_tests(adapter: LanguageAdapter, feature: str, contested: list[str]) -> CheckResult:
-    """Every test in the review tests folder (contested tests and tests that already failed
-    when the spec was approved are left out, as in the suite)."""
+    """Every test in the review tests folder (contested tests, tests that already failed
+    when the spec was approved and tests this machine cannot run are left out, as in the
+    suite)."""
     cfg = adapter.cfg
     run = adapter.run_tests(
         paths=[cfg.paths.review_tests], junit=cfg.out_dir / "step_review_tests.xml"
@@ -413,7 +418,10 @@ def review_tests(adapter: LanguageAdapter, feature: str, contested: list[str]) -
     if run.status == "no_tests":
         return CheckResult("PASS", run.output, "no review tests")
     known = regression_baseline(cfg, feature)
-    return tests_expecting(run, ExpectedRed(contested=contested), set(), known)
+    run, off = unrunnable.leave_out(cfg, run)
+    return unrunnable.noted(
+        tests_expecting(run, ExpectedRed(contested=contested), set(), known), off
+    )
 
 
 def checks(
@@ -437,11 +445,14 @@ def checks(
         contested = read_contested(adapter.cfg)
 
         def step_tests() -> CheckResult:
-            if not contested:
+            cfg = adapter.cfg
+            if not contested and not cfg.unrunnable_tests:
                 run = adapter.run_tests(req_ids=reqs)
                 return CheckResult("PASS" if run.status == "passed" else "FAIL", run.output)
-            run = adapter.run_tests(req_ids=reqs, junit=adapter.cfg.out_dir / "step_tests.xml")
-            return tests_expecting(run, ExpectedRed(contested=contested), set())
+            run = adapter.run_tests(req_ids=reqs, junit=cfg.out_dir / "step_tests.xml")
+            run, off = unrunnable.leave_out(cfg, run)
+            res = tests_expecting(run, ExpectedRed(contested=contested), set())
+            return unrunnable.noted(res, off)
 
         fix = scope == "fix" and bool(reqs)  # without IDs the check runs everything
         c.append(Check(FIX_TESTS if fix else "tests (current + earlier steps)", step_tests))
@@ -473,7 +484,7 @@ def checks(
                 for k in adapter.coverage_checks(tag, cov, cover_tests)
             ]
         else:
-            if cov is not None and known:
+            if cov is not None and (known or adapter.cfg.unrunnable_tests):
                 c.append(
                     Check(
                         "regression: whole suite, no coverage",
@@ -595,6 +606,14 @@ def gate_report(
             if exp.contested:
                 emit(f"- contested tests, left out: {', '.join(exp.contested)}")
             emit("- coverage, diff coverage and mutation: skipped until the redo")
+        if adapter.cfg.unrunnable_tests:
+            # said at every final gate: a green result says nothing about these tests
+            emit(
+                "Tests this machine cannot run ([gates] unrunnable_tests; a failure of one "
+                "is left out):"
+            )
+            for line in unrunnable.listed_lines(adapter.cfg):
+                emit(line)
         emit("")
     if scope == "idle":
         emit(IDLE_NOTE)

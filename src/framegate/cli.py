@@ -72,9 +72,16 @@ commands:
                           project environment's workflow tools at the tool's version
                           (updated unless the feature's spec is approved or --check), a
                           short setup check; prints what it did and what is left to do
-  doctor [--full] [--brief]  check the setup without agents: config, git, claude CLI,
-                          tools, gate commands, test selection by spec ID; --full: the whole
-                          suite; --brief: only the verdict and what needs action
+  doctor [--full] [--tree] [--brief]  check the setup without agents: config, git,
+                          claude CLI, tools, gate commands, test selection by spec ID;
+                          --full: the whole suite; --tree (the setup, once per project):
+                          the whole suite, and what is red on the code as it is (failing
+                          tests, lint / format debt with its size, a mutation tool that
+                          cannot run here); --brief: only the verdict and what needs action
+  commit-setup [--dry-run] [PATH ...]   the files the setup wrote (framegate.toml, the
+                          knowledge file, the code map, spec templates, .gitignore, changed
+                          packaging / test config; PATH: one more, e.g. a tag helper) in
+                          one commit of their own; --dry-run: only list them
   cleanup <feature> [--tags] [--force]   delete out/<feature>/ and its run logs (DONE only);
                           --tags: also the feature's tags (spec-approved, tests-approved,
                           spec-update, tests-update, knowledge-update)
@@ -200,6 +207,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("doctor", help="check the project setup (no agents)")
     p.add_argument("--full", action="store_true", help="also run the whole test suite")
     p.add_argument("--brief", action="store_true", help="only the verdict and what needs action")
+    p.add_argument(
+        "--tree",
+        action="store_true",
+        help="also run the whole suite and say what is red on the code as it is (the setup)",
+    )
+    p = sub.add_parser("commit-setup", help="the setup's files in one commit of their own")
+    p.add_argument("paths", nargs="*", help="one more file the setup wrote (a tag helper)")
+    p.add_argument("--dry-run", action="store_true", help="only list the files")
     p = sub.add_parser("publish", help="state branch + product branch of a finished feature")
     p.add_argument("feature")
     p.add_argument("--dry-run", action="store_true", help="only say what would go where")
@@ -329,7 +344,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "doctor":
             from framegate import doctor
 
-            return doctor.run(cfg, full=args.full, only_brief=args.brief)
+            return doctor.run(cfg, full=args.full, only_brief=args.brief, tree=args.tree)
+        if args.command == "commit-setup":
+            from framegate.scaffold import commit_setup
+
+            return commit_setup(cfg, args.paths, dry_run=args.dry_run)
         if args.command == "spec-brief":
             from framegate.scaffold import spec_brief
 

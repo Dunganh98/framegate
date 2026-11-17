@@ -20,7 +20,9 @@ plugin/
   skills/setup/SKILL.md             # /framegate:setup: framegate probe, one table of the
                                     # project's facts to confirm, framegate.toml,
                                     # .framegate/project.md and the code map, framegate
-                                    # doctor, optional smoke run
+                                    # doctor --tree (the setup check and what is red on
+                                    # the code as it is), framegate commit-setup,
+                                    # optional smoke run
   skills/feature/SKILL.md           # /framegate:feature <f>: branch + spec dialogue, then the run
                                     # protocol (injected: framegate protocol)
   skills/bugfix/SKILL.md            # /framegate:bugfix <f>: bug report dialogue (spec --mode

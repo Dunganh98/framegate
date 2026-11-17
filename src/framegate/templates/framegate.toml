@@ -78,6 +78,13 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 #                                  # nothing is run at the approval, every failure counts.
 #                                  # Not set: on for a bug fix (it may start on a red tree),
 #                                  # off for a feature and a refactor (they start on a green one)
+# unrunnable_tests = [             # tests this machine cannot run (a database, a service,
+#   { test = "tests/test_db.py", reason = "needs a PostgreSQL server" },   # another OS): a
+# ]                                # failure of one is left out of every gate, in every mode,
+#                                  # and the final summary names them with the reason. test =
+#                                  # a test name, a pytest node ID, a test file or a folder.
+#                                  # /framegate:setup finds them (framegate doctor --tree),
+#                                  # you confirm each one
 # coverage_timeout = 1800          # seconds per coverage run; killed -> "ERROR: test run incomplete"
 # mutation_timeout = 3600          # seconds per mutation run (same)
 # format_fix = true                # the gates format the changed source files (and review

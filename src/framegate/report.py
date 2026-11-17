@@ -211,10 +211,12 @@ def final_facts(
     mode: str = "feature",
     causes: list[tuple[str, str]] | None = None,
     followup: list[str] | None = None,
+    unrunnable: list[str] | None = None,
 ) -> str:
     """{out}/{f}/final_facts.md: what the summary agent must report, from the run's records.
     `followup`: the pipeline / reference follow-up sections with their note
-    (followup.facts_lines), if there are any."""
+    (followup.facts_lines), if there are any. `unrunnable`: the tests this machine cannot
+    run, with their reason (unrunnable.facts_lines): named every time, in every mode."""
     ev = since_spec_approval(events)
     parked = prog.get("parked") or []
     parked_steps = {
@@ -338,6 +340,8 @@ def final_facts(
         ]
         out.append("Name them under Struggles in the brief (one line).")
 
+    if unrunnable:
+        out += ["", *unrunnable]
     if followup:
         out += ["", *followup]
     out += ["", "## Final gates (final_gates.md)", "", "~~~", final_gates.strip(), "~~~"]

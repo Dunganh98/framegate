@@ -125,6 +125,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "mutation_scope": (str,),
         "regression_timeout": (int,),
         "regression_baseline": (bool,),
+        "unrunnable_tests": (list,),
         "coverage_timeout": (int,),
         "mutation_timeout": (int,),
         "commands": (dict,),
@@ -393,6 +394,11 @@ class Config:
     #: false: nothing is run at the approval and every failure counts. Not set (None): on
     #: for a bug fix, off for a feature and a refactor (specs.baseline_on)
     regression_baseline: bool | None = None
+    #: [gates] unrunnable_tests: test -> reason, for tests this machine cannot run (they need
+    #: a database, a service, another operating system). The setup finds them once and the
+    #: user confirms each reason. A failure of one is left out of every gate in every mode,
+    #: and the final facts name them with their reason each time (unrunnable.py)
+    unrunnable_tests: dict[str, str] = field(default_factory=dict)
     #: [gates.extra] name -> command: project checks run at the final gates and shown at the
     #: final gate, never blocking (e.g. a balance measurement)
     extra_checks: dict[str, list[str]] = field(default_factory=dict)
@@ -762,6 +768,24 @@ def _str_list(where: str, value: Any) -> list[str]:
     return list(value)
 
 
+def _unrunnable_tests(value: list[Any]) -> dict[str, str]:
+    """[gates] unrunnable_tests = [{ test = "...", reason = "..." }]: test -> reason. Both are
+    needed: an entry without a reason would hide a red test without saying why."""
+    where = "[gates] unrunnable_tests"
+    out: dict[str, str] = {}
+    for n, entry in enumerate(value, 1):
+        shape = f'{where}: entry {n} must be {{ test = "...", reason = "..." }}'
+        if not isinstance(entry, dict) or set(entry) != {"test", "reason"}:
+            raise ConfigError(shape)
+        test, reason = entry["test"], entry["reason"]
+        if not isinstance(test, str) or not isinstance(reason, str):
+            raise ConfigError(shape)
+        if not test.strip() or not reason.strip():
+            raise ConfigError(f"{where}: entry {n} needs a test and a reason, neither empty")
+        out[test.strip()] = reason.strip()
+    return out
+
+
 def _effort(where: str, value: Any) -> str:
     if value == "" or value in EFFORT_LEVELS:
         return str(value)
@@ -906,6 +930,7 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
             raise ConfigError(f"[gates] {key} must be >= 1")
         setattr(cfg, key, value)
     cfg.regression_baseline = gates.get("regression_baseline", cfg.regression_baseline)
+    cfg.unrunnable_tests = _unrunnable_tests(gates.get("unrunnable_tests", []))
     for key, cmd in gates.get("commands", {}).items():
         if key == "format_fix":
             cfg.format_fix_command = _str_list("[gates.commands] format_fix", cmd)
