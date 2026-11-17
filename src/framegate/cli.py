@@ -34,6 +34,8 @@ commands:
   status [<feature>] [--brief]   progress and which gate is waiting; no feature: all
                           features; --brief: short state + last progress lines (for the chat)
   watch <feature>         live view: print new progress lines until the run ends
+  wake <feature>          a run that waits for the usage limit tries again now (the limit
+                          was refilled, or lifted before the time claude named)
   gate-summary <feature>  chat-friendly digest of the waiting gate (questions numbered)
   approve <feature>       approve the waiting gate (tests -> implement; final -> retro)
   reject <feature> --reason TEXT   reject the tests gate; writer + reviewer re-run with it
@@ -70,8 +72,9 @@ commands:
   preflight [<feature>] [--plugin-version X] [--check]   the start step of the chat
                           skills: the command-line tool at the plugin's version, the
                           project environment's workflow tools at the tool's version
-                          (updated unless the feature's spec is approved or --check), a
-                          short setup check; prints what it did and what is left to do
+                          (updated unless a task is in progress or --check: an update
+                          then waits), a short setup check; prints what it did and what
+                          is left to do; off: [update] check, FRAMEGATE_UPDATE_CHECK=0
   doctor [--full] [--tree] [--brief]  check the setup without agents: config, git,
                           claude CLI, tools, gate commands, test selection by spec ID;
                           --full: the whole suite; --tree (the setup, once per project):
@@ -137,7 +140,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["python", "dotnet", "generic"],
         help="default: detected (generic: any other language, configured in framegate.toml)",
     )
-    for name in ("spec-check", "run", "approve", "spec-brief", "watch", "gate-summary"):
+    for name in ("spec-check", "run", "approve", "spec-brief", "watch", "gate-summary", "wake"):
         sub.add_parser(name).add_argument("feature")
     p = sub.add_parser("spec")
     p.add_argument("feature")
@@ -408,17 +411,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "spec":
             return orch.spec(f, args.mode)
         if args.command == "approve-spec":
-            return orch.approve_spec(f, force=args.force)
+            from framegate import preflight
+
+            code = orch.approve_spec(f, force=args.force)
+            if code == 0:  # the task starts: it keeps this version until it is DONE
+                preflight.record_start(orch.cfg, f, restart=True)
+            return code
         if args.command == "run":
+            from framegate import preflight
+
+            preflight.record_start(orch.cfg, f)  # a task approved by an older version
             return orch.run(f)
+        if args.command == "wake":
+            from framegate.orchestrator import wake
+
+            return wake(cfg, f)
         if args.command in ("status", "watch", "gate-summary", "cleanup"):
             from framegate import chat
 
             if args.command == "status":
                 from framegate import preflight
 
-                if (f is None or args.brief) and preflight.version_note():
-                    print(preflight.version_note())
+                note = preflight.version_note(cfg) if f is None or args.brief else ""
+                if note:
+                    print(note)
                 if f is None:
                     return chat.overview(orch)
                 return chat.brief(orch, f) if args.brief else orch.status(f)

@@ -19,7 +19,9 @@ This plugin is version 0.12.5. Before anything else run this command yourself:
 
     framegate preflight $ARGUMENTS --plugin-version 0.12.5
 
-`Start check: ok` and `KEPT:` lines: without a word. `RUN: <command>` (the command-line tool
+`Start check: ok`: without a word. `KEPT:` lines (a task in progress, here or in another
+repository, keeps the versions it was started with): one line to the user in all: an update
+is waiting for that task, `/framegate:update` does it now. `RUN: <command>` (the command-line tool
 is not at this plugin's version): run it, then the start check again. `UPDATED: ...`: one
 line to the user. A `TELL THE USER:` line (the plugin was
 updated while this session ran: restart Claude Code): say it as it is and stop. A `PROBLEM:`

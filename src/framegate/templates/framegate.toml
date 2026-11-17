@@ -47,6 +47,10 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 # limit_wait_max_hours = 6         # usage limit hit: wait for the reset and run again (no
 #                                  # failed attempt) if it is at most this far away; later
 #                                  # (weekly limit): stop, resume with `framegate run`; 0 = stop
+# limit_probe_minutes = 5          # during that wait: try the refused run again this often and
+#                                  # go on as soon as it gets through (the limit was refilled);
+#                                  # a refused try costs nothing; 0 = no tries. By hand at any
+#                                  # time: framegate wake <feature>
 # step_batch_ids = 15             # consecutive plan steps share one implementer run while their
 #                                  # spec IDs add up to at most this; 0 = one run per step
 
@@ -216,6 +220,14 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 [notify]
 # toast = true                     # Windows toast at each gate, DONE and on error (env
 #                                  # FRAMEGATE_TOAST=0 turns it off); no-op on other systems
+
+# [update]
+# check = true                     # the start check of the chat skills compares the plugin, the
+#                                  # command-line tool and the project's workflow tools and
+#                                  # brings them to one version (never while a task is in
+#                                  # progress: the update then waits). false, or env
+#                                  # FRAMEGATE_UPDATE_CHECK=0: nothing is compared or updated
+#                                  # (a pinned setup); `framegate update` still does it
 
 # [roles]
 # extra_dir = ".framegate/roles"   # <phase>.md files appended to the base role prompts
