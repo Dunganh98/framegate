@@ -114,7 +114,7 @@ locations are `file:line`. A project can start here and get a dedicated adapter 
 | Traceability / smells | AST scan of `tests/**/test_*.py` and `*_test.py` (the guide's code) |
 | Gates | `ruff check`, `ruff format --check`, `mypy src` via `python -m`; `lint-imports` only if `.importlinter` exists |
 | Coverage | Feature scope: `pytest --req <IDs> --req-paths <review_tests> --cov=src --cov-branch --cov-report=xml:out/coverage.xml` (`--req-paths` keeps the tests under these paths, tagged or not), then `diff-cover out/coverage.xml --compare-branch=tests-approved/<f> --fail-under=90`; regression = plain `pytest -q`. `[python] pytest_args` (e.g. `["-m", "not integration"]`) is added to every pytest run and to the test command the agents get. Incomplete: exit 124 / 2 (interrupted) / 3 (internal error), or no `coverage.xml` |
-| Mutation | mutmut >= 3 via the standalone runner `mutmut_runner.py` (copied to `out/.mutmut/`): `mutmut run <module>.x*` for the changed modules, `mutmut results --all true`, `mutmut show` for up to 50 survivors (diffs go into `mutation_survivors.md`); `mutants/` is deleted before and after the run (and gitignored by `init`). Feature scope: the runner sets `PYTEST_ADDOPTS="--req <IDs> --req-paths <review_tests>"` for mutmut's pytest runs (spec key `pytest_addopts`; needs the framegate pytest plugin with `--req-paths` in the mutmut env, which is why `MUTMUT_ENV_VERSION` is 2). Score = (killed + timeout + caught by type check + segfault) / (those + survived + no tests + suspicious); skipped / not checked are left out. Where it runs: `[gates] mutation_runner` (see below). SKIPPED when mutmut can't run there |
+| Mutation | mutmut >= 3 via the standalone runner `mutmut_runner.py` (copied to `out/.mutmut/`): `mutmut run <module>.x*` for the changed modules, `mutmut results --all true`, `mutmut show` for up to 50 survivors (diffs go into `mutation_survivors.md`); `mutants/` is deleted before and after the run (and gitignored by `init`). Feature scope: the runner sets `PYTEST_ADDOPTS="--req <IDs> --req-paths <review_tests>"` for mutmut's pytest runs (spec key `pytest_addopts`; needs the framegate pytest plugin with `--req-paths` in the mutmut env, which is why `MUTMUT_ENV_VERSION` is 2). Score = (killed + timeout + caught by type check + segfault) / (those + survived + no tests + suspicious); skipped / not checked are left out. Where it runs: `[gates] mutation_runner` (see below). NOT MEASURED, with the reason and the fix, when mutmut can't run there |
 | Forbidden | `type: ignore`, `noqa`, `pragma: no cover`, `pytest.skip`, `xfail` |
 | Protected | `pyproject.toml`, `setup.cfg`, `setup.py`, `requirements*`, `uv.lock`, `poetry.lock`, `Pipfile`, `.importlinter`, `mypy.ini`, `ruff.toml`, `.ruff.toml`, `pytest.ini`, `tox.ini`, root `conftest.py` |
 | Tools | `Bash(python -m pytest *)`, `Bash(pytest *)`, and from the effective gate commands; by default `Bash(python -m ruff check *)`, `Bash(python -m ruff format *)`, `Bash(python -m mypy *)` and the short forms `Bash(ruff check *)`, `Bash(ruff format *)`, `Bash(mypy *)` |
@@ -126,13 +126,21 @@ mutmut needs `fork`, so it can't run on native Windows. `[gates] mutation_runner
 | Value | Meaning |
 |---|---|
 | `"auto"` (default) | `wsl` on Windows, `native` elsewhere |
-| `"native"` | The project interpreter (`[env] python` / `.venv`) runs mutmut, which must be installed there. On native Windows: SKIPPED with a pointer to `"wsl"` |
+| `"native"` | The project interpreter (`[env] python` / `.venv`) runs mutmut, which must be installed there (else NOT MEASURED). On native Windows: NOT MEASURED with a pointer to `"auto"` |
 | `"wsl"` | `wsl.exe [-d <[env] wsl_distro>] -e python3 <runner> <spec>` |
 
 WSL flow (`adapters/wsl.py`, `adapters/mutmut_runner.py`):
 
 1. Probe: `wsl.exe -e wslpath -a <repo>` (repo path, e.g. `/mnt/d/...`) and `python3 --version`.
-   Either failing -> SKIPPED with the reason (no wsl.exe, distro won't start, no python3).
+   With `[env] wsl_distro` only that distribution is tried. Without it the default
+   distribution comes first; when it can't (with Docker Desktop the default is often
+   `docker-desktop`, which has no Python), the other distributions of `wsl.exe -l -v` are
+   tried in that order (`docker-desktop*` left out) and the first with `python3` is used; the
+   score line then says `WSL <name>`. None -> NOT MEASURED with the reason and the one-line
+   fix (no wsl.exe: `wsl --install -d Ubuntu`; a distribution without python3: `sudo apt
+   install python3 python3-venv` in it; a configured name WSL does not know: `[env]
+   wsl_distro`). The probe only reads; nothing is installed. `framegate doctor` runs the same
+   probe (`tool: mutmut (mutation)`).
 2. Venv: `~/.cache/framegate/venvs/<sha256(WSL repo path)[:16]>` on the Linux filesystem (not
    on `/mnt/<drive>`: slow and visible to Windows). Contents: the project's dependencies
    (`[project] dependencies`, every optional extra, every `[dependency-groups]` group,
@@ -144,7 +152,7 @@ WSL flow (`adapters/wsl.py`, `adapters/mutmut_runner.py`):
    `uv.lock`, `poetry.lock`, `Pipfile.lock`, `pdm.lock`, the requirements files, the framegate
    version and `MUTMUT_ENV_VERSION`. Built with `uv` (PATH, `~/.local/bin`, `~/.cargo/bin`;
    `uv venv --python python3` + `uv pip install`), else `python3 -m venv` + pip. If neither
-   works: SKIPPED with the setup log and the one-time hint (`curl -LsSf
+   works: NOT MEASURED with the setup log and the one-time hint (`curl -LsSf
    https://astral.sh/uv/install.sh | sh`, or `sudo apt install python3-venv`; Ubuntu's python3
    has no `ensurepip` by default).
 4. mutmut runs in the repo through `/mnt/<drive>/...`; the runner writes

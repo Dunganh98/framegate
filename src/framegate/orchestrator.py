@@ -2792,6 +2792,7 @@ class Orchestrator:
             structure=rep.structure,
             tool_failures=rep.tool_failures,
             **({"fidelity": rep.fidelity} if rep.fidelity else {}),
+            **({"not_measured": rep.not_measured} if rep.not_measured else {}),
         )
         names = [n + (" [tool failure]" if n in rep.tool_failures else "") for n in rep.failed]
         self.progress(
@@ -2799,6 +2800,7 @@ class Orchestrator:
             f"[REVIEW] final gates: {'PASSED' if rep.ok else 'FAILED'}"
             + (f" ({', '.join(names)})" if names else "")
             + (f"; skipped: {', '.join(rep.skipped)}" if rep.skipped else "")
+            + (f"; not measured: {', '.join(rep.not_measured)}" if rep.not_measured else "")
             + (
                 "; project checks (not blocking): "
                 + ", ".join(f"{n} {'OK' if c == 0 else f'exit {c}'}" for n, c in rep.extra.items())
@@ -3242,10 +3244,12 @@ class Orchestrator:
         if self.spec_diff(feature):
             state += "; spec changed from your answers (diff in final_summary.md)"
         rating = self.assess_risk(feature, prog)
-        if rating.low and self.cfg.final_gate == "auto":
+        if rating.auto and self.cfg.final_gate == "auto":
             self.auto_approve_final(feature, prog)
             return
         state += f"; risk {rating.level}"
+        if rating.not_measured:
+            state += f"; not measured (the tool cannot run here): {', '.join(rating.not_measured)}"
         d = self.fdir(feature)
         self.pause(
             feature,

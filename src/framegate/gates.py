@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 
 from framegate import red_tree, references, unrunnable
 from framegate.adapters.base import (
+    NOT_MEASURED,
     Check,
     CheckResult,
     LanguageAdapter,
@@ -541,7 +542,8 @@ class GateReport:
     durations: dict[str, float] = field(default_factory=dict)
     #: [gates.extra] check name -> exit code (reported at the final gate, never blocking)
     extra: dict[str, int] = field(default_factory=dict)
-    #: check name -> "PASS" / "FAIL" / "SKIPPED" plus its one-line result (score, coverage)
+    #: check name -> "PASS" / "FAIL" / "SKIPPED" / "NOT MEASURED" plus its one-line result
+    #: (score, coverage; for NOT MEASURED the reason and the fix)
     results: dict[str, str] = field(default_factory=dict)
     #: final scope: the structure report (file sizes, longest methods; structure.Structure)
     structure: dict[str, object] = field(default_factory=dict)
@@ -549,6 +551,9 @@ class GateReport:
     tool_failures: list[str] = field(default_factory=list)
     #: final scope, a port: each target file against its reference file (references.fidelity)
     fidelity: dict[str, object] = field(default_factory=dict)
+    #: checks whose tool cannot run on this machine (base.not_measured): passed over, never
+    #: counted as passed; `results` has the reason and the fix
+    not_measured: list[str] = field(default_factory=list)
 
     def excerpt(self, lines_per_check: int = 12, limit: int = 2000) -> str:
         """A trimmed excerpt of the failing checks' output (for events and the retro)."""
@@ -595,6 +600,7 @@ def gate_report(
     durations: dict[str, float] = {}
     results: dict[str, str] = {}
     tool_failures: list[str] = []
+    not_measured: list[str] = []
     exp = expected_red(adapter.cfg, feature) if scope == "final" else ExpectedRed()
     if scope == "final":
         for line in scope_lines(adapter, feature, skip_mutation):
@@ -665,6 +671,11 @@ def gate_report(
         elif res.status == "SKIPPED":
             skipped.append(check.name)
             emit(f"  {out.splitlines()[-1] if out else 'SKIPPED'}")
+        elif res.status == NOT_MEASURED:
+            not_measured.append(check.name)
+            emit(f"  {res.summary}")
+            for line in out.splitlines()[-OUTPUT_LINES:]:  # e.g. the tool's setup log
+                emit(f"  {line}")
         elif res.summary:
             emit(f"  {res.summary}")
         elif "SKIPPED" in out:
@@ -672,6 +683,8 @@ def gate_report(
     summary = "ALL GATES PASSED" if not failed else "FAILED: " + ", ".join(failed)
     if skipped:
         summary += f" (SKIPPED: {', '.join(skipped)})"
+    if not_measured:
+        summary += f" (NOT MEASURED, the tool cannot run here: {', '.join(not_measured)})"
     emit(f"\n{summary}")
     shape: dict[str, object] = {}
     if scope == "final" or (feature and adapter.cfg.max_file_lines):
@@ -707,6 +720,7 @@ def gate_report(
         shape,
         tool_failures,
         fidelity,
+        not_measured,
     )
 
 

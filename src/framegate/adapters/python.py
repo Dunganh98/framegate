@@ -37,6 +37,7 @@ from framegate.adapters.base import (
     diff_coverage_summary,
     incomplete_reason,
     incomplete_result,
+    not_measured,
     parse_junit,
     run_command,
 )
@@ -50,6 +51,11 @@ MODULE_RULE = "Bash(python -m "
 MUTMUT_ENV_VERSION = 2  # 2: pytest plugin --req-paths
 #: files whose content keys the WSL venv (besides the requirement list itself)
 LOCK_FILES = ("pyproject.toml", "uv.lock", "poetry.lock", "Pipfile.lock", "pdm.lock")
+#: mutmut needs fork: (reason, fix) when it is told to run with a Windows interpreter
+NATIVE_WINDOWS = (
+    "mutmut does not run on native Windows",
+    'set [gates] mutation_runner = "auto" (it then runs through WSL)',
+)
 #: mutmut 3 statuses (mutmut/stats.py); "skipped" / "not checked" don't count
 DETECTED = {"killed", "timeout", "caught by type check", "segfault"}
 SURVIVED = {"survived", "no tests", "suspicious"}
@@ -356,10 +362,15 @@ class PythonAdapter(LanguageAdapter):
         if self.cfg.mutation_tool == "none":
             out.append(("mutmut (mutation)", True, "mutation off ([gates] mutation_tool = none)"))
         elif self.mutation_runner() == "wsl":
-            # asked now, not by the first mutation run: seen live, a WSL without python3
-            # showed only at the first final gate
-            _, problem = wsl.probe(self.root, self.cfg.wsl_distro)
-            out.append(("mutmut (mutation)", not problem, problem or "runs in WSL"))
+            # the same probe as the mutation check: what doctor says is what the gate will do
+            found = wsl.probe(self.root, self.cfg.wsl_distro)
+            where = f"runs in WSL {found.distro}" if found.distro else "runs in WSL"
+            detail = f"{where} ({found.note})" if found.note else where
+            if found.root is None:
+                detail = f"mutation testing cannot run here: {found.problem}. Fix: {found.fix}"
+            out.append(("mutmut (mutation)", found.root is not None, detail))
+        elif os.name == "nt":
+            out.append(("mutmut (mutation)", False, ". Fix: ".join(NATIVE_WINDOWS)))
         else:
             ok = self._has_module("mutmut")
             out.append(("mutmut (mutation)", ok, self.python if ok else "install mutmut"))
@@ -693,13 +704,12 @@ class PythonAdapter(LanguageAdapter):
         if self.mutation_runner() == "wsl":
             return self._mutmut_wsl(feature, modules, scope)
         if os.name == "nt":
-            return CheckResult(
-                "SKIPPED",
-                "SKIPPED: mutmut does not support native Windows; set [gates] mutation_runner = "
-                '"wsl" (or "auto") or run the final gates in CI',
-            )
+            return not_measured(*NATIVE_WINDOWS)
         if not self._has_module("mutmut"):
-            return CheckResult("SKIPPED", "SKIPPED: mutmut is not installed")
+            return not_measured(
+                f"mutmut is not installed for {self.python}",
+                "add mutmut to the project's dev dependencies and install them",
+            )
         work = self._mutmut_dir()
         spec = self._mutmut_spec(modules, str(self.root), str(work / "result.json"), scope)
         (work / "spec.json").write_text(json.dumps(spec, indent=1), encoding="utf-8")
@@ -745,16 +755,16 @@ class PythonAdapter(LanguageAdapter):
     def _mutmut_wsl(
         self, feature: str, modules: Sequence[str], scope: TestScope | None = None
     ) -> CheckResult:
-        distro = self.cfg.wsl_distro
-        wsl_root, problem = wsl.probe(self.root, distro)
-        if wsl_root is None:
-            return CheckResult(
-                "SKIPPED",
-                f"SKIPPED: mutation testing via WSL is unavailable: {problem}. mutmut does not "
-                "support native Windows; run the final gates in CI or fix WSL.",
+        found = wsl.probe(self.root, self.cfg.wsl_distro)
+        if found.root is None:
+            return not_measured(
+                f"mutation testing via WSL is unavailable: {found.problem} (mutmut does not "
+                "run on native Windows)",
+                found.fix,
             )
         work = self._mutmut_dir()
-        root_wsl: str = wsl_root
+        wsl_root = root_wsl = found.root
+        distro = found.distro
 
         def w(path: pathlib.Path) -> str:
             return wsl.to_wsl(path, self.root, root_wsl, distro)
@@ -806,10 +816,10 @@ class PythonAdapter(LanguageAdapter):
             return CheckResult("FAIL", f"mutmut runner ({where}) failed (exit {code}):\n{out}")
         res = json.loads(result_file.read_text(encoding="utf-8"))
         if not res.get("ok"):
-            return CheckResult(
-                "SKIPPED",
-                f"{res.get('setup_log', '')}\nSKIPPED: {res.get('error')} ({where}); "
-                f"{res.get('hint', '')}",
+            return not_measured(
+                f"{res.get('error')} ({where})",
+                str(res.get("hint") or "see the setup log under the check"),
+                log=str(res.get("setup_log", "")),
             )
         output = str(res.get("run_output", ""))
         reason = incomplete_reason(int(res.get("run_code") or 0), output, self.cfg.mutation_timeout)

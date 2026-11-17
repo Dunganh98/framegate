@@ -492,7 +492,11 @@ def _final_brief(
     lines += _outcomes(orch, feature, prog, events)
     rated = prog.get("risk") or {}
     if rated.get("level"):
-        rating = risk.Assessment(rated["level"], list(rated.get("reasons") or []))
+        rating = risk.Assessment(
+            rated["level"],
+            list(rated.get("reasons") or []),
+            not_measured=dict(rated.get("not_measured") or {}),
+        )
         lines.append(rating.line(auto=orch.cfg.final_gate == "auto"))
     for title, names in (
         ("Proven by the tests", ("proven",)),
