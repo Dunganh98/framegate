@@ -108,7 +108,9 @@ def rmtree(path: pathlib.Path) -> None:
         func(target)
 
     if path.exists():
-        shutil.rmtree(path, onerror=writable)
+        # a .venv holds paths over Windows' 260 characters (tensorflow headers): \\?\ form
+        target = "\\\\?\\" + str(path.resolve()) if os.name == "nt" else path
+        shutil.rmtree(target, onerror=writable)
 
 
 def source(repo: str, base: pathlib.Path, cache: pathlib.Path) -> pathlib.Path:

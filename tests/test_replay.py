@@ -162,6 +162,17 @@ def test_sandbox_holds_the_parent_and_hides_the_answer(repo: dict[str, Any], bui
     assert ex["base_pass"] == ["tests.test_calc::test_add"]
 
 
+def test_rmtree_removes_paths_over_260_characters(tmp_path: pathlib.Path) -> None:
+    deep = tmp_path / "venv" / ("d" * 120) / ("e" * 120) / ("f" * 40)
+    prefix = "\\\\?\\" if os.name == "nt" else ""
+    os.makedirs(prefix + str(deep))
+    open(prefix + str(deep / "x.h"), "w").close()
+
+    sandbox.rmtree(tmp_path / "venv")
+
+    assert not (tmp_path / "venv").exists()
+
+
 def test_candidate_whose_tests_pass_on_the_parent_is_dropped(
     repo: dict[str, Any], tmp_path: pathlib.Path
 ) -> None:
