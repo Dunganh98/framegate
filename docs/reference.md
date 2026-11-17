@@ -49,6 +49,7 @@ a terminal.
 | `framegate spec-brief <f>` | the project's spec conventions (the feature skill reads it) | internal |
 | `framegate protocol` | the chat run protocol (the skills read it) | internal |
 | `framegate unlock [--force]` | clear a lock left by a killed run | after a crash |
+| `framegate replay <candidates.md>` | real commits as tasks, each delivered in a sandbox cut before the commit and scored with the commit's own tests ([replay.md](replay.md)) | measuring framegate |
 | `framegate hook ...` | the Claude Code hooks (called by the plugin) | internal |
 
 Exit codes: 0 done, 1 error, 10 waiting at a gate, 130 interrupted (run again to resume).
