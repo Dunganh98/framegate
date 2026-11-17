@@ -41,7 +41,7 @@ def test_the_survey_runs_again_on_files_it_left_out_and_the_probe_reads_it(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     root = tmp_path / "repo"
-    for f in ("data/a.py", "platform/ingest/b.py", "tests/test_a.py", "pyproject.toml"):
+    for f in ("data/a.py", "platform/ingest/b.py", "tests/test_a.py", "main.py"):
         (root / f).parent.mkdir(parents=True, exist_ok=True)
         (root / f).write_text("", encoding="utf-8")
     init_git(root)
@@ -49,11 +49,8 @@ def test_the_survey_runs_again_on_files_it_left_out_and_the_probe_reads_it(
 
     def ask(cfg, adapter, prompt, resume=""):
         asked.append(prompt)
-        layout = (
-            LAYOUT
-            if not resume
-            else {**LAYOUT, "src": [*LAYOUT["src"], {"path": "platform/ingest"}]}
-        )
+        more = [{"path": "platform/ingest"}, {"path": "main.py"}]
+        layout = {**LAYOUT, "src": [*LAYOUT["src"], *more]} if resume else LAYOUT
         answer = f"```json\n{json.dumps(layout)}\n```"
         return {"result": answer, "session_id": "s1", "total_cost_usd": 0.2}, ""
 
@@ -61,8 +58,9 @@ def test_the_survey_runs_again_on_files_it_left_out_and_the_probe_reads_it(
     cfg = parse_config(root, {"paths": {"src": ["data"]}})
     data = survey.survey(cfg, get_adapter(cfg), ["Language: python"])
 
-    assert "platform/ingest (1)" in asked[0] and asked[1].endswith("platform/ingest/b.py")
+    assert "platform/ingest (1)" in asked[0] and asked[1].endswith("main.py\nplatform/ingest/b.py")
     assert data["uncovered"] == [] and data["cost_usd"] == 0.4
+    assert [s["path"] for s in data["loose"]] == ["main.py"]
     seen = probe.collect(root)
     assert [s["path"] for s in seen["src"]] == ["data", "platform/ingest"]
     assert seen["layout_source"] == "the survey, out/survey.json"

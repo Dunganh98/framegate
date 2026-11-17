@@ -151,6 +151,11 @@ def lines(data: dict[str, Any]) -> list[str]:
         "Source folders: "
         + "; ".join(f"{s['path']} ({s.get('evidence', '')})" for s in data.get("src", []))
     ]
+    out += [
+        f"Loose source file: {s['path']} ({s.get('evidence', '')}; [paths] src takes folders: "
+        "a task cannot change it)"
+        for s in data.get("loose") or []
+    ]
     tests = data.get("tests") or {}
     out.append(f"Test folder: {tests.get('path', '?')} ({tests.get('evidence', '')})")
     out += [f"Not project code: {x['path']} ({x.get('reason', '')})" for x in data["excluded"]]
@@ -180,8 +185,10 @@ def survey(cfg: Config, adapter: LanguageAdapter, facts: Sequence[str]) -> dict[
         err = err or err2
     if not layout:
         raise RuntimeError(f"the survey agent gave no layout: {err or res.get('result', '')}")
+    src = [s for s in layout["src"] if isinstance(s, dict) and s.get("path")]
     clean = {
-        "src": [s for s in layout["src"] if isinstance(s, dict) and s.get("path")],
+        "src": [s for s in src if not (cfg.root / s["path"]).is_file()],
+        "loose": [s for s in src if (cfg.root / s["path"]).is_file()],
         "tests": layout.get("tests") or {},
         "excluded": [x for x in layout.get("excluded") or [] if isinstance(x, dict)],
         "notes": [str(n) for n in layout.get("notes") or []][:5],
