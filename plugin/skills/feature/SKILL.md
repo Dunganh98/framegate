@@ -71,14 +71,10 @@ knowledge. It overrides any default you would otherwise assume.
 
 ## Part 1: the spec dialogue
 
-First: do you know what is wanted? If the user gave only the name `$ARGUMENTS`, nothing in
-this conversation says what the feature is to do (no requirement, no ticket text, no file to
-read) and requirements.md in the spec folder is still the unfilled template, ask for it in
-one short question ("What should `$ARGUMENTS` do? A few sentences or a ticket are enough.")
-and wait for the answer. Until then write no spec file and no stub, and read no code beyond
-the conventions above. Never take the task from the name (seen live: a feature nobody asked
-for, invented from the name). If the user's message already holds the requirement, go on
-without asking.
+If the user gave only a name (`$ARGUMENTS`), it is just the branch and folder name: find out
+in step 1 what it refers to (the code map, the code, the docs) and ask in step 2 only what
+you still cannot decide, the requirement itself included if the code and the docs do not
+tell.
 
 1. Read the requirements the user gives, then decide everything you can yourself first: read
    the docs, the code map, the code the feature touches and the project knowledge above
@@ -178,17 +174,10 @@ without asking.
    import order (leaf modules first; a file after the files it imports), each step covering
    the IDs its file serves (an ID two files serve goes to the later one). The code lands
    whole files at a time anyway; steps cut by ID end in steps with nothing left to build.
-   Files in a plan step: a step names only files its implementer can write: the source
-   folders, and documentation files by their path (`docs/usage.md`, `README.md`,
-   `CHANGELOG.md`: .md / .rst under a docs folder, README, CHANGELOG), which become writable
-   for that step at the approval and are frozen with it. Tests, setup files, deploy / CI
-   files and workflow files never go into a step (seen live: a step said "update
-   docs/xyz.md", nothing made it writable, the step parked); a file the step only reads gets
-   "(read only)" after its name. What the user must change by hand in this repository: one
-   line under "## To do by hand" after the last step of plan.md (`- <file>: <what>
-   (<why>)`), and on the brief as the last line of **Plan** ("by hand, not part of the run:
-   ..."). `spec-check` lists every file that does not fit and prints "Documentation files
-   the plan makes writable": name those on their step's **Plan** line.
+   Files in a plan step: a step may mention any file. A Markdown docs file it names by its
+   path (`README.md`, `CHANGELOG.md`, `.md` under a docs folder) becomes writable for that
+   step at the approval; everything else outside the source folders stays read-only.
+   `spec-check` prints "Documentation files the plan makes writable".
 4. Create interface stubs in the source paths named above, in the stub style named above: full
    typed signatures, a one-line doc comment per public type and method saying what it is for
    (in words) plus the IDs it serves, bodies that only signal "not implemented". One concept

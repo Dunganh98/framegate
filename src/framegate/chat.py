@@ -495,6 +495,7 @@ def _final_brief(
         rating = risk.Assessment(
             rated["level"],
             list(rated.get("reasons") or []),
+            dict(rated.get("facts") or {}),
             not_measured=dict(rated.get("not_measured") or {}),
         )
         lines.append(rating.line(auto=orch.cfg.final_gate == "auto"))
