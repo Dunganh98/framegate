@@ -111,6 +111,87 @@ def test_frame_suppression_in_new_untracked_file(framed: pathlib.Path) -> None:
     assert res.output == "SUPPRESSION ADDED: import os  # noqa"
 
 
+MOVED_DIFF = """\
+diff --git a/old.py b/old.py
+--- a/old.py
++++ b/old.py
+@@ -1,4 +0,0 @@
+-a = 1
+-b = 2
+-
+-c = 3
+diff --git a/new.py b/new.py
+--- /dev/null
++++ b/new.py
+@@ -0,0 +1,11 @@
++    a = 1
++b = 2
++
++c = 3
++x = 9
++a = 1
++x = 9
++a = 1
++b = 2
++b = 2 + 1
++c = 3
+"""
+
+
+def test_moved_lines_are_blocks() -> None:
+    from framegate.moved import find_moved, parse_diff
+
+    # a block of 3 counts, a single repeated line does not, a changed line breaks the block
+    assert find_moved(*parse_diff(MOVED_DIFF)) == {"new.py": {1, 2, 3, 4}}
+
+
+A_PY = "def f() -> int:\n    raise NotImplementedError\n"
+G_PY = (
+    "def g() -> int:\n    if True:\n        return 1\n"
+    "    raise NotImplementedError  # pragma: no cover\n"
+)
+
+
+@pytest.fixture
+def moved(framed: pathlib.Path) -> pathlib.Path:
+    write(framed, "src/pkg/a.py", A_PY + "\n\n" + G_PY)
+    write(framed, "tests/test_b.py", "import sys\n\nsys.path.insert(0, 'src')\nimport pkg.b\n")
+    git(framed, "add", "-A")
+    git(framed, "commit", "-q", "-m", "g")
+    git(framed, "tag", "-f", "tests-approved/f")
+    write(framed, "src/pkg/a.py", A_PY)
+    write(framed, "src/pkg/b.py", "Y = 2  # noqa\n\n\n" + G_PY)
+    git(framed, "add", "-A")
+    return framed
+
+
+def test_frame_moved_suppression_is_not_added(moved: pathlib.Path) -> None:
+    res = frame_diff.check(adapter_for(moved), "f")
+    assert res.output == "SUPPRESSION ADDED: Y = 2  # noqa"
+    assert res.summary == "moved, not counted: 6 lines"
+
+
+def test_diff_coverage_leaves_moved_lines_out(moved: pathlib.Path) -> None:
+    diff = adapter_for(moved).coverage_checks("tests-approved/f")
+    diff[0].run()
+    res = diff[1].run()
+    assert res.status == "PASS" and res.summary == (
+        "Diff coverage 100% (1/1 changed lines covered), threshold 90%; "
+        "moved, not counted: 6 lines."
+    )
+
+
+def test_report_without_lines_lcov(tmp_path: pathlib.Path) -> None:
+    from framegate.adapters.base import report_without_lines
+
+    src = tmp_path / "lcov.info"
+    src.write_text("SF:src/b.py\nDA:1,0\nDA:2,0\nBRDA:2,0,0,0\nend_of_record\n", encoding="utf-8")
+    report_without_lines(src, tmp_path / "out.info", tmp_path, {"src/b.py": {2}})
+    assert (tmp_path / "out.info").read_text(encoding="utf-8") == (
+        "SF:src/b.py\nDA:1,0\nend_of_record\n"
+    )
+
+
 def test_frame_config(framed: pathlib.Path) -> None:
     write(framed, "config/x.yml", "a: 1\n")
     write(framed, "src/pkg/a.py", "TODO_HACK = 1\n")

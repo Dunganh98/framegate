@@ -34,6 +34,7 @@ from framegate.adapters.base import (
     incomplete_result,
     parse_junit,
     run_command,
+    without_moved,
 )
 from framegate.config import ConfigError
 
@@ -313,17 +314,18 @@ class GenericAdapter(LanguageAdapter):
             tool = self.tool_path("diff-cover")
             if not tool:
                 return CheckResult("SKIPPED", "SKIPPED: diff-cover is not installed")
+            reports, moved = without_moved(self.cfg, base_ref, [report], report.parent)
             code, out = run_command(
                 [
                     tool,
-                    str(report),
+                    *map(str, reports),
                     f"--compare-branch={base_ref}",
                     "--diff-range-notation=..",  # the base itself (task_base.py)
                     f"--fail-under={self.cfg.diff_coverage}",
                 ],
                 self.root,
             )
-            summary = diff_coverage_summary(out, self.cfg.diff_coverage)
+            summary = diff_coverage_summary(out, self.cfg.diff_coverage, moved)
             return CheckResult("PASS" if code == 0 else "FAIL", out, summary=summary)
 
         suffix = " (feature tests)" if feature and ids else ""

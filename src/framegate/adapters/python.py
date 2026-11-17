@@ -40,6 +40,7 @@ from framegate.adapters.base import (
     not_measured,
     parse_junit,
     run_command,
+    without_moved,
 )
 
 SKIP_MARKS = {"skip", "skipif", "xfail"}
@@ -679,10 +680,11 @@ class PythonAdapter(LanguageAdapter):
             if cover_tests:  # diff coverage is about the source files only
                 report = out_dir / "coverage_src.xml"
                 cobertura_without(xml, report, self.root, self.cfg.paths.tests.rstrip("/") + "/")
+            reports, moved = without_moved(self.cfg, base_ref, [report], out_dir)
             code, out = run_command(
                 [
                     tool,
-                    str(report),
+                    *map(str, reports),
                     f"--compare-branch={base_ref}",
                     # the base itself, not its merge base with HEAD (task_base.py)
                     "--diff-range-notation=..",
@@ -690,7 +692,7 @@ class PythonAdapter(LanguageAdapter):
                 ],
                 self.root,
             )
-            summary = diff_coverage_summary(out, self.cfg.diff_coverage)
+            summary = diff_coverage_summary(out, self.cfg.diff_coverage, moved)
             return CheckResult("PASS" if code == 0 else "FAIL", out, summary=summary)
 
         feature = scope is not None and not scope.whole_suite

@@ -27,6 +27,8 @@ from framegate.agent_commands import (
     rule_allows,
 )
 from framegate.config import GATE_COMMAND_KEYS, Config
+from framegate.moved import moved_lines, moved_note
+from framegate.state import GitError
 
 READ_TOOLS = ["Read", "Glob", "Grep"]
 WRITE_TOOLS = ["Write", "Edit", "MultiEdit"]
@@ -216,9 +218,10 @@ def incomplete_result(reason: str, output: str = "", what: str = "test run") -> 
     return CheckResult("FAIL", head + ("\n" + tail if tail else ""), summary=head)
 
 
-def diff_coverage_summary(output: str, threshold: float) -> str:
+def diff_coverage_summary(output: str, threshold: float, moved: int = 0) -> str:
     """One line from diff-cover's console report: percent, covered/total changed lines and the
     threshold ("" when the output has no coverage figures, e.g. diff-cover crashed)."""
+    tail = f", threshold {threshold:g}%" + (f"; {moved_note(moved)}." if moved else ".")
     pct = re.search(r"^Coverage:\s*([\d.]+)%", output, re.M)
     if pct:
         total = re.search(r"^Total:\s*(\d+) lines?", output, re.M)
@@ -228,9 +231,9 @@ def diff_coverage_summary(output: str, threshold: float) -> str:
             n = int(total.group(1))
             covered = n - (int(missing.group(1)) if missing else 0)
             lines = f" ({covered}/{n} changed lines covered)"
-        return f"Diff coverage {pct.group(1)}%{lines}, threshold {threshold:g}%."
+        return f"Diff coverage {pct.group(1)}%{lines}{tail}"
     if "No lines with coverage information" in output:
-        return f"Diff coverage: no coverable changed lines, threshold {threshold:g}%."
+        return f"Diff coverage: no coverable changed lines{tail}"
     return ""
 
 
@@ -283,24 +286,75 @@ def cobertura_without(
     uncovered source lines behind a high percentage."""
     tree = ET.parse(src)
     top = tree.getroot()
-    bases = [pathlib.Path(s.text.strip()) for s in top.iter("source") if s.text]
-    root = root.resolve()
-
-    def under_prefix(fname: str) -> bool:
-        for cand in [pathlib.Path(fname), *(b / fname for b in bases), root / fname]:
-            try:
-                if cand.is_absolute() and cand.is_file():
-                    return cand.resolve().relative_to(root).as_posix().startswith(prefix)
-            except (OSError, ValueError):
-                continue
-        return fname.replace("\\", "/").startswith(prefix)
-
+    rel = _cobertura_rel(top, root)
     for parent in top.iter():
         for cls in [c for c in parent if c.tag == "class"]:
-            if under_prefix(cls.get("filename") or ""):
+            if rel(cls.get("filename") or "").startswith(prefix):
                 parent.remove(cls)
     dst.parent.mkdir(parents=True, exist_ok=True)
     tree.write(dst, encoding="utf-8", xml_declaration=True)
+
+
+def _cobertura_rel(top: ET.Element, root: pathlib.Path) -> Callable[[str], str]:
+    bases = [pathlib.Path(s.text.strip()) for s in top.iter("source") if s.text]
+    root = root.resolve()
+
+    def rel(fname: str) -> str:
+        for cand in [pathlib.Path(fname), *(b / fname for b in bases), root / fname]:
+            try:
+                if cand.is_absolute() and cand.is_file():
+                    return cand.resolve().relative_to(root).as_posix()
+            except (OSError, ValueError):
+                continue
+        return fname.replace("\\", "/")
+
+    return rel
+
+
+def report_without_lines(
+    src: pathlib.Path, dst: pathlib.Path, root: pathlib.Path, lines: dict[str, set[int]]
+) -> None:
+    """Cobertura XML or LCOV, told apart as diff-cover does."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if src.suffix == ".xml":
+        tree = ET.parse(src)
+        rel = _cobertura_rel(tree.getroot(), root)
+        for cls in tree.getroot().iter("class"):
+            drop = lines.get(rel(cls.get("filename") or ""), set())
+            for group in cls.iter("lines"):
+                for x in [x for x in group if int(x.get("number") or 0) in drop]:
+                    group.remove(x)
+        tree.write(dst, encoding="utf-8", xml_declaration=True)
+        return
+    out: list[str] = []
+    drop = set()
+    for line in src.read_text(encoding="utf-8").splitlines():
+        if line.startswith("SF:"):
+            path = root / line[3:].strip()
+            try:
+                drop = lines.get(path.resolve().relative_to(root.resolve()).as_posix(), set())
+            except ValueError:
+                drop = set()
+        elif line.startswith(("DA:", "BRDA:")) and int(line.split(":")[1].split(",")[0]) in drop:
+            continue
+        out.append(line)
+    dst.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def without_moved(
+    cfg: Config, base_ref: str, reports: Sequence[pathlib.Path], dst_dir: pathlib.Path
+) -> tuple[list[pathlib.Path], int]:
+    try:
+        moved = {f: n for f, n in moved_lines(cfg, base_ref).items() if cfg.in_src(f)}
+    except GitError:
+        return list(reports), 0
+    if not moved:
+        return list(reports), 0
+    out = []
+    for r in reports:
+        out.append(dst_dir / f"{r.stem}-unmoved{r.suffix}")
+        report_without_lines(r, out[-1], cfg.root, moved)
+    return out, sum(len(n) for n in moved.values())
 
 
 @dataclass

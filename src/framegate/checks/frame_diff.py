@@ -18,6 +18,7 @@ import re
 
 from framegate.adapters.base import CheckResult, LanguageAdapter
 from framegate.config import CONFIG_FILE, Config, drop_machine_files, is_machine_file
+from framegate.moved import find_moved, moved_note, work_changes
 from framegate.state import GitError, commit_paths, git, tag_exists
 
 #: the workflow's own files, protected in every project. The built-in deploy / CI paths
@@ -342,6 +343,7 @@ def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
             return CheckResult("FAIL", f"Tag {tag} not found — tests were never approved.")
         changed, untracked = changed_files(cfg, tag)
         diff = git(cfg, "diff", "-U0", tag, "--", *cfg.src_roots)
+        added, removed = work_changes(cfg, tag)
     except GitError as e:
         return CheckResult("FAIL", str(e))
     try:
@@ -360,13 +362,24 @@ def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
         and f not in MACHINE_FILES
     ]
     rx = forbidden_regex(adapter)
+    moved = find_moved(added, removed)
+    moved_text = {
+        text.strip() for f, rows in added.items() for n, text in rows if n in moved.get(f, ())
+    }
+    skipped = sum(len(moved.get(f, ())) for f in added if cfg.in_src(f))
     if rx is not None:
-        added = new_suppressions(diff, rx)
+        found = new_suppressions(diff, rx)
         for f in sorted(untracked):
             if cfg.in_src(f) and f.endswith(adapter.source_suffixes):
                 path = cfg.root / f
                 if path.is_file():
                     text = path.read_text(encoding="utf-8", errors="replace")
-                    added += [line for line in text.splitlines() if rx.search(line)]
-        problems += [f"SUPPRESSION ADDED: {line.strip()}" for line in added]
-    return CheckResult("FAIL" if problems else "PASS", "\n".join(problems) or "Frame intact.")
+                    found += [line for line in text.splitlines() if rx.search(line)]
+        problems += [
+            f"SUPPRESSION ADDED: {line.strip()}" for line in found if line.strip() not in moved_text
+        ]
+    return CheckResult(
+        "FAIL" if problems else "PASS",
+        "\n".join(problems) or "Frame intact.",
+        summary=moved_note(skipped),
+    )
