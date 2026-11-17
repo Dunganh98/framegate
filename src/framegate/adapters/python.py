@@ -663,6 +663,8 @@ class PythonAdapter(LanguageAdapter):
                     tool,
                     str(report),
                     f"--compare-branch={base_ref}",
+                    # the base itself, not its merge base with HEAD (task_base.py)
+                    "--diff-range-notation=..",
                     f"--fail-under={self.cfg.diff_coverage}",
                 ],
                 self.root,
@@ -707,9 +709,21 @@ class PythonAdapter(LanguageAdapter):
         changed = [f for f in changed_src if f.endswith(".py")]
         if not changed:
             return CheckResult("PASS", "No changed Python source files to mutate.")
-        modules = self._mutmut_modules(changed)
+        return self._mutmut(feature, self._mutmut_modules(changed), scope)
+
+    def mutation_trial(self) -> CheckResult | None:
+        """The setup's trial (doctor --tree): mutmut finds the code and pytest loads
+        framegate's plugin, through the final gate's path; no mutant runs. The first trial
+        on a machine builds the WSL venv once (cached for the gates)."""
+        if (self.cfg.mutation_tool or "mutmut") != "mutmut":
+            return None
+        return self._mutmut("", [], None, trial=True)
+
+    def _mutmut(
+        self, feature: str, modules: Sequence[str], scope: TestScope | None, trial: bool = False
+    ) -> CheckResult:
         if self.mutation_runner() == "wsl":
-            return self._mutmut_wsl(feature, modules, scope)
+            return self._mutmut_wsl(feature, modules, scope, trial)
         if os.name == "nt":
             return not_measured(*NATIVE_WINDOWS)
         if not self._has_module("mutmut"):
@@ -719,20 +733,16 @@ class PythonAdapter(LanguageAdapter):
             )
         work = self._mutmut_dir()
         spec = self._mutmut_spec(modules, str(self.root), str(work / "result.json"), scope)
+        spec["trial"] = trial
         (work / "spec.json").write_text(json.dumps(spec, indent=1), encoding="utf-8")
         cmd = [self.python, str(work / "runner.py"), str(work / "spec.json")]
-        return self._mutmut_finish(feature, modules, cmd, "native")
+        return self._mutmut_finish(feature, modules, cmd, "native", trial)
 
     # ---------- mutmut internals ----------
     def _mutmut_modules(self, changed: Sequence[str]) -> list[str]:
-        """Changed files -> module names as mutmut names them (relative to `src/`)."""
-        roots = [r.rstrip("/") + "/" for r in self.cfg.src_roots]
-
-        def module(f: str) -> str:
-            root = next((r for r in roots if f.startswith(r)), "")
-            return f[len(root) : -3].replace("/", ".")
-
-        mods = [module(f) for f in changed]
+        """Changed files -> module names as mutmut names them: the path from the root, a
+        leading `src.` dropped (mutmut 3 drops only that one)."""
+        mods = [f[:-3].replace("/", ".").removeprefix("src.") for f in changed]
         return sorted({m[: -len(".__init__")] if m.endswith(".__init__") else m for m in mods})
 
     def _mutmut_dir(self) -> pathlib.Path:
@@ -758,6 +768,9 @@ class PythonAdapter(LanguageAdapter):
                 _shell_quote(a) for a in [*self.pytest_args, *self.scope_args(scope)]
             ),
             "also_copy": self._mutmut_also_copy(),
+            # mutmut guesses its folder (src/ or one named like the project); seen live: a
+            # project with packages at the root, and mutmut found nothing to mutate
+            "source_paths": [r.rstrip("/") for r in self.cfg.src_roots],
         }
 
     def _mutmut_also_copy(self) -> list[str]:
@@ -770,7 +783,11 @@ class PythonAdapter(LanguageAdapter):
         return [f for f in out.splitlines() if not f.startswith(own)] if code == 0 else []
 
     def _mutmut_wsl(
-        self, feature: str, modules: Sequence[str], scope: TestScope | None = None
+        self,
+        feature: str,
+        modules: Sequence[str],
+        scope: TestScope | None = None,
+        trial: bool = False,
     ) -> CheckResult:
         found = wsl.probe(self.root, self.cfg.wsl_distro)
         if found.root is None:
@@ -803,22 +820,25 @@ class PythonAdapter(LanguageAdapter):
             stamp=stamp,
             requirements=reqs,
             requirement_files=files,
+            trial=trial,
         )
         (work / "spec.json").write_text(json.dumps(spec, indent=1), encoding="utf-8")
         cmd = wsl.wsl_command(["python3", w(work / "runner.py"), w(work / "spec.json")], distro)
-        return self._mutmut_finish(feature, modules, cmd, f"WSL {distro}" if distro else "WSL")
+        where = f"WSL {distro}" if distro else "WSL"
+        return self._mutmut_finish(feature, modules, cmd, where, trial)
 
     def _wsl_requirements(
         self, w: Callable[[pathlib.Path], str]
     ) -> tuple[list[str], list[str], str]:
         """What the WSL venv needs: the project's dependencies (all extras and dependency
-        groups, requirements*.txt), mutmut and pytest, and framegate itself (its pytest plugin)
-        from this source tree when framegate runs from one. The project itself is not installed:
-        mutmut puts its mutated copy on sys.path. Returns (requirements, -r files, stamp)."""
+        groups, requirements*.txt), mutmut, pytest, hypothesis (the review tests use it), and
+        framegate itself (its pytest plugin) from this source tree when framegate runs from
+        one. The project itself is not installed: mutmut puts its mutated copy on sys.path.
+        Returns (requirements, -r files, stamp)."""
         reqs, files = collect_requirements(self.root)
         own = framegate_source()
         reqs = [r for r in reqs if not (own and req_name(r) == "framegate")]
-        reqs += ["mutmut>=3", "pytest"] + ([w(own)] if own else [])
+        reqs += ["mutmut>=3", "pytest", "hypothesis"] + ([w(own)] if own else [])
         reqs = [translate_drive_paths(r, w) for r in reqs]
         digest = hashlib.sha256()
         digest.update(json.dumps([MUTMUT_ENV_VERSION, __version__, reqs]).encode("utf-8"))
@@ -828,7 +848,7 @@ class PythonAdapter(LanguageAdapter):
         return reqs, [w(f) for f in files], digest.hexdigest()
 
     def _mutmut_finish(
-        self, feature: str, modules: Sequence[str], cmd: list[str], where: str
+        self, feature: str, modules: Sequence[str], cmd: list[str], where: str, trial: bool = False
     ) -> CheckResult:
         result_file = self.root / self.cfg.paths.out / ".mutmut" / "result.json"
         result_file.unlink(missing_ok=True)
@@ -848,6 +868,16 @@ class PythonAdapter(LanguageAdapter):
                 log=str(res.get("setup_log", "")),
             )
         output = str(res.get("run_output", ""))
+        if trial:
+            secs = f"{where}, {res.get('seconds')} s" + (
+                ", venv reused" if res.get("venv_reused") else ", venv built"
+            )
+            if res.get("run_code") == 0:
+                return CheckResult(
+                    "PASS", output, output.strip().replace(chr(10), "; ") + f" ({secs})"
+                )
+            last = output.strip().splitlines()[-1:] or ["mutmut cannot run here"]
+            return CheckResult("FAIL", output, f"{last[0]} ({secs})")
         reason = incomplete_reason(int(res.get("run_code") or 0), output, self.cfg.mutation_timeout)
         if reason:
             return incomplete_result(reason, output, f"mutation run ({where})")

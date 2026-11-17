@@ -22,6 +22,8 @@ spec.json keys:
   pythonpath         a folder put on PYTHONPATH (framegate's pytest plugin as a file)
   also_copy          files (relative to project) copied into `mutants/` before the run: what
                      the tests read outside the source folders
+  source_paths       the folders to mutate; written to a [mutmut] section of setup.cfg for
+                     the run (and taken out after) unless the project configures mutmut
 
 result.json keys: ok, stage ("setup" | "run"), error, hint, setup_log, venv_reused, python,
 run_code, run_output, results (`mutmut results --all true`), shows {name: diff}, seconds.
@@ -127,11 +129,121 @@ def ensure_venv(spec: dict) -> tuple[bool, bool, str]:
     return True, False, "\n".join(log)
 
 
+def own_config(project: str) -> bool:
+    """Does the project configure mutmut itself ([tool.mutmut] or setup.cfg [mutmut])?"""
+    for name, head in (("pyproject.toml", "[tool.mutmut]"), ("setup.cfg", "[mutmut]")):
+        try:
+            with open(os.path.join(project, name), encoding="utf-8") as fh:
+                if any(line.strip() == head for line in fh):
+                    return True
+        except OSError:
+            pass
+    return False
+
+
+def add_source_paths(project: str, paths: list) -> str | None:
+    """Write `paths` into setup.cfg for mutmut; returns setup.cfg's old text ('' = there was
+    none), None when nothing was written."""
+    if not paths or own_config(project):
+        return None
+    cfg = os.path.join(project, "setup.cfg")
+    old = ""
+    if os.path.isfile(cfg):
+        with open(cfg, encoding="utf-8") as fh:
+            old = fh.read()
+    sep = "\n" if old and not old.endswith("\n") else ""
+    body = "".join(f"    {p}\n" for p in paths)
+    with open(cfg, "w", encoding="utf-8") as fh:
+        fh.write(f"{old}{sep}\n[mutmut]\nsource_paths =\n{body}")
+    return old
+
+
+def restore_setup_cfg(project: str, old: str | None) -> None:
+    if old is None:
+        return
+    cfg = os.path.join(project, "setup.cfg")
+    if old:
+        with open(cfg, "w", encoding="utf-8") as fh:
+            fh.write(old)
+    else:
+        os.remove(cfg)
+
+
+#: the trial's first look: mutmut's config loads and every folder it would mutate exists
+TRIAL = (
+    "from mutmut.configuration import config\n"
+    "paths = config().source_paths\n"
+    "missing = [str(p) for p in paths if not p.exists()]\n"
+    "assert not missing, f'source folders not found: {missing}'\n"
+    "print('mutmut mutates:', ' '.join(str(p) for p in paths))\n"
+)
+
+
+#: the trial's second look: collect the tests (nothing runs) and compare the names the code
+#: is imported under with the names mutmut gives it (the path from the root, `src.` dropped).
+#: Seen live: a conftest put orchestrator/ on sys.path, tests imported `controller.cli`,
+#: mutmut expected `orchestrator.controller.cli`, and the run stopped after minutes.
+IMPORTS = r"""
+import os, sys
+import pytest
+root, paths = os.getcwd(), [p.rstrip("/") for p in sys.argv[1:]]
+sys.path.insert(0, root)
+code = int(pytest.main(["--collect-only", "-q", "-p", "no:cacheprovider"]))
+bad = set()
+for name, mod in list(sys.modules.items()):
+    path = getattr(mod, "__file__", None) or ""
+    rel = os.path.relpath(path, root).replace(os.sep, "/") if path else ".."
+    if rel.startswith("..") or not rel.endswith(".py"):
+        continue
+    if not any(rel.startswith(p + "/") for p in paths if p not in ("", ".")):
+        continue
+    want = rel[:-3].replace("/", ".").removesuffix(".__init__")
+    want = want[4:] if want.startswith("src.") else want
+    if name != want:
+        bad.add(f"{name} (mutmut names it {want})")
+if bad:
+    print("FRAMEGATE: the tests import the code under other names than mutmut gives it: "
+          + ", ".join(sorted(bad)[:3]) + ". mutmut cannot run on this project as it is.")
+    sys.exit(3)
+if code not in (0, 5):
+    print(f"FRAMEGATE: pytest cannot collect the tests here (exit {code})")
+    sys.exit(code)
+print("FRAMEGATE: the tests import the code as mutmut names it")
+"""
+
+
+def trial_mutmut(spec: dict, python: str) -> dict:
+    """The setup's trial (spec `trial`): mutmut finds the code, pytest loads framegate's
+    plugin (`--req`) and collects the tests under the module names mutmut uses. No test and
+    no mutant runs: seconds, not minutes."""
+    project = spec["project"]
+    old_cfg = add_source_paths(project, list(spec.get("source_paths", [])))
+    try:
+        code, out = _run([python, "-c", TRIAL], cwd=project, timeout=60)
+        if code == 0:
+            hcode, help_text = _run([python, "-m", "pytest", "--help"], cwd=project, timeout=60)
+            if hcode != 0 or "--req" not in help_text:
+                code = hcode or 1
+                out = "pytest does not load framegate's plugin (--req unknown):\n" + _tail(
+                    help_text
+                )
+        if code == 0:
+            paths = [str(p) for p in spec.get("source_paths", [])]
+            icode, found = _run([python, "-c", IMPORTS, *paths], cwd=project, timeout=180)
+            said = [x for x in found.splitlines() if x.startswith("FRAMEGATE: ")]
+            verdict = said[-1].removeprefix("FRAMEGATE: ") if said else _tail(found, 15)
+            out, code = f"{out.strip()}\n{verdict}", icode
+    finally:
+        restore_setup_cfg(project, old_cfg)
+    return {"ok": True, "stage": "trial", "run_code": code, "run_output": _tail(out)}
+
+
 def run_mutmut(spec: dict, python: str) -> dict:
     project = spec["project"]
     mutants = os.path.join(project, "mutants")
     shutil.rmtree(mutants, ignore_errors=True)
     patterns = list(spec.get("patterns", []))
+    old_cfg = add_source_paths(project, list(spec.get("source_paths", [])))
     try:
         for rel in spec.get("also_copy", []):
             src, dst = os.path.join(project, rel), os.path.join(mutants, rel)
@@ -156,6 +268,7 @@ def run_mutmut(spec: dict, python: str) -> dict:
             _, diff = _run([python, "-m", "mutmut", "show", m.group(1)], cwd=project)
             shows[m.group(1)] = diff.strip()
     finally:
+        restore_setup_cfg(project, old_cfg)
         if not spec.get("keep_mutants"):
             shutil.rmtree(mutants, ignore_errors=True)
     return {
@@ -198,7 +311,7 @@ def main(argv: list[str]) -> int:
             return 0
         python = venv_python(os.path.expanduser(spec["venv"]))
         result["python"] = python
-    result.update(run_mutmut(spec, python))
+    result.update((trial_mutmut if spec.get("trial") else run_mutmut)(spec, python))
     result["seconds"] = round(time.time() - t0, 1)
     write_result(spec["result"], result)
     return 0

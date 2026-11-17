@@ -1390,12 +1390,20 @@ tests that failed>`; the `risk` event and the `human_gate` event (`risk`) record
 your decision, so you can compare before switching on `[gates] final = "auto"`: then a low-risk
 feature passes the final gate without a stop (`human_gate` with `auto: true`, retro, DONE;
 nothing is pushed, the PR stays yours). Everything else stops as before.
-A check that is NOT MEASURED (the tool cannot run on this machine, see "Not measured") is no
-reason for `elevated`: it says nothing about the feature. It is no proof either. The brief
-shows `Risk: low for what was measured (...); mutation score NOT MEASURED: <reason>. Fix:
-<fix>` (or, next to real reasons, `Risk: elevated: <reasons>. Not a reason: ...`), the `risk`
-event has it in `not_measured`, and `[gates] final = "auto"` does not pass the gate without a
-stop. A score below the threshold is a reason as before; `mutation_tool = "none"` is not.
+A configured check that is NOT MEASURED (the tool cannot run here, or gave no result) is a
+reason for `elevated`, with its fix: `Risk: elevated: mutation score NOT MEASURED: <reason>.
+Fix: <fix>`. A score below the threshold is a reason as before; `mutation_tool = "none"` (off
+on purpose, a setup decision) is not.
+
+A final check whose tool gave no result is asked at the final gate: run the final checks
+again (the default; the answer re-runs them), or finish without it. With the same result a
+second time the default becomes "finish without it", and the question points to
+`/framegate:setup` to repair the tool.
+
+The task's own lines: lint, typecheck and imports findings and diff coverage count only the
+lines the task wrote. The format fix formats a touched file whole, so the comparison base is
+the approved commit with those files run through the same fixes (`refs/framegate/task-base/`,
+`task_base.py`): a line only the formatter rewrote is the same on both sides.
 
 Several source folders: `[paths] src` takes one folder or a list (`["core", "autoload",
 "scenes"]`). The implementer may write all of them; the frame diff, the forbidden patterns,

@@ -164,6 +164,15 @@ def mutation_lines(tools: list[tuple[str, bool, str]]) -> list[str]:
     ]
 
 
+def mutation_failed(trial: CheckResult) -> str:
+    """`MUTATION:` for a trial that failed (doctor: adapter.mutation_trial)."""
+    why = trial.summary or _first_line(trial.output)
+    return (
+        f"MUTATION: the trial failed: {why}. Make it run (the fix), or the user decides: "
+        '[gates] mutation_tool = "none". The setup is not ready before.'
+    )
+
+
 def run(
     adapter: LanguageAdapter,
     lint_red: list[tuple[str, CheckResult]],

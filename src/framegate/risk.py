@@ -10,12 +10,10 @@ rating can be compared with what the human did before `[gates] final = "auto"` i
 Limits: `[risk]` in framegate.toml (config.Risk). A project without a measured diff coverage or
 mutation score is never low risk: there the frame proves less (but see mutation off below).
 
-One case apart: a check whose tool cannot run on this machine (NOT MEASURED, base.not_measured;
-e.g. mutmut on Windows without a WSL distribution that has Python). That says nothing about the
-feature, so it is no reason for `elevated`. It is no proof either: the risk line names it with
-its fix, and `[gates] final = "auto"` does not pass the gate without a stop (`Assessment.auto`).
-Mutation testing switched off on purpose (`[gates] mutation_tool = "none"`, a decision of
-the setup) is no reason and no stop either.
+A configured check that measured nothing (NOT MEASURED: the tool cannot run here, or gave no
+result) is a reason for `elevated`, named with its fix; `[gates] final = "auto"` never passes
+it. Mutation testing switched off on purpose (`[gates] mutation_tool = "none"`, a decision of
+the setup) is no reason.
 """
 
 from __future__ import annotations
@@ -52,8 +50,7 @@ class Assessment:
     reasons: list[str] = field(default_factory=list)
     #: the numbers behind it (changed lines, files, removed lines, assumptions, features)
     facts: dict[str, Any] = field(default_factory=dict)
-    #: check -> reason and fix, for the checks whose tool cannot run on this machine: not a
-    #: reason (the level stays what the rest says), and not a proof
+    #: check -> reason and fix, for configured checks that measured nothing (also a reason)
     not_measured: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -72,18 +69,8 @@ class Assessment:
 
     def line(self, auto: bool) -> str:
         """The final brief's risk line."""
-        missing = "; ".join(f"{k} {NOT_MEASURED}: {v}" for k, v in self.not_measured.items())
-        if not self.low:
-            return (
-                "Risk: elevated: "
-                + "; ".join(self.reasons)
-                + (f". Not a reason: {missing}" if missing else "")
-            )
-        if missing:
-            return (
-                f"Risk: low for what was measured (clean run, small change); {missing}. "
-                'This gate stops for it also with [gates] final = "auto"'
-            )
+        if not self.low:  # an unmeasured check is one of the reasons
+            return "Risk: elevated: " + "; ".join(self.reasons)
         proven = (
             "coverage measured, mutation off by config"
             if self.facts.get("mutation_off")
@@ -207,8 +194,9 @@ def assess(
         if not last or any(res.startswith("PASS") for res in found):
             continue
         blocked = [res for res in found if res.startswith(NOT_MEASURED)]
-        if blocked:  # the tool cannot run on this machine: says nothing about the feature
+        if blocked:  # configured, but the tool measured nothing: no proof
             not_measured[name] = blocked[0].removeprefix(NOT_MEASURED).lstrip(": ")
+            reasons.append(f"{name} {NOT_MEASURED}: {not_measured[name]}")
         else:  # failed, or left out by the config or by a red check before it
             reasons.append(f"{name} was not measured")
 

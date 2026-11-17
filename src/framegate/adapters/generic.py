@@ -318,6 +318,7 @@ class GenericAdapter(LanguageAdapter):
                     tool,
                     str(report),
                     f"--compare-branch={base_ref}",
+                    "--diff-range-notation=..",  # the base itself (task_base.py)
                     f"--fail-under={self.cfg.diff_coverage}",
                 ],
                 self.root,
