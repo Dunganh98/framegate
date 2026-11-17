@@ -103,7 +103,7 @@ def ask(
     cfg: Config, adapter: LanguageAdapter, prompt: str, resume: str = ""
 ) -> tuple[dict[str, Any], str]:
     """One `claude -p` turn of the survey agent: (its result object, error or '')."""
-    role = importlib.resources.files("framegate.roles").joinpath("survey.md").read_text("utf-8")
+    role = importlib.resources.files("framegate").joinpath("roles", "survey.md").read_text("utf-8")
     cmd = [*_claude(cfg), "-p", "--output-format", "json", "--allowedTools", TOOLS]
     cmd += ["--max-turns", MAX_TURNS, "--model", cfg.agent_model("SURVEY") or MODEL]
     cmd += ["--append-system-prompt", role] + (["--resume", resume] if resume else [])
