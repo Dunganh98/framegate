@@ -285,4 +285,5 @@ def test_doctor_names_a_command_the_rules_deny_and_renamed_names(demo_repo: Demo
     assert "- WARN config: renamed names (still read): [phases.PR] is now" in out
     # the role file under its old name still reaches the summary agent
     orch = Orchestrator(cfg, get_adapter(cfg), echo=lambda s: None)
-    assert "Mention the ticket." in orch.role_text("summary", "demo")
+    text = orch.role_text("summary", "demo")
+    assert "Mention the ticket." in text and "A comment or docstring is no evidence" in text

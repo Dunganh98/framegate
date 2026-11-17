@@ -244,6 +244,11 @@ KNOWLEDGE_ROLES = {
     "retro",
 }
 KNOWLEDGE_MAX_LINES = 300
+EVIDENCE_RULE = (
+    "# Evidence\n\nThe code (and the build and test files) is the truth; the spec and the docs "
+    "say what is intended. A comment or docstring is no evidence of what the code does: read "
+    "the code. Write as few comments as possible.\n"
+)
 #: failed final checks one automatic repair may fix before the human sees them (by the start
 #: of the check's name): the implementer owns the first group, the test writer the second
 FINAL_SRC_CHECKS = (*GATE_NAMES.values(), "regression", "coverage run", "full test suite")
@@ -766,7 +771,7 @@ class Orchestrator:
         return text
 
     def role_text(self, role: str, feature: str) -> str:
-        text = package_text("roles", f"{role}.md")
+        text = package_text("roles", f"{role}.md").rstrip() + "\n\n" + EVIDENCE_RULE
         if self.cfg.roles_extra_dir:
             folder = self.cfg.root / self.cfg.roles_extra_dir
             extra = folder / f"{role}.md"
