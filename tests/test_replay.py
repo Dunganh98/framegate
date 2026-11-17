@@ -390,7 +390,8 @@ def test_chat_call_sends_a_slash_command_as_argument_and_text_through_stdin() ->
     text, stdin = chat.command("claude", "line 1\nline 2", resume="abc")
 
     assert slash[-1] == "/framegate:setup" and no_stdin is None
-    assert text[-2:] == ["--resume", "abc"] and stdin == "line 1\nline 2"
+    assert text[-4:-2] == ["--resume", "abc"] and stdin == "line 1\nline 2"
+    assert text[-2:] == ["--model", "sonnet"]
     allowed = slash[slash.index("--allowedTools") + 1].split(",")
     assert "PowerShell(pytest *)" in allowed
     assert not [rule for rule in allowed if "push" in rule or "(gh" in rule or "(az" in rule]

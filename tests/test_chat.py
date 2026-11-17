@@ -224,7 +224,7 @@ def test_watch_follows_a_live_run(demo_repo: DemoRepo) -> None:
     assert "IMPLEMENT start" in first
     o.progress("demo", "DONE")
     procs.remove_lock(r.root / "out")
-    rest, _ = p.communicate(timeout=30)
+    rest, _ = p.communicate(timeout=90)  # watch may miss the lock and wait its 30 s
     assert p.returncode == 0
     assert "DONE" in rest and "watch ended:" in rest.splitlines()[-1]
 
