@@ -13,7 +13,7 @@ from framegate.adapters import get_adapter
 from framegate.adapters.base import CheckResult, lines_beyond
 from framegate.checks import frame_diff
 from framegate.config import load_config, parse_config
-from framegate.orchestrator import EXIT_GATE
+from framegate.orchestrator import EXIT_GATE, Orchestrator
 from framegate.report import final_facts
 from framegate.specs import baseline_on
 
@@ -278,16 +278,68 @@ def test_a_config_that_does_not_load_or_weakens_a_check_is_not_applied(
     cfg = load_config(r.root)
     toml = (r.root / "framegate.toml").read_text(encoding="utf-8")
     cfg.feature_out("demo").mkdir(parents=True, exist_ok=True)
-    for proposal, why in (
-        ("[gates\n", "was not applied, the new file is not a valid config"),
+    weaker = "frame.forbidden_patterns: not set -> []"
+    for proposal, why, refused in (
+        ("[gates\n", "was not applied, the new file is not a valid config", []),
         (
             toml + "\n[frame]\nforbidden_patterns = []\n",
-            "was not applied, it weakens a check (frame.forbidden_patterns: not set -> []). "
+            f"was not applied, it weakens a check ({weaker}). "
             "A task never does that: it belongs to the setup (/framegate:setup)",
+            [weaker],
         ),
     ):
         (cfg.feature_out("demo") / redo.CONFIG_UPDATE_FILE).write_text(proposal, encoding="utf-8")
-        new, notes, applied = redo.apply_config_update(cfg, "demo", "ANS-1")
-        assert new is None and applied == [] and why in notes[0]
+        new, notes, changes = redo.apply_config_update(cfg, "demo", "ANS-1")
+        assert new is None and changes == refused and why in notes[0]
         assert (r.root / "framegate.toml").read_text(encoding="utf-8") == toml
         assert not marker(r.root, "config-update/demo")
+
+    # the refused change is setup work: the step is not redone and nothing is left to approve
+    orch = Orchestrator(cfg, get_adapter(cfg), echo=lambda s: None)
+    asked = "Diagnosis (d.md): approve the proposed fix, or answer otherwise.\nRoot cause: x"
+    prog: dict = {"redo": [{"kind": "step", "owner": "config", "question": asked}]}
+    (cfg.feature_out("demo") / redo.CONFIG_UPDATE_FILE).write_text(proposal, encoding="utf-8")
+    orch.apply_config_fix("demo", prog, "ANS-1")
+    head = {"kind": "step", "step": 1, "label": "step 1 - add"}
+    assert orch.redo_pointless("demo", prog, prog["redo"], head)
+    (p,) = prog["parked"]
+    assert p["owner"] == "setup" and p["reason"] == "not redone: it needs the setup"
+    assert p["question"] == (
+        redo.NEEDS_SETUP.format(why="framegate refused the change", what=weaker) + "\nRoot cause: x"
+    )
+    assert "/framegate:setup" in p["question"] and "approve" not in p["question"]
+    assert not redo.forces_redo(p, "ok, done") and redo.forces_redo(p, "redo anyway")
+
+
+DA_CORE = """\
+Root cause: the 11 skeleton tests fail before the feature (`pytest.fail("TODO")`).
+Fix owner: config
+Proposed fix: framegate.toml as it is now, plus this line in section [gates]:
+  `regression_baseline = true`. This weakens no check.
+Evidence:
+- framegate.toml:58: `[gates]` sets only `unrunnable_tests`; `diff_coverage = 10` is not set
+"""
+
+
+def test_a_config_fix_that_would_be_refused_is_not_offered_for_approval(
+    demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    weaker = config_change.proposed_weakening(DA_CORE, {"gates": {"mutation_score": 80}})
+    assert weaker == ["gates.regression_baseline: not set -> true"]  # as seen live
+    fine = "Proposed fix: [gates] `regression_timeout = 7200` and [agents] `max_turns = 90`"
+    assert config_change.proposed_weakening(fine, {}) == []
+    off = "Fix owner: config\nProposed fix: section [gates.commands]:\ntypecheck = []\n"
+    assert config_change.proposed_weakening(off, {}) == ["gates.commands.typecheck: not set -> []"]
+
+    cfg = load_config(demo_repo.root)
+    orch = Orchestrator(cfg, get_adapter(cfg), echo=lambda s: None)
+    report = cfg.feature_out("demo") / "diagnosis.md"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(orch, "agent", lambda *a, **k: report.write_text(DA_CORE, "utf-8"))
+    gate = gates.GateReport(False, "x", failed=["lint"])
+    found = orch.diagnose("demo", {"fail_streak": 2}, "step 1 - add", ["DEMO-R-001"], gate)
+    assert found["owner"] == "setup" and "approve" not in found["question"]
+    assert found["question"].startswith(
+        "This needs the setup (diagnosis: out/demo/diagnoses/step-1-add.md): "
+        "gates.regression_baseline: false -> true. A task never makes that change"
+    )  # (the demo repository sets it to false)

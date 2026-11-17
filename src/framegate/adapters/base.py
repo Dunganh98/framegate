@@ -545,15 +545,33 @@ class LanguageAdapter(abc.ABC):
             return False
         return bool(self.cfg.format_fix_command) or "format" not in self.cfg.gate_commands
 
-    def configured_format_fix(self, files: list[str]) -> list[list[str]]:
-        """[gates.commands] format_fix with "{files}" replaced by `files`; [] = not configured."""
-        cmd = self.cfg.format_fix_command
-        if not cmd:
-            return []
+    def _on_files(self, cmd: list[str], files: list[str]) -> list[str]:
+        """A configured fix command with "{files}" replaced by `files`."""
         i = cmd.index("{files}")
         resolved = self.resolve_command([*cmd[:i], *cmd[i + 1 :]])
         k = len(self.resolve_command(cmd[:i])) if i else 0
-        return [[*resolved[:k], *files, *resolved[k:]]]
+        return [*resolved[:k], *files, *resolved[k:]]
+
+    def configured_format_fix(self, files: list[str]) -> list[list[str]]:
+        """[gates.commands] format_fix with "{files}" replaced by `files`; [] = not configured."""
+        cmd = self.cfg.format_fix_command
+        return [self._on_files(cmd, files)] if cmd else []
+
+    def lint_fix_commands(self, files: list[str]) -> list[list[str]]:
+        """The linter's safe fixes on `files`, run where the format fix runs. Seen live: the
+        test writer's file failed lint on import order, the implementer may not edit tests,
+        and the step parked. [gates.commands] lint_fix (`[]` = off), else `ruff check --fix`
+        when the lint command is ruff; [] = off, or the lint tool has no fix mode."""
+        if not self.cfg.format_fix:
+            return []
+        own = self.cfg.lint_fix_command
+        if own is not None:
+            return [self._on_files(own, files)] if own else []
+        lint = self.cfg.gate_commands.get("lint", self.default_gate_commands().get("lint")) or []
+        if "check" not in lint or "ruff" not in [pathlib.PurePath(a).stem.lower() for a in lint]:
+            return []
+        ruff = self.resolve_command(lint[: lint.index("check") + 1])
+        return [[*ruff, "--fix", "--no-unsafe-fixes", "--quiet", *files]]
 
     def format_fix(self, base_ref: str | None) -> str:
         """Before the checks of a gate: format the source files changed since base_ref, so a
@@ -561,9 +579,10 @@ class LanguageAdapter(abc.ABC):
         exceptions: written by the reviewer, which nobody formats otherwise and the implementer
         may not edit). Frozen tests are never touched. A changed file is formatted whole: old
         formatting debt in it is fixed with the work (format_beyond counts those lines for
-        the final summary). Returns a one-line note ("" = nothing)."""
+        the final summary). The linter's safe fixes are applied first (lint_fix_commands).
+        Returns a one-line note ("" = nothing)."""
         self.format_beyond = {}
-        if not self.format_fix_enabled() or not base_ref:
+        if not base_ref:
             return ""
         from framegate.checks.frame_diff import changed_files, path_matches
         from framegate.state import GitError, tag_exists
@@ -579,11 +598,12 @@ class LanguageAdapter(abc.ABC):
         return self.format_files(files, base_ref)
 
     def format_files(self, files: Sequence[str], base_ref: str | None = None) -> str:
-        """Format `files` (posix, relative to the root; other suffixes and missing files are
-        left out) with the adapter's formatter. With line_scoped_format and a base_ref, only
-        the formatter's changes on lines changed since base_ref are kept. Returns a note.
-        Sets format_beyond: file -> lines the formatter rewrote that were not changed since
-        base_ref (formatting debt from before the task, fixed with it)."""
+        """Apply the linter's safe fixes to `files` (lint_fix_commands), then format them
+        with the adapter's formatter (format_fix_enabled). `files`: posix, relative to the
+        root; other suffixes and missing files are left out. With line_scoped_format and a
+        base_ref, only the changes on lines changed since base_ref are kept. Returns a note.
+        Sets format_beyond: file -> lines rewritten that were not changed since base_ref
+        (debt from before the task, fixed with it)."""
         self.format_beyond = {}
         files = [
             f
@@ -591,11 +611,13 @@ class LanguageAdapter(abc.ABC):
             if (self.root / f).is_file()
             and (not self.source_suffixes or f.endswith(self.source_suffixes))
         ]
-        cmds = (
+        lint = self.lint_fix_commands(list(files)) if files else []
+        fmt = (
             (self.configured_format_fix(list(files)) or self.format_fix_commands(list(files)))
-            if files
+            if files and self.format_fix_enabled()
             else []
         )
+        cmds = [*lint, *fmt]
         if not cmds:
             return ""
         scoped = self.line_scoped_format and bool(base_ref)
@@ -604,7 +626,8 @@ class LanguageAdapter(abc.ABC):
         failed = []
         for cmd in cmds:
             code, out = run_command(cmd, self.root, env=self.tool_env(), timeout=900)
-            if code != 0:
+            # a lint fix exits non-zero on what it cannot fix: the lint check reports that
+            if code != 0 and cmd not in lint:
                 failed.append(f"{cmd[0]} exit {code}: {out.strip().splitlines()[-1:] or ''}")
         for f, old in before.items():
             path = self.root / f
@@ -620,9 +643,11 @@ class LanguageAdapter(abc.ABC):
                 path.write_bytes(merge_scoped(was, now, lines).encode("utf-8"))
             elif n := lines_beyond(was, now, lines):
                 self.format_beyond = {**self.format_beyond, f: n}
-        note = f"formatted {len(files)} changed file(s)" + (
+        note = f"{'formatted' if fmt else 'lint fixes in'} {len(files)} changed file(s)" + (
             " (changed lines only)" if scoped else ""
         )
+        if lint and fmt:
+            note += ", the linter's safe fixes first"
         return note + (f" (formatter problems: {'; '.join(failed)})" if failed else "")
 
     def scope_diagnostics(self, output: str, base_ref: str | None) -> tuple[str, int, int]:

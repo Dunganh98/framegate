@@ -508,10 +508,10 @@ def old() -> int:
 """
 
 
-def test_step_gate_runs_the_whole_suite(framed: pathlib.Path) -> None:
-    """Seen live: a step broke another feature's frozen test and both step gates passed,
-    because they ran only this feature's tests. The step gate now also runs the whole suite;
-    the tests of this feature's later steps are red by design and left out."""
+def test_step_gate_runs_the_whole_suite_only_when_the_config_says(framed: pathlib.Path) -> None:
+    """A step gate judges the task's tests; the whole suite runs once, at the final gate.
+    [gates] step_tests = "suite" runs it at every step gate too; the tests of this feature's
+    later steps are red by design and left out."""
     from framegate.gates import STEP_SUITE, is_test_at, later_step_tests
     from framegate.state import clear_reqs, set_reqs
 
@@ -530,7 +530,7 @@ def test_step_gate_runs_the_whole_suite(framed: pathlib.Path) -> None:
     git(framed, "commit", "-q", "-m", "tests")
     git(framed, "tag", "-f", "tests-approved/f")
     off = {"commands": {"lint": [], "format": [], "typecheck": []}}
-    a = adapter_for(framed, {"gates": off})
+    a = adapter_for(framed, {"gates": {**off, "step_tests": "suite"}})
     assert later_step_tests(a, "f", ["FT-R-001"]) == ["tests/test_feat.py::test_two"]
     # the same method name in another file or class is another test
     assert is_test_at("tests.test_feat::test_two", ["tests/test_feat.py::test_two"])
@@ -550,8 +550,8 @@ def test_step_gate_runs_the_whole_suite(framed: pathlib.Path) -> None:
         assert not ok and f"[FAIL] {STEP_SUITE}" in report
         broken = report.split("Tests outside this step fail")[1]
         assert "test_other::test_two" in broken and "test_feat::test_two" not in broken
-        # [gates] step_tests = "feature": only the step's IDs, as before
-        b = adapter_for(framed, {"gates": {**off, "step_tests": "feature"}})
+        # the default: only the step's IDs; what it broke elsewhere is the final gate's to find
+        b = adapter_for(framed, {"gates": off})
         ok, report = run_gates(b, "f", "step")
         assert ok and STEP_SUITE not in report, report
         # the step's own tests are red: the suite is not run on top
@@ -594,7 +594,8 @@ def test_fix_gate_runs_the_features_tests_not_the_suite(framed: pathlib.Path) ->
         rep = gate_report(a, "f", "fix")
         assert rep.ok and f"[PASS] {FIX_TESTS}" in rep.report, rep.report
         assert STEP_SUITE not in rep.report and REVIEW_TESTS not in rep.report  # no folder
-        assert not gate_report(a, "f", "step").ok  # a plan step still runs the suite
+        suite = adapter_for(framed, {"gates": {**off, "step_tests": "suite"}})
+        assert not gate_report(suite, "f", "step").ok  # a plan step runs it when asked to
         # an untagged review test is run too
         review = "from pkg.a import f\n\n\ndef test_r() -> None:\n    assert f() in {n}\n"
         write(framed, "tests/review/test_r.py", review.format(n="(1, 3)"))

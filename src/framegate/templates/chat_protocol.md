@@ -119,6 +119,9 @@ fail for no reason. Reading files and git log/diff/status are fine.
    - A parked item with a proposed fix: "ok" / "approve <n>" for it is the answer
      `Approved: apply the proposed fix as written.`; the next run sends it to the phase that
      owns the file (spec, tests, code).
+   - A parked item that says "This needs the setup: ...": there is nothing to approve. Offer
+     `/framegate:setup` with the change it names (default), then answer the item with what
+     was done; the step is redone once framegate.toml has changed.
    - The provisional-steps item (code kept, test fixes proposed): "ok" / "yes" / "approve" for
      it, or for the whole gate while it is listed, is the answer `Approved: apply all proposed
      test fixes as written.` (`framegate approve` refuses while it is open). A "no" to one fix

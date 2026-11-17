@@ -12,7 +12,7 @@ import re
 from fnmatch import fnmatchcase
 from typing import Any
 
-from framegate.config import Config
+from framegate.config import SCHEMA, Config, tomllib
 
 #: keys (section.key) that never change what a check demands
 SAFE = (
@@ -94,3 +94,45 @@ def shown(change: Change) -> str:
     key, old, new = change
     a, b = ("not set" if v is None else json.dumps(v) for v in (old, new))
     return f"{key}: {a} -> {b}"
+
+
+def _known(key: str) -> bool:
+    """Is `section.key` a key framegate.toml can hold (config.SCHEMA)?"""
+    node: Any = SCHEMA
+    for part in key.split("."):
+        if node == {} or node == (dict,):  # free names below: [phases.X], [gates.commands]
+            return True
+        if not isinstance(node, dict) or part not in node:
+            return False
+        node = node[part]
+    return not isinstance(node, dict)
+
+
+SECTION_RE = re.compile(r"\[([a-z_]+(?:\.\w+)*)\]")
+PROPOSAL_RE = re.compile(
+    r"Proposed fix\W*:(.*?)(?=^\W*(?:Evidence|Contested tests)\W*:|\Z)", re.S | re.M
+)
+
+
+def proposed_weakening(diagnosis: str, current: dict[str, Any]) -> list[str]:
+    """The changes a diagnosis proposes for framegate.toml that weaken a check, as `shown`
+    gives them: read when the diagnosis is, so a fix the engine would refuse is never
+    offered for approval. A proposal is every TOML line (`key = value`, in backticks or on
+    a line of its own) under every `[section]` its `Proposed fix` names; what cannot be
+    read that way is not judged here (apply_config_update still is the last word)."""
+    m = PROPOSAL_RE.search(diagnosis)
+    text = m.group(1) if m else diagnosis
+    sections = SECTION_RE.findall(text)
+    have = _flat(current)
+    found: dict[str, Any] = {}
+    for piece in [*re.findall(r"`([^`\n]+)`", text), *text.splitlines()]:
+        try:
+            pairs = _flat(tomllib.loads(piece.strip()))
+        except tomllib.TOMLDecodeError:
+            continue
+        for key, value in pairs.items():
+            for full in (key, *(f"{s}.{key}" for s in sections)):
+                if "." in full and _known(full):
+                    found[full] = value
+    changed = [(k, have.get(k), v) for k, v in sorted(found.items()) if have.get(k) != v]
+    return [shown(c) for c in changed if weakens(*c)]

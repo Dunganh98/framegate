@@ -901,6 +901,7 @@ def test_format_fix_and_project_checks(demo_repo: DemoRepo) -> None:
     assert "def helper(x):\n    return x" in impl.read_text(encoding="utf-8")
     assert "format" not in rep.failed
     rep = gate_report(orch.adapter, "demo", "final")
+    assert not (r.root / ".coverage").exists()  # the coverage data stays in the out folder
     assert rep.extra == {"balance": 0, "broken": 3}
     assert "[OK] balance (full output: out/demo/extra_balance.log)" in rep.report
     assert "slide win rate 0.31" in rep.report and "[EXIT 3] broken" in rep.report

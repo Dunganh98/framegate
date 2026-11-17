@@ -240,38 +240,40 @@ handled here, not blamed on the first task. The command ran the whole suite and 
 format / type checks once; you run nothing yourself. Go by the prefix of its lines:
 
 - `PROBLEM: N test(s) fail on the untouched tree and are not listed:` and one line per test
-  (name | first line of the failure). Sort them into two groups, from those lines and what
-  you read in step 1 (a failure you cannot place: read the test file, do not run it):
-  **cannot run on this machine** (it needs a database, a service, a network address, a
-  licence, another operating system, a tool nobody can install here) and **really red**
-  (the machine can run it and it fails). Show both in one message and ask once:
+  (name | first line of the failure). The verdict is "not ready" while one is left: every
+  red test ends as made to run, or listed with a reason after the user's OK. Sort them,
+  from those lines and what you read in step 1 (a failure you cannot place: read the test
+  file, do not run it): **only lacks a package** (install it: a workflow tool, `framegate
+  install-tools` did that; a dependency of the project, name the command for the user),
+  **cannot run on this machine** (a database, a service, a network address, a licence,
+  another operating system) and **red before any task** (the machine runs it and it
+  fails: a placeholder, a known bug; the project's own debt). Show them in one message and
+  ask once:
 
       **3 tests fail on the code as it is**
-      Cannot run on this machine - I would list them; every check then leaves them out,
-      and every final summary names them with the reason:
+      I would list them; every check then leaves them out, and every final summary names
+      them with the reason:
       1. tests/test_db.py (2 tests): needs a PostgreSQL server (connection refused, localhost:5432)
-      Really red - fix first:
-      2. tests.test_price::test_rounding: AssertionError: 10.01 != 10.0
-      Reply "ok", or the number and the change ("2: needs the licence server").
+      2. tests/test_price.py::test_rounding: red before any task: AssertionError: 10.01 != 10.0
+      Reply "ok", or the number and the change ("2: I fix it first").
 
   After the answer write the confirmed entries to framegate.toml. `test` names the file:
   `tests/db/test_x.py::test_connect`, or the whole file when all its tests fail for the same
-  reason. A bare test name is refused:
+  reason (a bare test name is refused). The reason of a debt entry starts with "red before
+  any task:":
 
       [gates]
       unrunnable_tests = [
         { test = "tests/test_db.py", reason = "needs a PostgreSQL server" },
+        { test = "tests/test_price.py::test_rounding", reason = "red before any task: rounding bug" },
       ]
 
-  Never write an entry the user did not confirm, and never list a really red test to get a
-  green tree: the engine cannot tell the two apart, the user's word decides. A test that
-  only lacks a package: install it (a workflow tool: `framegate install-tools` did that; a
-  dependency of the project: name the command for the user) and do not list the test. Then
-  run `framegate doctor --tree --brief` again: the entries show as `LISTED:` lines.
-- Really red tests that are left: say so plainly, with the count and the names, and
-  recommend fixing them first: "2 tests are really red. Fix them before the first feature:
-  `/framegate:bugfix <name>` (a feature started now would be held up by them)". Suggest a
-  name. The setup goes on; when to fix is the user's call.
+  Never write an entry the user did not confirm; a test the user wants fixed first stays
+  unlisted, and the setup stays not ready until it is green. Then run `framegate doctor
+  --tree --brief` again: the entries show as `LISTED:` lines.
+- `LISTED:` lines: name the listed tests once in your summary. Under them, a `->` line
+  counts the debt entries: suggest one task for them, with a name ("2 tests were red
+  before any task; fix them when you like: `/framegate:bugfix rounding`").
 - `PROBLEM: the whole suite did not run to the end` or `gave no per-test results`: nothing
   is known about the tests. Fix the test command (row 3) or `[gates] regression_timeout`
   and run the check again.
@@ -286,7 +288,6 @@ format / type checks once; you run nothing yourself. Go by the prefix of its lin
   Switch it off for this project?" On yes write `mutation_tool = "none"` under `[gates]` in
   framegate.toml: off on purpose is no risk and no stop at the final gate. Left as it is,
   every final gate says NOT MEASURED and stops, also with `final = "auto"`.
-- `LISTED:` lines: the tests the project already lists as not runnable here; name them once.
 - `Tree: green.`: say so in one line.
 
 ### The state branch (after the tree is settled)

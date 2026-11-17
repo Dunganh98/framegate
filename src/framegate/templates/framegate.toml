@@ -82,13 +82,16 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 #                                  # nothing is run at the approval, every red test counts.
 #                                  # Not set: on for a bug fix (it may start on a red tree),
 #                                  # off for a feature and a refactor (they start on a green one)
-# unrunnable_tests = [             # tests this machine cannot run (a database, a service,
-#   { test = "tests/test_db.py", reason = "needs a PostgreSQL server" },   # another OS): a
-# ]                                # failure of one is left out of every gate, in every mode,
+# unrunnable_tests = [             # tests that are red before any task: this machine cannot
+#   { test = "tests/test_db.py", reason = "needs a PostgreSQL server" },   # run them (a
+#   { test = "tests/test_todo.py", reason = "red before any task: placeholders" },  # database,
+# ]                                # another OS), or they are the project's own debt. A
+#                                  # failure of one is left out of every gate, in every mode,
 #                                  # and the final summary names them with the reason. test =
 #                                  # the test file, or file::test (no bare test name).
-#                                  # /framegate:setup finds them (framegate doctor --tree),
-#                                  # you confirm each one
+#                                  # /framegate:setup finds them (framegate doctor --tree) and
+#                                  # is not ready until each one runs or is listed; you
+#                                  # confirm each one
 # coverage_timeout = 1800          # seconds per coverage run; killed -> "ERROR: test run incomplete"
 # mutation_timeout = 3600          # seconds per mutation run (same)
 # format_fix = true                # the gates format the changed source files (and review
@@ -99,14 +102,9 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 #                                  # over this, is a numbered item at the final gate (split
 #                                  # now / later); 0 = off. Every step gate and the final
 #                                  # gates report the changed files' sizes (not blocking)
-# step_tests = "suite"             # a step gate also runs the whole suite (the everyday
-#                                  # selection: [dotnet] base_filter, [python] pytest_args),
-#                                  # with the tests of this feature's later steps left out;
-#                                  # "feature" = only the tests of the step's IDs (slow suite).
-#                                  # Plan steps only: the runs after the review (review
-#                                  # fixes, structure fixes, final repair) are checked with
-#                                  # the feature's tests + the review tests either way; the
-#                                  # final gates run the whole suite right after
+# step_tests = "feature"           # a step gate runs only the tests of the step's IDs (and
+#                                  # the earlier steps'); the whole suite runs once, at the
+#                                  # final gate. "suite" = every step gate runs it too
 # unreached_assertions = true      # the final gate fails on an assertion of a new test that
 #                                  # never ran in the feature's tests (`if (x) Assert...` on
 #                                  # data without x); false = off
@@ -124,6 +122,9 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 # format_fix = ["python", "-m", "black", "{files}"]   # the formatter the gates apply to the
 #                                  # changed files when `format` is the project's own check
 #                                  # (without it a configured `format` turns the fix off)
+# lint_fix = ["ruff", "check", "--fix", "{files}"]    # the linter's safe fixes on the same
+#                                  # files, before any check. Default: this, when `lint` is
+#                                  # ruff; another linter: its fix command, or [] = off
 
 # [python]                         # python adapter
 # pytest_args = ["-m", "not integration and not slow"]   # added to every pytest run of

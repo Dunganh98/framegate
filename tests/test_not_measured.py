@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 from typing import Any
 
@@ -133,6 +134,17 @@ def test_mutation_check_runs_in_the_distribution_the_probe_found(
     assert a.mutation_check("f", "t", ["src/demo/__init__.py"]).status == "PASS"
     assert seen["where"] == "WSL Ubuntu"
     assert seen["cmd"][1:5] == ["-d", "Ubuntu", "-e", "python3"]
+
+    def spec() -> dict[str, Any]:
+        return json.loads((tmp_path / "out/.mutmut/spec.json").read_text(encoding="utf-8"))
+
+    assert "pythonpath" not in spec()  # from a source tree, framegate is installed in the venv
+    # seen live: an installed framegate the project does not name; pytest refused `--req`
+    monkeypatch.setattr("framegate.adapters.python.framegate_source", lambda: None)
+    a.mutation_check("f", "t", ["src/demo/__init__.py"], TestScope(["F-R-001"]))
+    assert spec()["pytest_addopts"] == "--req F-R-001 -p framegate_req_plugin"
+    assert spec()["pythonpath"].endswith("/out/.mutmut")
+    assert "--req" in (tmp_path / "out/.mutmut/framegate_req_plugin.py").read_text("utf-8")
 
 
 def test_doctor_reports_what_the_mutation_check_will_do(

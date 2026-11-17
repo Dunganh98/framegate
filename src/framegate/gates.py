@@ -1,7 +1,7 @@
 """Gate runner: run the frame checks for a feature.
 
-scope step   fast checks after each implementation step (tests of current + earlier steps,
-             then the whole everyday suite: [gates] step_tests)
+scope step   fast checks after each implementation step (tests of current + earlier steps;
+             with [gates] step_tests = "suite" the whole everyday suite too)
 scope fix    the same checks for a run after the review (review fixes, structure fixes, final
              repair) with the feature's tests and the review tests only: the final gates run
              the whole suite right after
@@ -290,7 +290,7 @@ def _skipped(reason: str) -> Callable[[], CheckResult]:
     return lambda: CheckResult("SKIPPED", reason)
 
 
-#: step scope: the whole suite beside the step's own tests ([gates] step_tests = "suite")
+#: step scope, only with [gates] step_tests = "suite": the whole suite beside the step's tests
 STEP_SUITE = "other tests (whole suite; this feature's later steps left out)"
 
 
@@ -329,11 +329,11 @@ def is_test_at(case_name: str, places: list[str]) -> bool:
 
 
 def step_suite(adapter: LanguageAdapter, feature: str, covered: list[str]) -> CheckResult:
-    """The whole suite (the adapter's everyday selection) at a step gate. Seen live: a step
-    made helpers public and broke another feature's frozen public-surface test; both step
-    gates passed (they ran only this feature's tests) and the break showed in a later fix
-    run. Failures of this feature's later steps, of contested tests, of tests that already
-    failed when the spec was approved and of tests this machine cannot run are left out."""
+    """The whole suite (the adapter's everyday selection) at a step gate, only with [gates]
+    step_tests = "suite". Off by default: a gate judges what belongs to the task, and seen
+    live this check failed every step on tests that were red before the task. Failures of
+    this feature's later steps, of contested tests, of tests that already failed when the
+    spec was approved and of listed tests ([gates] unrunnable_tests) are left out."""
     cfg = adapter.cfg
     later = later_step_tests(adapter, feature, covered)
     run, off = unrunnable.leave_out(cfg, adapter.run_tests(junit=cfg.out_dir / "step_suite.xml"))
@@ -394,8 +394,8 @@ REVIEW_TESTS = "review tests"
 #: ported two whole files, step 4 "needed no code change", and its gate ran the whole suite
 #: again (4.5 min) on the code the gate before it had just checked.
 IDLE_NOTE = (
-    "Nothing changed since the last green step gate (same commit, clean tree): lint, the "
-    "frame check and the whole suite are that gate's results; only this step's tests ran."
+    "Nothing changed since the last green step gate (same commit, clean tree): lint and the "
+    "frame check are that gate's results; only this step's tests ran."
 )
 
 
@@ -458,7 +458,7 @@ def checks(
 ) -> list[Check]:
     tag = frame_diff.approved_tag(feature)
     # an idle step (scope "idle"): the code is the one the last green gate checked, so only
-    # the step's own tests are new; lint, the frame check and the whole suite are its results
+    # the step's own tests are new; lint and the frame check are its results
     idle = scope == "idle"
     c = [] if idle else lint_checks(adapter, feature)
     if not idle:
@@ -533,7 +533,7 @@ def checks(
     return c
 
 
-#: under a failed check whose tool gave no result
+#: under a check whose tool gave no result (it crashed, was cut short): NOT MEASURED, not FAIL
 TOOL_FAILURE_NOTE = (
     "TOOL FAILURE: the tool gave no result; this says nothing about the code or the tests"
 )
@@ -569,7 +569,8 @@ class GateReport:
     results: dict[str, str] = field(default_factory=dict)
     #: final scope: the structure report (file sizes, longest methods; structure.Structure)
     structure: dict[str, object] = field(default_factory=dict)
-    #: failed checks whose tool gave no result (CheckResult.tool_failure): no agent can fix them
+    #: checks whose tool gave no result (CheckResult.tool_failure): shown as NOT MEASURED (also
+    #: in `not_measured`), never in `failed`; the final gate asks whether to run them again
     tool_failures: list[str] = field(default_factory=list)
     #: final scope, a port: each target file against its reference file (references.fidelity)
     fidelity: dict[str, object] = field(default_factory=dict)
@@ -637,8 +638,8 @@ def gate_report(
         if adapter.cfg.unrunnable_tests:
             # said at every final gate: a green result says nothing about these tests
             emit(
-                "Tests this machine cannot run ([gates] unrunnable_tests; a failure of one "
-                "is left out):"
+                "Listed tests ([gates] unrunnable_tests: this machine cannot run them, or "
+                "they were red before any task; a failure of one is left out):"
             )
             for line in unrunnable.listed_lines(adapter.cfg):
                 emit(line)
@@ -669,17 +670,19 @@ def gate_report(
         except Exception as e:  # a crashing check must fail the gate, not the runner
             res = CheckResult("FAIL", f"check crashed: {type(e).__name__}: {e}")
         durations[check.name] = round(time.monotonic() - t0, 1)
+        if res.status == "FAIL" and res.tool_failure:
+            # no result is no verdict: NOT MEASURED, and the final gate asks about it
+            tool_failures.append(check.name)
+            text = res.output.strip()
+            long = len(text.splitlines()) > OUTPUT_LINES
+            log = save_full_output(adapter, feature, check.name, text) if long else ""
+            parts = (TOOL_FAILURE_NOTE, res.summary, f"full output: {log}" if log else "")
+            res = CheckResult(NOT_MEASURED, res.output, "; ".join(x for x in parts if x))
         results[check.name] = res.status + (f": {res.summary}" if res.summary else "")
         emit(f"[{res.status}] {check.name}")
         out = res.output.strip()
         if res.status == "FAIL":
             failed.append(check.name)
-            if res.tool_failure:
-                tool_failures.append(check.name)
-                results[check.name] = "FAIL: tool failure" + (
-                    f": {res.summary}" if res.summary else ""
-                )
-                emit(f"  {TOOL_FAILURE_NOTE}")
             if res.summary:
                 emit(f"  {res.summary}")
             full_outputs[check.name] = out
