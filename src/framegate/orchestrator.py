@@ -476,7 +476,9 @@ TASKS = {
     "final-gate failure, "
     "permission denial, assumption and parked item, "
     "with item IDs. Address every ID in {out}/{f}/retro_proposals.md (a proposal, or the "
-    "'Not acted on' list with a one-line reason). More detail: {out}/events.jsonl (feature={f}), "
+    "'Not acted on' list with a one-line reason). Its sections 'Run state' (a run that stopped "
+    "before DONE) and 'Chat' (what the chat asked the user, was told, did by hand, refused) "
+    "have no IDs: use them as evidence. More detail: {out}/events.jsonl (feature={f}), "
     "{out}/{f}/, {out}/runs/*{f}*.json.",
 }
 
@@ -3696,7 +3698,7 @@ class Orchestrator:
         return True
 
     # ---------- RETRO ----------
-    def write_retro_input(self, feature: str) -> list[str]:
+    def write_retro_input(self, feature: str, stopped: str = "") -> list[str]:
         """{out}/{f}/retro_input.md; returns the item IDs the proposals must address."""
         d = self.fdir(feature)
         review = d / "review.md"
@@ -3708,6 +3710,7 @@ class Orchestrator:
             notes,
             self.assumptions(feature),
             archive.read_text(encoding="utf-8") if archive.is_file() else "",
+            stopped,
         )
         # what earlier retros proposed: the retro names a problem it sees again
         earlier = backlog.retro_section(self.cfg)
@@ -3719,8 +3722,56 @@ class Orchestrator:
         f = self.fdir(feature) / "retro_proposals.md"
         return missing_ids(f.read_text(encoding="utf-8") if f.is_file() else "", ids)
 
-    def phase_retro(self, feature: str, prog: dict[str, Any]) -> None:
-        ids = self.write_retro_input(feature)
+    def stopped_text(self, feature: str, prog: dict[str, Any]) -> str:
+        """Where a run that did not reach DONE stands and why, for the retro."""
+        w, i = prog.get("waiting") or {}, prog.get("interrupted") or {}
+        why = (
+            f"it waits at the {w.get('gate')} gate, not decided"
+            if w.get("kind") == "gate"
+            else f"interrupted ({i.get('how')})"
+            if i
+            else "no run is active; the last progress lines say what ended it"
+        )
+        where = " / ".join(str(x) for x in (prog.get("phase"), prog.get("sub")) if x)
+        log = self.fdir(feature) / PROGRESS_LOG
+        text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
+        last = text.splitlines()[-8:]
+        return (
+            f"The run reached {where} of {' -> '.join(PHASES)}: {why}. "
+            f"Steps done: {len(prog.get('completed_steps') or [])}; parked items: "
+            f"{len(prog.get('parked') or [])}. Say in the proposals what stopped it and what "
+            "would have let it finish.\n\nLast progress lines:\n"
+            + ("\n".join(f"    {x}" for x in last) or "    (none)")
+        )
+
+    def retro(self, feature: str) -> int:
+        """`framegate retro`: the retro of a run that stopped before DONE (abandoned, a cap,
+        an error). Only retro_input.md and retro_proposals.md are written: no metrics row, no
+        commit, and progress.json is put back as it was."""
+        if not tag_exists(self.cfg, f"spec-approved/{feature}"):
+            raise WorkflowError(f"Spec not approved: nothing to look back on in {feature}.")
+        if load_progress(self.cfg, feature)["phase"] in ("RETRO", "DONE"):
+            raise WorkflowError(
+                f"{feature} passed the final gate: `framegate run {feature}` does the retro "
+                f"(after finish --no-retro: `framegate approve {feature}` first)."
+            )
+        self.take_run_lock(feature)
+        prog = load_progress(self.cfg, feature)  # after the lock: a stale one is recorded there
+        try:
+            with procs.stop_signals():
+                work = {**prog, "feedback": "", "attempt": 0}
+                self.retro_agent(feature, work, self.stopped_text(feature, prog))
+        except KeyboardInterrupt:
+            return EXIT_INTERRUPTED
+        finally:
+            save_progress(self.cfg, feature, prog)
+            clear_phase(self.cfg)
+            procs.remove_lock(self.cfg.out_dir)
+        self.echo(f"Retro proposals: {self.cfg.paths.out}/{feature}/retro_proposals.md")
+        return EXIT_OK
+
+    def retro_agent(self, feature: str, prog: dict[str, Any], stopped: str = "") -> None:
+        ids = self.write_retro_input(feature, stopped)
         self.agent("RETRO", feature, prog, self.task_text("RETRO", feature))
         missing = self.retro_missing(feature, ids)
         first = list(missing)
@@ -3751,6 +3802,9 @@ class Orchestrator:
                 f"WARNING: retro_proposals.md still doesn't address {', '.join(missing)} "
                 f"(see {self.cfg.paths.out}/{feature}/retro_input.md).",
             )
+
+    def phase_retro(self, feature: str, prog: dict[str, Any]) -> None:
+        self.retro_agent(feature, prog)
         prop = self.fdir(feature) / "retro_proposals.md"
         again = backlog.note_repeats(
             self.cfg, feature, prop.read_text(encoding="utf-8") if prop.is_file() else ""

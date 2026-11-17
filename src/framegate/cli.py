@@ -33,6 +33,8 @@ commands:
   run <feature>           advance to the next human gate (tests, final) or DONE; no other stops
   status [<feature>] [--brief]   progress and which gate is waiting; no feature: all
                           features; --brief: short state + last progress lines (for the chat)
+  status --all            every open task on this machine (any repository): mode, phase,
+                          last activity; stale = none for 14 days
   watch <feature>         live view: print new progress lines until the run ends
   wake <feature>          a run that waits for the usage limit tries again now (the limit
                           was refilled, or lifted before the time claude named)
@@ -42,6 +44,10 @@ commands:
   answer <feature>        after writing out/<f>/answers.md: tests gate -> writer + reviewer
                           re-run; final gate -> the next run redoes the parked items
   finish <feature> --no-retro      final gate -> DONE without the retro
+  retro <feature>         the retro of a run that stopped before DONE (abandoned, a cap, an
+                          error): any phase after "spec OK"; the task's state stays as it is
+  note <feature> TEXT     one line of what happened in the chat (a question to the user and
+                          the reply, something done by hand, a refusal), for the retro
   learn <feature> K1 [K3 ...|all]  add the retro's project-knowledge proposals you accept to
                           the knowledge file ([project] knowledge), committed
   keep <feature> 1 3 [...|take|all|none]  record which retro proposals you accept in the
@@ -140,8 +146,20 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["python", "dotnet", "generic"],
         help="default: detected (generic: any other language, configured in framegate.toml)",
     )
-    for name in ("spec-check", "run", "approve", "spec-brief", "watch", "gate-summary", "wake"):
+    for name in (
+        "spec-check",
+        "run",
+        "approve",
+        "spec-brief",
+        "watch",
+        "gate-summary",
+        "wake",
+        "retro",
+    ):
         sub.add_parser(name).add_argument("feature")
+    p = sub.add_parser("note", help="one line of what happened in the chat, for the retro")
+    p.add_argument("feature")
+    p.add_argument("text", nargs=argparse.REMAINDER)  # the rest as it is, also `-> ...`
     p = sub.add_parser("spec")
     p.add_argument("feature")
     p.add_argument(
@@ -158,6 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("status")
     p.add_argument("feature", nargs="?")
     p.add_argument("--brief", action="store_true", help="short state for the chat")
+    p.add_argument("--all", action="store_true", help="every open task on this machine")
     p = sub.add_parser("cleanup", help="delete out/<feature>/ and its run logs (DONE only)")
     p.add_argument("feature")
     p.add_argument("--tags", action="store_true", help="also delete the feature's tags")
@@ -300,6 +319,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             target = args.plugin_version or preflight.installed_plugin_version() or ""
             return preflight.run(None, target, update=True)
+        if args.command == "status" and args.all:
+            from framegate import preflight
+
+            return preflight.status_all()
         root = find_root()
         if root is not None:
             cfg = load_config(root)
@@ -421,7 +444,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             from framegate import preflight
 
             preflight.record_start(orch.cfg, f)  # a task approved by an older version
-            return orch.run(f)
+            code = orch.run(f)
+            note = preflight.version_note(cfg) if code == 0 else ""
+            if note:  # DONE: the update that waited for this task
+                print(note)
+            return code
+        if args.command == "retro":
+            return orch.retro(f)
+        if args.command == "note":
+            from framegate.retro import chat_note
+
+            return chat_note(cfg, f, " ".join(args.text))
         if args.command == "wake":
             from framegate.orchestrator import wake
 

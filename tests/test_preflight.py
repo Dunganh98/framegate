@@ -6,6 +6,7 @@ framegate pytest plugin 0.8.0; nothing re-ran `install-tools`, nothing noticed."
 
 from __future__ import annotations
 
+import datetime
 import json
 import pathlib
 from collections.abc import Callable
@@ -464,3 +465,59 @@ def test_update_keeps_nothing(
     plugin_on_disk(claude_home, V)
     assert cli.main(["status", "demo", "--brief"]) == 0
     assert "/framegate:update" not in capsys.readouterr().out
+
+
+def last_event(root: pathlib.Path, feature: str, days_ago: int) -> None:
+    ts = (datetime.datetime.now() - datetime.timedelta(days=days_ago)).isoformat()
+    line = json.dumps({"ts": ts, "feature": feature, "kind": "gate"})
+    (root / "out" / "events.jsonl").write_text(line + "\n", encoding="utf-8")
+
+
+def test_a_task_without_activity_for_14_days_no_longer_holds_the_update_back(
+    claude_home: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    elsewhere = tmp_path / "elsewhere"
+    entry = other_task(claude_home, elsewhere, "port-x", "IMPLEMENT")
+    last_event(elsewhere, "port-x", 13)
+    assert any(x.startswith("KEPT:") for x in check("demo", NEWER, start=tmp_path)[1])
+    last_event(elsewhere, "port-x", 14)
+    assert any(x.startswith("RUN:") for x in check("demo", NEWER, start=tmp_path)[1])
+    assert entry.exists()
+
+
+def test_status_all_is_one_table_of_the_open_tasks_of_this_machine(
+    demo_repo: DemoRepo,
+    claude_home: pathlib.Path,
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert demo_repo.af("approve-spec", "demo") == 0
+    elsewhere = tmp_path / "elsewhere"
+    other_task(claude_home, elsewhere, "old", "REVIEW")
+    last_event(elsewhere, "old", 20)
+    other_task(claude_home, tmp_path / "third", "finished", "DONE")
+    monkeypatch.chdir(tmp_path)  # no framegate project: the list is the machine's
+    capsys.readouterr()
+    assert cli.main(["status", "--all"]) == 0
+    head, *rows, legend = capsys.readouterr().out.splitlines()
+    assert head.split() == ["Repository", "Task", "Mode", "Phase", "Last", "activity"]
+    old, demo = sorted((row.split() for row in rows), key=lambda row: row[1] == "demo")
+    assert old[:4] == [str(elsewhere), "old", "?", "REVIEW"]
+    assert old[-4:] == ["(20", "d", "ago)", "stale"]
+    assert demo[1:4] == ["demo", "feature", "TESTS"] and "stale" not in demo
+    assert legend.startswith("stale: no activity for 14 days")
+
+
+def test_done_names_the_update_that_waited(
+    demo_repo: DemoRepo, claude_home: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    r = demo_repo
+    assert r.af("approve-spec", "demo") == 0
+    progress = r.root / "out" / "demo" / "progress.json"
+    progress.write_text(json.dumps({"phase": "DONE"}), encoding="utf-8")
+    plugin_on_disk(claude_home, NEWER)
+    capsys.readouterr()
+    assert r.af("run", "demo") == 0
+    done, note = capsys.readouterr().out.splitlines()[-2:]
+    assert done == "Feature demo: DONE." and "/framegate:update" in note
