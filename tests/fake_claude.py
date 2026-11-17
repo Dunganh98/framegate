@@ -6,6 +6,9 @@ scenario file, and prints the result: `--output-format stream-json` -> one JSON 
 (system init, one assistant message per API turn, the result last), else the single result object
 of `--output-format json`.
 
+An IMPLEMENT run appends one line to every file in FRAMEGATE_STEP_DOCS (the documentation
+files the approved plan names for its step), whatever the scenario says.
+
 Scenario keys:
   questions_in: list of phases that ask one question in their first run (TESTS, TEST_REVIEW,
     ...: questions.md, then the normal work; IMPLEMENT: questions.md only = a park request)
@@ -318,6 +321,7 @@ def main() -> int:
         call = {
             "phase": phase,
             "agent_env": os.environ.get("FRAMEGATE_AGENT"),
+            "step_docs": os.environ.get("FRAMEGATE_STEP_DOCS"),
             # what an agent's shell would see (framegate.agent_env)
             "env": {
                 "python": shutil.which("python"),
@@ -453,6 +457,10 @@ def main() -> int:
             body = "Verdict: OK\n\n## Objections\nNone.\n"
         write("out/demo/test_review.md", body)
     elif phase == "IMPLEMENT":
+        # the documentation files the approved plan names for this step: one line each
+        for doc in json.loads(os.environ.get("FRAMEGATE_STEP_DOCS") or "[]"):
+            old = pathlib.Path(doc).read_text(encoding="utf-8") if os.path.isfile(doc) else ""
+            write(doc, old + f"written in IMPLEMENT run {runs[phase]}\n")
         path = pathlib.Path(lang["impl"])
         cur = path.read_text(encoding="utf-8") if path.is_file() else ""
         # one step ("plan step 2") or a batch ("plan steps 1, 2 in one go"): the last one counts

@@ -18,6 +18,9 @@ from an older template) is not checked.
   source file that holds one of the frame check's forbidden patterns (suppressions, skips).
   Seen live (runner-skeleton): a suppression comment written into a stub during the spec
   dialogue surfaced only at a step gate, where nobody could fix it.
+- Files a plan step names that the implementer cannot write (plan_files.py): a documentation
+  file becomes writable for that step, anything else is a problem. Seen live: a step said
+  "update docs/xyz.md", the write guard blocked it and the step parked.
 """
 
 from __future__ import annotations
@@ -322,9 +325,10 @@ def problems(cfg: Config, feature: str, adapter: LanguageAdapter | None = None) 
     """Everything the spec check finds; [] = fine. With the adapter also the forbidden
     markers in the stubs."""
     from framegate import references  # it reads the spec tables with this module
-    from framegate.checks import red_stubs
+    from framegate.checks import plan_files, red_stubs
 
     return [
+        *(plan_files.problems(adapter, feature) if adapter is not None else []),
         *references.spec_problems(cfg, feature),
         *red_stubs.green_problems(_read(cfg.spec_dir(feature) / "requirements.md")),
         *spec_id_problems(cfg, feature),

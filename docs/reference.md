@@ -25,7 +25,7 @@ a terminal.
 | `framegate doctor [--full] [--tree] [--brief]` | check the setup without agents; ends with a verdict and only what needs action (`--brief`: only that); `--full` also runs the whole test suite; `--tree` runs it too and says what is red on the code as it is ("The tree at setup" below) | after setup or config changes; `--tree` once per repo, in `/framegate:setup` |
 | `framegate commit-setup [--dry-run] [PATH ...]` | the files the setup wrote, in one commit of their own ("The tree at setup" below); `--dry-run` only lists them | last step of `/framegate:setup` |
 | `framegate spec <f> [--mode feature\|bugfix\|refactor]` | create the branch `feat/<f>` and open the spec phase with the mode's templates | start of a feature |
-| `framegate spec-check <f>` | mechanical checks of the spec tables and the stubs (below); lists the setup files the approval commits; exit 1 on a problem | internal |
+| `framegate spec-check <f>` | mechanical checks of the spec tables, the stubs and the files the plan steps name (below); lists the setup files the approval commits and the documentation files the plan makes writable; exit 1 on a problem | internal |
 | `framegate port-stubs <f> [--force]` | a port: write the stubs of its code files from the reference (text kept, function bodies replaced; python); lists imports that will not resolve here ("References and ports") | internal (spec dialogue of a port) |
 | `framegate approve-spec <f> [--force]` | spec-check, `[env] refresh`, then freeze the spec and the setup files ("spec OK"); restarts the feature if the spec changed later | gate 1 |
 | `framegate run <f>` | run the agents until the next human gate or DONE | after every decision |
@@ -1283,6 +1283,37 @@ reads columns of the spec templates' tables; a spec without them is not checked:
   whole) that matches one of the frame check's forbidden patterns (`[frame]
   forbidden_patterns`, else the adapter's: `noqa`, `type: ignore`, `#pragma warning disable`,
   ...) is reported with file and line. The frame check would reject it at every step gate.
+- Files a plan step names (`checks/plan_files.py`): every path-like word of a
+  `## Step N:` section of plan.md that the implementer cannot write. Seen live (a replay
+  pilot, 2 of 3 runs): a step said "update docs/xyz.md", the write guard blocked the
+  implementer and the step parked.
+  - A **documentation file** becomes writable for the implementer while it runs that step:
+    a `README` / `CHANGELOG` (`.md`, `.rst`, `.txt`) or a `.md` / `.rst` file under a folder
+    called `docs` or `doc`. Never: a path in a dot folder (`.claude/`, `.github/`,
+    `.framegate/`), the tests, the specs, the out and metrics folders, the code map, the
+    knowledge file, `CLAUDE.md` / `AGENTS.md` anywhere, a machine file, a setup file, a
+    deploy / CI file, and every path the frame check protects (`[protected] extra` /
+    `paths`). `spec-check` prints them: `Documentation files the plan makes writable
+    (frozen with the spec): step 2: docs/guide.md`.
+  - Anything else the implementer cannot write is a problem, per step: `plan.md, Step 2:
+    names tests/test_x.py, which the implementer cannot write ...`, with what to do (tests:
+    the test writer's; a deploy / CI file: "Pipeline follow-up"; a setup file: change it in
+    the spec phase; else one line under `## To do by hand` at the end of plan.md, which is
+    no step and for the user). A file the step only reads: `(read only)` after its name. A
+    `README` / `CHANGELOG` without its file name is a problem too (write the path).
+  - Counted as a file: a word with a letter suffix that exists in the repository, lies in
+    an existing top folder, or has a documentation or deploy / CI name. Paths in the spec
+    folder (the step's sources), web addresses and names such as `e.g` or `Parser.parse`
+    are left out. Not seen: a folder ("the docs"), a glob, a file without a suffix.
+  - The list is frozen with the approval: the run reads plan.md at the
+    `spec-approved/<f>` marker, so a spec update or an edit of plan.md makes nothing new
+    writable. For an implementer run of plan steps the orchestrator puts that step's list
+    into the agent's environment (`FRAMEGATE_STEP_DOCS`, a JSON list) and into its task;
+    the write guard allows a listed file in the `IMPLEMENT` phase only, for an agent of
+    the run only, and checks the rule again. Review-fix runs and every other role get no
+    list. The files are committed with the step's code and set aside with it when the
+    step parks (they are in the parked diff). The frame check needs no rule for them: a
+    file it protects is never a documentation file here.
 `spec-check` also prints `Setup files changed (committed with the spec): ...` and reports
 uncommitted protected files that are not setup files (`approve-spec` refuses on those even
 with `--force`).
@@ -1388,7 +1419,9 @@ the hook JSON on stdin, exit 0 silently without `framegate.toml` or `.phase`, an
 2. The write protection holds for every session while a phase is set, the chat included; in the
 SPEC phase the chat may also write the setup files and `out/<f>/spec_brief.md` ("The spec phase
 covers the setup" above); a deploy / CI file (the built-in names, `[protected] extra`) is
-refused in every phase but the pipeline task's. A path outside the repository is blocked only for the agents of a run
+refused in every phase but the pipeline task's. The implementer of a plan step may also write
+the documentation files the approved plan names for that step ("Files a plan step names"
+under the spec check). A path outside the repository is blocked only for the agents of a run
 (`FRAMEGATE_AGENT` set): a chat session keeps writing its own files there (memory, scratch);
 a `[references]` folder is read-only for both. Shell calls: only plain single commands are pre-approved, so a pipe (`dotnet test ... |
 Select-String`), a `;` / `&&` / `||` chain, several lines, or a `cd` / env-variable prefix would

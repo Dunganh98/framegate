@@ -9,6 +9,15 @@
      names where the new code goes instead: "New file: <path> (<what goes there>)". Seen live:
      two steps added to files of 1,093 and 835 lines, and the split cost a fix run after the
      review. `framegate spec-brief` lists the files that are over the limit.
+     Files a step names: only what its implementer can write. That is the source folders,
+     and documentation files (.md / .rst under a docs folder, README, CHANGELOG): one that a
+     step names by its path ("docs/usage.md", not "the docs") becomes writable for that step
+     when the spec is approved, and no other later. Tests, specs, setup, deploy / CI and
+     workflow files never go into a step; a file the step only reads gets "(read only)"
+     after its name. `framegate spec-check` lists what does not fit. Seen live: a step said
+     "update docs/xyz.md", the implementer could not write it and the step parked. What the
+     user must change by hand in this repository goes under "## To do by hand" after the
+     last step ("- <file>: <what> (<why>)").
      A port (requirements.md, "Ported from"): the steps follow the FILES, not the spec IDs.
      One step per `code` target file, in import order (leaf modules first: a file comes
      after the files it imports); a step's "Covers:" IDs are the ones its file serves, and
