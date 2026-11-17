@@ -148,6 +148,8 @@ def claude_driver(lay: Layout, c: Candidate, caps: Caps, src: pathlib.Path) -> d
     prompt = lay.driver / "DRIVER.md"
     prompt.write_text(instructions(lay, c, caps, src), encoding="utf-8")
     cmd = [claude_exe(), "-p", "--output-format", "json", "--permission-mode", "acceptEdits"]
+    # the driver only follows rules: a small model does (FRAMEGATE_REPLAY_DRIVER_MODEL)
+    cmd += ["--model", os.environ.get("FRAMEGATE_REPLAY_DRIVER_MODEL") or "sonnet"]
     cmd += ["--allowedTools", DRIVER_TOOLS]
 
     def spend() -> tuple[float, float]:

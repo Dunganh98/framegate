@@ -85,6 +85,8 @@ A file with a mistake is refused with the line and what is wrong.
 
 `FRAMEGATE_REPLAY_PLUGIN=<folder>` makes the chat load the plugin from that folder (a checkout's
 `plugin/`) instead of the installed one: for measuring a version before its release.
+`FRAMEGATE_REPLAY_CHAT_MODEL=<model>` sets the chat's model (default: yours);
+`FRAMEGATE_REPLAY_DRIVER_MODEL` the driver's (default: `sonnet`).
 
 ## What you get
 
