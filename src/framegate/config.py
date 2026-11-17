@@ -787,9 +787,11 @@ def _str_list(where: str, value: Any) -> list[str]:
     return list(value)
 
 
-def _unrunnable_tests(value: list[Any]) -> dict[str, str]:
+def _unrunnable_tests(root: pathlib.Path, value: list[Any]) -> dict[str, str]:
     """[gates] unrunnable_tests = [{ test = "...", reason = "..." }]: test -> reason. Both are
-    needed: an entry without a reason would hide a red test without saying why."""
+    needed: an entry without a reason would hide a red test without saying why. The test
+    names its file (`tests/test_x.py` or `tests/test_x.py::test_connect`): a bare test name
+    would match every test of that name."""
     where = "[gates] unrunnable_tests"
     out: dict[str, str] = {}
     for n, entry in enumerate(value, 1):
@@ -801,7 +803,14 @@ def _unrunnable_tests(value: list[Any]) -> dict[str, str]:
             raise ConfigError(shape)
         if not test.strip() or not reason.strip():
             raise ConfigError(f"{where}: entry {n} needs a test and a reason, neither empty")
-        out[test.strip()] = reason.strip()
+        test = test.strip().replace("\\", "/")
+        file = pathlib.PurePosixPath(test.partition("::")[0])
+        if not file.suffix or not (len(file.parts) > 1 or (root / file).is_file()):
+            raise ConfigError(
+                f'{where}: entry {n} ("{test}") must name the test file: '
+                '"tests/db/test_x.py" or "tests/db/test_x.py::test_connect"'
+            )
+        out[test] = reason.strip()
     return out
 
 
@@ -952,7 +961,7 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
             raise ConfigError(f"[gates] {key} must be >= 1")
         setattr(cfg, key, value)
     cfg.regression_baseline = gates.get("regression_baseline", cfg.regression_baseline)
-    cfg.unrunnable_tests = _unrunnable_tests(gates.get("unrunnable_tests", []))
+    cfg.unrunnable_tests = _unrunnable_tests(root, gates.get("unrunnable_tests", []))
     for key, cmd in gates.get("commands", {}).items():
         if key == "format_fix":
             cfg.format_fix_command = _str_list("[gates.commands] format_fix", cmd)

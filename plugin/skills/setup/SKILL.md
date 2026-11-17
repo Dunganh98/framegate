@@ -230,7 +230,7 @@ the setup and running all tests once; on a large suite this takes a few minutes"
 failures and the warnings that need a decision, then the lines of the tree check (below).
 Fix every FAIL that is a config problem yourself and run it again until it says ready. Show
 the user the verdict line and, per remaining warning, one line with the decision and your
-default ("mutmut is not installed: mutation testing off until it is? Default: yes"). The
+default. The
 full output (`framegate doctor --tree`) on request.
 
 ### The tree as it is (once per project)
@@ -254,9 +254,9 @@ format / type checks once; you run nothing yourself. Go by the prefix of its lin
       2. tests.test_price::test_rounding: AssertionError: 10.01 != 10.0
       Reply "ok", or the number and the change ("2: needs the licence server").
 
-  After the answer write the confirmed entries to framegate.toml, one per test, file or
-  folder (a whole file or folder when all its tests fail for the same reason; `test` is the
-  name as printed, a pytest node ID, a file or a folder):
+  After the answer write the confirmed entries to framegate.toml. `test` names the file:
+  `tests/db/test_x.py::test_connect`, or the whole file when all its tests fail for the same
+  reason. A bare test name is refused:
 
       [gates]
       unrunnable_tests = [
@@ -281,7 +281,11 @@ format / type checks once; you run nothing yourself. Go by the prefix of its lin
   `/framegate:refactor cleanup-lint`? You can skip it: a task formats the files it touches
   anyway, the other files stay as they are." No question per file, no list of files.
 - `MUTATION:` (the mutation tool cannot run on this machine, e.g. WSL has no `python3`):
-  pass it on in one line, as printed.
+  decide it here. Make it run (the fix the line names; WSL: the default distribution is
+  tried first, then the others), or ask once: "Mutation testing cannot run here: <reason>.
+  Switch it off for this project?" On yes write `mutation_tool = "none"` under `[gates]` in
+  framegate.toml: off on purpose is no risk and no stop at the final gate. Left as it is,
+  every final gate says NOT MEASURED and stops, also with `final = "auto"`.
 - `LISTED:` lines: the tests the project already lists as not runnable here; name them once.
 - `Tree: green.`: say so in one line.
 

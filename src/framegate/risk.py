@@ -8,13 +8,14 @@ reason, shown on the final brief and logged (`risk` event) next to the human's d
 rating can be compared with what the human did before `[gates] final = "auto"` is switched on.
 
 Limits: `[risk]` in framegate.toml (config.Risk). A project without a measured diff coverage or
-mutation score is never low risk: there the frame proves less.
+mutation score is never low risk: there the frame proves less (but see mutation off below).
 
 One case apart: a check whose tool cannot run on this machine (NOT MEASURED, base.not_measured;
 e.g. mutmut on Windows without a WSL distribution that has Python). That says nothing about the
 feature, so it is no reason for `elevated`. It is no proof either: the risk line names it with
 its fix, and `[gates] final = "auto"` does not pass the gate without a stop (`Assessment.auto`).
-A check the config switched off is still a reason: there the project chose to prove less.
+Mutation testing switched off on purpose (`[gates] mutation_tool = "none"`, a decision of
+the setup) is no reason and no stop either.
 """
 
 from __future__ import annotations
@@ -83,7 +84,12 @@ class Assessment:
                 f"Risk: low for what was measured (clean run, small change); {missing}. "
                 'This gate stops for it also with [gates] final = "auto"'
             )
-        return "Risk: low (clean run, small change, coverage and mutation measured)" + (
+        proven = (
+            "coverage measured, mutation off by config"
+            if self.facts.get("mutation_off")
+            else "coverage and mutation measured"
+        )
+        return f"Risk: low (clean run, small change, {proven})" + (
             "" if auto else '; with [gates] final = "auto" this gate would not have stopped'
         )
 
@@ -191,7 +197,12 @@ def assess(
         reasons.append("the final gates did not run")
     elif not last.get("passed"):
         reasons.append("final gates failed: " + ", ".join(last.get("failed") or []))
+    mutation_off = (cfg.mutation_tool or "").lower() == "none"
+    if mutation_off:
+        facts["mutation_off"] = True
     for prefix, name in MEASURED.items():
+        if mutation_off and name == "mutation score":
+            continue  # the project's decision (setup), not a gap of this feature
         found = [res for check, res in results.items() if check.startswith(prefix)]
         if not last or any(res.startswith("PASS") for res in found):
             continue

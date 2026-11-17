@@ -13,8 +13,8 @@ The tests still run with the suite (on a machine that has the database they pass
 A failure of a listed test is left out of every gate, in every mode, and the final facts
 name the listed tests with their reason each time, so nobody reads "all green" into it.
 
-A `test` is a name as the test report prints it, a pytest node ID
-(`tests/test_db.py::test_connect`), a test file, or a folder of tests.
+A `test` names the file: a whole test file (`tests/test_db.py`) or one test in it
+(`tests/test_db.py::test_connect`). The config refuses a bare test name.
 """
 
 from __future__ import annotations
@@ -35,28 +35,17 @@ def _parts(text: str) -> list[str]:
     return [p for p in re.split(r"[.:/\\]+", head) if p]
 
 
-def entry_parts(cfg: Config, entry: str) -> list[str]:
-    """The name parts of a listed test. A file path loses its suffix, so
-    `tests/test_db.py` reads like the report's `tests.test_db`."""
-    path, sep, rest = entry.partition("::")
-    try:
-        is_path = "/" in path or "\\" in path or (cfg.root / path).is_file()
-    except OSError:
-        is_path = False
-    last = path.replace("\\", "/").rsplit("/", 1)[-1]
-    if is_path and "." in last:
-        path = path.rsplit(".", 1)[0]
-    return _parts(path + sep + rest)
-
-
 def matches(cfg: Config, case_name: str, entry: str) -> bool:
     """Is the test case (a name from the test report) the listed test, or inside the listed
-    file or folder? The entry's name parts must appear in the case's name, in a row."""
-    want, have = entry_parts(cfg, entry), _parts(case_name)
-    if not want:
-        return False
+    file? The entry's name parts (the file without its suffix, then the test) must appear in
+    the case's name in a row, or the case's name starts where the file's path ends (a .NET
+    report names `Shop.Tests.DbTests.Connects` for `tests/Shop.Tests/DbTests.cs`)."""
+    path, sep, rest = entry.partition("::")
+    want, have = _parts(path.rsplit(".", 1)[0] + sep + rest), _parts(case_name)
     n = len(want)
-    return any(have[i : i + n] == want for i in range(len(have) - n + 1))
+    if any(have[i : i + n] == want for i in range(len(have) - n + 1)):
+        return True
+    return any(have[: n - i] == want[i:] for i in range(1, n))
 
 
 def entry_of(cfg: Config, case_name: str) -> str | None:

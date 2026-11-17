@@ -376,7 +376,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             # for the spec brief: the user approves these with the spec
             print("Setup files changed (committed with the spec): " + (", ".join(setup) or "none"))
             # also for the brief: what the implementer may write beyond its source folders
-            print(plan_files.docs_line(plan_files.planned_docs(adapter, args.feature)))
+            print(plan_files.docs_line(adapter, args.feature))
             n = len(found) + (1 if stray else 0)
             print(f"Spec check: {n} problem(s)" if n else "Spec check: OK")
             return 1 if n else 0

@@ -38,7 +38,8 @@ HEADING = "Tree check (the code as it is, before any task):"
 RED_TESTS_ADVICE = (
     "  -> Per test: can this machine run it at all? No (it needs a database, a service, "
     "another operating system): propose an entry { test, reason } for [gates] "
-    "unrunnable_tests, and write it once the user confirmed. Yes: it is really red; "
+    "unrunnable_tests (test: its file, or file::test), and write it once the user "
+    "confirmed. Yes: it is really red; "
     "recommend fixing it first, as a bug fix (/framegate:bugfix <name>), before the first "
     "feature."
 )
@@ -149,7 +150,8 @@ def mutation_lines(tools: list[tuple[str, bool, str]]) -> list[str]:
     """`MUTATION:` when doctor's tool list says the mutation tool is not there (one line)."""
     return [
         f"MUTATION: {name.replace(' (mutation)', '')} cannot run on this machine: "
-        f"{detail.rstrip('.')}. The final gate will say that mutation testing did not run."
+        f"{detail.rstrip('.')}. Make it run (the fix), or the user decides: [gates] "
+        'mutation_tool = "none".'
         for name, found, detail in tools
         if "(mutation)" in name and not found
     ]

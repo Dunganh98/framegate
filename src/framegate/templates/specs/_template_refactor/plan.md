@@ -4,13 +4,8 @@
      every spec ID. Later steps need no "Covers:" line: in a refactor every step is checked
      with ALL the characterization tests, and each step runs on its own. Keep the steps small:
      one move, split or rename each; the code builds and every test passes after each.
-     Files a step names: only what its implementer can write. That is the source folders,
-     and documentation files (.md / .rst under a docs folder, README, CHANGELOG): one that a
-     step names by its path ("docs/layout.md", not "the docs") becomes writable for that
-     step when the spec is approved. Tests, specs, setup, deploy / CI and workflow files
-     never go into a step; a file the step only reads gets "(read only)" after its name.
-     `framegate spec-check` lists what does not fit. What the user must change by hand in
-     this repository goes under "## To do by hand" after the last step. -->
+     A Markdown docs file a step names by its path (README.md, CHANGELOG.md, .md under a
+     docs folder) becomes writable for that step when the spec is approved. -->
 
 ## Step 1: <short title>
 Covers: XXX-R-001, XXX-I-001

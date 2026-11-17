@@ -204,18 +204,20 @@ def test_not_measured_does_not_raise_the_risk_and_is_no_proof(rate: Any) -> None
         )
 
 
-def test_a_low_score_or_a_switched_off_check_still_raises_the_risk(rate: Any) -> None:
+def test_a_low_score_raises_the_risk_and_mutation_off_on_purpose_does_not(
+    rate: Any, demo_repo: DemoRepo
+) -> None:
     low = rate("FAIL: Mutation score 40.0% (2/5 killed), threshold 60%")
-    off = rate("SKIPPED: mutation testing disabled ([gates] mutation_tool)")
-    for a in (low, off):
-        assert not a.low and a.reasons == ["mutation score was not measured"]
-        assert a.not_measured == {} and "not_measured" not in a.as_dict()
+    assert not low.low and low.reasons == ["mutation score was not measured"]
     measured = rate("PASS: Mutation score 90.0%")
-    assert (
-        measured.low
-        and measured.auto
-        and "coverage and mutation measured" in measured.line(auto=True)
-    )
+    assert measured.auto and "coverage and mutation measured" in measured.line(auto=True)
+    # [gates] mutation_tool = "none": the setup's decision, no reason and no stop
+    demo_repo.set_toml("gates", "mutation_tool", '"none"')
+    adapter = Orchestrator(load_config(demo_repo.root)).adapter
+    event = gates_event("SKIPPED: mutation testing disabled ([gates] mutation_tool)")
+    off = risk.assess(adapter, "demo", {}, [event], 0, 0)
+    assert off.auto and off.reasons == []
+    assert "coverage measured, mutation off by config" in off.line(auto=True)
 
 
 def test_other_reasons_stand_and_the_line_keeps_them_apart(rate: Any) -> None:

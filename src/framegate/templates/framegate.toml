@@ -87,7 +87,7 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 #   { test = "tests/test_db.py", reason = "needs a PostgreSQL server" },   # another OS): a
 # ]                                # failure of one is left out of every gate, in every mode,
 #                                  # and the final summary names them with the reason. test =
-#                                  # a test name, a pytest node ID, a test file or a folder.
+#                                  # the test file, or file::test (no bare test name).
 #                                  # /framegate:setup finds them (framegate doctor --tree),
 #                                  # you confirm each one
 # coverage_timeout = 1800          # seconds per coverage run; killed -> "ERROR: test run incomplete"

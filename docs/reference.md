@@ -25,7 +25,7 @@ a terminal.
 | `framegate doctor [--full] [--tree] [--brief]` | check the setup without agents; ends with a verdict and only what needs action (`--brief`: only that); `--full` also runs the whole test suite; `--tree` runs it too and says what is red on the code as it is ("The tree at setup" below) | after setup or config changes; `--tree` once per repo, in `/framegate:setup` |
 | `framegate commit-setup [--dry-run] [PATH ...]` | the files the setup wrote, in one commit of their own ("The tree at setup" below); `--dry-run` only lists them | last step of `/framegate:setup` |
 | `framegate spec <f> [--mode feature\|bugfix\|refactor]` | create the branch `feat/<f>` and open the spec phase with the mode's templates | start of a feature |
-| `framegate spec-check <f>` | mechanical checks of the spec tables, the stubs and the files the plan steps name (below); lists the setup files the approval commits and the documentation files the plan makes writable; exit 1 on a problem | internal |
+| `framegate spec-check <f>` | mechanical checks of the spec tables and the stubs (below); lists the setup files the approval commits and the documentation files the plan makes writable; exit 1 on a problem | internal |
 | `framegate port-stubs <f> [--force]` | a port: write the stubs of its code files from the reference (text kept, function bodies replaced; python); lists imports that will not resolve here ("References and ports") | internal (spec dialogue of a port) |
 | `framegate approve-spec <f> [--force]` | spec-check, `[env] refresh`, then freeze the spec and the setup files ("spec OK"); restarts the feature if the spec changed later | gate 1 |
 | `framegate run <f>` | run the agents until the next human gate or DONE | after every decision |
@@ -119,7 +119,7 @@ not a FAIL: the setup works, the tree does not. After the verdict it prints plai
 | `PROBLEM: N test(s) fail on the untouched tree and are not listed:` then one line per test with the first line of its failure | red tests nobody decided about | per test: this machine cannot run it (it needs a database, a service, another operating system) -> proposes the entry, the user confirms, the chat writes it; else it is really red -> recommends a bug fix first (`/framegate:bugfix <name>`), before the first feature |
 | `PROBLEM: the whole suite did not run to the end` / `gave no per-test results` | nothing is known about the tests (doctor FAILs) | fixes the test command or `[gates] regression_timeout` first |
 | `DEBT: <check>: N line(s) in M file(s) (most in ...)` | a lint / format / typecheck / imports check fails on the code as it is; its size is the output lines that name a file | proposes ONE clean-up task (`/framegate:refactor <name>`) as a follow-up the user accepts or skips; no question per file |
-| `MUTATION: <tool> cannot run on this machine: <why>` | e.g. WSL has no `python3` (doctor's tool check; for mutmut in WSL it now asks WSL instead of waiting for the first mutation run) | says so in one line |
+| `MUTATION: <tool> cannot run on this machine: <why>` | e.g. WSL has no `python3` (doctor's tool check; for mutmut in WSL it now asks WSL instead of waiting for the first mutation run) | makes it run, or asks once and writes `[gates] mutation_tool = "none"` |
 | `Tree: green.` / `Tree: not green (see the lines above).` | the last line | |
 
 `[gates] unrunnable_tests` (`src/framegate/unrunnable.py`): tests this machine cannot run,
@@ -133,10 +133,9 @@ unrunnable_tests = [
 ]
 ```
 
-- `test` is a name as the test report prints it, a pytest node ID, a test file, or a folder
-  of tests; its name parts must appear in a test's name in a row (`tests/test_db.py` covers
-  `tests.test_db::test_connect[1]`; `Shop.Tests.DbTests` covers every method of that class).
-  `test` and `reason` are both required; anything else is a config error.
+- `test` names the file: a whole test file (`tests/test_db.py` covers
+  `tests.test_db::test_connect[1]`) or one test in it (`tests/test_db.py::test_connect`). A
+  bare test name (`test_connect`) is a config error, as is an entry without a `reason`.
 - The engine cannot tell "this machine lacks a database" from "really broken". The chat
   proposes, the user confirms, then the entry is written. Nothing is listed by itself.
 - The listed tests still run with the suite: where the database exists they pass and count.
@@ -1313,7 +1312,8 @@ PASSED (NOT MEASURED, the tool cannot run here: ...)`, and the `final_gates` eve
 check in `not_measured` (its `results` entry has the reason and the fix). No repair run and no
 question. The brief shows it with the scores and on the risk line; a pull request's
 description shows it with the reason. `framegate stats` marks the run (`PASS (not measured:
-...)`). A check the config leaves out (`mutation_tool = "none"`) stays SKIPPED.
+...)`). Mutation off on purpose (`[gates] mutation_tool = "none"`, written by the setup
+after the user confirmed) is SKIPPED: no risk reason, no stop.
 
 Spec check (`framegate spec-check <f>`, also the first step of `approve-spec`, which refuses
 while it finds something; `--force` approves anyway and logs `spec_check` with `forced`). It
@@ -1334,37 +1334,15 @@ reads columns of the spec templates' tables; a spec without them is not checked:
   whole) that matches one of the frame check's forbidden patterns (`[frame]
   forbidden_patterns`, else the adapter's: `noqa`, `type: ignore`, `#pragma warning disable`,
   ...) is reported with file and line. The frame check would reject it at every step gate.
-- Files a plan step names (`checks/plan_files.py`): every path-like word of a
-  `## Step N:` section of plan.md that the implementer cannot write. Seen live (a replay
-  pilot, 2 of 3 runs): a step said "update docs/xyz.md", the write guard blocked the
-  implementer and the step parked.
-  - A **documentation file** becomes writable for the implementer while it runs that step:
-    a `README` / `CHANGELOG` (`.md`, `.rst`, `.txt`) or a `.md` / `.rst` file under a folder
-    called `docs` or `doc`. Never: a path in a dot folder (`.claude/`, `.github/`,
-    `.framegate/`), the tests, the specs, the out and metrics folders, the code map, the
-    knowledge file, `CLAUDE.md` / `AGENTS.md` anywhere, a machine file, a setup file, a
-    deploy / CI file, and every path the frame check protects (`[protected] extra` /
-    `paths`). `spec-check` prints them: `Documentation files the plan makes writable
-    (frozen with the spec): step 2: docs/guide.md`.
-  - Anything else the implementer cannot write is a problem, per step: `plan.md, Step 2:
-    names tests/test_x.py, which the implementer cannot write ...`, with what to do (tests:
-    the test writer's; a deploy / CI file: "Pipeline follow-up"; a setup file: change it in
-    the spec phase; else one line under `## To do by hand` at the end of plan.md, which is
-    no step and for the user). A file the step only reads: `(read only)` after its name. A
-    `README` / `CHANGELOG` without its file name is a problem too (write the path).
-  - Counted as a file: a word with a letter suffix that exists in the repository, lies in
-    an existing top folder, or has a documentation or deploy / CI name. Paths in the spec
-    folder (the step's sources), web addresses and names such as `e.g` or `Parser.parse`
-    are left out. Not seen: a folder ("the docs"), a glob, a file without a suffix.
-  - The list is frozen with the approval: the run reads plan.md at the
-    `spec-approved/<f>` marker, so a spec update or an edit of plan.md makes nothing new
-    writable. For an implementer run of plan steps the orchestrator puts that step's list
-    into the agent's environment (`FRAMEGATE_STEP_DOCS`, a JSON list) and into its task;
-    the write guard allows a listed file in the `IMPLEMENT` phase only, for an agent of
-    the run only, and checks the rule again. Review-fix runs and every other role get no
-    list. The files are committed with the step's code and set aside with it when the
-    step parks (they are in the parked diff). The frame check needs no rule for them: a
-    file it protects is never a documentation file here.
+- Files a plan step names (`checks/plan_files.py`): no check. A step may mention any file.
+  A Markdown docs file it names by its path (`README.md`, `CHANGELOG.md`, `.md` under a
+  `docs` / `doc` folder; nothing the frame protects, no tests, specs, setup, deploy / CI,
+  workflow or dot-folder file) is writable for the implementer in that step; everything
+  else outside the source folders stays read-only. `spec-check` prints `Documentation files
+  the plan makes writable (frozen with the spec): step 2: docs/guide.md`. The run reads the
+  list from plan.md at the `spec-approved/<f>` marker and hands it to the write guard
+  (`FRAMEGATE_STEP_DOCS`); the files are committed with the step and set aside with it when
+  it parks.
 `spec-check` also prints `Setup files changed (committed with the spec): ...` and reports
 uncommitted protected files that are not setup files (`approve-spec` refuses on those even
 with `--force`).
@@ -1391,7 +1369,7 @@ reason for `elevated`: it says nothing about the feature. It is no proof either.
 shows `Risk: low for what was measured (...); mutation score NOT MEASURED: <reason>. Fix:
 <fix>` (or, next to real reasons, `Risk: elevated: <reasons>. Not a reason: ...`), the `risk`
 event has it in `not_measured`, and `[gates] final = "auto"` does not pass the gate without a
-stop. A score below the threshold and a check the config switched off are reasons as before.
+stop. A score below the threshold is a reason as before; `mutation_tool = "none"` is not.
 
 Several source folders: `[paths] src` takes one folder or a list (`["core", "autoload",
 "scenes"]`). The implementer may write all of them; the frame diff, the forbidden patterns,

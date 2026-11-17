@@ -81,23 +81,24 @@ def test_a_listed_test_needs_a_test_and_a_reason(demo_repo: DemoRepo) -> None:
             parse_config(root, {"gates": {"unrunnable_tests": bad}})
 
 
-def test_a_listed_test_is_a_name_a_node_id_a_file_or_a_folder(demo_repo: DemoRepo) -> None:
+@pytest.mark.parametrize("test", ["test_connect", "tests.test_db::test_connect", "tests/db"])
+def test_a_listed_test_without_its_file_is_refused(demo_repo: DemoRepo, test: str) -> None:
+    entry = {"test": test, "reason": "needs a database"}
+    with pytest.raises(ConfigError, match="must name the test file"):
+        parse_config(demo_repo.root, {"gates": {"unrunnable_tests": [entry]}})
+
+
+def test_a_listed_test_is_a_file_or_a_test_in_it(demo_repo: DemoRepo) -> None:
     cfg = load_config(demo_repo.root)
     name = "tests.db.test_pg.TestPool::test_connect[1]"
-    for entry in (
-        name,
-        "tests/db/test_pg.py::TestPool::test_connect",
-        "tests/db/test_pg.py",
-        "tests\\db\\test_pg.py",
-        "tests/db",
-        "tests/db/",
-    ):
+    for entry in ("tests/db/test_pg.py::TestPool::test_connect", "tests/db/test_pg.py"):
         assert unrunnable.matches(cfg, name, entry), entry
-    for entry in ("tests/db/test_my.py", "tests/test_pg.py", "test_pg.py::test_other", ""):
+    for entry in ("tests/db/test_my.py", "tests/test_pg.py", "tests/db/test_pg.py::test_other"):
         assert not unrunnable.matches(cfg, name, entry), entry
-    # a .NET name: namespace, class, method
-    assert unrunnable.matches(cfg, "Shop.Tests.DbTests.Connects(x: 1)", "Shop.Tests.DbTests")
-    assert not unrunnable.matches(cfg, "Shop.Tests.ApiTests.Connects", "Shop.Tests.DbTests")
+    # a .NET report names namespace.class.method: the end of the file's path
+    cs = "tests/Shop.Tests/DbTests.cs"
+    assert unrunnable.matches(cfg, "Shop.Tests.DbTests.Connects(x: 1)", cs)
+    assert not unrunnable.matches(cfg, "Shop.Tests.ApiTests.Connects", cs)
 
 
 # ---------- the gates leave a listed test's failure out ----------
@@ -253,7 +254,8 @@ def test_a_mutation_tool_that_cannot_run_here_is_one_line() -> None:
     ]
     assert tree_check.mutation_lines(tools) == [
         "MUTATION: mutmut cannot run on this machine: python3 not found in WSL (install it "
-        "in the distribution). The final gate will say that mutation testing did not run."
+        "in the distribution). Make it run (the fix), or the user decides: [gates] "
+        'mutation_tool = "none".'
     ]
     assert tree_check.mutation_lines([("mutmut (mutation)", True, "mutation off")]) == []
 
