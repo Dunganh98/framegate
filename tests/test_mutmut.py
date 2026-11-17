@@ -203,6 +203,9 @@ if cmd == "run":
         fh.write(" ".join(sys.argv[2:]))
     with open("addopts.txt", "w") as fh:
         fh.write(os.environ.get("PYTEST_ADDOPTS", ""))
+    if os.path.exists("setup.cfg"):
+        with open("setup.cfg") as src, open("setup_seen.txt", "w") as fh:
+            fh.write(src.read())
     print("\\r⠋ 0/7\\r⠼ 7/7  🎉 6 🙁 1\\n108.40 mutations/second")
     sys.exit(int(os.environ.get("FAKE_MUTMUT_RC", "0")))
 elif cmd == "results":
@@ -255,6 +258,19 @@ def test_runner_script_flow(fake_mutmut: pathlib.Path) -> None:
     a90 = adapter(fake_mutmut, {"gates": {"mutation_score": 90}})
     assert run_fake(a90, ["demo"])[0] == "FAIL"
     assert run_fake(a, ["other"])[1] == "No mutants generated for the changed files."
+
+
+def test_mutmut_is_told_the_source_folders(fake_mutmut: pathlib.Path) -> None:
+    """Seen live: packages at the root (no src/), and mutmut found nothing to mutate."""
+    own = "[flake8]\nx = 1\n"
+    (fake_mutmut / "setup.cfg").write_text(own, encoding="utf-8")
+    a = adapter(fake_mutmut, {"paths": {"src": ["orchestrator", "platform"]}})
+    mods = a._mutmut_modules(["orchestrator/a/b.py", "src/demo/x.py"])
+    assert mods == ["demo.x", "orchestrator.a.b"]  # as mutmut names them
+    run_fake(a, ["orchestrator.a.b"])
+    seen = (fake_mutmut / "setup_seen.txt").read_text(encoding="utf-8")
+    assert "[mutmut]\nsource_paths =\n    orchestrator\n    platform\n" in seen
+    assert (fake_mutmut / "setup.cfg").read_text(encoding="utf-8") == own  # put back
 
 
 def test_the_tests_find_the_repository_files_they_read(fake_mutmut: pathlib.Path) -> None:

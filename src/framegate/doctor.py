@@ -521,6 +521,22 @@ def run(
         secs = time.monotonic() - t0
         tree_lines = seen.lines
         add(Item(seen.status, "tree: whole test suite on the code as it is", seen.detail, secs))
+        if not any(x.startswith("MUTATION:") for x in tree_lines):
+            # the mutation tool is there: can it run? (seconds; found here, not at a final gate)
+            t0 = time.monotonic()
+            trial = adapter.mutation_trial()
+            if trial is not None:
+                ok = trial.status == "PASS"
+                add(
+                    Item(
+                        "OK" if ok else "FAIL",
+                        "mutation trial",
+                        trial.summary or trial.output,
+                        time.monotonic() - t0,
+                    )
+                )
+                if not ok:
+                    tree_lines.insert(-1, tree_check.mutation_failed(trial))
     elif full:
         t0 = time.monotonic()
         suite = adapter.run_tests(junit=cfg.out_dir / "doctor" / "whole_suite.xml")

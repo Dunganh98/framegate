@@ -133,8 +133,8 @@ NOT_MEASURED = "NOT MEASURED"
 def not_measured(reason: str, fix: str, log: str = "") -> CheckResult:
     """The check's tool cannot run on this machine, so nothing was measured. That is not a
     FAIL (it says nothing about the code or the tests) and not a SKIPPED (nobody chose to
-    leave the check out). The gate passes; the gate report, the brief and the risk line show
-    the reason and the one-line fix, and the risk rating is not raised for it (risk.py)."""
+    leave the check out). The gate passes; the gate report and the brief show the reason and
+    the one-line fix, and the risk is elevated for it (risk.py)."""
     return CheckResult(NOT_MEASURED, log, summary=f"{reason}. Fix: {fix}")
 
 
@@ -597,6 +597,17 @@ class LanguageAdapter(abc.ABC):
         files = sorted(f for f in changed if path_matches(f, allowed))
         return self.format_files(files, base_ref)
 
+    def fix_commands(self, files: Sequence[str]) -> tuple[list[list[str]], list[list[str]]]:
+        """(the linter's safe fixes, the formatter) for `files`, as format_files runs them."""
+        if not files:
+            return [], []
+        fmt = (
+            (self.configured_format_fix(list(files)) or self.format_fix_commands(list(files)))
+            if self.format_fix_enabled()
+            else []
+        )
+        return self.lint_fix_commands(list(files)), fmt
+
     def format_files(self, files: Sequence[str], base_ref: str | None = None) -> str:
         """Apply the linter's safe fixes to `files` (lint_fix_commands), then format them
         with the adapter's formatter (format_fix_enabled). `files`: posix, relative to the
@@ -611,12 +622,7 @@ class LanguageAdapter(abc.ABC):
             if (self.root / f).is_file()
             and (not self.source_suffixes or f.endswith(self.source_suffixes))
         ]
-        lint = self.lint_fix_commands(list(files)) if files else []
-        fmt = (
-            (self.configured_format_fix(list(files)) or self.format_fix_commands(list(files)))
-            if files and self.format_fix_enabled()
-            else []
-        )
+        lint, fmt = self.fix_commands(files)
         cmds = [*lint, *fmt]
         if not cmds:
             return ""
@@ -743,6 +749,12 @@ class LanguageAdapter(abc.ABC):
         only with the tests of `scope` (None = the whole suite); write survivors to
         <out>/<feature>/mutation_survivors.md. SKIPPED with a reason when the config leaves
         it out; `not_measured(reason, fix)` when the tool cannot run on this machine."""
+
+    def mutation_trial(self) -> CheckResult | None:
+        """`framegate doctor --tree`: a check in seconds, through the final gate's path, that
+        the mutation tool can run here (no mutant runs), so it fails at the setup and not at
+        the first task's final gate. None: this adapter has no trial."""
+        return None
 
     # ---------- frame ----------
     @abc.abstractmethod

@@ -282,12 +282,12 @@ format / type checks once; you run nothing yourself. Go by the prefix of its lin
   in 41 files, format: 12 files. Clean this up in one task after the setup:
   `/framegate:refactor cleanup-lint`? You can skip it: a task formats the files it touches
   anyway, the other files stay as they are." No question per file, no list of files.
-- `MUTATION:` (the mutation tool cannot run on this machine, e.g. WSL has no `python3`):
-  decide it here. Make it run (the fix the line names; WSL: the default distribution is
+- `MUTATION:` (the mutation tool cannot run here: doctor's tool check, or its trial of a few
+  seconds failed, e.g. the tests import the code under other names than mutmut gives it):
+  decide it here. The setup is not ready before. Make it run (the fix the line names; WSL: the default distribution is
   tried first, then the others), or ask once: "Mutation testing cannot run here: <reason>.
   Switch it off for this project?" On yes write `mutation_tool = "none"` under `[gates]` in
-  framegate.toml: off on purpose is no risk and no stop at the final gate. Left as it is,
-  every final gate says NOT MEASURED and stops, also with `final = "auto"`.
+  framegate.toml: off on purpose is no risk and no stop at the final gate.
 - `Tree: green.`: say so in one line.
 
 ### The state branch (after the tree is settled)

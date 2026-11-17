@@ -12,7 +12,7 @@ from framegate.adapters.base import Check, CheckResult, LanguageAdapter, TestSco
 from framegate.checks import mutation
 from framegate.config import load_config
 from framegate.gates import red_blockers
-from framegate.orchestrator import EXIT_GATE, Orchestrator
+from framegate.orchestrator import EXIT_GATE, Orchestrator, wants_rerun
 
 FAST = "[gates.commands]\nlint = []\nformat = []\ntypecheck = []\n"
 LEGACY = """\
@@ -177,11 +177,24 @@ def test_a_tool_failure_is_asked_not_repaired(
     assert len(asked) == 1 and "Default: yes, run them again." in items[asked[0] - 1]
     assert orch.must_ask("demo", r.progress()) == set(asked)  # the brief cannot leave it out
 
+    def run_again() -> list[str]:
+        (r.root / "out/demo/answers.md").write_text(
+            f"{asked[0]}. Yes, run them again.\n", encoding="utf-8"
+        )
+        assert r.af("answer", "demo") == 0
+        assert r.af("run", "demo") == EXIT_GATE
+        return orch.final_items("demo", r.progress())
+
+    # seen live: "run again" was the default a second time, with the same result
+    items = run_again()
+    asked = [i for i, x in enumerate(items, 1) if f"{name}: the tool gave no result again" in x]
+    assert len(asked) == 1 and "Default: finish without this check." in items[asked[0] - 1]
+    assert "/framegate:setup" in items[asked[0] - 1]
+    again = items[asked[0] - 1]
+    assert not wants_rerun([{"asked": again, "a": "Default"}])  # finish without it
+    assert not wants_rerun([{"asked": again, "a": "finish without the check"}])
+
     broken["now"] = False
-    (r.root / "out/demo/answers.md").write_text(
-        f"{asked[0]}. Yes, run them again.\n", encoding="utf-8"
-    )
-    assert r.af("answer", "demo") == 0
-    assert r.af("run", "demo") == EXIT_GATE
+    run_again()
     assert final_gates(r)[-1]["passed"] is True and final_gates(r)[-1]["tool_failures"] == []
     assert not orch.open_questions("demo")

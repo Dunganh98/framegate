@@ -8,9 +8,9 @@ import re
 import pytest
 
 from conftest import DemoRepo, git, marker
-from framegate import config_change, gates, red_tree, redo
+from framegate import config_change, gates, red_tree, redo, task_base
 from framegate.adapters import get_adapter
-from framegate.adapters.base import CheckResult, lines_beyond
+from framegate.adapters.base import CheckResult, changed_lines, lines_beyond
 from framegate.checks import frame_diff
 from framegate.config import load_config, parse_config
 from framegate.orchestrator import EXIT_GATE, Orchestrator
@@ -129,6 +129,27 @@ def test_formatting_debt_in_a_touched_file_is_fixed_with_the_work_and_counted(
     assert "OLD = [1, 2]" in text and "NEW = [3, 4]" in text
     assert adapter.format_beyond == {"src/demo/__init__.py": 2}  # the two OLD lines
     assert adapter.format_fix("spec-approved/demo") and adapter.format_beyond == {}
+
+    # the task's own lines: the OLD line the formatter rewrote is not one of them
+    lines = text.splitlines()
+    old, new = lines.index("OLD = [1, 2]") + 1, lines.index("NEW = [3, 4]") + 1
+    base = task_base.task_base(adapter, "spec-approved/demo")
+    assert base and base != "spec-approved/demo"
+    wrote = changed_lines(adapter.cfg, base, "src/demo/__init__.py")
+    assert wrote is not None and new in wrote and old not in wrote
+    found = [
+        f"src/demo/__init__.py:{old}:1: E1 from before",
+        f"src/demo/__init__.py:{new}:1: E2 the task's",
+    ]
+    mine = red_tree.in_changed(
+        adapter, {"src/demo/__init__.py"}, CheckResult("FAIL", "\n\n".join(found)), lambda f: wrote
+    )
+    assert mine.status == "FAIL" and "E2" in mine.output and "E1" not in mine.output
+    only_old = CheckResult("FAIL", found[0])
+    assert (
+        red_tree.in_changed(adapter, {"src/demo/__init__.py"}, only_old, lambda f: wrote).status
+        == "PASS"
+    )
 
     assert lines_beyond("a\nb =  1\nc\n", "a\nb = 1\nc\n", {2}) == 0
     assert lines_beyond("a\nb =  1\nc\n", "a\nb = 1\nc\n", {3}) == 1

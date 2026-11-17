@@ -32,7 +32,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from framegate import red_tree, references, unrunnable
+from framegate import red_tree, references, task_base, unrunnable
 from framegate.adapters.base import (
     NOT_MEASURED,
     Check,
@@ -41,6 +41,7 @@ from framegate.adapters.base import (
     TestCase,
     TestRun,
     TestScope,
+    changed_lines,
     incomplete_result,
     run_command,
 )
@@ -56,7 +57,7 @@ from framegate.config import Config
 from framegate.failure_filter import filter_failure_output
 from framegate.report import short_name
 from framegate.specs import baseline_on, feature_ids, plan_steps
-from framegate.state import load_progress, log_event, read_contested, read_reqs
+from framegate.state import load_progress, log_event, read_contested, read_reqs, tag_exists
 
 #: most lines of a failing check's output in the gate report (and so in the fix prompt)
 OUTPUT_LINES = 40
@@ -434,9 +435,29 @@ def task_files(adapter: LanguageAdapter, feature: str) -> set[str] | None:
     return set().union(*found) if found else None
 
 
+def task_lines(adapter: LanguageAdapter, feature: str) -> Callable[[str], set[int] | None]:
+    """file -> the lines the task wrote in it (None = all of it): changed since the spec
+    approval (else the tests approval), old lines the formatter rewrote left out
+    (task_base.py)."""
+    cfg = adapter.cfg
+    tags = (f"spec-approved/{feature}", frame_diff.approved_tag(feature)) if feature else ()
+    found: dict[str, set[int] | None] = {}
+    base: list[str | None] = []
+
+    def lines(rel: str) -> set[int] | None:
+        if not base:
+            marker = next((t for t in tags if tag_exists(cfg, t)), None)
+            base.append(task_base.task_base(adapter, marker))
+        if rel not in found:
+            found[rel] = changed_lines(cfg, base[0], rel) if base[0] else None
+        return found[rel]
+
+    return lines
+
+
 def lint_checks(adapter: LanguageAdapter, feature: str) -> list[Check]:
     """The lint / format / typecheck / imports checks. With `file_scoped_lint` they run on the
-    whole tree (mypy needs it) and a finding counts only in a file the task changed."""
+    whole tree (mypy needs it) and a finding counts only on a line the task wrote."""
     found = adapter.lint_checks(frame_diff.approved_tag(feature))
     if not adapter.file_scoped_lint:
         return found
@@ -444,7 +465,9 @@ def lint_checks(adapter: LanguageAdapter, feature: str) -> list[Check]:
     def scoped(check: Check) -> CheckResult:
         res = check.run()
         changed = task_files(adapter, feature)
-        return res if changed is None else red_tree.in_changed(adapter, changed, res)
+        if changed is None:
+            return res
+        return red_tree.in_changed(adapter, changed, res, task_lines(adapter, feature))
 
     return [Check(k.name, functools.partial(scoped, k), k.needs_green) for k in found]
 
@@ -516,7 +539,8 @@ def checks(
                 )
             elif cov is not None:
                 c.append(adapter.regression_check())
-            c += adapter.coverage_checks(tag, cov, cover_tests)
+            # diff coverage counts the task's own lines, not the ones the formatter rewrote
+            c += adapter.coverage_checks(task_base.task_base(adapter, tag) or tag, cov, cover_tests)
         c.append(Check("traceability", lambda: traceability.check(adapter, feature)))
         c.append(Check("test smells", lambda: test_smells.check(adapter, feature)))
         if cover_tests:

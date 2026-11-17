@@ -126,7 +126,9 @@ def test_mutation_check_runs_in_the_distribution_the_probe_found(
     a = wsl_adapter(tmp_path)
     seen: dict[str, Any] = {}
 
-    def finish(feature: str, modules: list[str], cmd: list[str], where: str) -> CheckResult:
+    def finish(
+        feature: str, modules: list[str], cmd: list[str], where: str, trial: bool = False
+    ) -> CheckResult:
         seen.update(cmd=cmd, where=where)
         return CheckResult("PASS", "")
 
@@ -192,25 +194,13 @@ def rate(demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch) -> Any:
     return run
 
 
-def test_not_measured_is_no_reason_for_risk_and_no_proof(rate: Any, demo_repo: DemoRepo) -> None:
+def test_a_configured_check_that_measured_nothing_raises_the_risk(
+    rate: Any, demo_repo: DemoRepo
+) -> None:
     a = rate(f"{NOT_MEASURED}: {REASON}. Fix: {FIX}")
-    assert a.low and a.reasons == []
-    assert a.not_measured == {"mutation score": f"{REASON}. Fix: {FIX}"}
-    assert not a.auto  # [gates] final = "auto" still stops
-    assert a.as_dict()["not_measured"] == a.not_measured
-    for auto in (True, False):
-        assert a.line(auto) == (
-            "Risk: low for what was measured (clean run, small change); mutation score "
-            f"NOT MEASURED: {REASON}. Fix: {FIX}. This gate stops for it also with [gates] "
-            'final = "auto"'
-        )
-    # other reasons stand, and the line keeps them apart
-    a = rate(f"{NOT_MEASURED}: {REASON}. Fix: {FIX}", parked=[{"label": "step 2"}])
-    assert not a.low and a.reasons == ["1 parked item(s)"]
-    assert a.line(auto=False) == (
-        "Risk: elevated: 1 parked item(s). Not a reason: mutation score NOT MEASURED: "
-        f"{REASON}. Fix: {FIX}"
-    )
+    assert a.reasons == [f"mutation score NOT MEASURED: {REASON}. Fix: {FIX}"]
+    assert not a.low and not a.auto
+    assert a.line(auto=True) == f"Risk: elevated: mutation score NOT MEASURED: {REASON}. Fix: {FIX}"
     low = rate("FAIL: Mutation score 40.0% (2/5 killed), threshold 60%")
     assert not low.low and low.reasons == ["mutation score was not measured"]
     measured = rate("PASS: Mutation score 90.0%")
@@ -275,12 +265,14 @@ def test_final_gate_shows_not_measured_and_auto_mode_stops(
     assert not [e for e in r.events() if e["kind"] == "final_repair"]  # nothing to repair
 
     rated = [e for e in r.events() if e["kind"] == "risk"][-1]
-    assert rated["level"] == "low" and rated["reasons"] == []
+    assert rated["level"] == "elevated"
+    assert rated["reasons"] == [f"mutation score NOT MEASURED: {REASON}. Fix: {FIX}"]
     assert rated["not_measured"] == {"mutation score": f"{REASON}. Fix: {FIX}"}
     waiting = r.progress()["waiting"]
     assert waiting["gate"] == "final"
     assert (
-        "risk low; not measured (the tool cannot run here): mutation score." in (waiting["message"])
+        "risk elevated; not measured (the tool cannot run here): mutation score."
+        in waiting["message"]
     )
     log = (r.root / "out/demo/progress.log").read_text(encoding="utf-8")
     assert f"final gates: PASSED; not measured: {name}" in log
@@ -290,7 +282,4 @@ def test_final_gate_shows_not_measured_and_auto_mode_stops(
     assert chat.gate_summary(Orchestrator(load_config(r.root)), "demo") == 0
     out = capsys.readouterr().out
     assert f"{name} NOT MEASURED: {REASON}. Fix: {FIX}" in out  # the facts under "Outcomes"
-    assert (
-        "Risk: low for what was measured (clean run, small change); mutation score "
-        f"NOT MEASURED: {REASON}. Fix: {FIX}. This gate stops"
-    ) in out
+    assert f"Risk: elevated: mutation score NOT MEASURED: {REASON}. Fix: {FIX}" in out

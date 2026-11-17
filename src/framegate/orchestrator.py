@@ -268,6 +268,24 @@ SAME_AS_RE = re.compile(r"^\W*same as item \d+\s*:\s*(.*)$", re.I | re.S)
 LEAVE_RE = re.compile(r"^\W*(?:default\W+)?(?:leave|keep)\b", re.I)
 
 
+def wants_rerun(items: list[dict[str, Any]]) -> bool:
+    """Does an answer to a final gates question (a tool that gave no result) ask to run the
+    final checks again? The default does for the first question ("Default: yes, run them
+    again"), not for the second one ("...gave no result again", default: finish without).
+    Seen live: "run them again" was taken, nothing ran, the same gate came back."""
+    for it in items:
+        asked, text = str(it.get("asked") or ""), str(it.get("a") or "")
+        if not asked.startswith(f"[{GATES_WHO}] "):
+            continue
+        if re.search(r"\b(finish|without|no)\b", text, re.I):
+            continue
+        if re.search(r"\b(run|again|yes)\b", text, re.I):
+            return True
+        if NO_CHANGE_RE.match(text) and "gave no result again" not in asked:
+            return True
+    return False
+
+
 def take_defaults(items: list[dict[str, Any]]) -> bool:
     """Do all the numbered answers take the default or keep things as they are ("Default:
     ...", "accept", "leave it", "No answer needed")? Such answers may still need work (a
@@ -3141,19 +3159,33 @@ class Orchestrator:
     def tool_failure_questions(self, feature: str) -> None:
         """A question at the final gate (always asked) for every final check whose tool gave
         no result in the last run: run the final gates again (any answer does), or approve
-        without that check."""
+        without that check. After a run again with the same result, running again is no
+        longer the default: the tool needs the setup."""
         last = [e for e in read_events(self.cfg, feature) if e.get("kind") == "final_gates"]
         names = (last[-1].get("tool_failures") if last else None) or []
         asked = "\n".join(self.open_questions(feature))
         out = self.cfg.paths.out
-        lines = [
-            f"{name}: the tool gave no result, so this check says nothing about the code or "
-            f"the tests (its output: {out}/{feature}/final_gates.md). Run the final checks "
-            "again? Options: yes, run them again; no, finish without this check (approve as "
-            "is). Default: yes, run them again."
-            for name in names
-            if f"] {name}: the tool gave no result" not in asked
-        ]
+        lines = []
+        for name in names:
+            again = len(last) > 1 and name in (last[-2].get("tool_failures") or [])
+            head = f"{name}: the tool gave no result" + (" again" if again else "")
+            if f"] {head}," in asked:
+                continue
+            what = f"{head}, so this check says nothing about the code or the tests (its " + (
+                f"output: {out}/{feature}/final_gates.md). "
+            )
+            if again:
+                what += (
+                    "Options: finish without this check (approve as is); repair the tool with "
+                    "/framegate:setup, then run the final checks again. Default: finish "
+                    "without this check."
+                )
+            else:
+                what += (
+                    "Run the final checks again? Options: yes, run them again; no, finish "
+                    "without this check (approve as is). Default: yes, run them again."
+                )
+            lines.append(what)
         if not lines:
             return
         with open(self.fdir(feature) / "open_questions.md", "a", encoding="utf-8") as fh:
@@ -4564,9 +4596,10 @@ class Orchestrator:
                         "gate": "final",
                         "ref": ref,
                         "then": {"phase": "REVIEW", "sub": "agent"},
-                        # a file-size answer needs the structure run even without a spec change
+                        # a file-size answer needs the structure run even without a spec
+                        # change, and "run them again" the final checks
                         "unchanged": {"phase": "REVIEW", "sub": "final"}
-                        if prog.get("structure_findings")
+                        if prog.get("structure_findings") or wants_rerun(items)
                         else {"phase": "SUMMARY", "sub": None},
                         "feedback": "",
                         "amend": True,
