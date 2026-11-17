@@ -71,7 +71,7 @@ def test_candidates_file_errors_name_the_line() -> None:
 
     assert str(e.value).splitlines() == [
         "line 3: unknown field 'comit' (known: repo, commit, kind, tests, pythonpath, python, "
-        "install, max-usd, max-hours)",
+        "install, setup, max-usd, max-hours)",
         "line 5: expected `- field: value` or `### Task`, got 'stray'",
         "line 1: candidate 'one' has no `- commit:`",
         "line 4: kind 'fix' is not one of feature, bugfix, refactor",
