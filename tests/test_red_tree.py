@@ -4,14 +4,16 @@ Seen in three of three replay runs (real commits of three repositories, replayed
 before them): tests, lint or format failed on the untouched tree, every step gate blamed the
 feature, and an approved fix that nobody could apply was redone on the same inputs.
 
+- Lint, format, typecheck and imports findings count only in files the task changed
+  (gates.lint_checks, red_tree.py).
 - [gates] regression_baseline (on for a bug fix, or where framegate.toml sets it):
-  `approve-spec` records what is red, the gates count only what is new (gates.py,
-  red_tree.py).
+  `approve-spec` records the tests that fail, the gates leave them out (gates.py).
 - Formatting debt in a file the task touches is fixed with the work and counted for the
   final summary.
 - The frame check counts a suppression by its text, not by its line (frame_diff.py).
-- `Fix owner: config`: framegate applies an approved framegate.toml change itself; a redo
-  whose gate inputs did not change is not run (redo.py).
+- `Fix owner: config`: framegate applies an approved framegate.toml change itself, unless it
+  weakens a check (config_change.py); a redo whose gate inputs did not change is not run
+  (redo.py).
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ import re
 import pytest
 
 from conftest import DemoRepo, git, marker
-from framegate import gates, red_tree, redo
+from framegate import config_change, gates, red_tree, redo
 from framegate.adapters import get_adapter
 from framegate.adapters.base import CheckResult, lines_beyond
 from framegate.checks import frame_diff
@@ -54,81 +56,43 @@ def phases(r: DemoRepo) -> list[str]:
     return [c["phase"] for c in r.calls()]
 
 
-def red_repo(r: DemoRepo) -> None:
-    """The demo repository with a test and two lint findings that fail before the task."""
+# ---------- lint / format / typecheck: only the files the task changed count ----------
+def test_a_finding_counts_only_in_a_changed_file(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    for name in ("old", "new"):
+        (r.root / "src" / "demo" / f"{name}.py").write_text("x = 1\n", encoding="utf-8")
+    adapter = get_adapter(load_config(r.root))
+    changed = {"src/demo/new.py"}
+    old = "F401 unused import\n --> src/demo/old.py:1:8\n  |\n1 | import os\n"
+    res = red_tree.in_changed(adapter, changed, CheckResult("FAIL", old))
+    assert res.status == "PASS" and "left out" in res.summary
+    new = "src/demo/new.py:3: X001 c"
+    res = red_tree.in_changed(adapter, changed, CheckResult("FAIL", f"{old}\n{new}\nFound 2."))
+    assert res.status == "FAIL" and new in res.output
+    assert "old.py" not in res.output and "F401" not in res.output
+    crash = CheckResult("FAIL", "the tool crashed")  # names no file: stays a failure
+    assert red_tree.in_changed(adapter, changed, crash) is crash
+
+
+def test_findings_from_before_the_task_do_not_fail_its_gates(demo_repo: DemoRepo) -> None:
+    """In every mode, without a record (seen live: every step parked, nothing built)."""
+    r = demo_repo
     (r.root / "tools").mkdir()
     (r.root / "tools" / "lint.py").write_text(LINT, encoding="utf-8")
     (r.root / "legacy").mkdir()
-    (r.root / "legacy" / "old.py").write_text("A = 1  # BAD\nB = 2  # BAD\n", encoding="utf-8")
-    (r.root / "tests" / "test_legacy.py").write_text(RED_TEST, encoding="utf-8")
+    (r.root / "legacy" / "old.py").write_text("A = 1  # BAD\n", encoding="utf-8")
     r.add_toml(COMMANDS)
     r.defer_tests_gate()
-    r.set_toml("gates", "regression_baseline", "true")
-
-
-# ---------- lint / format: only what is new counts ----------
-def test_a_failing_check_passes_while_no_file_has_more_findings(demo_repo: DemoRepo) -> None:
-    r = demo_repo
-    (r.root / "src" / "demo" / "old.py").write_text("x = 1\n", encoding="utf-8")
-    (r.root / "src" / "demo" / "new.py").write_text("y = 1\n", encoding="utf-8")
-    adapter = get_adapter(load_config(r.root))
-    then = {"src/demo/old.py": 2}
-    same = CheckResult("FAIL", "src/demo/old.py:1: X001 a\nsrc/demo/old.py:9: X001 b\nFound 2.")
-    res = red_tree.judge(adapter, then, same)
-    assert res.status == "PASS"
-    assert res.summary == (
-        "already there when the spec was approved (left out): 2 line(s) in 1 file(s)"
-    )
-    # a finding in a file that had none, beside the old ones: only that file counts
-    other = CheckResult("FAIL", same.output + "\nsrc/demo/new.py:3: X001 c")
-    res = red_tree.judge(adapter, then, other)
-    assert res.status == "FAIL" and res.summary.startswith("new in src/demo/new.py")
-    assert "src/demo/new.py:3: X001 c" in res.output and "old.py:1" not in res.output
-    assert "src/demo/new.py (now 1, then 0)" in res.output
-    # one more finding in a file that already had some
-    more = CheckResult("FAIL", same.output + "\nsrc/demo/old.py:12: X001 d")
-    res = red_tree.judge(adapter, then, more)
-    assert res.status == "FAIL" and "src/demo/old.py (now 3, then 2)" in res.output
-    # a failure that names no file, where files were named before, is another failure
-    crash = CheckResult("FAIL", "the tool crashed")
-    assert red_tree.judge(adapter, then, crash) is crash
-    assert red_tree.judge(adapter, {}, crash).status == "PASS"
-    # a tool failure and a pass are left as they are
-    broken = CheckResult("FAIL", "src/demo/old.py:1: X001 a", tool_failure=True)
-    assert red_tree.judge(adapter, then, broken) is broken
-
-
-def test_the_untouched_tree_is_recorded_and_the_run_is_not_blamed_for_it(
-    demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A red test and lint findings from before the task: recorded at the spec approval, the
-    step gate passes, the step is built (seen live: it parked, with nothing built)."""
-    r = demo_repo
-    red_repo(r)
     assert r.af("approve-spec", "demo") == 0
-    out = capsys.readouterr().out
-    assert "Already red on the untouched tree: 1 test(s); lint: 2 line(s) in 1 file(s)." in out
-    cfg = load_config(r.root)
-    assert red_tree.load(cfg, "demo") == {"lint": {"legacy/old.py": 2}}
-    (ev,) = [e for e in r.events() if e["kind"] == "lint_baseline"]
-    assert ev["checks"] == {"lint": {"files": 1, "lines": 2}}
-
     assert r.af("run", "demo") == EXIT_GATE
     assert r.progress()["completed_steps"] == [1] and not r.progress()["parked"]
-    step = next(e for e in r.events() if e["kind"] == "gate" and e["scope"] == "step")
-    assert step["passed"] and step["attempt"] == 1
-
-    # what the task adds still fails: one more finding in the old file, one in a new file
-    adapter = get_adapter(cfg)
-    (r.root / "legacy" / "old.py").write_text("A = 1  # BAD\nB = 2  # BAD\nC = 3  # BAD\n", "utf-8")
+    # a finding in a file the task changes fails, and only that file is shown
+    (r.root / "src" / "demo" / "extra.py").write_text("D = 4  # BAD\n", encoding="utf-8")
+    adapter = get_adapter(load_config(r.root))
     (lint,) = [c for c in gates.checks(adapter, "demo", "step", True) if c.name == "lint"]
     res = lint.run()
-    assert res.status == "FAIL" and "legacy/old.py (now 3, then 2)" in res.output
-    git(r.root, "checkout", "-q", "--", "legacy/old.py")
-    (r.root / "src" / "demo" / "extra.py").write_text("D = 4  # BAD\n", encoding="utf-8")
-    res = lint.run()
-    assert res.status == "FAIL" and "legacy/old.py" not in res.output
-    assert "src/demo/extra.py:1: X001" in res.output
+    assert res.status == "FAIL" and "src/demo/extra.py:1: X001" in res.output
+    assert "legacy/old.py" not in res.output
 
 
 def test_the_tests_of_the_task_are_never_on_the_list_of_old_failures(demo_repo: DemoRepo) -> None:
@@ -217,6 +181,30 @@ def test_a_rewrapped_suppression_is_not_a_new_one() -> None:
     assert frame_diff.new_suppressions(two, rx) == ["y = g()  # type: ignore"]
 
 
+# ---------- a framegate.toml change during a task ----------
+@pytest.mark.parametrize(
+    ("key", "old", "new", "weakens"),
+    [
+        ("gates.regression_timeout", 3600, 7200, False),
+        ("agents.max_attempts", 3, 5, False),
+        ("gates.diff_coverage", 80, 90, False),
+        ("gates.diff_coverage", None, 80, True),  # the default is 90
+        ("gates.mutation_tool", None, "none", True),
+        ("gates.regression_baseline", None, True, True),
+        ("gates.commands.lint", ["ruff", "check"], ["ruff", "check", "--exclude", "x"], True),
+        ("gates.commands.lint", ["ruff", "check"], ["python", "-m", "ruff", "check"], False),
+        ("gates.commands.typecheck", None, [], True),  # switched off
+        ("gates.unrunnable_tests", [], [{"test": "t", "reason": "r"}], True),
+        ("gates.unrunnable_tests", [{"test": "t", "reason": "r"}], [], False),
+        ("paths.tests", "tests", "tests/unit", True),  # on no list: weakening
+    ],
+)
+def test_which_config_changes_weaken_a_check(
+    key: str, old: object, new: object, weakens: bool
+) -> None:
+    assert config_change.weakens(key, old, new) is weakens
+
+
 # ---------- parked work that no implementer run can finish ----------
 def test_only_a_bare_approval_depends_on_the_fix_being_applied() -> None:
     assert redo.only_approves("")
@@ -285,19 +273,22 @@ def test_an_approved_config_fix_is_applied_by_framegate(demo_repo: DemoRepo) -> 
     out folder, framegate checks it, puts it in place (committed, tagged) and redoes the step
     with it; the frame check accepts the file as long as it is exactly that."""
     r = demo_repo
-    to_parked_config_fix(r, config_update="\n# set by the approved diagnosis\n")
+    to_parked_config_fix(r, config_update="\n[update]\ncheck = false\n")
     before = len(r.calls())
     approve_the_fix(r)
     update = next(c for c in r.calls()[before:] if c["phase"] == "SPEC_UPDATE")
     assert "write the whole new file to out/demo/config_update.toml" in update["prompt"]
     toml = (r.root / "framegate.toml").read_text(encoding="utf-8")
-    assert toml.endswith("# set by the approved diagnosis\n")
+    assert toml.endswith("[update]\ncheck = false\n")
     assert marker(r.root, "config-update/demo")
     assert not (r.root / "out/demo/config_update.toml").exists()
     assert "framegate.toml updated from answers ANS-1" in git(r.root, "log", "--format=%s")
     assert git(r.root, "status", "--porcelain", "--", "framegate.toml") == ""
     (ev,) = [e for e in r.events() if e["kind"] == "config_update"]
-    assert ev["applied"] is True
+    assert ev["applied"] is True and ev["changes"] == ["update.check: not set -> false"]
+    facts = final_facts("demo", [], {}, r.events(), [], "", "")
+    assert "## framegate.toml changed during the task" in facts
+    assert "- update.check: not set -> false" in facts
     # the step was redone and is green: the frame check accepted the changed config
     assert "IMPLEMENT" in phases(r)[before:]
     assert r.progress()["completed_steps"] == [1] and not r.progress()["parked"]
@@ -309,16 +300,30 @@ def test_an_approved_config_fix_is_applied_by_framegate(demo_repo: DemoRepo) -> 
     assert res.status == "FAIL" and "PROTECTED PATH CHANGED: framegate.toml" in res.output
 
 
-def test_a_proposed_config_that_does_not_load_is_not_applied(demo_repo: DemoRepo) -> None:
+@pytest.mark.parametrize(
+    ("proposal", "why"),
+    [
+        ("bad", "was not applied, the new file is not a valid config"),
+        (
+            "\n[frame]\nforbidden_patterns = []\n",
+            "was not applied, it weakens a check (frame.forbidden_patterns: not set -> []). "
+            "A task never does that: it belongs to the setup (/framegate:setup)",
+        ),
+    ],
+    ids=["invalid", "weakening"],
+)
+def test_a_config_that_does_not_load_or_weakens_a_check_is_not_applied(
+    demo_repo: DemoRepo, proposal: str, why: str
+) -> None:
     r = demo_repo
-    to_parked_config_fix(r, config_update="bad")
+    to_parked_config_fix(r, config_update=proposal)
     toml = (r.root / "framegate.toml").read_text(encoding="utf-8")
     before = len(r.calls())
     approve_the_fix(r)
     assert (r.root / "framegate.toml").read_text(encoding="utf-8") == toml
     assert not marker(r.root, "config-update/demo")
     notes = " ".join(r.progress()["spec_update_notes"])
-    assert "was not applied, the new file is not a valid config" in notes
+    assert why in notes
     assert "IMPLEMENT" not in phases(r)[before:]  # nothing changed: not redone
     (p,) = r.progress()["parked"]
     assert p["reason"] == "not redone: nothing changed since it parked"

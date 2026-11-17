@@ -25,6 +25,7 @@ failures, and skips coverage, diff coverage and mutation until the redo.
 
 from __future__ import annotations
 
+import functools
 import json
 import re
 import time
@@ -425,6 +426,29 @@ def review_tests(adapter: LanguageAdapter, feature: str, contested: list[str]) -
     )
 
 
+def task_files(adapter: LanguageAdapter, feature: str) -> set[str] | None:
+    """The files the task changed: since the tests approval, and since the spec approval
+    (the tests it wrote before that tag). None before both: nothing is known."""
+    tags = (frame_diff.approved_tag(feature), f"spec-approved/{feature}") if feature else ()
+    found = [s for tag in tags if (s := adapter.changed_since(tag)) is not None]
+    return set().union(*found) if found else None
+
+
+def lint_checks(adapter: LanguageAdapter, feature: str) -> list[Check]:
+    """The lint / format / typecheck / imports checks. With `file_scoped_lint` they run on the
+    whole tree (mypy needs it) and a finding counts only in a file the task changed."""
+    found = adapter.lint_checks(frame_diff.approved_tag(feature))
+    if not adapter.file_scoped_lint:
+        return found
+
+    def scoped(check: Check) -> CheckResult:
+        res = check.run()
+        changed = task_files(adapter, feature)
+        return res if changed is None else red_tree.in_changed(adapter, changed, res)
+
+    return [Check(k.name, functools.partial(scoped, k), k.needs_green) for k in found]
+
+
 def checks(
     adapter: LanguageAdapter,
     feature: str,
@@ -436,9 +460,7 @@ def checks(
     # an idle step (scope "idle"): the code is the one the last green gate checked, so only
     # the step's own tests are new; lint, the frame check and the whole suite are its results
     idle = scope == "idle"
-    # lint, format, typecheck, imports: only what is new against the spec approval counts
-    lint = [] if idle else adapter.lint_checks(tag)
-    c = [red_tree.against_baseline(adapter, feature, k) for k in lint]
+    c = [] if idle else lint_checks(adapter, feature)
     if not idle:
         c.append(Check(frame_diff.CHECK_NAME, lambda: frame_diff.check(adapter, feature)))
     if scope in ("step", "fix", "idle"):
