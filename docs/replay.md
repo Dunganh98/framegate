@@ -42,6 +42,7 @@ A released lock must be free at once.
 | `pythonpath` | optional | import roots, comma-separated. Default: `src` if it exists, and `.` |
 | `python` | optional | Python version of the sandbox's environment (needs uv) |
 | `install` | optional, repeatable | a command that installs the project into the sandbox's environment; `{py}` is its python; paths with `/`. Default: `requirements.txt`, then `-e .` |
+| `setup` | optional | what the user tells the setup up front, sent with `/framegate:setup` (e.g. `mutation off for this project: mutation_tool = "none"`) |
 | `max-usd`, `max-hours` | optional | caps of this candidate |
 | `### Task` | optional | the task as the user would say it, free markdown up to the next `## `; headings inside it need `###` or deeper. Never write it from the diff. Default: the commit message |
 

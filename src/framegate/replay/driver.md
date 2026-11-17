@@ -50,7 +50,7 @@ your folder:
 
 ## The stages
 
-1. **Setup.** Message: `/framegate:setup`. Then answer by the policy until the setup says it is
+1. **Setup.** Message: `{{setup}}` (exactly this text). Then answer by the policy until the setup says it is
    done (framegate.toml, `.framegate/project.md`, the code map, doctor verdict). When it says
    so, run `framegate commit-setup --dry-run`:
    - `Setup files: nothing to commit.`: the tree counts as clean. Go on.

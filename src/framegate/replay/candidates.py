@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 KINDS = ("feature", "bugfix", "refactor")
 REQUIRED = ("repo", "commit", "kind")
 LISTS = ("tests", "pythonpath")
-FIELDS = (*REQUIRED, *LISTS, "python", "install", "max-usd", "max-hours")
+FIELDS = (*REQUIRED, *LISTS, "python", "install", "setup", "max-usd", "max-hours")
 
 TEMPLATE = """\
 # Replay candidates
@@ -49,6 +49,8 @@ class Candidate:
     install: list[str] = field(default_factory=list)
     max_usd: float | None = None
     max_hours: float | None = None
+    #: what the user tells the setup up front (sent with /framegate:setup), e.g. mutation off
+    setup: str = ""
 
 
 def _number(value: str) -> float | None:
@@ -97,6 +99,7 @@ def _candidate(
             install,
             caps["max-usd"],
             caps["max-hours"],
+            value("setup"),
         ),
         [],
     )

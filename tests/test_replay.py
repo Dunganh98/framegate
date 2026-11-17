@@ -383,6 +383,9 @@ def test_driver_instructions_are_filled_for_the_run(tmp_path: pathlib.Path) -> N
     assert "{{" not in text
     assert "`/framegate:bugfix lock-free`" in text and "after 2 hours" in text and "10 USD" in text
     assert f"  - `{lay.answer.parent}`" in text and f"  - `{tmp_path / 'repo'}`" in text
+    assert "Message: `/framegate:setup` (exactly" in text
+    c.setup = "mutation off"
+    assert "`/framegate:setup mutation off`" in run.instructions(lay, c, run.Caps(1, 1), lay.run)
 
 
 def test_chat_call_sends_a_slash_command_as_argument_and_text_through_stdin() -> None:

@@ -100,6 +100,7 @@ def instructions(lay: Layout, c: Candidate, caps: Caps, src: pathlib.Path) -> st
         "forbidden": "\n".join(f"  - `{p}`" for p in (lay.answer.parent, lay.sources, src)),
         "max_usd": f"{caps.usd:g}",
         "max_hours": f"{caps.hours:g}",
+        "setup": f"/framegate:setup {c.setup}".strip(),
     }
     for key, value in values.items():
         text = text.replace("{{" + key + "}}", value)
