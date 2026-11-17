@@ -23,3 +23,6 @@ Standing decisions of the user, one line each. Details: docs/AGENTIC_WORKFLOW_SE
 19. A feature and a refactor start on a green tree (setup sees to it); a bug fix may start red (2026-11-17).
 20. During a task `framegate.toml` changes only where no check gets weaker; the rest is setup (2026-11-17).
 21. framegate updates itself only when no task is in progress on the machine (2026-11-17).
+22. Replay: the user writes the candidates file; caps 25 USD and 3 hours per candidate; chat and driver on Sonnet (2026-11-17).
+23. A replay never affects anything outside its run folder: deny rules and a guard hook, no prompts (2026-11-17).
+24. Setup settles mutation with a trial of seconds: it runs, or the user switches it off (2026-11-17).

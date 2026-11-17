@@ -66,7 +66,15 @@ A file with a mistake is refused with the line and what is wrong.
    usage limit does not count. At a cap the run is stopped. A run that did not reach DONE
    still gets a retro (`framegate retro`, where this framegate has it) and a score; a run
    that ended before framegate built anything (in the setup or the spec) gets no retro.
-5. **Score.** The hidden tests run on a copy of the result. A skipped hidden test is "not
+5. **Inside the run folder only.** Nobody answers permission prompts in a replay, so the
+   chat may run any shell command. What keeps it, framegate's agents and the driver inside
+   the run folder is each folder's `.claude/settings.local.json`: deny rules (push, network,
+   publish, cleanup, update, `claude`, global git config, package managers of the machine;
+   reading `answers/` and the source repositories) and a guard hook before every shell, Edit
+   and Write call (`python -m framegate.replay.guard`, `guard.py`): no path outside the run
+   folder, and none of those commands. Windows has no folder lock for a process: a path the
+   command hides (built in a script) gets past the hook.
+6. **Score.** The hidden tests run on a copy of the result. A skipped hidden test is "not
    proven", not a pass. A test that passed on the parent and fails now is a regression. A run
    that ended before framegate built anything is "not run", not "bad": the Note column has the
    stage and the driver's reason (its `outcome.txt`).
