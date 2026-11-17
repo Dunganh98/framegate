@@ -72,8 +72,10 @@ A file with a mistake is refused with the line and what is wrong.
    publish, cleanup, update, `claude`, global git config, package managers of the machine;
    reading `answers/` and the source repositories) and a guard hook before every shell, Edit
    and Write call (`python -m framegate.replay.guard`, `guard.py`): no path outside the run
-   folder, and none of those commands. Windows has no folder lock for a process: a path the
-   command hides (built in a script) gets past the hook.
+   folder (temp folders and home included; the installed plugins may be read), and none of
+   those commands where a command starts. The build tries the hook once and drops the
+   candidate if it does not block: a hook that cannot start blocks nothing. Windows has no
+   folder lock for a process: a path the command hides (built in a script) gets past the hook.
 6. **Score.** The hidden tests run on a copy of the result. A skipped hidden test is "not
    proven", not a pass. A test that passed on the parent and fails now is a regression. A run
    that ended before framegate built anything is "not run", not "bad": the Note column has the

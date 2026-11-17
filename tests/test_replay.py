@@ -133,7 +133,7 @@ def this_python(c: Candidate, sandbox: pathlib.Path) -> pathlib.Path:
 def built(repo: dict[str, Any], tmp_path_factory: pytest.TempPathFactory) -> Layout:
     lay = Layout(tmp_path_factory.mktemp("out"), "sub")
     build(
-        Candidate("sub", str(repo["root"]), repo["target"][:8], "feature"),
+        Candidate("sub", str(repo["root"]), repo["target"][:8], "feature", setup='say "no"'),
         lay,
         repo["root"],
         this_python,
@@ -152,6 +152,7 @@ def test_sandbox_holds_the_parent_and_hides_the_answer(repo: dict[str, Any], bui
     assert "test_sub" not in (sb / "tests" / "test_calc.py").read_text("utf-8")
     assert "test_sub" in (built.answer / "hidden" / "tests" / "test_calc.py").read_text("utf-8")
     assert (built.driver / "task.md").read_text("utf-8") == "target: the message\n"
+    assert (built.driver / "setup.txt").read_text("utf-8") == '/framegate:setup say "no"\n'
     rules = read_json(sb / ".claude" / "settings.local.json")["permissions"]
     deny = rules["deny"]
     assert any(rule.endswith("/answers/**)") for rule in deny) and "Bash(git push *)" in deny
@@ -383,9 +384,6 @@ def test_driver_instructions_are_filled_for_the_run(tmp_path: pathlib.Path) -> N
     assert "{{" not in text
     assert "`/framegate:bugfix lock-free`" in text and "after 2 hours" in text and "10 USD" in text
     assert f"  - `{lay.answer.parent}`" in text and f"  - `{tmp_path / 'repo'}`" in text
-    assert "Message: `/framegate:setup` (exactly" in text
-    c.setup = "mutation off"
-    assert "`/framegate:setup mutation off`" in run.instructions(lay, c, run.Caps(1, 1), lay.run)
 
 
 def test_chat_call_sends_a_slash_command_as_argument_and_text_through_stdin() -> None:
@@ -396,8 +394,7 @@ def test_chat_call_sends_a_slash_command_as_argument_and_text_through_stdin() ->
     assert text[-4:-2] == ["--resume", "abc"] and stdin == "line 1\nline 2"
     assert text[-2:] == ["--model", "sonnet"]
     allowed = slash[slash.index("--allowedTools") + 1].split(",")
-    assert "PowerShell(pytest *)" in allowed
-    assert not [rule for rule in allowed if "push" in rule or "(gh" in rule or "(az" in rule]
+    assert "Bash" in allowed and "PowerShell" in allowed  # no prompts; the guard keeps it in
 
 
 def test_chat_call_is_detached_and_wait_prints_its_answer(
@@ -436,9 +433,10 @@ def test_chat_call_is_detached_and_wait_prints_its_answer(
 
 
 def test_the_guard_keeps_every_call_inside_the_run(tmp_path: pathlib.Path) -> None:
-    root = tmp_path / "run"
+    root = tmp_path / "my run"  # a space in the path
     (root / "sandbox").mkdir(parents=True)
     cwd = str(root / "sandbox")
+    toml = root / "sandbox" / "framegate.toml"
 
     def why(tool: str, **args: str) -> str:
         return guard.verdict(
@@ -452,7 +450,9 @@ def test_the_guard_keeps_every_call_inside_the_run(tmp_path: pathlib.Path) -> No
         'Get-Content "$HOME/.claude/plugins/known_marketplaces.json"',
         "Get-ChildItem src,tests -Depth 2 -Name | Select-Object -First 80; git branch -a",
         "git diff spec-approved/x..HEAD -- src",
-        f"Get-Content {root / 'sandbox' / 'framegate.toml'}",
+        f"Get-Content {toml}",
+        f'git -C "{toml.parent.as_posix()}" status && ls',
+        'git commit -m "fix reg handling in the az region"; grep -rn claude .',
     ):
         assert why("PowerShell", command=ok) == "", ok
     assert why("Edit", file_path="src/a.py") == ""
@@ -464,7 +464,15 @@ def test_the_guard_keeps_every_call_inside_the_run(tmp_path: pathlib.Path) -> No
         "cat /c/Users/someone/.ssh/id_rsa",
         "Set-Content ../../answers/x.txt hi",
         "Get-Content $env:USERPROFILE/.gitconfig",
+        "cat ${HOME}/.gitconfig",
+        "echo x > /tmp/out.txt",
+        r"Copy-Item a.txt \\server\share",
+        "rm -rf ~/.claude/plugins/framegate",
+        f'Copy-Item "{toml}" "C:/Program Files/x"',
+        f"Get-Content {toml} C:/Windows/win.ini",
         "claude plugin install other",
+        "git -C sandbox push",
+        "Set-Location x; & gh pr create",
     ):
         assert why("PowerShell", command=bad), bad
     assert why("Write", file_path=str(tmp_path / "elsewhere.txt"))

@@ -383,12 +383,17 @@ DIAGNOSTIC = re.compile(
 
 
 def parse_junit(path: pathlib.Path) -> list[TestCase]:
-    """Parse a JUnit XML report (pytest --junitxml, dotnet JUnit logger) into outcomes."""
+    """Parse a JUnit XML report (pytest --junitxml, dotnet JUnit logger) into outcomes.
+    A module that skips itself at import (pytest: "collection skipped") is no test: pytest
+    reports it even when the selection takes none of its tests."""
     cases = []
     for tc in ET.parse(path).getroot().iter("testcase"):
         cls = tc.get("classname") or ""
         name = f"{cls}::{tc.get('name')}" if cls else str(tc.get("name"))
         by_tag = {child.tag: child for child in tc}
+        skip = by_tag.get("skipped")
+        if skip is not None and skip.get("message") == "collection skipped":
+            continue
         outcome, message = "passed", ""
         for tag, result in (("error", "error"), ("skipped", "skipped"), ("failure", "failed")):
             if tag in by_tag:

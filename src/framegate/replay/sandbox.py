@@ -28,17 +28,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from framegate.replay.candidates import Candidate
+from framegate.replay.guard import BLOCKED
 
 UPLOAD = "git -c uploadpack.allowAnySHA1InWant=true upload-pack"
 SKIP = shutil.ignore_patterns(
     ".venv", ".git", "out", "__pycache__", ".pytest_cache", ".ruff_cache", ".hypothesis"
 )
-BLOCKED = (
-    "gh", "az", "git fetch", "git pull", "git clone", "git remote", "git push", "git submodule",
-    "git config --global", "curl", "wget", "Invoke-WebRequest", "Invoke-RestMethod", "claude",
-    "npm", "npx", "winget", "setx", "Start-Process", "uv tool", "framegate publish",
-    "framegate cleanup", "framegate update",
-)  # fmt: skip
 TEST_TIMEOUT = 1800
 
 
@@ -163,13 +158,10 @@ def rule_path(path: pathlib.Path) -> str:
     return "//" + text.lstrip("/")
 
 
-def deny_rules(hidden: Sequence[str], shell: bool = True) -> list[str]:
+def deny_rules(hidden: Sequence[str]) -> list[str]:
     """`hidden`: folders as rule paths (rule_path)."""
-    rules = [f"Read({p}/**)" for p in hidden]
-    if shell:
-        rules += ["WebFetch", "WebSearch"]
-        rules += [f"{tool}({cmd} *)" for tool in ("Bash", "PowerShell") for cmd in BLOCKED]
-    return rules
+    rules = [f"Read({p}/**)" for p in hidden] + ["WebFetch", "WebSearch"]
+    return rules + [f"{tool}({cmd} *)" for tool in ("Bash", "PowerShell") for cmd in BLOCKED]
 
 
 #: what the setup would add to the settings on a yes. The chat may not edit that file in a
@@ -193,6 +185,29 @@ def write_deny(
     permissions = {**({"allow": list(allow)} if allow else {}), "deny": rules}
     data = {"permissions": permissions, "hooks": guard_hook(up)}
     write_json(folder / ".claude" / "settings.local.json", data)
+
+
+def check_guard(py: pathlib.Path, lay: Layout) -> None:
+    """The driver's hook as Claude Code starts it, with the sandbox's python: it must let a
+    write in the run folder through and block one outside. A hook that cannot start blocks
+    nothing (Claude Code goes on after any exit code but 2)."""
+    # `python` as the hook finds it: the run puts py's folder first on PATH (run.run_env)
+    python = shutil.which("python", path=os.pathsep.join([str(py.parent), os.environ["PATH"]]))
+    for target, expected in ((lay.sandbox / "x.txt", 0), (lay.answer / "x.txt", 2)):
+        call = {"tool_name": "Write", "tool_input": {"file_path": str(target)}}
+        r = subprocess.run(
+            [python or "python", "-m", "framegate.replay.guard", "--up", "1"],
+            input=json.dumps({**call, "cwd": str(lay.driver)}),
+            capture_output=True,
+            text=True,
+            cwd=lay.driver,
+            env=dict(os.environ, CLAUDE_PROJECT_DIR=str(lay.driver)),
+        )
+        if r.returncode != expected:
+            raise ReplayError(
+                f"the replay guard (python -m framegate.replay.guard, python = {python}) gave exit "
+                f"{r.returncode} for a write to {target}, not {expected}: {r.stderr.strip()}"
+            )
 
 
 def venv_python(sandbox: pathlib.Path) -> pathlib.Path:
@@ -338,6 +353,9 @@ def build(
     (lay.answer / "commit.patch").write_text(git("diff", parent, full), encoding="utf-8")
     lay.driver.mkdir(parents=True)
     (lay.driver / "task.md").write_text((c.task or message) + "\n", encoding="utf-8")
+    # a file, not a shell argument: the shells mangle quotes in the candidate's setup text
+    setup = f"/framegate:setup {c.setup}".strip()
+    (lay.driver / "setup.txt").write_text(setup + "\n", encoding="utf-8")
 
     with open(lay.sandbox / ".git" / "info" / "exclude", "a", encoding="utf-8") as f:
         f.write("\n.venv/\n.claude/settings.local.json\n")
@@ -349,6 +367,7 @@ def build(
     write_deny(lay.driver, deny_rules(secret), up=1)
 
     py = env(c, lay.sandbox)
+    check_guard(py, lay)
     roots = c.pythonpath or (["src", "."] if (lay.sandbox / "src").is_dir() else ["."])
     check = lay.answer / "check"
     copy_tree(lay.sandbox, check / "base", hidden)
