@@ -6,14 +6,15 @@ import pathlib
 
 import pytest
 
-from conftest import git, init_git
+from conftest import DemoRepo, git, init_git
 from framegate.adapters import get_adapter
 from framegate.adapters.base import CheckResult
 from framegate.adapters.python import PythonAdapter
-from framegate.checks import frame_diff, red_stubs, traceability
+from framegate.checks import frame_diff, red_stubs, test_lint, traceability
 from framegate.checks import test_smells as smells_check
-from framegate.config import parse_config
+from framegate.config import load_config, parse_config
 from framegate.gates import run_gates
+from framegate.state import set_marker
 
 
 def write(root: pathlib.Path, rel: str, text: str) -> None:
@@ -854,3 +855,35 @@ def test_refactor_counts_tagged_existing_tests_and_ignores_their_old_smells(
     write(tmp_path, "tests/test_old.py", tagged.replace("assert 1 + 1 == 2", "assert True"))
     note = baseline.existing_tests(a, "f", ids)[-1]
     assert note.startswith("NOTE: tests/test_old.py: 1 line(s) of this existing test file")
+
+
+TEST_LINT = """import pathlib
+import sys
+
+bad = [
+    f"{p.as_posix()}:{n}: X001 the word is not allowed"
+    for p in sorted(pathlib.Path("tests").rglob("*.py"))
+    for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
+    if "BAD" in line
+]
+print("\\n".join(bad))
+sys.exit(1 if bad else 0)
+"""
+
+
+def test_lint_on_the_test_writers_own_lines(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    (r.root / "tools").mkdir()
+    (r.root / "tools" / "lint.py").write_text(TEST_LINT, encoding="utf-8")
+    (r.root / "tests" / "test_old.py").write_text("A = 1  # BAD\n", encoding="utf-8")
+    r.add_toml(
+        '[gates.commands]\nlint = ["python", "tools/lint.py"]\nformat = []\ntypecheck = []\n'
+    )
+    cfg = load_config(r.root)
+    set_marker(cfg, "spec-approved/demo")
+    adapter = get_adapter(cfg)
+    assert test_lint.check(adapter, "demo").status == "PASS"  # old debt is not the writer's
+    (r.root / "tests" / "test_new.py").write_text("B = 2  # BAD\n", encoding="utf-8")
+    res = test_lint.check(adapter, "demo")
+    assert res.status == "FAIL" and "tests/test_new.py:1" in res.output, res.output
+    assert "test_old" not in res.output

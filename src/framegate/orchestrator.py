@@ -53,6 +53,7 @@ from framegate.checks import (
     plan_files,
     scope_coverage,
     spec_lint,
+    test_lint,
     test_smells,
     traceability,
 )
@@ -2186,6 +2187,7 @@ class Orchestrator:
             (baseline.name(mode), baseline),
             ("Traceability", traceability),
             ("Test smells", test_smells),
+            ("Lint (the tests' own lines)", test_lint),
         ]:
             res = mod.check(self.adapter, feature)
             status[name] = res.status
