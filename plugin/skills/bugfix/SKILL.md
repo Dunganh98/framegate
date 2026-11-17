@@ -72,6 +72,15 @@ the language, how tests are written here, the code map and the project knowledge
 
 ## Part 1: the bug report dialogue
 
+First: do you know what is wanted? If the user gave only the name `$ARGUMENTS`, nothing in
+this conversation says what goes wrong (no bug report, no input, no wrong result) and
+requirements.md in the spec folder is still the unfilled template, ask for it in one short
+question ("What goes wrong in `$ARGUMENTS`: the input, what comes out, what should come
+out?") and wait for the answer. Until then write no spec file, and read and run no code
+beyond the conventions above. Never take the bug from the name (seen live: the report never
+arrived, and a spec was written from the name alone). If the user's message already holds
+the bug report, go on without asking.
+
 1. Read what the user reports, then find out everything you can yourself: read the code map,
    the code on the path from the input to the wrong result, and the project knowledge above
    (dot folders of tools such as `.serena/`, `.vscode/`, `.venv/` are machine files, not
@@ -99,6 +108,17 @@ the language, how tests are written here, the code map and the project knowledge
    exactly: reproduction rows are R IDs (each gets a test that fails today and passes once
    fixed), must-not-change rows are I IDs (each gets a test that passes today and after).
    Usually one plan step that covers every ID. Do not write tests and do not fix anything.
+   Files in a plan step: a step names only files its implementer can write: the source
+   folders, and documentation files by their path (`CHANGELOG.md`, `docs/usage.md`: .md /
+   .rst under a docs folder, README, CHANGELOG), which become writable for that step at the
+   approval and are frozen with it. Tests, setup files, deploy / CI files and workflow files
+   never go into a step (seen live: a step said "update docs/xyz.md", nothing made it
+   writable, the step parked); a file the step only reads gets "(read only)" after its name.
+   What the user must change by hand in this repository: one line under "## To do by hand"
+   after the last step of plan.md (`- <file>: <what> (<why>)`), and on the brief as the last
+   line of **Plan** ("by hand, not part of the run: ..."). `spec-check` lists every file
+   that does not fit and prints "Documentation files the plan makes writable": name those on
+   their step's **Plan** line.
    Then run `framegate spec-check $ARGUMENTS` and fix what it lists.
    Setup files: if the task needs a new package or source folder, a dependency or a tool
    setting, change those files now, in the spec phase: `framegate.toml` and the project's

@@ -47,6 +47,7 @@ from framegate.checks import (
     baseline,
     check_signature,
     existing_members,
+    plan_files,
     scope_coverage,
     spec_lint,
     test_smells,
@@ -667,6 +668,9 @@ class Orchestrator:
         self.adapter = adapter or get_adapter(cfg)
         self.echo = echo
         self._claude: list[str] | None = None
+        #: the documentation files the approved plan names for the step(s) being implemented
+        #: (checks/plan_files.py): writable for that run, committed and parked with its code
+        self.step_docs: list[str] = []
 
     # ---------- helpers ----------
     def fdir(self, feature: str) -> pathlib.Path:
@@ -972,7 +976,7 @@ class Orchestrator:
             # own process group + kill-on-close job: Ctrl+C / SIGTERM / a killed framegate
             # take the whole agent tree (claude, node, shells, dotnet) down with it
             # FRAMEGATE_AGENT, the project's tools first on PATH, no chat memory (agent_env.py)
-            env = agent_env.build(self.adapter, role_name)
+            env = agent_env.build(self.adapter, role_name, docs=self.step_docs)
             _, stdout, stderr = procs.run(args, input=prompt, cwd=self.cfg.root, job=True, env=env)
         except OSError as e:
             stdout, stderr = "", f"could not start claude: {e}"
@@ -1368,7 +1372,7 @@ class Orchestrator:
                 **({"fidelity": rep.fidelity} if rep.fidelity else {}),
             )
             if rep.ok:
-                done = commit(self.cfg, f"{feature}: {label}")
+                done = commit(self.cfg, f"{feature}: {label}", extra=self.step_docs)
                 drift = references.differing(rep.fidelity)
                 self.progress(
                     feature,
@@ -1578,8 +1582,13 @@ class Orchestrator:
 
     def revert_src(self, feature: str, label: str) -> str:
         """Save the parked work's uncommitted source changes as a diff and restore the sources
-        to the last commit, so later steps start from code that passed its gates."""
+        to the last commit, so later steps start from code that passed its gates. The step's
+        documentation files (self.step_docs) go the same way."""
         src = [r for r in self.cfg.src_roots if (self.cfg.root / r).exists()]
+        # only the changed ones: git refuses a path it does not know or that is ignored
+        src += [
+            f for f in self.step_docs if git(self.cfg, "status", "--porcelain", "--", f).strip()
+        ]
         if not src:
             return ""
         git(self.cfg, "add", "-A", "--", *src)
@@ -1675,7 +1684,11 @@ class Orchestrator:
             )
             return False
         names = ", ".join(contested)
-        commit(self.cfg, f"{feature}: {label} (PROVISIONAL: tests contested: {names})")
+        commit(
+            self.cfg,
+            f"{feature}: {label} (PROVISIONAL: tests contested: {names})",
+            extra=self.step_docs,
+        )
         sha = git(self.cfg, "rev-parse", "HEAD").strip()
         rec = dict(item, contested=contested, question=question, commit=sha, attempts=attempts)
         prog["provisional"] = [*(prog.get("provisional") or []), rec]
@@ -2458,6 +2471,9 @@ class Orchestrator:
                 )
             task += self.parked_context(prog, steps) + self.provisional_context(prog)
             task += self.size_context(feature) + self.port_context(feature, prog)
+            # documentation files the approved plan names for these steps: writable now only
+            self.step_docs = plan_files.approved_docs(self.adapter, feature, nums)
+            task += plan_files.task_note(self.step_docs)
             if redo:
                 task += REDO_NOTE.format(**self.placeholders(feature))
             for r in redo:
@@ -2476,7 +2492,10 @@ class Orchestrator:
             item: dict[str, Any] = {"kind": "step", "step": nums[0], "label": label}
             if not one:
                 item["steps"] = nums
-            ok = self.implement_loop(feature, prog, task, covered, item)
+            try:
+                ok = self.implement_loop(feature, prog, task, covered, item)
+            finally:
+                self.step_docs = []
             if ok:
                 prog["completed_steps"] += nums
             if redo:

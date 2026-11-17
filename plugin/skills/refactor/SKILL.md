@@ -74,6 +74,14 @@ the language, how tests are written here, the code map and the project knowledge
 
 ## Part 1: the scope dialogue
 
+First: do you know what is wanted? If the user gave only the name `$ARGUMENTS`, nothing in
+this conversation says what is to be restructured and why (no scope, no goal) and
+requirements.md in the spec folder is still the unfilled template, ask for it in one short
+question ("What should `$ARGUMENTS` restructure, and what should be better afterwards?")
+and wait for the answer. Until then write no spec file, and read no code beyond the
+conventions above. Never take the scope from the name (seen live: a task invented from the
+name). If the user's message already holds the scope, go on without asking.
+
 1. Read what the user wants, then decide everything you can yourself: read the code map, the
    code in question, its callers and its existing tests, and the project knowledge above
    (dot folders of tools such as `.serena/`, `.vscode/`, `.venv/` are machine files, not
@@ -105,6 +113,17 @@ the language, how tests are written here, the code map and the project knowledge
    following the templates exactly: step 1 has the "Covers:" line with every ID; later steps
    need none (every step is checked with all the characterization tests) but get a "Depends
    on: Step N" line. Do not write tests and do not move any code.
+   Files in a plan step: a step names only files its implementer can write: the source
+   folders, and documentation files by their path (`docs/layout.md`, `README.md`: .md / .rst
+   under a docs folder, README, CHANGELOG), which become writable for that step at the
+   approval and are frozen with it. Tests, setup files, deploy / CI files and workflow files
+   never go into a step (seen live: a step said "update docs/xyz.md", nothing made it
+   writable, the step parked); a file the step only reads gets "(read only)" after its name.
+   What the user must change by hand in this repository: one line under "## To do by hand"
+   after the last step of plan.md (`- <file>: <what> (<why>)`), and on the brief as the last
+   line of **Plan** ("by hand, not part of the run: ..."). `spec-check` lists every file
+   that does not fit and prints "Documentation files the plan makes writable": name those on
+   their step's **Plan** line.
    Then run `framegate spec-check $ARGUMENTS` and fix what it lists.
    Setup files: if the task needs a new package or source folder, a dependency or a tool
    setting, change those files now, in the spec phase: `framegate.toml` and the project's

@@ -218,7 +218,14 @@ def spec_brief(cfg: Config, feature: str) -> str:
             "- IDs: <CODE>-R-001 (requirement), <CODE>-E-001 (edge case), <CODE>-I-001 "
             f"(invariant); regex {cfg.id_pattern}",
             '- plan.md is parsed: "## Step N: <title>" headings, each with one '
-            '"Covers: ID, ID" line. Every ID is covered by exactly one step.',
+            '"Covers: ID, ID" line. Every ID is covered by exactly one step. A step names only '
+            f"files its implementer can write: {'/, '.join(cfg.src_roots)}/, and documentation "
+            "files by their path (.md / .rst under a docs folder, README, CHANGELOG), which "
+            "become writable for that step at the approval. Anything else (tests, setup, "
+            "deploy / CI, workflow files) fails `framegate spec-check`.",
+            "- Before you write the spec: the user's own words must say what is wanted (the "
+            "requirement, the bug report, the scope). Only a name so far: ask for it in one "
+            "short question and write nothing before the answer.",
             *(
                 MODE_BRIEF[mode]
                 if mode in MODE_BRIEF
