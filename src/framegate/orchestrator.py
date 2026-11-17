@@ -1648,7 +1648,8 @@ class Orchestrator:
         )
         self.progress(feature, f"[{label}] diagnosis ({owner}): {root}")
         applies = (
-            f" (approved: framegate changes {CONFIG_FILE} as proposed and redoes the step)"
+            f" (approved: framegate changes {CONFIG_FILE} as proposed and redoes the step; "
+            "not a change that weakens a check, that belongs to /framegate:setup)"
             if owner == "config"
             else ""
         )
@@ -3655,8 +3656,10 @@ class Orchestrator:
         """An approved diagnosis with `Fix owner: config`: the spec updater's proposed
         framegate.toml is checked and put in place (redo.apply_config_update), and the run
         goes on with the new config. Returns the notes for the next gate."""
-        fresh, notes = redos.apply_config_update(self.cfg, feature, ref)
-        log_event(self.cfg, feature, "config_update", ref=ref, applied=fresh is not None)
+        fresh, notes, changes = redos.apply_config_update(self.cfg, feature, ref)
+        log_event(
+            self.cfg, feature, "config_update", ref=ref, applied=fresh is not None, changes=changes
+        )
         if fresh is not None:
             self.cfg = fresh
             self.adapter = get_adapter(fresh)
@@ -4133,30 +4136,21 @@ class Orchestrator:
         what fails)."""
         if not baseline_on(self.cfg, feature):
             return
-        path = self.cfg.feature_out(feature) / BASELINE_FILE
-        count: int | None = None
-        if not path.is_file():
-            self.echo("Regression baseline: running the whole suite once (what fails today)...")
-            count, problem = record_regression_baseline(self.adapter, feature)
-            log_event(self.cfg, feature, "regression_baseline", failing=count, problem=problem)
-            if problem:
-                count = None
-                self.echo(
-                    f"WARNING: no regression baseline recorded: {problem}. The gates fail on "
-                    "every red test; fix the run and approve the spec again."
-                )
-            else:
-                self.echo(
-                    f"Regression baseline: {count} test(s) already fail; the step gates and "
-                    "the final regression check fail only on other failures."
-                )
-        if red_tree.path_of(self.cfg, feature).is_file():
+        if (self.cfg.feature_out(feature) / BASELINE_FILE).is_file():
             return
-        # lint, format, typecheck, imports: what they report on the tree as it is
-        checks = red_tree.record(self.adapter, feature)
-        log_event(self.cfg, feature, "lint_baseline", checks=red_tree.event_fields(checks))
-        for line in red_tree.summary_lines(count, checks):
-            self.echo(line)
+        self.echo("Regression baseline: running the whole suite once (what fails today)...")
+        count, problem = record_regression_baseline(self.adapter, feature)
+        log_event(self.cfg, feature, "regression_baseline", failing=count, problem=problem)
+        if problem:
+            self.echo(
+                f"WARNING: no regression baseline recorded: {problem}. The gates fail on "
+                "every red test; fix the run and approve the spec again."
+            )
+        else:
+            self.echo(
+                f"Regression baseline: {count} test(s) already fail; the step gates and "
+                "the final regression check fail only on other failures."
+            )
 
     def status(self, feature: str) -> int:
         prog = load_progress(self.cfg, feature)

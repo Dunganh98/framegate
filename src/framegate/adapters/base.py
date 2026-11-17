@@ -500,6 +500,23 @@ class LanguageAdapter(abc.ABC):
                 checks.append(command_check(GATE_NAMES[key], self.resolve_command(cmd), self.root))
         return checks
 
+    #: the gates count a lint / format / typecheck / imports finding only in a file the task
+    #: changed (gates.lint_checks); the checks themselves run on the whole tree
+    file_scoped_lint: ClassVar[bool] = False
+
+    def changed_since(self, base_ref: str | None) -> set[str] | None:
+        """Files changed since base_ref (incl. untracked); None when that is not known (no
+        ref, no such marker)."""
+        from framegate.checks.frame_diff import changed_files
+        from framegate.state import GitError, tag_exists
+
+        try:
+            if not base_ref or not tag_exists(self.cfg, base_ref):
+                return None
+            return changed_files(self.cfg, base_ref)[0]
+        except GitError:
+            return None
+
     def tool_env(self) -> dict[str, str] | None:
         """Environment for the adapter's tool commands (None = inherit)."""
         return None

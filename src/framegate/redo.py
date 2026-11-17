@@ -12,8 +12,9 @@ Two parts:
   it again at once and says what is missing).
 - `apply_config_update`: a diagnosis with `Fix owner: config`, approved at the final gate. The
   spec updater writes the new framegate.toml to the out folder (it cannot write the file
-  itself), framegate checks that it loads and puts it in place, committed and tagged
-  `config-update/<feature>` (the frame check allows the file while it is exactly that).
+  itself), framegate checks that it loads and weakens no check, and puts it in place,
+  committed and tagged `config-update/<feature>` (the frame check allows the file while it
+  is exactly that).
 """
 
 from __future__ import annotations
@@ -22,10 +23,10 @@ import difflib
 import hashlib
 import re
 
-from framegate import red_tree
+from framegate import config_change
 from framegate.adapters import get_adapter
 from framegate.checks.frame_diff import changed_files, config_update_tag
-from framegate.config import CONFIG_FILE, Config, ConfigError, load_config
+from framegate.config import CONFIG_FILE, Config, ConfigError, load_config, tomllib
 from framegate.gates import BASELINE_FILE
 from framegate.state import GitError, git, set_marker
 
@@ -74,7 +75,7 @@ def gate_inputs(cfg: Config, feature: str) -> str:
     """A digest of what the gates read and no implementer run changes: every tracked file
     outside the source folders, the review tests and the out folder (the spec, the frozen
     tests, framegate.toml, packaging and tool config) at HEAD, the uncommitted changes to
-    such files, and the records of what was red when the spec was approved. "" when git
+    such files, and the record of the tests that failed when the spec was approved. "" when git
     gives no answer (then nothing is compared)."""
     skip = _outside(cfg)
 
@@ -98,27 +99,33 @@ def gate_inputs(cfg: Config, feature: str) -> str:
             h.update(path.read_bytes() if path.is_file() else b"<gone>")
         except OSError:
             h.update(b"<unreadable>")
-    for name in (BASELINE_FILE, red_tree.CHECKS_FILE):
-        path = cfg.feature_out(feature) / name
-        try:
-            h.update(path.read_bytes() if path.is_file() else b"<none>")
-        except OSError:
-            h.update(b"<unreadable>")
+    path = cfg.feature_out(feature) / BASELINE_FILE
+    try:
+        h.update(path.read_bytes() if path.is_file() else b"<none>")
+    except OSError:
+        h.update(b"<unreadable>")
     return h.hexdigest()
 
 
-def apply_config_update(cfg: Config, feature: str, ref: str) -> tuple[Config | None, list[str]]:
+def apply_config_update(
+    cfg: Config, feature: str, ref: str
+) -> tuple[Config | None, list[str], list[str]]:
     """Put the spec updater's {out}/<feature>/config_update.toml in place as framegate.toml:
-    only when it loads as a config; committed alone and tagged `config-update/<feature>`.
-    Returns (the new config, or None when framegate.toml stays as it was; notes for the
-    next gate)."""
+    only when it loads as a config and weakens no check (config_change.py); committed alone
+    and tagged `config-update/<feature>`. Returns (the new config, or None when
+    framegate.toml stays as it was; notes for the next gate; the applied changes as
+    `key: old -> new`)."""
     proposal = cfg.feature_out(feature) / CONFIG_UPDATE_FILE
     where = f"{cfg.paths.out}/{feature}/{CONFIG_UPDATE_FILE}"
     if not proposal.is_file():
-        return None, [
-            f"{ref}: an approved fix names {CONFIG_FILE}, but the spec updater wrote no "
-            f"{where}: {CONFIG_FILE} is unchanged (change it yourself, then answer again)"
-        ]
+        return (
+            None,
+            [
+                f"{ref}: an approved fix names {CONFIG_FILE}, but the spec updater wrote no "
+                f"{where}: {CONFIG_FILE} is unchanged (change it yourself, then answer again)"
+            ],
+            [],
+        )
     target = cfg.root / CONFIG_FILE
     new, old = proposal.read_bytes(), target.read_bytes()
     proposal.unlink()
@@ -133,17 +140,35 @@ def apply_config_update(cfg: Config, feature: str, ref: str) -> tuple[Config | N
         if line[:1] in "+-" and not line.startswith(("+++", "---"))
     ]
     if not lines:
-        return None, [f"{ref}: {where} is the same as {CONFIG_FILE}: unchanged"]
+        return None, [f"{ref}: {where} is the same as {CONFIG_FILE}: unchanged"], []
     target.write_bytes(new)
+    text = new.decode("utf-8", "replace")
     try:
         fresh = load_config(cfg.root)
         get_adapter(fresh)
     except ConfigError as e:
         target.write_bytes(old)
-        return None, [
-            f"{ref}: the change to {CONFIG_FILE} was not applied, the new file is not a "
-            f"valid config: {e}"
-        ]
+        return (
+            None,
+            [
+                f"{ref}: the change to {CONFIG_FILE} was not applied, the new file is not a "
+                f"valid config: {e}"
+            ],
+            [],
+        )
+    changed = config_change.changes(tomllib.loads(old.decode("utf-8")), tomllib.loads(text))
+    weaker = [config_change.shown(c) for c in changed if config_change.weakens(*c)]
+    if weaker:
+        target.write_bytes(old)
+        return (
+            None,
+            [
+                f"{ref}: the change to {CONFIG_FILE} was not applied, it weakens a check "
+                f"({'; '.join(weaker)}). A task never does that: it belongs to the setup "
+                "(/framegate:setup), outside a task."
+            ],
+            [],
+        )
     try:
         git(cfg, "add", "--", CONFIG_FILE)
         message = f"{feature}: {CONFIG_FILE} updated from answers {ref}"
@@ -151,10 +176,14 @@ def apply_config_update(cfg: Config, feature: str, ref: str) -> tuple[Config | N
         set_marker(fresh, config_update_tag(feature))
     except GitError as e:
         target.write_bytes(old)
-        return None, [f"{ref}: the change to {CONFIG_FILE} was not applied (git: {e})"]
+        return None, [f"{ref}: the change to {CONFIG_FILE} was not applied (git: {e})"], []
     more = f" ... and {len(lines) - SHOWN_LINES} more" if len(lines) > SHOWN_LINES else ""
     shown = "; ".join(f"`{line}`" for line in lines[:SHOWN_LINES])
-    return fresh, [
-        f"{ref}: {CONFIG_FILE} updated by framegate from the approved diagnosis "
-        f"({len(lines)} changed line(s): {shown}{more})"
-    ]
+    return (
+        fresh,
+        [
+            f"{ref}: {CONFIG_FILE} updated by framegate from the approved diagnosis "
+            f"({len(lines)} changed line(s): {shown}{more})"
+        ],
+        [config_change.shown(c) for c in changed],
+    )

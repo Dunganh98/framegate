@@ -181,6 +181,7 @@ def _shell_quote(arg: str) -> str:
 class PythonAdapter(LanguageAdapter):
     name = "python"
     source_suffixes = (".py",)
+    file_scoped_lint = True
 
     @classmethod
     def detect(cls, root: pathlib.Path) -> bool:

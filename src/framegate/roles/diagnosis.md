@@ -12,7 +12,7 @@ Find out why the checks keep failing. Typical causes: the code is wrong (the imp
 the spec); a test is wrong or its data cannot produce the situation it needs (a pinned seed, a
 fixture); the spec contradicts itself or a test; a check fails on a file the implementer may not
 edit; an existing test (golden, hash, snapshot) serializes something the feature changed; a
-check is set up wrongly for this project (a command, an exclusion, a threshold or a timeout in
+check is set up wrongly for this project (a command, a tool path or a timeout in
 framegate.toml).
 
 Write {out}/{feature}/diagnosis.md, short (at most ~15 lines), in exactly this form:
@@ -28,14 +28,18 @@ Write {out}/{feature}/diagnosis.md, short (at most ~15 lines), in exactly this f
 Fix owner: `src` when the implementer can fix it within the spec and the frozen tests (your
 proposal goes to its next attempt); `tests` when a test or its data must change; `spec` when the
 spec must change first; `config` when framegate.toml must change (the spec, the tests and the code
-are right, a check is not: its command, what it leaves out, a threshold, a timeout). For `tests` /
+are right, the way a check runs is not: its command, a tool path, a timeout, agent settings). For `tests` /
 `spec` / `config` the work is parked and the human approves your proposal at the final gate in one
 reply, so make the proposal complete enough to apply as written. An approved `config` proposal is
 applied by framegate itself; no agent and no other owner can change framegate.toml, so never give
 such a fix to `src`, `tests` or `spec`.
-A failure that was there before this task (a test or a finding in a file the task never touched)
-is not this task's to fix. framegate records what was red when the spec was approved and leaves
-it out, so say what differs from that record instead of proposing to switch a check off.
+Never propose a config change that weakens a check: a lower threshold, files or tests left out,
+a check switched off. framegate refuses it during a task; it belongs to the setup
+(/framegate:setup). If nothing else helps, say so and leave the decision to the human.
+A failure that was there before this task is not this task's to fix. framegate leaves out lint /
+format / typecheck findings in files the task did not change, and the tests recorded as failing
+when the spec was approved, so say what differs from that instead of proposing to switch a check
+off.
 A fix that needs something no file of the repository holds (a package to install, a service to
 start) is the human's: give it the owner whose check it serves and say plainly that a person
 must do it.

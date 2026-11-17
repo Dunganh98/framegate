@@ -301,6 +301,12 @@ def final_facts(
         )
         out += [f"- {name}: {n} line(s)" for name, n in sorted(debt.items())]
 
+    config = [c for e in ev if e.get("kind") == "config_update" for c in e.get("changes") or []]
+    if config:
+        out += ["", "## framegate.toml changed during the task", ""]
+        out.append("Applied by framegate from an approved diagnosis. Name each in the summary:")
+        out += [f"- {c}" for c in config]
+
     out += ["", f"## Parked items: {len(parked)}", ""]
     for p in parked:
         out.append(f"- {p.get('label')} ({p.get('kind')}): {p.get('reason')}")

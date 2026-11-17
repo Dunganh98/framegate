@@ -798,7 +798,7 @@ forget, silent if it fails. `cleanup` keeps `specs/<f>/`, the metrics row and th
 `out/events.jsonl`, refuses while the feature's run is active or before DONE (`--force`), and
 prints the `git push origin --delete` line for tags that were pushed (`[git] markers = "tags"`).
 
-**Markers, commits, known failures.** `spec-approved/<f>`, `tests-approved/<f>`, `spec-update/<f>`, `tests-update/<f>`, `knowledge-update/<f>` and `config-update/<f>` are private refs (`refs/<name>`) by default: `git diff tests-approved/<f>` resolves them like a tag, but no `git push`, `--tags` or `--all` publishes them to a shared remote. `[git] markers = "tags"` stores git tags instead (needed for a CI job that runs `framegate gates`); tags left by an older framegate are still read and replaced on the next write. A workflow commit stages only the workflow's paths (`[paths] src`, `tests`, `specs`, `metrics`, the knowledge file, the code map), never the whole working tree: your notes and unrelated edits stay out. `[gates] regression_baseline`: `approve-spec` checks the tree as it is before the task. Not set, it is on for a bug fix and off for a feature and a refactor: a bug fix may start on a red tree (the bug can have a failing test already), a feature and a refactor start on a green one (a test this machine cannot run, or code that does not follow the project's checks, is a matter for the setup or for a refactor of its own). `true` / `false` in framegate.toml sets it for every mode. It runs the whole suite once and records the tests that already fail (`out/<f>/regression_baseline.json`; never a test tagged with one of the feature's own spec IDs), and it runs the lint / format / typecheck / imports checks once and records, per failing check, how many output lines name each file (`out/<f>/lint_baseline.json`). Both records are kept on a second approval. It prints one line ("Already red on the untouched tree: ...") and goes on. From then on the gates count only what is new: the step gates and the final regression check (with the default `coverage_scope = "feature"`) leave the recorded tests out; a failing lint / format / typecheck / imports check passes while no file is named more often than at the approval, and when it fails, its output holds only the files that got worse. Limits: a new finding in a file that already had some counts only by number, and an old failure that changes its cause does not show. `regression_baseline = false`: nothing is run at the approval and every failure counts. Formatting debt, in every mode: the format fix formats a changed file whole, so debt from before the task in a file the task touches is fixed with it, without a question. The lines the formatter rewrote outside the task's own lines are counted (`format_debt` event) and listed in final_facts.md ("Formatted beyond the task's lines"), for one line in the summary. Files the task does not touch are left as they are.
+**Markers, commits, known failures.** `spec-approved/<f>`, `tests-approved/<f>`, `spec-update/<f>`, `tests-update/<f>`, `knowledge-update/<f>` and `config-update/<f>` are private refs (`refs/<name>`) by default: `git diff tests-approved/<f>` resolves them like a tag, but no `git push`, `--tags` or `--all` publishes them to a shared remote. `[git] markers = "tags"` stores git tags instead (needed for a CI job that runs `framegate gates`); tags left by an older framegate are still read and replaced on the next write. A workflow commit stages only the workflow's paths (`[paths] src`, `tests`, `specs`, `metrics`, the knowledge file, the code map), never the whole working tree: your notes and unrelated edits stay out. Lint, format, typecheck and imports, in every mode (Python): the checks run on the whole tree, and a finding counts only in a file the task changed since the tests were approved, or since the spec was approved (the tests the task wrote). Findings in other files are left out of the verdict and of the output ("in files the task did not change (left out): N line(s)"). Limits: a type error the task causes in a file it did not change is not reported (the tests have to find it), and a failure that names no file (an import contract, a crashed tool) always counts. `[gates] regression_baseline` is about tests only: `approve-spec` runs the whole suite once and records the tests that already fail (`out/<f>/regression_baseline.json`; never a test tagged with one of the feature's own spec IDs; kept on a second approval). The step gates and the final regression check (with the default `coverage_scope = "feature"`) leave them out. Not set, it is on for a bug fix (the bug can have a failing test already) and off for a feature and a refactor, which start on a green tree; `true` / `false` in framegate.toml sets it for every mode. Formatting debt, in every mode: the format fix formats a changed file whole, so debt from before the task in a file the task touches is fixed with it, without a question. The lines the formatter rewrote outside the task's own lines are counted (`format_debt` event) and listed in final_facts.md ("Formatted beyond the task's lines"), for one line in the summary. Files the task does not touch are left as they are.
 
 **The spec phase covers the setup.** Everything the human adds or changes happens before
 "spec OK"; after it the frame is locked and no agent (and no later hand edit) may change a
@@ -1074,14 +1074,20 @@ Between the gates nothing stops:
   `config`: the item parks at once with the proposal as its question; at the final gate one
   reply approves it, and the redo sends it to the phase that owns the file (spec updater,
   test writer, implementer).
-- `Fix owner: config` is a change to framegate.toml (a check's command, what it leaves
-  out, a threshold, a timeout). No agent may write that file. When the answer approves the
-  proposal, the spec updater writes the whole new file to `out/<f>/config_update.toml`;
-  framegate checks that it loads, puts it in place, commits it alone (`<f>: framegate.toml
-  updated from answers ANS-n`), tags it `config-update/<f>` and goes on with the new
-  config (`config_update` event; the changed lines are listed under "Spec changes from
-  your answers" at the next gate). The frame check accepts framegate.toml while it is
-  exactly the tagged file. A file that does not load is not applied.
+- `Fix owner: config` is a change to framegate.toml that keeps every check as strict as it
+  is: a timeout, a tool path, a command that runs the same check, agent settings. No agent
+  may write that file. When the answer approves the proposal, the spec updater writes the
+  whole new file to `out/<f>/config_update.toml`; framegate checks it, puts it in place,
+  commits it alone (`<f>: framegate.toml updated from answers ANS-n`), tags it
+  `config-update/<f>` and goes on with the new config. The `config_update` event holds each
+  change as `key: old -> new`, and final_facts.md lists them under "framegate.toml changed
+  during the task". The frame check accepts framegate.toml while it is exactly the tagged
+  file. Not applied: a file that does not load, and a change that weakens a check
+  (`src/framegate/config_change.py`). That is a lower `diff_coverage` / `mutation_score`,
+  a new `unrunnable_tests` entry, a command that is emptied or gets an argument that leaves
+  something out (`--exclude`, `--ignore`, `-k` ...), and every key that is not known to be
+  harmless (`mutation_tool`, `regression_baseline`, `[paths]`, `[protected]`, `[frame]`,
+  `[risk]` ...). Such a change belongs to the setup (`/framegate:setup`), outside a task.
 - A redo that cannot end differently is not run. Work that parked on something no
   implementer run can change ("unfixable in IMPLEMENT", or a diagnosis with owner `tests`
   / `spec` / `config`) keeps a digest of what the gates read outside the source folders:
@@ -1282,7 +1288,8 @@ Models and speed:
   runs (`[gates] format_fix`, default on, only with the adapter's own format check), so a
   formatting slip costs no attempt and never sits in a file the implementer may not edit. For
   .NET the format / lint checks report only findings on changed lines, and the format fix keeps
-  only its changes there: no churn in code the feature did not touch.
+  only its changes there: no churn in code the feature did not touch. For Python the lint /
+  format / typecheck / imports checks count only findings in files the task changed.
 - `[references]` (name = path, or `{ path, note }`): other projects the agents may read, see
   "References and ports".
 - `[gates.extra]` (name = command): project checks after the final gates, e.g. a balance
