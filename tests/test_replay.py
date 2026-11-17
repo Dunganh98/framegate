@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from framegate import cli
-from framegate.replay import chat, run, score
+from framegate.replay import chat, guard, run, sandbox, score
 from framegate.replay.candidates import Candidate, CandidatesError, parse
 from framegate.replay.sandbox import Layout, ReplayError, build, read_json, write_json
 
@@ -433,3 +433,44 @@ def test_chat_call_is_detached_and_wait_prints_its_answer(
     assert len(started) == 1 and started[0][-2:] == ["--turn", "turn-01.json"]
     assert "turn-01.json  session: s1" in capsys.readouterr().out
     assert not list(tmp_path.glob("turn-*.pid"))
+
+
+def test_the_guard_keeps_every_call_inside_the_run(tmp_path: pathlib.Path) -> None:
+    root = tmp_path / "run"
+    (root / "sandbox").mkdir(parents=True)
+    cwd = str(root / "sandbox")
+
+    def why(tool: str, **args: str) -> str:
+        return guard.verdict(
+            {"tool_name": tool, "tool_input": args, "cwd": cwd}, guard.norm(str(root))
+        )
+
+    # what the setup chat ran in the replays (blocked by the old allow-list)
+    for ok in (
+        r'.venv\Scripts\python.exe -m pip install -e ".[dev]"',
+        "framegate preflight --plugin-version 0.12.5; framegate state",
+        'Get-Content "$HOME/.claude/plugins/known_marketplaces.json"',
+        "Get-ChildItem src,tests -Depth 2 -Name | Select-Object -First 80; git branch -a",
+        "git diff spec-approved/x..HEAD -- src",
+        f"Get-Content {root / 'sandbox' / 'framegate.toml'}",
+    ):
+        assert why("PowerShell", command=ok) == "", ok
+    assert why("Edit", file_path="src/a.py") == ""
+    for bad in (
+        "git push origin HEAD",
+        "cd src; curl https://example.com",
+        "framegate publish x",
+        r"Remove-Item C:\Users\someone\project -Recurse",
+        "cat /c/Users/someone/.ssh/id_rsa",
+        "Set-Content ../../answers/x.txt hi",
+        "Get-Content $env:USERPROFILE/.gitconfig",
+        "claude plugin install other",
+    ):
+        assert why("PowerShell", command=bad), bad
+    assert why("Write", file_path=str(tmp_path / "elsewhere.txt"))
+
+    lay = Layout(tmp_path, "x")
+    sandbox.write_deny(lay.driver, [], up=1)
+    hook = json.loads((lay.driver / ".claude/settings.local.json").read_text(encoding="utf-8"))
+    command = hook["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert command == "python -m framegate.replay.guard --up 1"  # no path: any shell runs it

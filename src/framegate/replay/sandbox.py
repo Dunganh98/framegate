@@ -33,7 +33,12 @@ UPLOAD = "git -c uploadpack.allowAnySHA1InWant=true upload-pack"
 SKIP = shutil.ignore_patterns(
     ".venv", ".git", "out", "__pycache__", ".pytest_cache", ".ruff_cache", ".hypothesis"
 )
-BLOCKED = ("gh", "az", "git fetch", "git pull", "git clone", "git remote", "git push")
+BLOCKED = (
+    "gh", "az", "git fetch", "git pull", "git clone", "git remote", "git push", "git submodule",
+    "git config --global", "curl", "wget", "Invoke-WebRequest", "Invoke-RestMethod", "claude",
+    "npm", "npx", "winget", "setx", "Start-Process", "uv tool", "framegate publish",
+    "framegate cleanup", "framegate update",
+)  # fmt: skip
 TEST_TIMEOUT = 1800
 
 
@@ -172,9 +177,22 @@ def deny_rules(hidden: Sequence[str], shell: bool = True) -> list[str]:
 CHAT_RULES = ["Bash(framegate *)", "PowerShell(framegate *)"]
 
 
-def write_deny(folder: pathlib.Path, rules: list[str], allow: Sequence[str] = ()) -> None:
+def guard_hook(up: int) -> dict[str, Any]:
+    """The replay guard (guard.py) as a PreToolUse hook: nothing outside the folder `up`
+    levels above the project folder."""
+    hook = {"type": "command", "command": f"python -m framegate.replay.guard --up {up}"}
+    tools = "Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit"
+    return {"PreToolUse": [{"matcher": tools, "hooks": [hook]}]}
+
+
+def write_deny(
+    folder: pathlib.Path, rules: list[str], allow: Sequence[str] = (), up: int = 0
+) -> None:
+    """The folder's settings: deny rules, and the guard that keeps every tool call inside
+    the folder (`up` levels above it). Claude Code reads them for every agent started there."""
     permissions = {**({"allow": list(allow)} if allow else {}), "deny": rules}
-    write_json(folder / ".claude" / "settings.local.json", {"permissions": permissions})
+    data = {"permissions": permissions, "hooks": guard_hook(up)}
+    write_json(folder / ".claude" / "settings.local.json", data)
 
 
 def venv_python(sandbox: pathlib.Path) -> pathlib.Path:
@@ -327,7 +345,8 @@ def build(
     write_deny(
         lay.sandbox, deny_rules([*secret, rule_path(lay.out / "runs") + "/*/driver"]), CHAT_RULES
     )
-    write_deny(lay.driver, deny_rules(secret, shell=False))
+    # the driver works in its folder and talks to the sandbox: both are under the run folder
+    write_deny(lay.driver, deny_rules(secret), up=1)
 
     py = env(c, lay.sandbox)
     roots = c.pythonpath or (["src", "."] if (lay.sandbox / "src").is_dir() else ["."])

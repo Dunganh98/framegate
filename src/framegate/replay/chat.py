@@ -41,6 +41,10 @@ ALLOWED = [
     "PowerShell(& *python* *)",
     *(f"PowerShell({cmd} *)" for cmd in ("Select-Object", "Select-String", "Measure-Object")),
     *("Read", "Write", "Edit", "Glob", "Grep", "Monitor"),
+    # no prompts: nobody answers them in a replay. What keeps the chat in the sandbox is the
+    # sandbox's settings: deny rules and the guard hook (sandbox.write_deny, guard.py)
+    "Bash",
+    "PowerShell",
 ]
 #: `--wait` without a number: under the 10 minutes a tool call of the driver may take
 WAIT_SECONDS = 540.0
