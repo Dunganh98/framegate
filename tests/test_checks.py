@@ -430,6 +430,24 @@ def test_smells_count_only_in_the_features_test_files(tmp_path: pathlib.Path) ->
     assert smells_check.check(a).status == "FAIL"  # no feature: every test file
 
 
+def test_old_skip_calls_in_a_touched_file_are_not_counted(tmp_path: pathlib.Path) -> None:
+    init_git(tmp_path)
+    old = "import pytest\n\n\ndef test_old() -> None:\n    pytest.skip('slow')\n    assert 1\n"
+    write(tmp_path, "tests/test_s.py", old)
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-q", "-m", "old")
+    git(tmp_path, "tag", "spec-approved/f")
+    a = adapter_for(tmp_path)
+    write(tmp_path, "tests/test_s.py", old + "\n\ndef test_new() -> None:\n    assert 1\n")
+    res = smells_check.check(a, "f")
+    assert res.status == "PASS" and "(1 in tests this feature did not add: ignored)" in res.output
+    new = "\n\ndef test_new() -> None:\n    pytest.skip('x')\n    assert 1\n"
+    write(tmp_path, "tests/test_s.py", old + new)
+    res = smells_check.check(a, "f")
+    assert res.status == "FAIL" and "pytest.skip() call in tests/test_s.py line 10" in res.output
+    assert "line 5" not in res.output
+
+
 def test_no_smells(tmp_path: pathlib.Path) -> None:
     write(tmp_path, "tests/test_ok.py", "def test_ok() -> None:\n    assert 1 == 1\n")
     assert smells_check.check(adapter_for(tmp_path)) == CheckResult("PASS", "No test smells found.")

@@ -32,6 +32,7 @@ from framegate.adapters.base import (
     TestAssertions,
     TestRun,
     TestScope,
+    changed_lines,
     cobertura_hits,
     cobertura_without,
     diff_coverage_summary,
@@ -732,7 +733,10 @@ class PythonAdapter(LanguageAdapter):
         changed = [f for f in changed_src if f.endswith(".py")]
         if not changed:
             return CheckResult("PASS", "No changed Python source files to mutate.")
-        return self._mutmut(feature, self._mutmut_modules(changed), scope)
+        modules, functions = self._mutmut_targets(base_ref, changed)
+        if not modules and not functions:
+            return CheckResult("PASS", "No changed functions to mutate.")
+        return self._mutmut(feature, modules, scope, functions=functions)
 
     def mutation_trial(self) -> CheckResult | None:
         """The setup's trial (doctor --tree): mutmut finds the code and pytest loads
@@ -743,10 +747,15 @@ class PythonAdapter(LanguageAdapter):
         return self._mutmut("", [], None, trial=True)
 
     def _mutmut(
-        self, feature: str, modules: Sequence[str], scope: TestScope | None, trial: bool = False
+        self,
+        feature: str,
+        modules: Sequence[str],
+        scope: TestScope | None,
+        trial: bool = False,
+        functions: Sequence[str] = (),
     ) -> CheckResult:
         if self.mutation_runner() == "wsl":
-            return self._mutmut_wsl(feature, modules, scope, trial)
+            return self._mutmut_wsl(feature, modules, scope, trial, functions)
         if os.name == "nt":
             return not_measured(*NATIVE_WINDOWS)
         if not self._has_module("mutmut"):
@@ -755,18 +764,40 @@ class PythonAdapter(LanguageAdapter):
                 "add mutmut to the project's dev dependencies and install them",
             )
         work = self._mutmut_dir()
-        spec = self._mutmut_spec(modules, str(self.root), str(work / "result.json"), scope)
+        result = str(work / "result.json")
+        spec = self._mutmut_spec(modules, str(self.root), result, scope, functions)
         spec["trial"] = trial
         (work / "spec.json").write_text(json.dumps(spec, indent=1), encoding="utf-8")
         cmd = [self.python, str(work / "runner.py"), str(work / "spec.json")]
-        return self._mutmut_finish(feature, modules, cmd, "native", trial)
+        return self._mutmut_finish(feature, modules, cmd, "native", trial, functions)
 
     # ---------- mutmut internals ----------
+    def _mutmut_module(self, f: str) -> str:
+        """A source file's module as mutmut names it: the path from the root, a leading
+        `src.` dropped (mutmut 3 drops only that one)."""
+        m = f[:-3].replace("/", ".").removeprefix("src.")
+        return m[: -len(".__init__")] if m.endswith(".__init__") else m
+
     def _mutmut_modules(self, changed: Sequence[str]) -> list[str]:
-        """Changed files -> module names as mutmut names them: the path from the root, a
-        leading `src.` dropped (mutmut 3 drops only that one)."""
-        mods = [f[:-3].replace("/", ".").removeprefix("src.") for f in changed]
-        return sorted({m[: -len(".__init__")] if m.endswith(".__init__") else m for m in mods})
+        return sorted({self._mutmut_module(f) for f in changed})
+
+    def _mutmut_targets(self, base_ref: str, changed: Sequence[str]) -> tuple[list[str], list[str]]:
+        """(modules mutated whole: their changed lines are unknown, the changed functions)."""
+        modules: set[str] = set()
+        functions: list[str] = []
+        for f in changed:
+            module = self._mutmut_module(f)
+            lines = changed_lines(self.cfg, base_ref, f)
+            try:
+                text = (self.root / f).read_text(encoding="utf-8")
+                found = None if lines is None else mutmut_functions(module, text, lines)
+            except (OSError, ValueError, SyntaxError):
+                found = None
+            if found is None:
+                modules.add(module)
+            else:
+                functions += found
+        return sorted(modules), sorted(set(functions))
 
     def _mutmut_dir(self) -> pathlib.Path:
         """out/.mutmut/ with a fresh copy of the runner script."""
@@ -777,14 +808,20 @@ class PythonAdapter(LanguageAdapter):
         return work
 
     def _mutmut_spec(
-        self, modules: Sequence[str], project: str, result: str, scope: TestScope | None = None
+        self,
+        modules: Sequence[str],
+        project: str,
+        result: str,
+        scope: TestScope | None = None,
+        functions: Sequence[str] = (),
     ) -> dict[str, Any]:
         return {
             "project": project,
             "result": result,
             # top-level functions (x_name) and methods (x<sep>Class<sep>name) of the modules
-            "patterns": [f"{m}.x*" for m in modules],
+            "patterns": [f"{m}.x*" for m in modules] + [f"{f}*" for f in functions],
             "show_modules": list(modules),
+            "show_functions": list(functions),
             "show_limit": 50,
             "timeout": self.cfg.mutation_timeout,
             "pytest_addopts": " ".join(
@@ -811,6 +848,7 @@ class PythonAdapter(LanguageAdapter):
         modules: Sequence[str],
         scope: TestScope | None = None,
         trial: bool = False,
+        functions: Sequence[str] = (),
     ) -> CheckResult:
         found = wsl.probe(self.root, self.cfg.wsl_distro)
         if found.root is None:
@@ -827,7 +865,7 @@ class PythonAdapter(LanguageAdapter):
             return wsl.to_wsl(path, self.root, root_wsl, distro)
 
         reqs, files, stamp = self._wsl_requirements(w)
-        spec = self._mutmut_spec(modules, wsl_root, w(work / "result.json"), scope)
+        spec = self._mutmut_spec(modules, wsl_root, w(work / "result.json"), scope, functions)
         if scope_plugin_missing(reqs):
             # seen live: an installed framegate and a project that does not name it left
             # the venv without the plugin, and pytest refused `--req` (a run without a result)
@@ -848,7 +886,7 @@ class PythonAdapter(LanguageAdapter):
         (work / "spec.json").write_text(json.dumps(spec, indent=1), encoding="utf-8")
         cmd = wsl.wsl_command(["python3", w(work / "runner.py"), w(work / "spec.json")], distro)
         where = f"WSL {distro}" if distro else "WSL"
-        return self._mutmut_finish(feature, modules, cmd, where, trial)
+        return self._mutmut_finish(feature, modules, cmd, where, trial, functions)
 
     def _wsl_requirements(
         self, w: Callable[[pathlib.Path], str]
@@ -871,7 +909,13 @@ class PythonAdapter(LanguageAdapter):
         return reqs, [w(f) for f in files], digest.hexdigest()
 
     def _mutmut_finish(
-        self, feature: str, modules: Sequence[str], cmd: list[str], where: str, trial: bool = False
+        self,
+        feature: str,
+        modules: Sequence[str],
+        cmd: list[str],
+        where: str,
+        trial: bool = False,
+        functions: Sequence[str] = (),
     ) -> CheckResult:
         result_file = self.root / self.cfg.paths.out / ".mutmut" / "result.json"
         result_file.unlink(missing_ok=True)
@@ -908,7 +952,7 @@ class PythonAdapter(LanguageAdapter):
             if "nothing matches" in output:  # no mutants in the changed modules
                 return CheckResult("PASS", "No mutants generated for the changed files.")
             return CheckResult("FAIL", f"mutmut run failed ({where}):\n{output}")
-        tally = tally_mutmut(str(res.get("results", "")), modules)
+        tally = tally_mutmut(str(res.get("results", "")), modules, functions)
         write_survivors(
             self.root / self.cfg.paths.out / feature / "mutation_survivors.md",
             tally,
@@ -919,9 +963,13 @@ class PythonAdapter(LanguageAdapter):
         timing = f"{where}, {res.get('seconds')} s" + (
             ", venv reused" if res.get("venv_reused") else ""
         )
+        n = len(functions)
+        scope = [f"the {n} function{'s' * (n != 1)} this task changed"] if n else []
+        if modules:
+            scope.append(f"module{'s' * (len(modules) != 1)} {', '.join(modules)}")
         msg = (
-            f"Mutation score {tally.score:.1f}% ({tally.detected}/{tally.total} killed), "
-            f"threshold {self.cfg.mutation_score:g}% ({timing})."
+            f"Mutation score {tally.score:.1f}% ({tally.detected}/{tally.total} killed) in "
+            f"{' and '.join(scope)}, threshold {self.cfg.mutation_score:g}% ({timing})."
         )
         return CheckResult(
             "PASS" if tally.score >= self.cfg.mutation_score else "FAIL", msg, summary=msg
@@ -951,7 +999,21 @@ class PythonAdapter(LanguageAdapter):
 
     # ---------- agents ----------
     def test_tools(self) -> list[str]:
-        return ["Bash(python -m pytest *)", "Bash(pytest *)"]
+        own = [f'"{p}"' if " " in p else p for p in self._interpreter_forms()]
+        rules = ["Bash(python -m pytest *)", "Bash(pytest *)"]
+        return list(dict.fromkeys(rules + [f"Bash({p} -m pytest *)" for p in own]))
+
+    def _interpreter_forms(self) -> list[str]:
+        """The project interpreter as an agent may type it (relative inside the project)."""
+        p = pathlib.Path(self.python)
+        if not p.is_absolute():
+            return [self.python]
+        base = next((b for b in (self.root, self.root.resolve()) if p.is_relative_to(b)), None)
+        if base is None:
+            return list(dict.fromkeys([self.python, p.as_posix()]))
+        rel = p.relative_to(base).as_posix()
+        forms = [rel, "./" + rel]
+        return forms + [f.replace("/", "\\") for f in forms]
 
     def agent_form(self, cmd: Sequence[str]) -> list[str]:
         """The project interpreter is `python` for an agent, as in its test command."""
@@ -1014,14 +1076,40 @@ class MutmutTally:
         return 100.0 * self.detected / self.total if self.total else 100.0
 
 
-def tally_mutmut(results: str, modules: Sequence[str]) -> MutmutTally:
+def mutmut_functions(module: str, source: str, lines: set[int]) -> list[str]:
+    """mutmut's names (`mod.x_f`, `mod.xǁClsǁm`) of the functions and methods `lines` touch."""
+    found = []
+
+    def touched(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+        first = min([node.lineno, *(d.lineno for d in node.decorator_list)])
+        return any(n in lines for n in range(first, (node.end_lineno or node.lineno) + 1))
+
+    functions = (ast.FunctionDef, ast.AsyncFunctionDef)
+    for node in ast.parse(source).body:
+        if isinstance(node, functions) and touched(node):
+            found.append(f"{module}.x_{node.name}")
+        elif isinstance(node, ast.ClassDef):
+            found += [
+                f"{module}.xǁ{node.name}ǁ{item.name}"
+                for item in node.body
+                if isinstance(item, functions) and touched(item)
+            ]
+    return found
+
+
+def tally_mutmut(
+    results: str, modules: Sequence[str], functions: Sequence[str] = ()
+) -> MutmutTally:
     """Count `mutmut results --all true` lines (`    pkg.mod.x_func__mutmut_3: killed`) of the
-    given modules. The module is everything before the last dot (mangled names have none)."""
-    wanted = set(modules)
+    given modules (everything before the last dot: mangled names have none) or functions."""
+    wanted, funcs = set(modules), set(functions)
     t = MutmutTally()
     for line in results.splitlines():
         m = MUTANT_LINE.match(line)
-        if not m or m.group(1).rsplit(".", 1)[0] not in wanted:
+        if not m:
+            continue
+        name = m.group(1)
+        if name.rsplit(".", 1)[0] not in wanted and name.rsplit("__mutmut_", 1)[0] not in funcs:
             continue
         status = m.group(2)
         if status in DETECTED:

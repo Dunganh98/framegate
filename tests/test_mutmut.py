@@ -12,12 +12,13 @@ import sys
 
 import pytest
 
-from conftest import git
+from conftest import git, init_git
 from framegate.adapters import mutmut_runner, wsl
 from framegate.adapters.base import NOT_MEASURED, TestScope
 from framegate.adapters.python import (
     PythonAdapter,
     collect_requirements,
+    mutmut_functions,
     tally_mutmut,
     translate_drive_paths,
     write_survivors,
@@ -77,6 +78,58 @@ def test_tally_filters_modules_and_statuses() -> None:
     assert all(not n.startswith(("demo.sub.", "other.")) for n, _ in t.survivors)
     assert tally_mutmut(results, ["demo.sub"]).survivors == [("demo.sub.x_f__mutmut_1", "survived")]
     assert tally_mutmut("", ["demo"]).score == 100.0
+    t = tally_mutmut(results, [], ["demo.xǁCalcǁadd", "demo.x_h"])
+    assert (t.detected, t.total, t.unchecked) == (1, 2, 2)
+    assert tally_mutmut(results, [], ["demo.x_ad"]).total == 0  # a name, not a prefix
+
+
+SOURCE = """\
+import functools
+
+LIMIT = 3
+
+
+def old(a):
+    return a
+
+
+@functools.cache
+def changed(a):
+    return a + 1
+
+
+class Calc:
+    def keep(self):
+        return 1
+
+    @property
+    def value(self):
+        return 2
+"""
+
+
+def test_mutmut_functions_of_changed_lines() -> None:
+    assert mutmut_functions("pkg.m", SOURCE, {10, 21}) == ["pkg.m.x_changed", "pkg.m.xǁCalcǁvalue"]
+    assert mutmut_functions("pkg.m", SOURCE, {7, 17}) == ["pkg.m.x_old", "pkg.m.xǁCalcǁkeep"]
+    assert mutmut_functions("pkg.m", SOURCE, {3, 4}) == []  # module level only
+
+
+def test_mutmut_targets(tmp_path: pathlib.Path) -> None:
+    init_git(tmp_path)
+    (tmp_path / "src" / "pkg").mkdir(parents=True)
+    (tmp_path / "src" / "pkg" / "m.py").write_text(SOURCE, encoding="utf-8")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-q", "-m", "base")
+    git(tmp_path, "tag", "base")
+    (tmp_path / "src" / "pkg" / "m.py").write_text(SOURCE.replace("+ 1", "+ 2"), encoding="utf-8")
+    (tmp_path / "src" / "pkg" / "new.py").write_text("def f():\n    pass\n", encoding="utf-8")
+    a = adapter(tmp_path)
+    targets = a._mutmut_targets("base", ["src/pkg/m.py", "src/pkg/new.py"])
+    assert targets == (["pkg.new"], ["pkg.m.x_changed"])
+    (tmp_path / "src" / "pkg" / "m.py").write_text(SOURCE.replace("3", "4"), encoding="utf-8")
+    assert a.mutation_check("f", "base", ["src/pkg/m.py"]).output == (
+        "No changed functions to mutate."
+    )
 
 
 def test_write_survivors(tmp_path: pathlib.Path) -> None:
@@ -230,14 +283,16 @@ def fake_mutmut(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> path
 
 
 def run_fake(
-    a: PythonAdapter, modules: list[str], scope: TestScope | None = None
+    a: PythonAdapter,
+    modules: list[str],
+    scope: TestScope | None = None,
+    functions: tuple[str, ...] = (),
 ) -> tuple[str, str, str]:
     work = a._mutmut_dir()
-    spec = a._mutmut_spec(modules, str(a.root), str(work / "result.json"), scope)
+    spec = a._mutmut_spec(modules, str(a.root), str(work / "result.json"), scope, functions)
     (work / "spec.json").write_text(json.dumps(spec), encoding="utf-8")
-    res = a._mutmut_finish(
-        "f", modules, [sys.executable, str(work / "runner.py"), str(work / "spec.json")], "native"
-    )
+    cmd = [sys.executable, str(work / "runner.py"), str(work / "spec.json")]
+    res = a._mutmut_finish("f", modules, cmd, "native", functions=functions)
     return res.status, res.output, res.summary
 
 
@@ -245,7 +300,7 @@ def test_runner_script_flow(fake_mutmut: pathlib.Path) -> None:
     a = adapter(fake_mutmut, {"gates": {"mutation_score": 80}})
     status, output, summary = run_fake(a, ["demo"])
     assert status == "PASS", output
-    assert output.startswith("Mutation score 85.7% (6/7 killed), threshold 80% (native,")
+    assert output.startswith("Mutation score 85.7% (6/7 killed) in module demo, threshold 80% (")
     assert summary == output
     assert (fake_mutmut / "run_args.txt").read_text(encoding="utf-8") == "demo.x*"
     assert not (fake_mutmut / "mutants").exists()  # cleaned after the run
@@ -258,6 +313,19 @@ def test_runner_script_flow(fake_mutmut: pathlib.Path) -> None:
     a90 = adapter(fake_mutmut, {"gates": {"mutation_score": 90}})
     assert run_fake(a90, ["demo"])[0] == "FAIL"
     assert run_fake(a, ["other"])[1] == "No mutants generated for the changed files."
+
+    output = run_fake(a, [], functions=("demo.x_add",))[1]
+    assert output.startswith(
+        "Mutation score 85.7% (6/7 killed) in the 1 function this task changed"
+    )
+    assert (fake_mutmut / "run_args.txt").read_text(encoding="utf-8") == "demo.x_add*"
+    assert "demo.x_add__mutmut_5" in (fake_mutmut / "out/f/mutation_survivors.md").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        run_fake(a, [], functions=("demo.x_sub",))[1]
+        == "No mutants generated for the changed files."
+    )
 
 
 def test_mutmut_is_told_the_source_folders(fake_mutmut: pathlib.Path) -> None:

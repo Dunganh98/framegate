@@ -110,6 +110,24 @@ def test_python_defaults(tmp_path: pathlib.Path) -> None:
     assert "\n\n" not in brief and len(brief.encode()) < 1500
 
 
+def test_pytest_through_the_project_interpreter_is_allowed(tmp_path: pathlib.Path) -> None:
+    a = adapter(tmp_path, {"env": {"python": ".venv/Scripts/python.exe"}})
+    tools = a.allowed_tools("TESTS")
+    for typed in (
+        ".venv\\Scripts\\python.exe -m pytest tests/test_x.py",
+        ".\\.venv\\Scripts\\python.exe -m pytest -q",
+        "./.venv/Scripts/python.exe -m pytest",
+        "python -m pytest -q",
+    ):
+        assert rule_allows(tools, typed), typed
+    assert "PowerShell(.venv\\Scripts\\python.exe -m pytest *)" in tools
+    assert not rule_allows(tools, ".venv\\Scripts\\python.exe -c 1")
+    assert adapter(tmp_path, {"env": {"python": "python"}}).test_tools() == [
+        "Bash(python -m pytest *)",
+        "Bash(pytest *)",
+    ]
+
+
 def test_the_projects_own_commands_are_named_and_allowed(tmp_path: pathlib.Path) -> None:
     """black where the project formats with black, every source folder, no disabled command;
     nothing of the adapter's defaults is left in the brief or in the rules."""

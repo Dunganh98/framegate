@@ -10,6 +10,7 @@ spec.json keys:
   result             where to write the result JSON
   patterns           mutant-name globs for `mutmut run` (e.g. "demo.x*"); [] = all mutants
   show_modules       modules whose surviving mutants get a `mutmut show` diff (max show_limit)
+  show_functions     the same for single functions (mangled names, e.g. "demo.x_add")
   show_limit         max number of diffs (default 50)
   timeout            seconds for `mutmut run` (default 7200)
   keep_mutants       keep the `mutants/` copy (default: deleted before and after the run)
@@ -257,13 +258,18 @@ def run_mutmut(spec: dict, python: str) -> dict:
         )
         _, results = _run([python, "-m", "mutmut", "results", "--all", "true"], cwd=project)
         modules = set(spec.get("show_modules", []))
+        functions = set(spec.get("show_functions", []))
         shows: dict[str, str] = {}
         limit = int(spec.get("show_limit", 50))
         for line in results.splitlines():
             m = LINE.match(line)
-            if not m or m.group(2) not in SURVIVOR_STATUSES:
+            if not m or m.group(2) not in SURVIVOR_STATUSES or len(shows) >= limit:
                 continue
-            if m.group(1).rsplit(".", 1)[0] not in modules or len(shows) >= limit:
+            name = m.group(1)
+            if (
+                name.rsplit(".", 1)[0] not in modules
+                and name.rsplit("__mutmut_", 1)[0] not in functions
+            ):
                 continue
             _, diff = _run([python, "-m", "mutmut", "show", m.group(1)], cwd=project)
             shows[m.group(1)] = diff.strip()

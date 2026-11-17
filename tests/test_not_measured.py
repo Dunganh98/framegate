@@ -127,7 +127,7 @@ def test_mutation_check_runs_in_the_distribution_the_probe_found(
     seen: dict[str, Any] = {}
 
     def finish(
-        feature: str, modules: list[str], cmd: list[str], where: str, trial: bool = False
+        feature: str, modules: list[str], cmd: list[str], where: str, *_: Any
     ) -> CheckResult:
         seen.update(cmd=cmd, where=where)
         return CheckResult("PASS", "")

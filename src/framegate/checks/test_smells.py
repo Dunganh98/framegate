@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 
-from framegate.adapters.base import CheckResult, LanguageAdapter
+from framegate.adapters.base import CheckResult, LanguageAdapter, changed_lines
 from framegate.state import GitError, git, tag_exists
 
 
@@ -70,13 +70,40 @@ def is_old_test(problem: str, added: dict[str, str | None]) -> bool:
     return False
 
 
+#: a smell on one line: `... <file> line <N>` (python), `...: <file>:<N>` (generic)
+LINE_SMELL = re.compile(r"(?: line |:)(\d+)$")
+
+
+def is_old_line(problem: str, lines: dict[str, set[int] | None]) -> bool:
+    """A smell on a line of a file that existed before, not among the lines changed since."""
+    m = LINE_SMELL.search(problem)
+    if not m:
+        return False
+    head = problem[: m.start()]
+    for f, changed in lines.items():
+        if head.endswith(f):
+            return changed is not None and int(m.group(1)) not in changed
+    return False
+
+
 def check(adapter: LanguageAdapter, feature: str = "") -> CheckResult:
     problems = adapter.test_smells()
     files = feature_files(adapter, feature)
     ignored = 0
     if files is not None:
         added = added_text(adapter, feature, files)
-        kept = [p for p in problems if any(f in p for f in files) and not is_old_test(p, added)]
+        tag = f"spec-approved/{feature}"
+        on_lines = [p for p in problems if LINE_SMELL.search(p)]
+        changed = {
+            f: changed_lines(adapter.cfg, tag, f) for f in added if any(f in p for p in on_lines)
+        }
+        kept = [
+            p
+            for p in problems
+            if any(f in p for f in files)
+            and not is_old_test(p, added)
+            and not is_old_line(p, changed)
+        ]
         ignored = len(problems) - len(kept)
         problems = kept
     notes = [p for p in problems if p.startswith("NOTE")]
