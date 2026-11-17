@@ -49,7 +49,8 @@ def command(
     """The call and its stdin. A slash command must be the argument; any other text goes
     through stdin, which keeps many lines and quotes whole on every platform."""
     cmd = [exe, "-p", "--output-format", "json", "--permission-mode", "acceptEdits"]
-    cmd += ["--allowedTools", ",".join([*ALLOWED, *allow])]
+    # no MCP servers of the user's config: they start with every call and the chat may not use them
+    cmd += ["--strict-mcp-config", "--allowedTools", ",".join([*ALLOWED, *allow])]
     if resume:
         cmd += ["--resume", resume]
     if plugin := os.environ.get("FRAMEGATE_REPLAY_PLUGIN"):  # a plugin folder under test

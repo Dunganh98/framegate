@@ -395,6 +395,7 @@ def test_chat_call_sends_a_slash_command_as_argument_and_text_through_stdin() ->
     assert text[-2:] == ["--model", "sonnet"]
     allowed = slash[slash.index("--allowedTools") + 1].split(",")
     assert "Bash" in allowed and "PowerShell" in allowed  # no prompts; the guard keeps it in
+    assert "--strict-mcp-config" in slash
 
 
 def test_chat_call_is_detached_and_wait_prints_its_answer(
