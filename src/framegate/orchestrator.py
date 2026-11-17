@@ -526,19 +526,44 @@ TURN_CAP_RETRIES = 1
 LIMIT_DEFAULT_WAIT_S = 15 * 60
 LIMIT_MARGIN_S = 60
 LIMIT_MAX_WAITS = 4
+#: {out}/{f}/LIMIT_WAIT_FILE exists while a run waits for the usage limit (what it waits
+#: for, as JSON). Deleting it wakes the run: `framegate wake <f>` does that
+LIMIT_WAIT_FILE = "limit_wait.json"
+#: how often a waiting run looks whether it was woken
+WAKE_POLL_S = 5.0
 
 
 def now_utc() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
 
 
-def sleep_until(until: datetime.datetime) -> None:
-    """Sleep until `until` (aware), in short slices so Ctrl+C / SIGTERM stop it at once."""
+def sleep_until(until: datetime.datetime, wake: pathlib.Path | None = None) -> bool:
+    """Sleep until `until` (aware), in short slices so Ctrl+C / SIGTERM stop it at once.
+    With `wake`: also return, with True, as soon as that file is gone (the usage-limit wait:
+    `framegate wake` deletes it)."""
     while True:
+        if wake is not None and not wake.is_file():
+            return True
         left = (until - now_utc()).total_seconds()
         if left <= 0:
-            return
-        time.sleep(min(left, 30.0))
+            return False
+        time.sleep(min(left, 30.0 if wake is None else WAKE_POLL_S))
+
+
+def wake(cfg: Config, feature: str, echo: Callable[[str], None] = print) -> int:
+    """`framegate wake <f>`: a run that waits for the usage limit tries again now (the user
+    refilled the limit, or it lifted before the time claude named). Seen live: a run slept
+    1 h 40 min after the limit was refilled."""
+    path = cfg.feature_out(feature) / LIMIT_WAIT_FILE
+    lock = procs.read_lock(cfg.out_dir)
+    waiting = procs.lock_alive(lock) and (lock or {}).get("feature") == feature
+    if not path.is_file() or not waiting:
+        path.unlink(missing_ok=True)  # left by a killed run
+        echo(f"{feature} is not waiting for the usage limit: nothing to wake.")
+        return EXIT_ERROR
+    path.unlink(missing_ok=True)
+    echo(f"Woke {feature}: the run tries again within {WAKE_POLL_S:g} seconds.")
+    return EXIT_OK
 
 
 #: `usage` fields of a `claude -p` result -> the agent_run event's token columns
@@ -827,11 +852,22 @@ class Orchestrator:
         API could not be reached runs again after a short wait (neither is a failed attempt:
         the caller sees only a run that worked)."""
         waits = retries = 0
+
+        def once(probe: bool = False) -> tuple[dict[str, Any], UsageLimit | None]:
+            return self.run_agent_once(
+                phase, feature, task, feedback, role, step, attempt, probe=probe
+            )
+
+        early: tuple[dict[str, Any], UsageLimit | None] | None = None
         while True:
-            res, limit = self.run_agent_once(phase, feature, task, feedback, role, step, attempt)
+            # (a try during the usage-limit wait that got through is this run's result)
+            res, limit = early or once()
+            early = None
             if limit is not None:
                 waits += 1
-                self.wait_for_usage_limit(feature, phase, step, limit, waits)
+                early = self.wait_for_usage_limit(
+                    feature, phase, step, limit, waits, lambda: once(probe=True)
+                )
                 continue
             problem = detect_api_error(res)
             if problem is None:
@@ -876,11 +912,25 @@ class Orchestrator:
         sleep_until(now_utc() + datetime.timedelta(seconds=wait))
 
     def wait_for_usage_limit(
-        self, feature: str, phase: str, step: str | None, limit: UsageLimit, waits: int
-    ) -> None:
-        """Sleep until the limit lifts (plus a margin). A reset further away than
+        self,
+        feature: str,
+        phase: str,
+        step: str | None,
+        limit: UsageLimit,
+        waits: int,
+        probe: Callable[[], tuple[dict[str, Any], UsageLimit | None]] | None = None,
+    ) -> tuple[dict[str, Any], UsageLimit | None] | None:
+        """Wait until the limit lifts (plus a margin). A reset further away than
         [agents] limit_wait_max_hours, or a limit that is still there after LIMIT_MAX_WAITS
-        waits, stops the run like Ctrl+C: the state is kept, `framegate run` resumes it."""
+        waits, stops the run like Ctrl+C: the state is kept, `framegate run` resumes it.
+
+        The time claude names is the latest end, not the only one (seen live: a run slept
+        1 h 40 min after the user had refilled the limit). So the wait ends early when
+        - a try gets through: every [agents] limit_probe_minutes `probe` starts the refused
+          run again. A refused run costs nothing and leaves no record (run_agent_once); the
+          one that gets through is the run itself and is returned;
+        - the user wakes it: `framegate wake <f>` deletes {out}/{f}/limit_wait.json.
+        None = the caller starts the same run again."""
         now = now_utc()
         reset = limit.reset_at if limit.reset_at and limit.reset_at > now else None
         until = (reset or now + datetime.timedelta(seconds=LIMIT_DEFAULT_WAIT_S)) + (
@@ -908,16 +958,57 @@ class Orchestrator:
                 f"Resets {local}. Then: framegate run {feature}",
             )
             raise procs.Interrupted(f"usage limit, resets {local} ({why})")
+        every = self.cfg.limit_probe_minutes * 60 if probe is not None else 0
+        tries = f", a try every {self.cfg.limit_probe_minutes:g} min" if every else ""
         self.progress(
             feature,
-            f"[{label}] usage limit reached ({limit.message[:80]}); waiting until {local}, then "
-            "the same run again (not a failed attempt).",
+            # (what matters first: a progress line is cut at PROGRESS_WIDTH)
+            f"[{label}] usage limit reached; waiting until {local}{tries} (not a failed "
+            f"attempt). Refilled earlier: framegate wake {feature} ({limit.message[:60]})",
         )
         self.notify(
-            f"framegate: {feature} waits for the usage limit", f"Continues by itself at {local}."
+            f"framegate: {feature} waits for the usage limit",
+            f"Continues by itself at {local}, or now with: framegate wake {feature}",
         )
-        sleep_until(until)
-        self.progress(feature, f"[{label}] usage limit wait over; running again.")
+        marker = self.fdir(feature) / LIMIT_WAIT_FILE
+        marker.write_text(
+            json.dumps({"phase": phase, "step": step, "until": until.isoformat()}),
+            encoding="utf-8",
+        )
+        t0 = time.time()
+        probes = 0
+        how, early = "reset", None
+        try:
+            at = now
+            while how == "reset" and at < until:
+                # (by the planned times, not the clock: a test's sleep takes no time)
+                at = min(until, at + datetime.timedelta(seconds=every)) if every else until
+                if sleep_until(at, marker):
+                    how = "wake"
+                elif at < until and probe is not None:
+                    probes += 1
+                    res, still = probe()
+                    if still is None or res.get("total_cost_usd"):
+                        how, early = "probe", (res, still)
+        finally:
+            marker.unlink(missing_ok=True)
+        log_event(
+            self.cfg,
+            feature,
+            "usage_limit_over",
+            phase=phase,
+            step=step,
+            how=how,
+            waited_s=round(time.time() - t0),
+            probes=probes,
+        )
+        why = {
+            "reset": "wait over; running again",
+            "wake": "woken (framegate wake); running again",
+            "probe": f"lifted before {local} (try {probes} got through); the run goes on",
+        }[how]
+        self.progress(feature, f"[{label}] usage limit {why}.")
+        return early
 
     def run_agent_once(
         self,
@@ -928,8 +1019,12 @@ class Orchestrator:
         role: str | None = None,
         step: str | None = None,
         attempt: int | None = None,
+        probe: bool = False,
     ) -> tuple[dict[str, Any], UsageLimit | None]:
-        """One `claude -p` run: its result, and the usage limit that refused it (or None)."""
+        """One `claude -p` run: its result, and the usage limit that refused it (or None).
+        `probe`: a try during the usage-limit wait. Refused again, it did no work and cost
+        nothing, so it leaves no run files and no `agent_run` event (a wait of some hours
+        would fill the log with them); any other outcome is recorded like every run."""
         cmd = self.claude_cmd()
         set_phase(self.cfg, phase)
         role_name = (role or phase).lower()
@@ -966,7 +1061,8 @@ class Orchestrator:
         runs = self.cfg.out_dir / "runs"
         runs.mkdir(parents=True, exist_ok=True)
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        (runs / f"{stamp}-{feature}-{phase}.prompt.md").write_text(prompt, encoding="utf-8")
+        prompt_file = runs / f"{stamp}-{feature}-{phase}.prompt.md"
+        prompt_file.write_text(prompt, encoding="utf-8")
         t0 = time.time()
         try:
             # own process group + kill-on-close job: Ctrl+C / SIGTERM / a killed framegate
@@ -978,6 +1074,9 @@ class Orchestrator:
             stdout, stderr = "", f"could not start claude: {e}"
         res = parse_result(stdout, stderr)
         limit = detect_usage_limit(stdout, res)
+        if probe and limit is not None and not res.get("total_cost_usd"):
+            prompt_file.unlink(missing_ok=True)
+            return res, limit
         # the result object (read by the retro), and the whole message stream for debugging
         (runs / f"{stamp}-{feature}-{phase}.json").write_text(
             json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8"

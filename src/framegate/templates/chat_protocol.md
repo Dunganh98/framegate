@@ -50,6 +50,11 @@ fail for no reason. Reading files and git log/diff/status are fine.
   `PARKED`, `ERROR` or `INTERRUPTED`.
 - Monitor deadline notice (30 min) while the run is still active: start the same Monitor again
   (it continues where it stopped; nothing is lost or repeated).
+- A line `usage limit reached; waiting until <when> ...`: the run waits by itself and tries
+  again every few minutes; one line to the user: the Claude usage limit is reached, the run
+  goes on at <when> at the latest, and "say so when you have refilled the limit". When the
+  user says the limit is back (refilled, extra usage bought): run `framegate wake <f>` (the
+  run tries again within seconds; it is not a second run). Never wake it on your own.
 - The run has ended when either the background task's completion notification arrives or a
   `watch ended: ...` line comes. On the first of the two, run `framegate status <f> --brief`
   and act on its first line once (the second signal is then ignored):
