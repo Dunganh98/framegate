@@ -78,6 +78,9 @@ A file with a mistake is refused with the line and what is wrong.
 | `--force` | also run candidates that have a score. Without it a rerun skips them |
 | `--template` | print an empty candidates file |
 
+`FRAMEGATE_REPLAY_PLUGIN=<folder>` makes the chat load the plugin from that folder (a checkout's
+`plugin/`) instead of the installed one: for measuring a version before its release.
+
 ## What you get
 
 ```

@@ -51,6 +51,8 @@ def command(
     cmd += ["--allowedTools", ",".join([*ALLOWED, *allow])]
     if resume:
         cmd += ["--resume", resume]
+    if plugin := os.environ.get("FRAMEGATE_REPLAY_PLUGIN"):  # a plugin folder under test
+        cmd += ["--plugin-dir", plugin]
     if message.startswith("/"):
         return [*cmd, message], None
     return cmd, message
