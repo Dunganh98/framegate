@@ -23,8 +23,14 @@ then `framegate --version` again. If `uv` is missing or the install fails (no ac
 repository, no git), show the error and the two ways out, then stop: install uv
 (https://docs.astral.sh/uv/) and run the setup again, or clone the repository and run
 `uv tool install --editable <clone>`. An installed CLI of another version than 0.12.5 (this
-plugin's): run the same command with `--force` (the tool follows the plugin's version), then
-`framegate --version` again; say nothing when it worked, one line when it failed, and go on.
+plugin's): do not install over it yourself. The tool is one per machine, and a task in
+progress here or in another repository keeps the version it was started with. Run
+`framegate preflight --plugin-version 0.12.5` and act on its lines: `RUN: <command>`: run it
+(the tool follows the plugin's version), then `framegate --version` again; say nothing when
+it worked, one line when it failed, and go on. `KEPT: ...`: a task is in progress, the update
+waits until it is DONE; say so in one line and go on with the installed version. If the
+command fails with `invalid choice: 'preflight'` (a tool too old to have it), run the install
+command above with `--force`.
 
 Automatic updates (ask at most once per machine): read `~/.claude/plugins/known_marketplaces.json`.
 If its `framegate` entry has no `"autoUpdate": true`, ask in one line: "Keep framegate up to
