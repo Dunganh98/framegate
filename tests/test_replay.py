@@ -153,11 +153,7 @@ def test_sandbox_holds_the_parent_and_hides_the_answer(repo: dict[str, Any], bui
     assert (built.driver / "task.md").read_text("utf-8") == "target: the message\n"
     deny = read_json(sb / ".claude" / "settings.local.json")["permissions"]["deny"]
     assert any(rule.endswith("/answers/**)") for rule in deny) and "Bash(git push *)" in deny
-
-
-def test_check_names_the_tests_that_prove_the_task(built: Layout) -> None:
-    ex = read_json(built.answer / "exercise.json")
-
+    ex = read_json(built.answer / "exercise.json")  # the tests that prove the task
     assert ex["proving"] == ["tests.test_calc::test_sub"]
     assert ex["base_pass"] == ["tests.test_calc::test_add"]
 

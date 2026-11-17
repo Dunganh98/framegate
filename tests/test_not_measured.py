@@ -1,7 +1,4 @@
-"""A check whose tool cannot run on this machine is NOT MEASURED: not a fail, not a silent
-pass, and no reason for an elevated risk rating. Seen live: on a Windows machine whose default
-WSL distribution was Docker Desktop's (no python3), mutmut never ran and every run was rated
-"elevated risk". None of these tests needs WSL: wsl.exe is replaced by a table of answers."""
+"""A check whose tool cannot run here is NOT MEASURED: no fail, no silent pass (a fake wsl.exe)."""
 
 from __future__ import annotations
 
@@ -33,8 +30,7 @@ UBUNTU = "  Ubuntu            Stopped         2\n"
 
 
 def fake_wsl(monkeypatch: pytest.MonkeyPatch, listing: str, python_in: set[str | None]) -> list:
-    """wsl.exe that lists `listing` and has python3 in the distributions of `python_in`
-    (None = the default one). Returns the commands it was asked to run."""
+    """wsl.exe with python3 in the distributions of `python_in` (None = the default one)."""
     calls: list[list[str]] = []
 
     def run(cmd: list[str], cwd: pathlib.Path, **kw: Any) -> tuple[int, str]:
@@ -61,19 +57,13 @@ def test_distribution_list_is_read_by_position() -> None:
     assert wsl.parse_distros("WSL has no installed distributions.\nInstall one: ...\n") == []
 
 
-def test_default_distribution_with_python_is_used_without_a_look_at_the_others(
+def test_the_default_distribution_is_used_or_another_one_with_python(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls = fake_wsl(monkeypatch, LIST + UBUNTU, {None})
     found = wsl.probe(tmp_path, None)
     assert (found.root, found.distro, found.note) == ("/mnt/d/repo", None, "")
-    assert ["-l", "-v"] not in calls
-
-
-def test_another_distribution_with_python_stands_in_for_the_default(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The finding's machine: the default is docker-desktop, Ubuntu has python3."""
+    assert ["-l", "-v"] not in calls  # no look at the others
     fake_wsl(monkeypatch, LIST + UBUNTU, {"Ubuntu"})
     found = wsl.probe(tmp_path, None)
     assert (found.root, found.distro) == ("/mnt/d/repo", "Ubuntu")
@@ -190,7 +180,7 @@ def rate(demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch) -> Any:
     return run
 
 
-def test_not_measured_does_not_raise_the_risk_and_is_no_proof(rate: Any) -> None:
+def test_not_measured_is_no_reason_for_risk_and_no_proof(rate: Any, demo_repo: DemoRepo) -> None:
     a = rate(f"{NOT_MEASURED}: {REASON}. Fix: {FIX}")
     assert a.low and a.reasons == []
     assert a.not_measured == {"mutation score": f"{REASON}. Fix: {FIX}"}
@@ -202,11 +192,13 @@ def test_not_measured_does_not_raise_the_risk_and_is_no_proof(rate: Any) -> None
             f"NOT MEASURED: {REASON}. Fix: {FIX}. This gate stops for it also with [gates] "
             'final = "auto"'
         )
-
-
-def test_a_low_score_raises_the_risk_and_mutation_off_on_purpose_does_not(
-    rate: Any, demo_repo: DemoRepo
-) -> None:
+    # other reasons stand, and the line keeps them apart
+    a = rate(f"{NOT_MEASURED}: {REASON}. Fix: {FIX}", parked=[{"label": "step 2"}])
+    assert not a.low and a.reasons == ["1 parked item(s)"]
+    assert a.line(auto=False) == (
+        "Risk: elevated: 1 parked item(s). Not a reason: mutation score NOT MEASURED: "
+        f"{REASON}. Fix: {FIX}"
+    )
     low = rate("FAIL: Mutation score 40.0% (2/5 killed), threshold 60%")
     assert not low.low and low.reasons == ["mutation score was not measured"]
     measured = rate("PASS: Mutation score 90.0%")
@@ -218,15 +210,6 @@ def test_a_low_score_raises_the_risk_and_mutation_off_on_purpose_does_not(
     off = risk.assess(adapter, "demo", {}, [event], 0, 0)
     assert off.auto and off.reasons == []
     assert "coverage measured, mutation off by config" in off.line(auto=True)
-
-
-def test_other_reasons_stand_and_the_line_keeps_them_apart(rate: Any) -> None:
-    a = rate(f"{NOT_MEASURED}: {REASON}. Fix: {FIX}", parked=[{"label": "step 2"}])
-    assert not a.low and a.reasons == ["1 parked item(s)"]
-    assert a.line(auto=False) == (
-        "Risk: elevated: 1 parked item(s). Not a reason: mutation score NOT MEASURED: "
-        f"{REASON}. Fix: {FIX}"
-    )
 
 
 # ---------- the facts line, the description, the statistics ----------
