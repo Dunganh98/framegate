@@ -120,7 +120,10 @@ commands:
                           closed as `(not needed: <reason>)`)
   pipeline-approve <name> after the user's OK: check, tick the items, commit, end the phase
   unlock [--force]        clear a stale phase lock (.phase/.reqs) left by a killed run
-  protocol                the chat run protocol the plugin skills follow (printed)
+  replay <candidates.md>  measure framegate: real commits as tasks, each delivered in a
+                          sandbox cut before the commit and scored with the commit's own
+                          tests (docs/replay.md; --template prints an empty file)
+  protocol               the chat run protocol the plugin skills follow (printed)
   hook pre-tool-use|stop  Claude Code hooks (stdin = hook JSON; exit 2 = block)
 
 exit codes: 0 ok, 1 error, 10 human gate (tests or final), 130 interrupted (Ctrl+C /
@@ -261,6 +264,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("unlock", help="clear a stale phase lock left by a killed run")
     p.add_argument("--force", action="store_true", help="even if a run looks active")
     sub.add_parser("protocol", help="print the chat run protocol (used by the plugin skills)")
+    from framegate.replay import add_parser as add_replay
+
+    add_replay(sub)
     p = sub.add_parser("hook")
     p.add_argument("event", choices=["pre-tool-use", "stop"])
     return ap
@@ -291,6 +297,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         print(package_text("templates", "chat_protocol.md").rstrip())
         return 0
+    if args.command == "replay":  # works outside a project
+        from framegate.replay import run as replay
+
+        return replay.main(args)
 
     from framegate import publish
     from framegate.config import ConfigError, find_root, load_config
