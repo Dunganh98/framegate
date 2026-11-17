@@ -167,8 +167,14 @@ def deny_rules(hidden: Sequence[str], shell: bool = True) -> list[str]:
     return rules
 
 
-def write_deny(folder: pathlib.Path, rules: list[str]) -> None:
-    write_json(folder / ".claude" / "settings.local.json", {"permissions": {"deny": rules}})
+#: what the setup would add to the settings on a yes. The chat may not edit that file in a
+#: headless session, so it is there from the start.
+CHAT_RULES = ["Bash(framegate *)", "PowerShell(framegate *)"]
+
+
+def write_deny(folder: pathlib.Path, rules: list[str], allow: Sequence[str] = ()) -> None:
+    permissions = {**({"allow": list(allow)} if allow else {}), "deny": rules}
+    write_json(folder / ".claude" / "settings.local.json", {"permissions": permissions})
 
 
 def venv_python(sandbox: pathlib.Path) -> pathlib.Path:
@@ -318,7 +324,9 @@ def build(
     with open(lay.sandbox / ".git" / "info" / "exclude", "a", encoding="utf-8") as f:
         f.write("\n.venv/\n.claude/settings.local.json\n")
     secret = [rule_path(p) for p in (lay.answer.parent, lay.sources, src)]
-    write_deny(lay.sandbox, deny_rules([*secret, rule_path(lay.out / "runs") + "/*/driver"]))
+    write_deny(
+        lay.sandbox, deny_rules([*secret, rule_path(lay.out / "runs") + "/*/driver"]), CHAT_RULES
+    )
     write_deny(lay.driver, deny_rules(secret, shell=False))
 
     py = env(c, lay.sandbox)
