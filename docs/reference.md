@@ -19,6 +19,7 @@ a terminal.
 | `/framegate:status [f]` | where features stand; tag cleanup after the PR is merged | any time |
 | `framegate init` | write the starter files (config, spec templates, project facts, .gitignore lines) | once per repo |
 | `framegate install-tools [--dry-run] [--update]` | install what the workflow needs into the project's environment (python: the framegate pytest plugin, pytest, pytest-cov, hypothesis, diff-cover, and with a framegate.toml the lint / format / type tools its gate commands name); `--update` also brings the framegate pytest plugin there to the command-line tool's version; reports versions it changed; works before `init` | first step of `/framegate:setup`, after config changes |
+| `framegate survey` | an agent (read-only, Sonnet) maps the source folders, the test folder and what is not the project's code from the code and the build and test files (comments are no evidence); every code file must end up in one of them, the agent is asked once more about the rest, what is left is a `PROBLEM` line; writes out/survey.json, which the probe uses for its folder lines before a framegate.toml exists | step 1 of `/framegate:setup` |
 | `framegate probe [--json]` | the project facts every run depends on, from instant checks only (no test run, no linter over the code, no agent): language, the interpreter the run uses, the test / lint / format / type commands with where each comes from and whether the tool answers `--version` there, source and test folders, base branch, remote and host, deploy / CI paths locked or to lock, editable install, references; works before `init` (proposals from the project's own files) and with a framegate.toml (the configured values); always exit 0 | step 1 of `/framegate:setup` |
 | `framegate update [--plugin-version X]` | bring this machine in line with the installed plugin at any time: prints the install command for the command-line tool (it cannot replace itself while it runs), then updates the project's workflow tools; `/framegate:update` does both in the chat. Tasks between "spec OK" and DONE are the only thing the start check leaves alone; `update` does not, except while a run is active (it says so and updates nothing that run uses) |
 | `framegate preflight [<f>] [--plugin-version X] [--check]` | the start check: the command-line tool at the plugin's version (prints the install command for the chat), the project environment's workflow tools at the tool's version (updated here), a session with outdated skills told to restart, a short setup check; one line when all is in line; always exit 0. Nothing is updated while a task is in progress, with `--check` or without a feature: the update waits (`KEPT:`), "The start check and updates" below | first step of `/framegate:feature`, `:bugfix`, `:refactor`, `:pipeline`, `:resume` |
@@ -142,7 +143,11 @@ unrunnable_tests = [
   bare test name (`test_connect`) is a config error, as is an entry without a `reason`.
 - The engine cannot tell "this machine lacks a database" from "really broken". The chat
   proposes, the user confirms, then the entry is written. Nothing is listed by itself.
-- The listed tests still run with the suite: where the database exists they pass and count.
+- A listed test that failed on this machine at the setup (`doctor --tree`) is not run here
+  again (out/known_red.json); on a machine where the database exists it runs and counts.
+  The final summary offers one follow-up task that makes them run or pass (default: skip).
+- A whole-suite result is reused for the same code: the key is the tree's content without
+  framegate's own files, the test command and the installed packages (out/suite_run.json).
   A **failure** of a listed test is left out, in every mode (feature, bug fix, refactor):
   at the step gates (the step's tests, the whole suite, the review tests), in the final
   regression check and in the record `[gates] regression_baseline` takes. The check's result
@@ -705,6 +710,10 @@ framegate doctor [--full] [--tree] [--brief]  # check the setup without agents; 
                                             # --tree: the whole suite once, and what is red on
                                             # the code as it is ("The tree at setup")
 framegate commit-setup [--dry-run] [PATH ...]  # the setup's files in one commit of their own
+framegate survey                            # an agent maps source / test folders and what is
+                                            # not project code from the code and build files;
+                                            # every code file must be accounted for
+                                            # (out/survey.json, read by probe); a minute or two
 framegate probe [--json]                    # the project facts in seconds: interpreter, test /
                                             # lint / format / type commands (+ does each tool
                                             # answer --version), folders, base branch, remote,
