@@ -66,8 +66,7 @@ def command(
         cmd += ["--resume", resume]
     if plugin := os.environ.get("FRAMEGATE_REPLAY_PLUGIN"):  # a plugin folder under test
         cmd += ["--plugin-dir", plugin]
-    if model := os.environ.get("FRAMEGATE_REPLAY_CHAT_MODEL"):
-        cmd += ["--model", model]
+    cmd += ["--model", os.environ.get("FRAMEGATE_REPLAY_CHAT_MODEL") or "sonnet"]
     if message.startswith("/"):
         return [*cmd, message], None
     return cmd, message
