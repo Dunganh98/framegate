@@ -41,7 +41,7 @@ def test_the_survey_runs_again_on_files_it_left_out_and_the_probe_reads_it(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     root = tmp_path / "repo"
-    for f in ("data/a.py", "platform/ingest/b.py", "tests/test_a.py", "main.py"):
+    for f in ("data/a.py", "platform/ingest/b.py", "tests/test_a.py", "main.py", "pyproject.toml"):
         (root / f).parent.mkdir(parents=True, exist_ok=True)
         (root / f).write_text("", encoding="utf-8")
     init_git(root)
