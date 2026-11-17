@@ -24,22 +24,31 @@ COLUMNS = (
     "Time",
     "Engine USD",
     "Chat USD",
+    "Total USD",
     "Final rounds",
     "Redos",
     "Note",
 )
 
 
+#: stages before the engine built anything: the task was not started, or only its spec
+NOT_RUN = ("SETUP", "SPEC")
+
+
 def verdict(
-    proving: Sequence[str], base_pass: Sequence[str], result: dict[str, str]
+    proving: Sequence[str], base_pass: Sequence[str], result: dict[str, str], stage: str = ""
 ) -> dict[str, Any]:
-    """A hidden test that did not run counts as failed; a skipped one is not proven."""
+    """A hidden test that did not run counts as failed; a skipped one is not proven. A run
+    that ended before the engine started is "not run", not "bad": the failing tests say
+    nothing about framegate there."""
     by = {
         k: sorted(n for n in proving if result.get(n, "fail") == k)
         for k in ("pass", "fail", "skip")
     }
     regressions = sorted(n for n in base_pass if result.get(n, "fail") == "fail")
     word = "bad" if by["fail"] or regressions else "not proven" if by["skip"] else "good"
+    if word == "bad" and stage in NOT_RUN:
+        word = "not run"
     return {
         "verdict": word,
         "hidden": len(proving),
@@ -124,7 +133,7 @@ def score(lay: Layout) -> dict[str, Any]:
     numbers = engine(lay.sandbox, lay.name)
     (lay.run / "retro_proposals.md").write_text(numbers.pop("retro"), encoding="utf-8")
     return {
-        **verdict(ex["proving"], ex["base_pass"], result),
+        **verdict(ex["proving"], ex["base_pass"], result, numbers["stage"]),
         "result_tail": tail,
         **numbers,
         "chat_usd": chat_cost(lay.driver),
@@ -133,11 +142,12 @@ def score(lay: Layout) -> dict[str, Any]:
 
 def _cells(row: dict[str, Any]) -> list[str]:
     if row.get("status") != "scored":
-        return [row["name"], row["kind"], row["status"], *[""] * 8, row.get("note", "")]
+        return [row["name"], row["kind"], row["status"], *[""] * 9, row.get("note", "")]
     hidden = f"{row['passed']}/{row['hidden']}"
     if row["skipped"]:
         hidden += f", {len(row['skipped'])} skipped"
     counted = max(0.0, float(row.get("wall_s", 0)) - float(row.get("waited_s", 0)))
+    total = row["engine_usd"] + row["chat_usd"] + float(row.get("driver_usd", 0))
     return [
         row["name"],
         row["kind"],
@@ -148,6 +158,7 @@ def _cells(row: dict[str, Any]) -> list[str]:
         duration(counted),
         f"{row['engine_usd']:.2f}",
         f"{row['chat_usd']:.2f}",
+        f"{total:.2f}",
         str(row["final_rounds"]),
         str(row["redos"]),
         row.get("note", ""),
@@ -168,7 +179,9 @@ def write_results(out: pathlib.Path, rows: list[dict[str, Any]]) -> None:
     write_json(out / "results.json", rows)
     note = (
         "Verdict: good = every hidden test passes, no regression; not proven = a hidden test "
-        "was skipped; bad = a hidden test fails or a test that passed before fails. "
+        "was skipped; bad = a hidden test fails or a test that passed before fails; "
+        "not run = the run ended before framegate built anything (the Note says where and "
+        "why): no result for framegate. Total USD = engine + chat + driver. "
         "Time leaves out usage-limit waits.\n"
     )
     (out / "results.md").write_text(f"# Replay results\n\n{table(rows)}\n{note}", encoding="utf-8")

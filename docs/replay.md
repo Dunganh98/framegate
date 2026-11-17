@@ -58,12 +58,17 @@ A file with a mistake is refused with the line and what is wrong.
    the reason in the results.
 3. **Run.** One headless `claude` agent plays the user by fixed rules
    (`src/framegate/replay/driver.md`): setup, the task, every gate, the retro. It never
-   publishes, pushes, opens a pull request or cleans up.
+   publishes, pushes, opens a pull request or cleans up. Each chat message runs as a process
+   of its own (`python -m framegate.replay.chat`, the answer with `--wait`), so a time limit
+   of the driver's tools cannot cut a long chat turn and the run it started.
 4. **Caps.** 25 USD (engine and chat) and 3 hours per candidate; time spent waiting for the
    usage limit does not count. At a cap the run is stopped. A run that did not reach DONE
-   still gets a retro (`framegate retro`, where this framegate has it) and a score.
+   still gets a retro (`framegate retro`, where this framegate has it) and a score; a run
+   that ended before framegate built anything (in the setup or the spec) gets no retro.
 5. **Score.** The hidden tests run on a copy of the result. A skipped hidden test is "not
-   proven", not a pass. A test that passed on the parent and fails now is a regression.
+   proven", not a pass. A test that passed on the parent and fails now is a regression. A run
+   that ended before framegate built anything is "not run", not "bad": the Note column has the
+   stage and the driver's reason (its `outcome.txt`).
 
 ## Options
 
@@ -85,10 +90,11 @@ A file with a mistake is refused with the line and what is wrong.
 
 ```
 <out>/results.md, results.json   one row per candidate: verdict, hidden tests passed, regressions,
-                                 stage reached, time, engine cost, chat cost, final-gate rounds, redos
+                                 stage reached, time, engine cost, chat cost, total cost (engine +
+                                 chat + driver), final-gate rounds, redos
 <out>/retro-proposals.md         the retro proposals of every run
 <out>/runs/<name>/sandbox/       the repository as the run left it
-<out>/runs/<name>/driver/        the driver's log.md and report.md, every chat turn (turn-NN.json)
+<out>/runs/<name>/driver/        the driver's log.md, report.md and outcome.txt, every chat turn (turn-NN.json)
 <out>/runs/<name>/score.json     the row, with the names of failed and skipped tests
 <out>/answers/<name>/            the hidden answer and the check's logs
 ```

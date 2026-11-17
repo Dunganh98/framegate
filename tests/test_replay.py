@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -151,8 +152,10 @@ def test_sandbox_holds_the_parent_and_hides_the_answer(repo: dict[str, Any], bui
     assert "test_sub" not in (sb / "tests" / "test_calc.py").read_text("utf-8")
     assert "test_sub" in (built.answer / "hidden" / "tests" / "test_calc.py").read_text("utf-8")
     assert (built.driver / "task.md").read_text("utf-8") == "target: the message\n"
-    deny = read_json(sb / ".claude" / "settings.local.json")["permissions"]["deny"]
+    rules = read_json(sb / ".claude" / "settings.local.json")["permissions"]
+    deny = rules["deny"]
     assert any(rule.endswith("/answers/**)") for rule in deny) and "Bash(git push *)" in deny
+    assert rules["allow"] == ["Bash(framegate *)", "PowerShell(framegate *)"]  # the setup's
     ex = read_json(built.answer / "exercise.json")  # the tests that prove the task
     assert ex["proving"] == ["tests.test_calc::test_sub"]
     assert ex["base_pass"] == ["tests.test_calc::test_add"]
@@ -173,13 +176,14 @@ def test_score_runs_the_hidden_tests_on_the_result(built: Layout) -> None:
     (built.sandbox / "src" / "calc.py").write_text(CALC + SUB, encoding="utf-8")
     after = score.score(built)
 
-    assert (before["verdict"], before["passed"], before["failed"]) == (
-        "bad",
+    # no framegate.toml in the sandbox: the run ended in the setup, which is not "bad"
+    assert (before["verdict"], before["stage"], before["passed"], before["failed"]) == (
+        "not run",
+        "SETUP",
         0,
         ["tests.test_calc::test_sub"],
     )
     assert (after["verdict"], after["passed"], after["regressions"]) == ("good", 1, [])
-    assert after["stage"] == "SETUP"  # no framegate.toml in the sandbox
 
 
 def test_verdict_skipped_is_not_proven_and_a_broken_old_test_is_bad() -> None:
@@ -223,6 +227,7 @@ def scored(name: str, **over: Any) -> dict[str, Any]:
         "stage": "DONE",
         "engine_usd": 6.38,
         "chat_usd": 9.4,
+        "driver_usd": 1.25,
         "final_rounds": 1,
         "redos": 0,
         "waited_s": 600,
@@ -243,8 +248,10 @@ def test_results_table_and_collected_retros(tmp_path: pathlib.Path) -> None:
     score.write_results(tmp_path, rows)
 
     lines = (tmp_path / "results.md").read_text("utf-8").splitlines()
-    assert "| a | bugfix | good | 2/2 | 0 | DONE | 60 min | 6.38 | 9.40 | 1 | 0 |  |" in lines
-    assert "| b | feature | dropped |  |  |  |  |  |  |  |  | no test file |" in lines
+    # 17.03: engine + chat + driver
+    good = "| a | bugfix | good | 2/2 | 0 | DONE | 60 min | 6.38 | 9.40 | 17.03 | 1 | 0 |  |"
+    assert good in lines
+    assert "| b | feature | dropped |  |  |  |  |  |  |  |  |  | no test file |" in lines
     assert json.loads((tmp_path / "results.json").read_text("utf-8")) == rows
     assert (tmp_path / "retro-proposals.md").read_text("utf-8") == "# a\n\n1. shorter prompts\n"
 
@@ -279,8 +286,8 @@ def fake_runs(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[run.Options, list[str]]:
     """Options with faked sandboxes and scores, and the list of driver and retro calls. The
-    driver fails for the candidate named `breaks` and reports a cap for the one named
-    `capped`."""
+    driver fails for the candidate named `breaks`, reports a cap for the one named `capped`
+    and ends before the task for the one named `unstarted`."""
     driven: list[str] = []
 
     def fake_build(c: Candidate, lay: Layout, src: pathlib.Path, env: Any) -> None:
@@ -290,10 +297,13 @@ def fake_runs(
         driven.append(c.name)
         if c.name == "breaks":
             raise OSError("claude not found")
+        if c.name == "unstarted":
+            lay.driver.mkdir(parents=True)
+            (lay.driver / "outcome.txt").write_text("Setup: pytest is missing\n", "utf-8")
         return {"stopped": "cost cap" if c.name == "capped" else "", "wall_s": 60}
 
     def engine(sandbox: pathlib.Path, slug: str) -> dict[str, Any]:
-        return {"stage": "IMPLEMENT" if slug == "capped" else "DONE"}
+        return {"stage": {"capped": "IMPLEMENT", "unstarted": "SPEC"}.get(slug, "DONE")}
 
     monkeypatch.setattr(run, "build", fake_build)
     monkeypatch.setattr(score, "engine", engine)
@@ -341,6 +351,17 @@ def test_a_run_stopped_at_a_cap_is_scored_and_gets_a_retro(
     assert read_json(opts.out / "runs" / "capped" / "run.json")["state"] == "stopped"
 
 
+def test_a_run_that_ended_before_the_task_gets_no_retro_and_the_drivers_reason(
+    tmp_path: pathlib.Path, fake_runs: tuple[run.Options, list[str]]
+) -> None:
+    opts, driven = fake_runs
+
+    (row,) = run.run_all(candidates(tmp_path, "unstarted"), opts)
+
+    assert row["note"] == "ended at SPEC; Setup: pytest is missing"
+    assert driven == ["unstarted"]
+
+
 def test_prepare_only_starts_no_driver(
     tmp_path: pathlib.Path, fake_runs: tuple[run.Options, list[str]]
 ) -> None:
@@ -370,3 +391,41 @@ def test_chat_call_sends_a_slash_command_as_argument_and_text_through_stdin() ->
 
     assert slash[-1] == "/framegate:setup" and no_stdin is None
     assert text[-2:] == ["--resume", "abc"] and stdin == "line 1\nline 2"
+    allowed = slash[slash.index("--allowedTools") + 1].split(",")
+    assert "PowerShell(pytest *)" in allowed
+    assert not [rule for rule in allowed if "push" in rule or "(gh" in rule or "(az" in rule]
+
+
+def test_chat_call_is_detached_and_wait_prints_its_answer(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Sending returns at once (the driver's time limit cannot cut the chat); the answer is
+    fetched with --wait."""
+    started: list[list[str]] = []
+
+    def detach(cmd: list[str]) -> int:
+        started.append(list(cmd))
+        return os.getpid()  # a process that is alive
+
+    def claude(cmd: list[str], **kw: Any) -> Any:
+        answer = json.dumps({"session_id": "s1", "total_cost_usd": 0.5, "result": "The gate."})
+        return subprocess.CompletedProcess(cmd, 0, answer, "")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(chat, "detach", detach)
+    monkeypatch.setattr(chat, "claude_exe", lambda: "claude")
+
+    sent = chat.main(["Spec OK", "--resume", "s1"])
+    early = chat.main(["--wait", "0"])
+    twice = chat.main(["Spec OK", "--resume", "s1"])
+    monkeypatch.setattr(chat.subprocess, "run", claude)
+    chat.main(started[0][3:])  # the detached call itself
+    capsys.readouterr()
+    late = chat.main(["--wait"])
+
+    assert (sent, early, twice, late) == (0, chat.STILL_RUNNING, 2, 0)
+    assert len(started) == 1 and started[0][-2:] == ["--turn", "turn-01.json"]
+    assert "turn-01.json  session: s1" in capsys.readouterr().out
+    assert not list(tmp_path.glob("turn-*.pid"))

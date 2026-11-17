@@ -23,7 +23,7 @@ from framegate.config import ConfigError, load_config
 from framegate.replay import MAX_HOURS, MAX_USD
 from framegate.replay import score as scoring
 from framegate.replay.candidates import TEMPLATE, Candidate, CandidatesError, parse
-from framegate.replay.chat import claude_exe
+from framegate.replay.chat import claude_exe, read_pid
 from framegate.replay.sandbox import (
     Layout,
     ReplayError,
@@ -106,19 +106,41 @@ def instructions(lay: Layout, c: Candidate, caps: Caps, src: pathlib.Path) -> st
     return text
 
 
+def _kill(pid: int, group: bool = False) -> None:
+    if not pid or not procs.pid_alive(pid):
+        return
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, check=False)
+    elif group:
+        os.killpg(pid, signal.SIGTERM)
+    else:
+        os.kill(pid, signal.SIGTERM)
+
+
 def stop_engine(sandbox: pathlib.Path) -> None:
     """A `framegate run` the killed driver left behind in the sandbox."""
     try:
         lock = procs.read_lock(load_config(sandbox).out_dir)
     except ConfigError:
         return
-    pid = int((lock or {}).get("pid") or 0)
-    if not pid or not procs.pid_alive(pid):
-        return
-    if sys.platform == "win32":
-        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, check=False)
-    else:
-        os.kill(pid, signal.SIGTERM)
+    _kill(int((lock or {}).get("pid") or 0))
+
+
+def stop_chat(driver: pathlib.Path) -> None:
+    """A chat call that is still running: it is detached (chat.py), so killing the driver's
+    tree does not reach it."""
+    for mark in driver.glob("turn-*.pid"):
+        _kill(read_pid(mark), group=True)
+        mark.unlink(missing_ok=True)
+
+
+def outcome(driver: pathlib.Path) -> str:
+    """The driver's own line on how the run ended (outcome.txt), '' if it left none."""
+    try:
+        text = (driver / "outcome.txt").read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return ""
+    return next((line.strip()[:200] for line in text.splitlines() if line.strip()), "")
 
 
 def claude_driver(lay: Layout, c: Candidate, caps: Caps, src: pathlib.Path) -> dict[str, Any]:
@@ -142,6 +164,7 @@ def claude_driver(lay: Layout, c: Candidate, caps: Caps, src: pathlib.Path) -> d
             cmd, job=True, cwd=lay.driver, env=run_env(lay), stdin=stdin, stdout=out, stderr=err
         )
         why = watch(proc, caps, spend)
+    stop_chat(lay.driver)
     if why:
         stop_engine(lay.sandbox)
     try:
@@ -226,17 +249,22 @@ def run_one(c: Candidate, opts: Options, src: pathlib.Path) -> dict[str, Any]:
         write_json(run_json, state)
 
     stage = scoring.engine(lay.sandbox, c.name)["stage"]
-    if stage not in ("DONE", "SETUP") and "retro" not in state:
+    # before the engine ran there is nothing for a retro to read
+    if stage not in ("DONE", *scoring.NOT_RUN) and "retro" not in state:
         opts.echo(f"[{c.name}] ended at {stage}: retro")
         state["retro"] = opts.retro(lay)
         write_json(run_json, state)
     row.update(scoring.score(lay), status="scored")
     row.update({k: state[k] for k in ("stopped", "wall_s", "driver_usd", "retro") if k in state})
     notes = [state.get("stopped") or ("" if stage == "DONE" else f"ended at {stage}")]
+    notes += [outcome(lay.driver)] if stage != "DONE" else []
     notes += [f"retro {state['retro']}"] if "retro" in state else []
     row["note"] = "; ".join(n for n in notes if n)
     write_json(score_json, row)
-    opts.echo(f"[{c.name}] {row['verdict']}: {row['passed']}/{row['hidden']} hidden tests")
+    if row["verdict"] == "not run":
+        opts.echo(f"[{c.name}] not run: {row['note']}")
+    else:
+        opts.echo(f"[{c.name}] {row['verdict']}: {row['passed']}/{row['hidden']} hidden tests")
     return row
 
 
