@@ -20,6 +20,7 @@ from typing import Any
 
 from framegate import procs
 from framegate.config import ConfigError, load_config
+from framegate.detached import ENV as DETACH_ENV
 from framegate.replay import MAX_HOURS, MAX_USD
 from framegate.replay import score as scoring
 from framegate.replay.candidates import TEMPLATE, Candidate, CandidatesError, parse
@@ -83,8 +84,10 @@ def watch(
 
 
 def run_env(lay: Layout) -> dict[str, str]:
-    """The sandbox's python and framegate first on PATH, no update check, no chat memory."""
+    """The sandbox's python and framegate first on PATH, no update check, no chat memory, and
+    `framegate run` detached: the chat's next turn kills the background tasks of the last."""
     env = dict(os.environ, FRAMEGATE_UPDATE_CHECK="0", CLAUDE_CODE_DISABLE_AUTO_MEMORY="1")
+    env[DETACH_ENV] = "1"
     env.pop("FRAMEGATE_AGENT", None)
     bin_dir = pathlib.Path(read_json(lay.run / "run.json")["python"]).parent
     env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")

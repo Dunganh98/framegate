@@ -82,6 +82,8 @@ Sources, by rank:
 - Docs say where the project is heading: context only. A doc can suggest a requirement; it
   is one only when the user says so.
 - A comment or docstring is no source.
+Deferred work: read the entries `framegate deferred --file <path>` prints for the files the
+task touches; when the task does one, write `Resolves: D<n>` in requirements.md.
 Requirements come from the task only: a spec never requires text in a docstring, a comment
 or a doc, and neither you nor an agent of the run edits a documentation file. What a doc
 should say afterwards (the work makes it out of date, or the task goes another way than the

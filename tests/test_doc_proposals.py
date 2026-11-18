@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from conftest import REQUIREMENTS, DemoRepo, git
-from framegate import doc_proposals
+from framegate import answered, doc_proposals
 from framegate.config import load_config
 from framegate.doc_proposals import Proposal
 from framegate.hooks import protect_paths
@@ -157,6 +157,27 @@ def test_the_same_update_twice_is_one_and_framegates_own_files_are_none(
     assert doc_proposals.proposals(cfg, "demo") == [Proposal(DESIGN, "spec")]
 
 
+def test_one_question_per_file_and_place(demo_repo: DemoRepo) -> None:
+    """Seen live twice: one doc place asked twice at one gate, from the spec and from the
+    run's `code now:` note, worded differently."""
+    r = demo_repo
+    cfg = load_config(r.root)
+    plain = "docs/guide.md, Input: today: 'floats are added' -> proposed: ints only (the task)"
+    contra = "docs/guide.md:12, section input: today: floats -> code now: add() refuses floats"
+    other = "docs/guide.md, Output: today: x -> proposed: y"
+    spec = r.root / "specs/demo/requirements.md"
+    spec.write_text(REQUIREMENTS + f"\n## Proposed doc updates\n- {plain}\n", encoding="utf-8")
+    (r.root / "out/demo").mkdir(parents=True, exist_ok=True)
+    (r.root / "out/demo/doc_proposals.md").write_text(f"- {contra}\n- {other}\n", "utf-8")
+    found = doc_proposals.proposals(cfg, "demo")
+    assert found == [Proposal(contra, "run"), Proposal(other, "run")]
+    asked = [
+        answered.key(f"[doc update] {Proposal(x, 'spec').question()}") for x in (plain, contra)
+    ]
+    assert asked[0] == asked[1] == "doc docs/guide.md @ input"
+    assert doc_proposals.key("docs/guide.md, line 40 Input: today: a") == asked[0][4:]
+
+
 def test_a_doc_the_code_contradicts_asks_about_the_code() -> None:
     p = Proposal(CONTRA, "run")
     assert p.contradicts and not Proposal(DESIGN, "run").contradicts
@@ -245,10 +266,9 @@ def test_important_proposals_are_gate_questions_and_the_docs_step_applies_the_ap
     (r.root / "out/demo/answers.md").write_text("1. A\n2. B\n", encoding="utf-8")
     assert r.af("answer", "demo") == 0
     assert r.progress()["doc_approved"] == [DESIGN]
-    # doc answers start no run: the gate stays, without the two questions
-    assert r.progress()["waiting"]["gate"] == "final"
+    # doc answers start no run: the gate is approved, the docs step applies them
+    assert r.progress()["phase"] == "RETRO"
     assert not (r.root / "out/demo/open_questions.md").exists()
-    assert r.af("approve", "demo") == 0
     assert r.af("run", "demo") == 0
     assert [c["phase"] for c in r.calls()][-2:] == ["DOCS", "RETRO"]
     task = next(c for c in r.calls() if c["phase"] == "DOCS")["prompt"]
@@ -264,6 +284,8 @@ def test_important_proposals_are_gate_questions_and_the_docs_step_applies_the_ap
     )
     (ev,) = [e for e in r.events() if e["kind"] == "docs_step"]
     assert ev["applied"] == [README, CHANGELOG, DESIGN] and ev["why"] == ""
+    later = "- D1 [docs] docs/plan.md: Step 2: today: a method -> proposed: a function (it failed)."
+    assert later in (r.root / ".framegate/deferred.md").read_text(encoding="utf-8")
 
 
 def test_without_an_answer_the_default_is_later_and_only_the_minor_ones_are_applied(

@@ -17,6 +17,8 @@ else:  # pragma: no cover - exercised only on 3.10
     import tomli as tomllib
 
 CONFIG_FILE = "framegate.toml"
+#: the deferred-work list (deferred.py), committed with each task's final commit
+DEFERRED_FILE = ".framegate/deferred.md"
 
 #: The built-in deploy / CI paths: names that can only mean one thing. No feature, bug fix
 #: or refactor changes one; the pipeline task does (frame_diff.is_pipeline_file). Folders at

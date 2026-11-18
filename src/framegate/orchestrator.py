@@ -36,6 +36,8 @@ from framegate import (
     answered,
     api_error,
     backlog,
+    defaults,
+    deferred,
     description,
     doc_proposals,
     followup,
@@ -84,6 +86,7 @@ from framegate.checks.frame_diff import (
     tests_update_tag,
 )
 from framegate.config import CONFIG_FILE, ROLE_ALIASES, Config, load_config
+from framegate.detached import RUN_LOG
 from framegate.gates import (
     BASELINE_FILE,
     GateReport,
@@ -306,49 +309,6 @@ TESTS_WRONG_RE = re.compile(r"^\W*Park kind\W*:\W*tests[ -]wrong\b", re.I | re.M
 CONTESTED_RE = re.compile(r"^\W*Contested tests\W*:\s*(.+)$", re.I | re.M)
 
 
-#: an answer that takes the default or keeps things as they are
-NO_CHANGE_RE = re.compile(
-    r"^\W*(?:default|accept(?:ed)?|leave|keep|ok(?:ay)?|fine|as is|no change|no answer needed)\b",
-    re.I,
-)
-SAME_AS_RE = re.compile(r"^\W*same as item \d+\s*:\s*(.*)$", re.I | re.S)
-#: an answer to a file-size question that leaves the file as it is
-LEAVE_RE = re.compile(r"^\W*(?:default\W+)?(?:leave|keep)\b", re.I)
-
-
-def wants_rerun(items: list[dict[str, Any]]) -> bool:
-    """Does an answer to a final gates question (a tool that gave no result) ask to run the
-    final checks again? The default does for the first question ("Default: yes, run them
-    again"), not for the second one ("...gave no result again", default: finish without).
-    Seen live: "run them again" was taken, nothing ran, the same gate came back."""
-    for it in items:
-        asked, text = str(it.get("asked") or ""), str(it.get("a") or "")
-        if not asked.startswith(f"[{GATES_WHO}] "):
-            continue
-        if re.search(r"\b(finish|without|no)\b", text, re.I):
-            continue
-        if re.search(r"\b(run|again|yes)\b", text, re.I):
-            return True
-        if NO_CHANGE_RE.match(text) and "gave no result again" not in asked:
-            return True
-    return False
-
-
-def take_defaults(items: list[dict[str, Any]]) -> bool:
-    """Do all the numbered answers take the default or keep things as they are ("Default:
-    ...", "accept", "leave it", "No answer needed")? Such answers may still need work (a
-    default can be "split the file now"), so this alone ends nothing: see
-    Orchestrator.answers_changed_nothing."""
-    if not items:
-        return False
-    for it in items:
-        text = str(it.get("a") or "")
-        same = SAME_AS_RE.match(text)
-        if not NO_CHANGE_RE.match(same.group(1) if same else text):
-            return False
-    return True
-
-
 def contested_tests(text: str, tests_owner: bool = False) -> list[str]:
     """The tests a park request (`Park kind: tests-wrong`) or a diagnosis with `Fix owner:
     tests` contests (`Contested tests: A, B`); [] if it is not such a park or names none."""
@@ -373,9 +333,10 @@ def provisional_item(prog: dict[str, Any]) -> str:
         for r in recs
     ]
     return (
-        "Proposed test fixes (the code of these steps is kept as provisional; approve all with "
-        "one answer, or say which fix is wrong: then its code is reverted and the step redone "
-        "against the tests as they are): " + " | ".join(parts)
+        "Proposed test fixes (the code of these steps is kept as provisional). A: leave them: "
+        "the code stays, its contested tests red (the deferred list) (default) / B: apply all "
+        "the proposed test fixes / C: say which fix is wrong: its code is reverted and the step "
+        "redone against the tests as they are. " + " | ".join(parts)
     )
 
 
@@ -389,26 +350,31 @@ LOOK_AROUND = (
     "...) are tool state of this machine, not project context: do not search them and never "
     "write them."
 )
-#: names left out of the orientation's file lists
-#: a later test review round, sent to the session of the round before (not a new agent)
+#: a later test review round: a new agent with a short task, not the session of the round
+#: before (measured live three times: resuming re-read the whole session and cost more)
 TEST_REVIEW_AGAIN = (
-    "Feature '{f}': follow-up review (round {round} of at most {rounds}). The test writer "
-    "changed the tests after your review. Do not review everything again. Judge from the diff "
-    "below (read a file only where the diff does not show enough): is each of your objections "
-    "resolved, and did the change break anything else? The mechanical checks ran again: "
-    "{checks} ({out}/{f}/test_checks.md). Write {out}/{f}/test_review.md in the same format as "
-    "before, in full (the human reads only this file): an objection that is not resolved stays "
-    "under Objections, a problem the change brought is a new one. Do not edit tests.{note}\n\n"
-    "## Your objections of round {before}\n{objections}\n\n"
+    "Feature '{f}': follow-up test review (round {round} of at most {rounds}; mode 1, follow-up "
+    "only). The test reviewer of round {before} objected ({out}/{f}/test_review_round{before}.md) "
+    "and the test writer changed the tests since. Do not review everything again. Judge only: "
+    "is each objection below resolved, and did the change break anything else? Judge from the "
+    "diff below; read the spec ({specs}/{f}/), a test file or {out}/{f}/test_summary.md only "
+    "where the diff and the objection do not show enough. The mechanical checks ran again: "
+    "{checks} ({out}/{f}/test_checks.md). Write {out}/{f}/test_review.md in the format of your "
+    "role, in full (the human reads only this file): an objection that is not resolved stays "
+    "under Objections, a problem the change brought is a new one; take 'What the tests check' "
+    "from round {before} and adjust it to the change. Do not edit tests.{note}\n\n"
+    "## The objections of round {before}\n{objections}\n\n"
     "## The test files, changed since round {before}\n"
 )
 #: the test files as the test reviewer last saw them (the follow-up review gets the diff)
 REVIEWED_TESTS = "reviewed_tests"
 #: lines of a failed check / of the test diff shown in a task (the rest: the file)
 SHOWN_LINES = 300
+#: names left out of the orientation's file lists
 ORIENTATION_SKIP = {
     "prompts",
     "progress.log",
+    RUN_LOG,
     "progress.cursor",
     "progress.json",
     "parked",
@@ -963,10 +929,8 @@ class Orchestrator:
         role: str | None = None,
         step: str | None = None,
         attempt: int | None = None,
-        resume: str = "",
     ) -> dict[str, Any]:
-        """One headless Claude Code run: fresh, or with `resume` the next turn of that session
-        (`claude --resume <session id>`). The task goes via stdin and the role via
+        """One headless Claude Code run. The task goes via stdin and the role via
         --append-system-prompt-file (no multi-line text on the command line). A run refused by
         the usage limit waits for the reset and runs again; a run that did no work because the
         API could not be reached runs again after a short wait (neither is a failed attempt:
@@ -975,7 +939,7 @@ class Orchestrator:
 
         def once(probe: bool = False) -> tuple[dict[str, Any], UsageLimit | None]:
             return self.run_agent_once(
-                phase, feature, task, feedback, role, step, attempt, probe=probe, resume=resume
+                phase, feature, task, feedback, role, step, attempt, probe=probe
             )
 
         early: tuple[dict[str, Any], UsageLimit | None] | None = None
@@ -1140,7 +1104,6 @@ class Orchestrator:
         step: str | None = None,
         attempt: int | None = None,
         probe: bool = False,
-        resume: str = "",
     ) -> tuple[dict[str, Any], UsageLimit | None]:
         """One `claude -p` run: its result, and the usage limit that refused it (or None).
         `probe`: a try during the usage-limit wait. Refused again, it did no work and cost
@@ -1169,8 +1132,6 @@ class Orchestrator:
             "stream-json",
             "--verbose",
         ]
-        if resume:  # the session's messages; the role is not kept with it and is passed again
-            args += ["--resume", resume]
         budget = self.cfg.budget_cap(phase)
         if budget is not None:
             args += ["--max-budget-usd", f"{budget:g}"]
@@ -1225,7 +1186,6 @@ class Orchestrator:
             error=res.get("is_error"),
             denials=len(denials),
             session=res.get("session_id"),
-            **({"resumed": resume} if resume else {}),
             **token_usage(res),
             **({"usage_limit": True} if limit else {}),
             **({"api_error": True} if not limit and detect_api_error(res) else {}),
@@ -1472,7 +1432,6 @@ class Orchestrator:
         role: str | None = None,
         step: str | None = None,
         retry_turn_cap: bool = True,
-        resume: str = "",
     ) -> dict[str, Any]:
         """Run an agent with the pending feedback and consume it. A run that stops at the turn
         cap or the budget cap is re-run once with a note; if that one stops at a cap too, it is
@@ -1487,7 +1446,6 @@ class Orchestrator:
                 role=role,
                 step=step,
                 attempt=int(prog.get("attempt") or 0) or None,
-                resume=resume,
             )
             prog["feedback"] = ""
             save_progress(self.cfg, feature, prog)
@@ -1957,8 +1915,9 @@ class Orchestrator:
 
     # ---------- provisional steps: code kept while only their tests are contested ----------
     def contested(self, prog: dict[str, Any]) -> list[str]:
-        """The contested tests of all provisional steps."""
-        return [t for r in prog.get("provisional") or [] for t in r.get("contested") or []]
+        """The contested tests of all provisional steps (also those the owner left as they are)."""
+        recs = [*(prog.get("provisional") or []), *(prog.get("left_provisional") or [])]
+        return [t for r in recs for t in r.get("contested") or []]
 
     def set_check_scope(self, prog: dict[str, Any], reqs: list[str] | None) -> None:
         """What the step gates and the Stop hook check: the IDs (.reqs) minus the contested
@@ -2028,7 +1987,7 @@ class Orchestrator:
 
     def provisional_context(self, prog: dict[str, Any]) -> str:
         """Task lines about provisional steps: their contested tests fail by design."""
-        recs = prog.get("provisional") or []
+        recs = [*(prog.get("provisional") or []), *(prog.get("left_provisional") or [])]
         if not recs:
             return ""
         return (
@@ -2168,7 +2127,7 @@ class Orchestrator:
                 sub = self.set_sub(feature, prog, "review")
             if sub == "review":
                 rnd = int(prog.get("round") or 0)
-                review, resumed = self.review_tests(feature, prog, rnd)
+                review, follow_up = self.review_tests(feature, prog, rnd)
                 failed = [
                     n
                     for n, s in (prog.get("test_checks") or {}).items()
@@ -2189,7 +2148,7 @@ class Orchestrator:
                     failed_checks=failed,
                     sent_back=back,
                     **({"unchanged_checks": failed} if stuck else {}),
-                    **({"resumed": True} if resumed else {}),
+                    **({"follow_up": True} if follow_up else {}),
                 )
                 if stuck:
                     self.progress(
@@ -2271,10 +2230,9 @@ class Orchestrator:
         return name if ok else ""
 
     def review_tests(self, feature: str, prog: dict[str, Any], rnd: int) -> tuple[TestReview, bool]:
-        """One test review round: (the review, was it the follow-up in the session of the
-        round before). Round 1 is a new agent with the full review. A later round continues
-        that session with its objections, the test diff since then and the checks; without a
-        session, or when that run writes no review (session gone), a new agent reviews in full."""
+        """One test review round: (the review, was it a follow-up). Round 1 is a full review. A
+        later round of the same gate cycle is a new agent with a short task: the objections of
+        the round before, the test diff since then and the checks."""
         path = self.fdir(feature) / "test_review.md"
         path.unlink(missing_ok=True)
         note = prog.get("human_note") or ""
@@ -2286,40 +2244,27 @@ class Orchestrator:
             else "",
         }
         last = prog.get("test_review_last") or {}
-        res: dict[str, Any] = {}
-        if rnd and last.get("session") and last.get("round") == rnd:
+        follow_up = bool(rnd) and last.get("round") == rnd
+        if follow_up:
+            values = {**self.placeholders(feature), **extra}
             checks = ", ".join(f"{n} {s}" for n, s in (prog.get("test_checks") or {}).items())
-            task = (
-                TEST_REVIEW_AGAIN.format(
-                    **{**self.placeholders(feature), **extra},
-                    before=str(rnd),
-                    checks=checks,
-                    objections="\n".join(f"- {o}" for o in last.get("objections") or []) or "None.",
-                )
-                + f"```diff\n{self.tests_diff(feature)}\n```"
+            objections = "\n".join(f"- {o}" for o in last.get("objections") or []) or "None."
+            task = TEST_REVIEW_AGAIN.format(
+                **values, before=str(rnd), checks=checks, objections=objections
             )
-            res = self.agent(
-                "TEST_REVIEW", feature, prog, task, role="test_review", resume=last["session"]
-            )
-            if not path.is_file():
-                self.progress(
-                    feature,
-                    "[TESTS] the test reviewer's session could not be continued (no review "
-                    "written): a full review by a new agent instead.",
-                )
-        resumed = path.is_file()
-        if not resumed:
+            task += f"```diff\n{self.tests_diff(feature)}\n```"
+            mode_note = MODE_NOTES.get(feature_mode(self.cfg, feature), {}).get("TEST_REVIEW")
+            if mode_note:
+                task += "\n\n" + mode_note.format(**values)
+            task += "\n\n" + LOOK_AROUND
+        else:
             task = self.task_text("TEST_REVIEW", feature, **extra)
-            res = self.agent("TEST_REVIEW", feature, prog, task, role="test_review")
+        self.agent("TEST_REVIEW", feature, prog, task, role="test_review")
         self.collect_questions(feature, "TEST_REVIEW", "test reviewer")
         review = self.read_test_review(feature, keep_round=rnd + 1)
         self.keep_reviewed_tests(feature)
-        prog["test_review_last"] = {
-            "session": res.get("session_id"),
-            "round": rnd + 1,
-            "objections": review.objections,
-        }
-        return review, resumed
+        prog["test_review_last"] = {"round": rnd + 1, "objections": review.objections}
+        return review, follow_up
 
     def keep_reviewed_tests(self, feature: str) -> None:
         base = self.fdir(feature) / REVIEWED_TESTS
@@ -2374,48 +2319,6 @@ class Orchestrator:
         )
         prog.update(phase=nxt.get("phase"), sub=nxt.get("sub"), amend=None, attempt=0)
         save_progress(self.cfg, feature, prog)
-        quiet = prog.pop("quiet_answers", None)
-        if nxt.get("phase") == "SUMMARY" and self.answers_changed_nothing(feature, prog, quiet):
-            self.approve_unchanged(feature, prog, str(quiet["ref"]))
-
-    def answers_changed_nothing(
-        self, feature: str, prog: dict[str, Any], quiet: dict[str, Any] | None
-    ) -> bool:
-        """The answers at the final gate only took the defaults (`quiet`: recorded by
-        `answer`), and the spec update and the test writer then changed nothing: no commit,
-        no new question, nothing to restructure, nothing parked, and the final checks the
-        human saw had passed with every tool giving a result. Seen live: such answers
-        restarted the whole loop (a fix run that changed nothing, every check again, the
-        summary again: 26 minutes) and the human approved the same result a second time."""
-        if not quiet or prog.get("parked") or prog.get("provisional"):
-            return False
-        if prog.get("structure_findings") or self.open_questions(feature):
-            return False
-        if git(self.cfg, "rev-parse", "HEAD").strip() != quiet.get("head"):
-            return False
-        last = [e for e in read_events(self.cfg, feature) if e.get("kind") == "final_gates"]
-        return bool(last and last[-1].get("passed") and not last[-1].get("tool_failures"))
-
-    def approve_unchanged(self, feature: str, prog: dict[str, Any], ref: str) -> None:
-        """The final gate, passed by the human's answers (answers_changed_nothing): no second
-        final-gate run, summary or stop. Retro next, then DONE; nothing is pushed."""
-        log_event(
-            self.cfg,
-            feature,
-            "human_gate",
-            gate="final",
-            approved=True,
-            reason=f"the answers {ref} took the defaults and changed nothing",
-            from_answers=ref,
-            risk=(prog.get("risk") or {}).get("level"),
-        )
-        self.progress(
-            feature,
-            f"FINAL GATE: your answers ({ref}) took the defaults and changed nothing (no spec, "
-            "test or code change): approved with the checks you saw. Retro next.",
-        )
-        self.reapprove_spec(feature, prog, "final")
-        self.advance(feature, prog, "RETRO")
 
     def commit_test_changes(
         self, feature: str, prog: dict[str, Any], what: str, message: str
@@ -3496,8 +3399,8 @@ class Orchestrator:
         for finding, (rel, n) in later.items():
             q = (
                 f"{rel} had {n} lines before this feature (limit {self.cfg.max_file_lines}); "
-                f"the reviewer proposes: {finding.strip()} Split it now? Default: leave it for a "
-                "later cleanup (this task does not split a file that was already too big)."
+                f"the reviewer proposes: {finding.strip()} A: leave it for a later cleanup (the "
+                "deferred list) (default) / B: split it now."
             )
             k = answered.key(f"[{STRUCTURE_WHO}] {q}")
             if k in seen or self.answered_before(feature, f"[{STRUCTURE_WHO}] {q}", "the reviewer"):
@@ -3567,10 +3470,10 @@ class Orchestrator:
 
     def file_size_questions(self, feature: str, prog: dict[str, Any]) -> None:
         """A question at the final gate for every source file over [gates] max_file_lines
-        that this feature made longer (from the last final-gate structure report), with a
-        default: split it now when this feature took it over the limit, else leave it for
-        later. A file the feature changed without making it longer is not asked about (the
-        report lists it)."""
+        that this feature made longer (from the last final-gate structure report). The
+        default, as for every question, changes nothing: leave it for later (the deferred
+        list); split it now is the other option. A file the feature changed without making it
+        longer is not asked about (the report lists it)."""
         last = [e for e in read_events(self.cfg, feature) if e.get("kind") == "final_gates"]
         shape = (last[-1].get("structure") if last else None) or {}
         over = (shape["grown"] if "grown" in shape else shape.get("over")) or []
@@ -3585,16 +3488,16 @@ class Orchestrator:
             if path in asked or path in (prog.get("size_answered") or []):
                 continue
             was = before.get(path)
-            grew = was is None or was <= limit
-            default = (
-                "split it now by concept (the implementer restructures it, the tests stay as "
-                "they are; one more check round)"
-                if grew
-                else f"leave it for a later cleanup (it had {was} lines before this feature)"
+            took = (
+                "this feature took it over the limit"
+                if was is None or was <= limit
+                else f"it had {was} lines before this feature"
             )
             lines.append(
-                f"{path} has {files.get(path)} lines (limit {limit}). Split it into one file per "
-                f"concept? Default: {default}."
+                f"{path} has {files.get(path)} lines (limit {limit}; {took}). Split it into one "
+                "file per concept? A: leave it for a later cleanup (the deferred list) (default) "
+                "/ B: split it now by concept (the implementer restructures it, the tests stay as "
+                "they are; one more check round)."
             )
         if not lines:
             return
@@ -3608,9 +3511,9 @@ class Orchestrator:
 
     def tool_failure_questions(self, feature: str) -> None:
         """A question at the final gate (always asked) for every final check whose tool gave
-        no result in the last run: run the final gates again (any answer does), or approve
-        without that check. After a run again with the same result, running again is no
-        longer the default: the tool needs the setup."""
+        no result in the last run: approve without that check (the default: no change), or run
+        the final gates again (after a run again with the same result: repair the tool with
+        the setup first)."""
         last = [e for e in read_events(self.cfg, feature) if e.get("kind") == "final_gates"]
         names = (last[-1].get("tool_failures") if last else None) or []
         asked = "\n".join(self.open_questions(feature))
@@ -3624,17 +3527,11 @@ class Orchestrator:
             what = f"{head}, so this check says nothing about the code or the tests (its " + (
                 f"output: {out}/{feature}/final_gates.md). "
             )
-            if again:
-                what += (
-                    "Options: finish without this check (approve as is); repair the tool with "
-                    "/framegate:setup, then run the final checks again. Default: finish "
-                    "without this check."
-                )
-            else:
-                what += (
-                    "Run the final checks again? Options: yes, run them again; no, finish "
-                    "without this check (approve as is). Default: yes, run them again."
-                )
+            what += "A: finish without this check (approve as is) (default) / B: " + (
+                "repair the tool with /framegate:setup, then run the final checks again."
+                if again
+                else "run the final checks again."
+            )
             lines.append(what)
         if not lines:
             return
@@ -3864,6 +3761,9 @@ class Orchestrator:
             state += f"; {len(prov)} provisional (code kept, test fixes proposed): " + ", ".join(
                 p["label"] for p in prov
             )
+        left = [*(prog.get("left_parked") or []), *(prog.get("left_provisional") or [])]
+        if left:
+            state += "; left as they are (deferred): " + ", ".join(p["label"] for p in left)
         questions = self.open_questions(feature)
         if questions:
             state += f"; {len(questions)} open question(s)"
@@ -4419,7 +4319,8 @@ class Orchestrator:
         todo = doc_proposals.to_apply(self.cfg, feature, prog.get("doc_approved") or [])
         last = [e for e in read_events(self.cfg, feature) if e.get("kind") == "final_gates"]
         why = ""
-        if todo and (prog.get("parked") or not (last and last[-1].get("passed"))):
+        stuck = prog.get("parked") or prog.get("left_parked")
+        if todo and (stuck or not (last and last[-1].get("passed"))):
             why = "the final checks did not pass"
         elif todo:
             why = self.apply_docs(feature, todo)
@@ -4475,7 +4376,9 @@ class Orchestrator:
         """The feature ends: its pipeline and reference follow-ups (followup.py) go to
         {specs}/<f>/pipeline_followup.md / reference_followup.md, committed with the metrics
         row (`framegate cleanup` keeps the spec folder), and to an event each. The proposed
-        doc updates (doc_proposals.py) are kept the same way, marked applied or not."""
+        doc updates (doc_proposals.py) are kept the same way, marked applied or not. What the
+        task leaves for later goes to the deferred-work list, and the entries its spec
+        resolves leave it (deferred.py)."""
         prog = load_progress(self.cfg, feature)
         step = prog.get("docs_step") or {}
         kept = doc_proposals.keep(
@@ -4488,10 +4391,16 @@ class Orchestrator:
         )
         if kept:
             self.progress(feature, f"{doc_proposals.SECTION}, kept: {kept}")
+        later = deferred.task_items(
+            self.cfg, feature, feature_mode(self.cfg, feature), prog, read_events(self.cfg, feature)
+        )
         for kind in followup.KINDS:
             todo = followup.write(self.cfg, feature, durable=True, kind=kind)
             if not todo:
                 continue
+            where = f"{self.cfg.paths.specs}/{feature}/{kind.file}"
+            what = "pipeline" if kind is followup.PIPELINE else "feature"
+            later.append(deferred.Item(what, f"{len(todo)} item(s)", [where], kind.done))
             log_event(self.cfg, feature, kind.name, items=[it.line() for it in todo])
             repo, outside = followup.split(todo)
             counts = [f"{len(repo)} item(s) {kind.done}"] if repo else []
@@ -4501,6 +4410,22 @@ class Orchestrator:
                 feature,
                 f"{kind.section}, {', '.join(counts)}: "
                 f"{self.cfg.paths.specs}/{feature}/{kind.file}",
+            )
+        gone = deferred.resolve(self.cfg, feature)
+        added = deferred.add(self.cfg, feature, later)
+        if gone or added:
+            log_event(
+                self.cfg,
+                feature,
+                "deferred",
+                added=[e.line() for e in added],
+                resolved=[e.id for e in gone],
+            )
+            self.progress(
+                feature,
+                f"Deferred work ({deferred.PATH}): {len(added)} recorded"
+                + (f", resolved: {', '.join(e.id for e in gone)}" if gone else "")
+                + " (framegate deferred)",
             )
 
     def advance(
@@ -4676,6 +4601,8 @@ class Orchestrator:
                     f"(or: framegate approve-spec {feature} --force)\n{listed}"
                 )
             self.echo(f"Spec check: {len(found)} problem(s), approved anyway (--force)\n{listed}")
+        for line in spec_lint.warnings(self.cfg, feature):
+            self.echo(f"Spec check warning (not blocking): {line}")
         self.refuse_stray_files(feature)
         self.refresh_env(feature)
         # read again after the refresh: a lock file it rewrote is part of the setup too
@@ -5053,6 +4980,45 @@ class Orchestrator:
         self.echo(f"Next: framegate run {feature}")
         return EXIT_OK
 
+    def approve_by_defaults(
+        self,
+        feature: str,
+        prog: dict[str, Any],
+        gate: str,
+        logged: dict[str, Any],
+        shown: list[str],
+        reply: str,
+    ) -> int:
+        """Answers that only take defaults (or approve doc updates, applied after the approval)
+        change nothing: the gate is approved as it stands, as `approve` would. Seen live: such
+        answers started a spec update, a test amend, a structure run and every final check
+        again (5.5 minutes, nothing changed), and a second stop at the same gate."""
+        ref = str(logged["ref"])
+        self.archive_questions(feature, f"{gate} gate", "\n".join(f"- {q}" for q in shown), reply)
+        final = gate == "final"
+        parked = {"parked": [p["label"] for p in prog.get("parked") or []]} if final else {}
+        log_event(self.cfg, feature, "answer", gate=gate, **parked, **logged)
+        log_event(
+            self.cfg,
+            feature,
+            "human_gate",
+            gate=gate,
+            approved=True,
+            reason=f"the answers {ref} took the defaults",
+            from_answers=ref,
+            **({"risk": (prog.get("risk") or {}).get("level")} if final else {}),
+        )
+        if final:
+            self.reapprove_spec(feature, prog, "final")
+            self.advance(feature, prog, "RETRO")
+            done = "the final gate is approved as it stands; the next run does the retro, then DONE"
+        else:
+            self.pass_tests_gate(feature, prog)
+            done = f"the tests are approved, tagged tests-approved/{feature}"
+        self.echo(f"Answers recorded ({ref}): every answer takes its default (no change): {done}.")
+        self.echo(f"Next: framegate run {feature}")
+        return EXIT_OK
+
     def refuse_open_provisional(self, feature: str, prog: dict[str, Any]) -> None:
         """Approving the final gate would leave the contested tests red: the proposed test fixes
         need an answer first (one answer approves them all)."""
@@ -5129,29 +5095,56 @@ class Orchestrator:
         logged: dict[str, Any] = {"ref": ref, "answer": text[:20000], "items": items}
         if given != text:
             logged["as_given"] = given[:20000]
+        # the default of every question changes nothing (defaults.py); the brief's wording
+        # of a question names the letters the owner answers with
+        seen = dict(self.final_brief_plan(feature, prog).questions) if gate == "final" else {}
+        dflt = {
+            it["n"]: defaults.takes_default(f"{seen.get(it['n'], '')}\n{it['asked']}", str(it["a"]))
+            for it in items
+        }
         if gate == "final":
             # answers to the file-size questions: the structure fix run applies them (split,
             # or leave as is) before the final gates
             tag = f"[{STRUCTURE_WHO}] "
             sized = [
-                (shown[it["n"] - 1].removeprefix(tag), str(it["a"]))
-                for it in parse_answer_items(text)
-                if 0 < it["n"] <= len(shown) and shown[it["n"] - 1].startswith(tag) and it["a"]
+                (it["n"], it["asked"].removeprefix(tag), str(it["a"]))
+                for it in items
+                if it["asked"].startswith(tag) and it["a"]
             ]
             # "leave it" needs no run (seen live: three such answers started an implementer
             # run that changed nothing, and every check after it again)
-            shape = [f"{q}\n  The human's answer: {a}" for q, a in sized if not LEAVE_RE.match(a)]
+            shape = [f"{q}\n  The human's answer: {a}" for n, q, a in sized if not dflt[n]]
             if shape:
                 prog["structure_findings"] = [*(prog.get("structure_findings") or []), *shape]
             if sized:
                 # answered once: not asked again in a later round
                 prog["size_answered"] = [
                     *(prog.get("size_answered") or []),
-                    *(q.split(" ", 1)[0] for q, _ in sized),
+                    *(q.split(" ", 1)[0] for _, q, _ in sized),
                 ]
-                left = [q.split(" ", 1)[0] for q, a in sized if LEAVE_RE.match(a)]
+                left = [q.split(" ", 1)[0] for n, q, _ in sized if dflt[n]]
                 if left:
                     logged["size_left"] = left
+            # defaults that leave a proposed change for later: the deferred list at the end
+            fixed = len(prog.get("parked") or []) + (1 if prov_item else 0)
+            kinds = {STRUCTURE_WHO: "refactor", "test writer": "tests", "test reviewer": "tests"}
+            later = [
+                x
+                for it in items
+                if it["n"] > fixed and dflt[it["n"]]
+                for who in [answered.who(it["asked"])]
+                if who not in (GATES_WHO, doc_proposals.WHO)
+                for x in [
+                    deferred.answered_later(
+                        it["asked"],
+                        seen.get(it["n"], ""),
+                        kinds.get(who) or feature_mode(self.cfg, feature),
+                    )
+                ]
+                if x and x not in (prog.get("deferred") or [])
+            ]
+            if later:
+                prog["deferred"] = [*(prog.get("deferred") or []), *later]
             # answers to the important doc proposals: approved ones go to the docs step; a
             # rejected code (a contradiction, answer C) is the owner's solution: the usual run
             docs = {
@@ -5171,23 +5164,16 @@ class Orchestrator:
                     "later": [t for t, v in docs.items() if v == "later"],
                     **({"rejected": no} if no else {}),
                 }
-                if len(docs) == len(items) and not no:
-                    # nothing but doc answers: nothing to run, the gate stays as it is
-                    mine = [q for q in split_questions(open_q) if doc_proposals.asked(q) in docs]
-                    rest = [q for q in split_questions(open_q) if q not in mine]
-                    self.archive_questions(
-                        feature, "final gate: doc updates", "\n".join(f"- {q}" for q in mine), reply
-                    )
-                    if rest:
-                        oq.write_text("".join(f"- {q}\n" for q in rest), encoding="utf-8")
-                    log_event(self.cfg, feature, "answer", gate="final", parked=[], **logged)
-                    save_progress(self.cfg, feature, prog)
-                    self.echo(
-                        f"Doc updates recorded ({ref}): {len(ok)} approved, {len(docs) - len(ok)} "
-                        "later. The approved ones are applied after the final gate is approved."
-                        f"\nNext: framegate approve {feature}"
-                    )
-                    return EXIT_OK
+        # only defaults (a doc answer: the docs step after the approval applies it): no run,
+        # the gate is approved as it stands
+        docs_only = {
+            it["n"]
+            for it in items
+            if doc_proposals.asked(it["asked"])
+            and doc_proposals.verdict(it["asked"], str(it["a"])) != "rejected"
+        }
+        if items and all(dflt[it["n"]] or it["n"] in docs_only for it in items):
+            return self.approve_by_defaults(feature, prog, gate, logged, shown, reply)
         if gate == "tests":
             self.archive_questions(feature, "tests gate", open_q, reply)
             log_event(self.cfg, feature, "answer", gate="tests", **logged)
@@ -5213,44 +5199,46 @@ class Orchestrator:
                 "writer and the test reviewer re-run with them."
             )
         else:
-            parked = prog.get("parked") or []
+            if not shown:
+                raise WorkflowError(
+                    f"Nothing is parked and no question is open. Approve (framegate approve "
+                    f"{feature}) or finish (framegate finish {feature} --no-retro)."
+                )
+            # parked work and the provisional steps answered with their default (or not named
+            # among numbered answers) stay as they are, the deferred list at the end; the rest
+            # is redone. An answer without numbers is about all of them.
+            all_parked = list(enumerate(prog.get("parked") or [], start=1))
+            left = [p for n, p in all_parked if dflt.get(n, bool(items))]
+            parked = [p for n, p in all_parked if p not in left]
+            # a step that only waits for a redone one is redone with it
+            waits = {d for p in parked for d in p.get("dependents") or []}
+            parked += [p for p in left if set(item_steps(p)) & waits]
+            left = [p for p in left if p not in parked]
+            if left:
+                prog["left_parked"] = [*(prog.get("left_parked") or []), *left]
+            if prov_item and dflt.get(len(all_parked) + 1, bool(items)):
+                prov = [*(prog.get("left_provisional") or []), *prog["provisional"]]
+                prog.update(left_provisional=prov, provisional=[])
+                prov_item = ""
+            self.archive_questions(feature, "final gate", "\n".join(f"- {q}" for q in shown), reply)
+            log_event(
+                self.cfg,
+                feature,
+                "answer",
+                gate="final",
+                parked=[p["label"] for _, p in all_parked],
+                **logged,
+            )
             if not parked and not prov_item:
-                if not open_q.strip():
-                    raise WorkflowError(
-                        f"Nothing is parked and no question is open. Approve (framegate approve "
-                        f"{feature}) or finish (framegate finish {feature} --no-retro)."
-                    )
                 # only questions (e.g. deferred from the tests gate): the answers go into the
                 # spec; if it changed, the reviewer checks the code against it again (findings
                 # -> fix loop), else straight back to this gate
-                self.archive_questions(feature, "final gate: questions", open_q, reply)
-                log_event(
-                    self.cfg,
-                    feature,
-                    "answer",
-                    gate="final",
-                    parked=[],
-                    **logged,
-                )
-                # answers that only take the defaults: if the spec update and the test
-                # writer then change nothing, the feature is approved with the checks the
-                # human saw (answers_changed_nothing), without a second round of everything
-                # (an answer to a doc proposal changes nothing in the run: the docs step
-                # after the approval applies it; a rejected code does)
-                other = [
-                    it
-                    for it in items
-                    if not doc_proposals.asked(it["asked"])
-                    or doc_proposals.verdict(it["asked"], str(it["a"])) == "rejected"
-                ]
-                quiet = take_defaults(other) if other else bool(items)
-                prog["quiet_answers"] = (
-                    {"ref": ref, "head": git(self.cfg, "rev-parse", "HEAD").strip()}
-                    if quiet
-                    else None
+                rerun = any(
+                    answered.who(it["asked"]) == GATES_WHO and not dflt[it["n"]] for it in items
                 )
                 prog.update(
                     waiting=None,
+                    parked=[],
                     redo_mode=False,
                     attempt=0,
                     phase="SPEC_UPDATE",
@@ -5262,7 +5250,7 @@ class Orchestrator:
                         # a file-size answer needs the structure run even without a spec
                         # change, and "run them again" the final checks
                         "unchanged": {"phase": "REVIEW", "sub": "final"}
-                        if prog.get("structure_findings") or wants_rerun(items)
+                        if prog.get("structure_findings") or rerun
                         else {"phase": "SUMMARY", "sub": None},
                         "feedback": "",
                         "amend": True,
@@ -5274,34 +5262,15 @@ class Orchestrator:
                     "writer applies the ones that need a test change; if the spec changed, the "
                     "reviewer checks the code against it again (changed tests: the implementer "
                     "makes them pass); then the final gate again."
-                    + (
-                        " Your answers take the defaults: if they change nothing, the feature "
-                        "is approved with the checks you saw (retro, then DONE)."
-                        if quiet
-                        else ""
-                    )
                 )
                 self.echo(f"Next: framegate run {feature}")
                 return EXIT_OK
-            questions = "\n".join(
-                [f"- [{p['label']}] {p.get('question') or p.get('reason')}" for p in parked]
-                + ([f"- {prov_item}"] if prov_item else [])
-            )
-            self.archive_questions(feature, "final gate: parked", questions + "\n" + open_q, reply)
-            log_event(
-                self.cfg,
-                feature,
-                "answer",
-                gate="final",
-                parked=[p["label"] for p in parked],
-                **logged,
-            )
             # work no implementer run can finish (it kept the gate inputs when it parked): an
             # answer that says more than "approved" is new information, its redo always runs;
             # a bare approval is redone only when the approved change was made (redo_pointless)
             by_n = {it["n"]: str(it.get("a") or "") for it in items}
-            for n, p in enumerate(parked, start=1):
-                if p.get("inputs") and redos.forces_redo(p, by_n.get(n, "")):
+            for n, p in all_parked:
+                if p in parked and p.get("inputs") and redos.forces_redo(p, by_n.get(n, "")):
                     p["force_redo"] = True
             steps = [p for p in parked if p.get("kind") == "step"]
             # provisional steps: IMPLEMENT settles them first (contested tests pass now, or the
@@ -5315,7 +5284,6 @@ class Orchestrator:
                 waiting=None,
                 redo=parked,
                 parked=[],
-                quiet_answers=None,
                 redo_mode=True,
                 final_repair=[],  # a new final-gate cycle: one repair per owner again
                 attempt=0,

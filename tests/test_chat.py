@@ -243,7 +243,9 @@ def test_gate_summary_tests_gate_with_questions(
     lines = out.splitlines()
     assert lines[0].startswith("TESTS GATE: demo ($")
     # the decision and its default come first
-    assert lines[1].startswith('Decision: answer questions 1-2 ("ok" takes every default)')
+    assert lines[1].startswith(
+        'Decision: answer questions 1-2 ("ok" takes every default and approves the tests as they'
+    )
     # what the tests check, in plain words (test_summary.md's column, without the IDs)
     assert "What the tests check:\n  - sum" in out
     assert "Test reviewer: no objections." in out
@@ -278,7 +280,9 @@ def test_gate_summary_spec_diff_and_final_gate_parked(
     out = capsys.readouterr().out
     lines = out.splitlines()
     assert lines[0] == "FINAL GATE: demo"
-    assert lines[1].startswith('Decision: answer question 1 ("ok" takes every default below)')
+    assert lines[1].startswith(
+        'Decision: answer question 1 ("ok" takes every default below and approves the task as it'
+    )
     # no brief from the summary agent: generated plan lines and struggles
     assert "Steps:\n  1. add: done\n  2. neg: parked (see the items)\nStruggles: step 2" in out
     # the parked step's tests are expected red, not a failure

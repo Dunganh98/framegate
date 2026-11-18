@@ -2,6 +2,7 @@
 
 Feature code: XXX   <!-- 2–10 uppercase chars, prefix for all IDs, e.g. FKB -->
 Mode: bugfix
+Resolves:   <!-- optional: the deferred work this task does, e.g. D7, D9 (framegate deferred) -->
 
 ## Symptom
 <what goes wrong, where the user sees it, since when (version / commit, if known); 3–5 lines>
@@ -16,7 +17,12 @@ Mode: bugfix
      or the test module that holds the helper).
      Every error message: written out in full for one concrete input, with one notation for
      placeholders in the whole spec (repr, str, or str in literal quotes).
-     No criterion requires text in a docstring, a comment or a doc: only behaviour. -->
+     No criterion requires text in a docstring, a comment or a doc: only behaviour
+     (`framegate spec-check` fails such a row).
+     A fix that widens what an input may be (aware as well as naive datetimes, a new type, a
+     new range): list every place the function uses that input; the tests reach each with
+     the new kind (seen live: the tests faked an empty frame, so the new input never reached
+     the row filter that crashed on it). -->
 | ID | Given / when (exact input) | Observed now (wrong) | Expected (right, and why) | Measured with |
 |---|---|---|---|---|
 | XXX-R-001 | | | | |
@@ -80,7 +86,9 @@ Mode: bugfix
      (a CI variable, a secret in the vault, a migration of the real database, an environment
      switch): `- OUTSIDE [<where>]: <what must be done> (<why>)`; a person does it by hand.
      Only deploy / CI files and such outside steps: nothing else belongs here. "None." when the
-     feature needs no such change. -->
+     feature needs no such change.
+     A new test file where the CI lists test files by path: a line for that CI file (the CI
+     runs only the listed ones; `framegate spec-check` warns). -->
 None.
 
 ## Reference follow-up

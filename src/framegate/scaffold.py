@@ -276,6 +276,18 @@ def spec_brief(cfg: Config, feature: str) -> str:
         if long_files
         else []
     )
+    from framegate import deferred
+
+    n_later = len(deferred.read(cfg)[0])
+    later = (
+        [
+            f"- Deferred work: {n_later} open item(s) in {deferred.PATH} (framegate deferred "
+            "--file <path>). Read those on the files this task touches; a task that does one "
+            "says `Resolves: D<n>` in requirements.md. spec-check lists those on the plan's files."
+        ]
+        if n_later
+        else []
+    )
     return "\n".join(
         [
             f"framegate spec brief: feature '{feature}', language {cfg.language}",
@@ -302,6 +314,7 @@ def spec_brief(cfg: Config, feature: str) -> str:
             + ("exists: read it first" if (cfg.root / cfg.code_map).is_file() else "missing")
             + ")",
             *sizes,
+            *later,
             "- Setup files (change them now if the task needs a new package / source folder, a "
             "dependency or a tool setting; the approval commits them with the spec and they "
             "are frozen from then on): "

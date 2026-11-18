@@ -203,3 +203,70 @@ def test_every_edge_case_needs_a_fixture_row(demo_repo: DemoRepo) -> None:
         "XXX-R-002",
     }
     assert spec_lint.listed_ids("E-002", "ABC") == {"ABC-E-002"}
+
+
+DOC_ROWS = """\
+## Requirements
+| ID | Requirement | Acceptance criterion |
+|---|---|---|
+| DEMO-R-001 | add() has a docstring that names the units | the doc string says "metres" |
+| DEMO-R-002 | the module keeps a code comment on the cache | |
+| DEMO-R-003 | a comment in the function explains the clamp | |
+| DEMO-R-004 | the stub says `\"\"\"Return the sum.\"\"\"` | |
+| DEMO-R-005 | commented-out code is removed | no line starts with `# x =` |
+| DEMO-R-006 | a bad name is refused | `ValueError("see the docstring")` |
+| DEMO-R-007 | the log line reads 'comment saved' | |
+| DEMO-R-008 | the parser skips # comments in the config | a line `# x` gives no key |
+| DEMO-R-009 | docs/usage.md describes the flag | |
+
+## Edge cases
+| ID | Situation | Expected behavior |
+|---|---|---|
+| DEMO-E-001 | an empty name | the XML doc of Add lists it |
+"""
+
+
+def test_a_requirement_on_docstring_or_comment_text_fails(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    (r.root / "specs/demo/requirements.md").write_text(DOC_ROWS, encoding="utf-8")
+    found = spec_lint.doc_text_problems(load_config(r.root), "demo")
+    assert [x.split(": ")[0] for x in found] == [
+        f"requirements.md, Requirements, DEMO-R-00{n}" for n in (1, 2, 3, 4)
+    ] + ["requirements.md, Edge cases, DEMO-E-001"]
+    assert found[0].endswith("Drop it, or put a doc file change under ## Proposed doc updates")
+
+
+CI_SPEC = """\
+## Pipeline follow-up
+<!-- a new test selection for CI -->
+{follow_up}
+
+## Test data and fixtures
+| ID | Data | Observable |
+|---|---|---|
+| DEMO-R-001 | `tests/test_new.py::test_x`, tests/data/rows.csv | |
+"""
+
+
+def test_a_new_test_file_the_ci_does_not_list_warns(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    cfg = load_config(r.root)
+    req = r.root / "specs/demo/requirements.md"
+    req.write_text(CI_SPEC.format(follow_up="None."), encoding="utf-8")
+    assert spec_lint.warnings(cfg, "demo") == []  # no CI file
+    ci = r.root / ".github/workflows/ci.yml"
+    ci.parent.mkdir(parents=True)
+    ci.write_text("run: pytest tests/\n", encoding="utf-8")
+    assert spec_lint.warnings(cfg, "demo") == []  # the CI runs the folder
+    (r.root / "tests").mkdir(exist_ok=True)
+    (r.root / "tests/test_old.py").write_text("", encoding="utf-8")
+    ci.write_text("run: pytest tests/test_old.py\n", encoding="utf-8")
+    (found,) = spec_lint.warnings(cfg, "demo")
+    assert (
+        "adds tests/test_new.py, and the CI runs only" in found
+        and ".github/workflows/ci.yml" in found
+    )
+    req.write_text(
+        CI_SPEC.format(follow_up="- .github/workflows/ci.yml: run test_new.py"), encoding="utf-8"
+    )
+    assert spec_lint.warnings(cfg, "demo") == []

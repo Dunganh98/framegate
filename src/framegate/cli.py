@@ -208,6 +208,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--note", default="", help="e.g. where it was applied (PR, commit)")
     p.add_argument("--all", action="store_true", help="also applied, dropped and skipped ones")
     p.add_argument("--scope", choices=["framework", "project"], default="")
+    p = sub.add_parser("deferred", help="the deferred-work list (.framegate/deferred.md)")
+    p.add_argument("--file", default="", help="only the entries on this file")
     p = sub.add_parser("gates")
     p.add_argument("feature")
     p.add_argument("--scope", choices=["step", "final"], default="final")
@@ -402,6 +404,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             from framegate import stats
 
             return stats.run(cfg, args.feature, as_json=args.json)
+        if args.command == "deferred":
+            from framegate import deferred
+
+            lines = deferred.listing(cfg, args.file)
+            end = ":" if lines else "."
+            print(f"{len(lines)} open deferred item(s) in {deferred.PATH}{end}")
+            for line in lines:
+                print(line)
+            return 0
         if args.command == "spec-check":
             from framegate.adapters import get_adapter
             from framegate.checks import frame_diff, spec_lint
@@ -414,6 +425,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"- {line}")
             if stray:
                 print(f"- {stray_files_text(stray)}")
+            for line in spec_lint.warnings(cfg, args.feature):
+                print(f"- WARNING (not blocking): {line}")
+            from framegate import deferred
+
+            for line in deferred.plan_note(cfg, args.feature):  # a note for the spec brief
+                print(line)
             # for the spec brief: the user approves these with the spec
             print("Setup files changed (committed with the spec): " + (", ".join(setup) or "none"))
             n = len(found) + (1 if stray else 0)
@@ -457,8 +474,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 preflight.record_start(orch.cfg, f, restart=True)
             return code
         if args.command == "run":
-            from framegate import preflight
+            from framegate import detached, preflight
 
+            if detached.wanted():
+                started = detached.run(orch, f)
+                if started is not None:
+                    return started
             preflight.record_start(orch.cfg, f)  # a task approved by an older version
             code = orch.run(f)
             note = preflight.version_note(cfg) if code == 0 else ""

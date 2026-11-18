@@ -375,7 +375,8 @@ def _tests_brief(orch: Orchestrator, feature: str, prog: dict[str, Any]) -> list
     if questions:
         lines.append(
             f'Decision: answer {_numbers("question", len(questions))} ("ok" takes every '
-            "default); the test writer and reviewer then re-run with your answers."
+            "default and approves the tests as they are; another option re-runs the test writer "
+            "and reviewer with it)."
         )
     else:
         lines.append('Decision: "ok" approves the tests (default); or say what is wrong.')
@@ -471,9 +472,10 @@ def _final_brief(
     if questions:
         lines.append(
             f'Decision: answer {_numbers("question", len(questions))} ("ok" takes every '
-            "default below)"
+            "default below and approves the task as it stands; another option starts a run)"
             + (
-                "; the provisional-steps item must be answered before the gate can be approved."
+                "; the provisional-steps item's default keeps its code with the contested tests "
+                "red (the deferred list)."
                 if prov
                 else '; "approve as is" leaves them open (retro, then DONE).'
             )

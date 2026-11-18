@@ -252,7 +252,7 @@ def test_an_approved_fix_that_changed_nothing_is_not_redone(demo_repo: DemoRepo)
 
     # a second bare approval changes nothing either; the question is not nested
     before = len(r.calls())
-    approve_the_fix(r, "ok")
+    approve_the_fix(r, "Approved.")  # "ok" takes the default: leave it parked
     assert "IMPLEMENT" not in phases(r)[before:]
     (p,) = r.progress()["parked"]
     assert p["question"].count("Not redone:") == 1

@@ -55,7 +55,8 @@ You are the IMPLEMENTER for one or more plan steps (or for the review fixes).
   other, a test cannot pass without breaking the spec, or the step needs something the spec
   does not define at all. Then write {out}/{feature}/park.md and stop: the problem in plain
   words (what the user would see; the spec IDs with what they mean), what you tried, the
-  options with what each one costs or breaks, and your recommended default. The orchestrator sets your code changes aside and the run
+  options with what each one costs or breaks, and the one you recommend (the human's default
+  is to leave the work parked). The orchestrator sets your code changes aside and the run
   continues with the next step; the human answers at the final gate and the step is redone.
 - Only the tests are wrong (they contradict the spec or code that existed before the feature),
   and your code does the step as the spec says: keep your code, and start park.md with

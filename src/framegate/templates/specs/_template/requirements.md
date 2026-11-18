@@ -1,6 +1,7 @@
 # <Feature name> — Requirements
 
 Feature code: XXX   <!-- 2–10 uppercase chars, prefix for all IDs, e.g. HI2 -->
+Resolves:   <!-- optional: the deferred work this task does, e.g. D7, D9 (framegate deferred) -->
 
 ## Context
 <why this feature exists, 3–5 lines>
@@ -19,7 +20,12 @@ Feature code: XXX   <!-- 2–10 uppercase chars, prefix for all IDs, e.g. HI2 --
      the tests compare against it.
      A check function, helper or checker a criterion names: its name and module (`src/...`,
      or the test module that holds the helper).
-     No criterion requires text in a docstring, a comment or a doc: only behaviour. -->
+     No criterion requires text in a docstring, a comment or a doc: only behaviour
+     (`framegate spec-check` fails such a row).
+     A requirement that widens what an input may be (aware as well as naive datetimes, a new
+     type, a new range): list every place the function uses that input; the tests reach each
+     with the new kind (seen live: the tests faked an empty frame, so the new input never
+     reached the row filter that crashed on it). -->
 
 ## Edge cases
 <!-- empty / NaN / missing / out-of-range / unit mismatch / duplicates / ordering / timing / very large input
@@ -28,8 +34,11 @@ Feature code: XXX   <!-- 2–10 uppercase chars, prefix for all IDs, e.g. HI2 --
      Decided by: the existing method / predicate that decides the situation (e.g.
      `World.IsLeagueClub(id)`) and when it is checked (before / after de-duplication, before any
      work). A parser: the accepted forms (sign, leading zeros, spaces, largest value, overflow).
-     A wrong-type input: one example per kind (a number, None, an unhashable value such as a
-     list) and its place in the error order.
+     A wrong-type input: the rule by type first ("anything that is not exactly a `str` is
+     refused"; does a subclass count?), checked before any lookup, and its place in the error
+     order; then one example per kind (a number, None, an unhashable value such as a list).
+     Seen live: examples only, and the reviewer found three look-alikes in two rounds (an
+     unhashable object equal to a valid name, a numpy array, an unhashable str subclass).
      Every error message: written out in full for one concrete input, with one notation for
      placeholders in the whole spec (repr, str, or str in literal quotes). -->
 | ID | Situation | Expected behavior (exact: value, exception type + message pattern) | Decided by (method, when) |
@@ -117,7 +126,9 @@ Kept quirks:
      (a CI variable, a secret in the vault, a migration of the real database, an environment
      switch): `- OUTSIDE [<where>]: <what must be done> (<why>)`; a person does it by hand.
      Only deploy / CI files and such outside steps: nothing else belongs here. "None." when the
-     feature needs no such change. -->
+     feature needs no such change.
+     A new test file where the CI lists test files by path: a line for that CI file (the CI
+     runs only the listed ones; `framegate spec-check` warns). -->
 None.
 
 ## Reference follow-up

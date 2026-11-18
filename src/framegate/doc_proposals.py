@@ -68,7 +68,9 @@ _LINE = re.compile(
     r"^(?P<head>.*?):\s*today\s*:\s*(?P<today>.*?)\s*->\s*(?:code now|proposed)\s*:\s*(?P<new>.*)$",
     re.I | re.S,
 )
-_WHY = re.compile(r"\s*\([^()]*\)\s*$")
+_PLACE_END = re.compile(r":\s*(?:today|the doc says)\s*:", re.I)
+_LINE_NO = re.compile(r"\b(?:lines?|l\.)\s*\d+(?:\s*[-–]\s*\d+)?|:\d+\b|\(\s*\d+\s*\)", re.I)
+_FILLER = ("section", "heading", "the")
 
 
 def is_important(rel: str) -> bool:
@@ -100,12 +102,16 @@ def _words(text: str) -> str:
 
 
 def key(text: str) -> str:
-    """Two proposals with the same key are one: the same file and the same new text (the
-    `proposed:` / `code now:` part without its `(why)`)."""
+    """Two proposals with the same key are one: the same file and place (`<file>, <where>:`,
+    without a line number), whatever their wording. A line without a place (a minor one): the
+    same file and the same text."""
     m = _FILE.search(text)
-    new = re.split(r"(?:proposed|code now(?: does)?)\s*:", text, maxsplit=1, flags=re.I)
-    rest = _WHY.sub("", new[-1].strip().rstrip(".")) if len(new) > 1 else text
-    return f"{m.group(0).replace(chr(92), '/') if m else ''} {_words(rest)}"
+    file = m.group(0).replace("\\", "/") if m else ""
+    end = _PLACE_END.search(text)
+    if m and end and end.start() >= m.end():
+        where = _LINE_NO.sub(" ", text[m.end() : end.start()])
+        return f"{file} @ {' '.join(w for w in _words(where).split() if w not in _FILLER)}"
+    return f"{file} {_words(text[m.end() :] if m else text)}"
 
 
 def verdict(question: str, answer: str) -> str:
@@ -214,20 +220,28 @@ def _read(path: pathlib.Path) -> str:
 
 
 def proposals(cfg: Config, feature: str) -> list[Proposal]:
-    """Every proposal of the task: the spec's first, then the run's; one per key, none for a
-    file framegate writes itself."""
+    """Every proposal of the task: the spec's first, then the run's; one per key (the first
+    wording, a contradiction over a plain one), none for a file framegate writes itself."""
     spec = _bullets(_spec_section(_read(cfg.spec_dir(feature) / "requirements.md")))
     run = _bullets(_read(cfg.root / run_file(cfg, feature)))
     out: dict[str, Proposal] = {}
     for p in [Proposal(x, "spec") for x in spec] + [Proposal(x, "run") for x in run]:
-        if not (p.file and is_own(cfg, p.file)):
-            out.setdefault(key(p.text), p)
+        if p.file and is_own(cfg, p.file):
+            continue
+        k = key(p.text)
+        if k not in out or (p.contradicts and not out[k].contradicts):
+            out[k] = p
     return list(out.values())
+
+
+def among(p: Proposal, answered: list[str]) -> bool:
+    """Is `p` one of the `answered` proposals (as asked; the same key)?"""
+    return key(p.text) in {key(a) for a in answered}
 
 
 def to_apply(cfg: Config, feature: str, approved: list[str]) -> list[Proposal]:
     """What the docs step applies: the minor ones and the approved important ones."""
-    return [p for p in proposals(cfg, feature) if not p.important or p.body in approved]
+    return [p for p in proposals(cfg, feature) if not p.important or among(p, approved)]
 
 
 def brief_lines(cfg: Config, feature: str) -> list[str]:
@@ -300,9 +314,9 @@ def keep(
     def line(p: Proposal) -> str:
         if p.text in applied:
             return f"- [x] {p.shown()}: applied"
-        later = p.important and p.body not in approved
+        later = p.important and not among(p, approved)
         reason = "later" if later else why or "the docs step did not run"
-        if p.body in (rejected or []):
+        if among(p, rejected or []):
             reason = "you rejected the code"
         return f"- [ ] {p.shown()}: not applied ({reason})"
 

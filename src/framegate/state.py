@@ -11,7 +11,7 @@ import subprocess
 import time
 from typing import Any
 
-from framegate.config import Config, is_machine_file, phase_name
+from framegate.config import DEFERRED_FILE, Config, is_machine_file, phase_name
 
 
 class GitError(Exception):
@@ -138,11 +138,12 @@ def delete_marker(cfg: Config, name: str) -> None:
 
 def commit_paths(cfg: Config) -> list[str]:
     """What a workflow commit may contain: the source and test folders, the specs, the metrics
-    folder, the knowledge file and the code map. Anything else in the working tree (the
-    user's notes, scratch files, unrelated edits) is never swept into a commit."""
+    folder, the knowledge file, the deferred-work list and the code map. Anything else in the
+    working tree (the user's notes, scratch files, unrelated edits) is never swept into a
+    commit."""
     p = cfg.paths
     wanted = [*cfg.src_roots, p.tests, p.review_tests, p.specs, p.metrics, cfg.knowledge]
-    wanted.append(cfg.code_map)
+    wanted += [DEFERRED_FILE, cfg.code_map]
     out: list[str] = []
     for rel in wanted:
         if rel and rel not in out:

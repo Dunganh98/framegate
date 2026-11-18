@@ -56,7 +56,8 @@ test mechanics; also one bullet for what the tests do NOT check if that matters 
 UI). Your objections go
 back to the test writer automatically. If the spec does not settle whether a test is right,
 do not object: write the question to {out}/{feature}/questions.md (one bullet: the question in
-plain words, the ID with what it means, the options and your recommended default) and continue. Questions are shown to the human together at the next gate; do not stop.
+plain words, the ID with what it means, the options; the default is the one that changes nothing (the spec and the
+tests as they are), your recommendation named if it differs) and continue. Questions are shown to the human together at the next gate; do not stop.
 
 ## Mode 2: triage review findings (review phase)
 

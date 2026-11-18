@@ -150,6 +150,18 @@ def popen(cmd: Sequence[str], job: bool = False, **kw: Any) -> subprocess.Popen[
     return proc
 
 
+def detach(cmd: Sequence[str], out: Any = subprocess.DEVNULL, **kw: Any) -> subprocess.Popen[Any]:
+    """Start `cmd` outside the caller's process group, without a window or the caller's pipes;
+    stdout and stderr go to `out`."""
+    err = out if out is subprocess.DEVNULL else subprocess.STDOUT
+    kw.update(stdin=subprocess.DEVNULL, stdout=out, stderr=err)
+    if sys.platform == "win32":
+        kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+    else:
+        kw["start_new_session"] = True
+    return subprocess.Popen(list(cmd), **kw)
+
+
 def kill_tree(proc: subprocess.Popen[Any]) -> None:
     """Kill a child and everything it started."""
     if proc.poll() is not None:  # gone; its pid may already belong to someone else

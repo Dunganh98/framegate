@@ -93,7 +93,7 @@ your folder:
 | The chat asks | You answer |
 |---|---|
 | a plain confirmation (yes or no, one way forward) | `ok` |
-| options, one of them marked as recommended or default | that option, by its number or letter plus its words: `1: approve the proposed fix` (never a bare `ok`: at a gate it can mean another option) |
+| options, one of them marked as recommended or default | that option (one marked default and another recommended: the default), by its number or letter plus its words: `1: A: leave it for later` (never a bare `ok`: at a gate it can mean another option) |
 | options, and the chat says the recommended one will repeat a failure that already happened | the option the chat names as ending the repeat; log it as an assisted answer |
 | several numbered questions with defaults | one answer per number: `1: ok. 2: ok. 3: no.` The default for each, `no` for anything on the never-list. Never `ok, take every default`: the list may hold the smoke run or a pull request |
 | a question with no recommendation and no default | `No answer to <number or topic>: skip it. Decide what the code and the docs support, and record it as an assumption.` |

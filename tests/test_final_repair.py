@@ -11,8 +11,9 @@ from framegate.adapters import get_adapter
 from framegate.adapters.base import Check, CheckResult, LanguageAdapter, TestScope
 from framegate.checks import mutation
 from framegate.config import load_config
+from framegate.defaults import takes_default
 from framegate.gates import red_blockers
-from framegate.orchestrator import EXIT_GATE, Orchestrator, wants_rerun
+from framegate.orchestrator import EXIT_GATE, Orchestrator
 
 FAST = "[gates.commands]\nlint = []\nformat = []\ntypecheck = []\n"
 LEGACY = """\
@@ -174,7 +175,9 @@ def test_a_tool_failure_is_asked_not_repaired(
     orch = Orchestrator(cfg, get_adapter(cfg), echo=lambda s: None)
     items = orch.final_items("demo", r.progress())
     asked = [i for i, x in enumerate(items, 1) if x.startswith(f"[final gates] {name}: the tool")]
-    assert len(asked) == 1 and "Default: yes, run them again." in items[asked[0] - 1]
+    first = items[asked[0] - 1]
+    assert len(asked) == 1 and "A: finish without this check (approve as is) (default)" in first
+    assert takes_default(first, "ok") and not takes_default(first, "Yes, run them again.")
     assert orch.must_ask("demo", r.progress()) == set(asked)  # the brief cannot leave it out
 
     def run_again() -> list[str]:
@@ -185,14 +188,17 @@ def test_a_tool_failure_is_asked_not_repaired(
         assert r.af("run", "demo") == EXIT_GATE
         return orch.final_items("demo", r.progress())
 
-    # seen live: "run again" was the default a second time, with the same result
+    # seen live: "run again" a second time, with the same result: the tool needs the setup
     items = run_again()
     asked = [i for i, x in enumerate(items, 1) if f"{name}: the tool gave no result again" in x]
-    assert len(asked) == 1 and "Default: finish without this check." in items[asked[0] - 1]
+    assert (
+        len(asked) == 1
+        and "finish without this check (approve as is) (default)" in items[asked[0] - 1]
+    )
     assert "/framegate:setup" in items[asked[0] - 1]
     again = items[asked[0] - 1]
-    assert not wants_rerun([{"asked": again, "a": "Default"}])  # finish without it
-    assert not wants_rerun([{"asked": again, "a": "finish without the check"}])
+    assert takes_default(again, "Default") and takes_default(again, "finish without the check")
+    assert not takes_default(again, "B")
 
     broken["now"] = False
     run_again()

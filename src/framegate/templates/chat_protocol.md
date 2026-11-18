@@ -45,6 +45,8 @@ you or the user refused (`refused: ...`). Gate answers and approvals are recorde
    own commit (`<f>: docs`); never edit a doc yourself for the task.
 2. Start the run in the background: Bash tool, `run_in_background: true`, command
    `framegate run <f>` (PowerShell tool the same if Bash is not available). Note its task id.
+   If it prints `runs detached` (a replay), its task ends at once and the run goes on: only
+   the live view and status tell its end; its output is the log file it names.
 3. Start the live view: Monitor tool, command `framegate watch <f>`, description
    `framegate <f>`, `timeout_ms: 1800000`.
 4. Tell the user in one line that the run started and they can keep chatting. End the turn.
@@ -69,8 +71,8 @@ fail for no reason. Reading files and git log/diff/status are fine.
   goes on at <when> at the latest, and "say so when you have refilled the limit". When the
   user says the limit is back (refilled, extra usage bought): run `framegate wake <f>` (the
   run tries again within seconds; it is not a second run). Never wake it on your own.
-- The run has ended when either the background task's completion notification arrives or a
-  `watch ended: ...` line comes. On the first of the two, run `framegate status <f> --brief`
+- The run has ended when either the background task's completion notification arrives (not
+  after `runs detached`) or a `watch ended: ...` line comes. On the first of the two, run `framegate status <f> --brief`
   and act on its first line once (the second signal is then ignored):
   - `waiting at the tests gate` / `waiting at the final gate`: section C.
   - `DONE`: section D.
@@ -80,7 +82,7 @@ fail for no reason. Reading files and git log/diff/status are fine.
   - `interrupted ...` (any other reason): one line: where it stopped; "Continue the run?"
     (default yes), then A.2.
   - `phase X, not running` after an error: read the last 20 lines of the background task's
-    output file (Read); tell the user in one or two lines what failed, in words, and the one
+    output file, or of the log file a detached run named (Read); tell the user in one or two lines what failed, in words, and the one
     decision needed with your default (e.g. "Retry the run? (default: yes, it looks like a
     timeout)"). The lines themselves on request. Do not retry blindly.
   - The user gives the task up before DONE: offer the retro of what happened (default
@@ -121,16 +123,17 @@ fail for no reason. Reading files and git log/diff/status are fine.
      short question with your default and wait. A wish to change the spec at the final gate:
      say in one line that it means editing the spec and `framegate approve-spec <f>` (restarts
      from the tests), ask "Change the spec?" (default no).
-   - A parked item with a proposed fix: "ok" / "approve <n>" for it is the answer
-     `Approved: apply the proposed fix as written.`; the next run sends it to the phase that
-     owns the file (spec, tests, code).
+   - A parked item: its default leaves it parked (the deferred list). "apply the fix" /
+     "approve the fix <n>" (option B) is the answer `Approved: apply the proposed fix as
+     written.`; the next run sends it to the phase that owns the file (spec, tests, code).
    - A parked item that says "This needs the setup: ...": there is nothing to approve. Offer
      `/framegate:setup` with the change it names (default), then answer the item with what
      was done; the step is redone once framegate.toml has changed.
-   - The provisional-steps item (code kept, test fixes proposed): "ok" / "yes" / "approve" for
-     it, or for the whole gate while it is listed, is the answer `Approved: apply all proposed
-     test fixes as written.` (`framegate approve` refuses while it is open). A "no" to one fix
-     is an answer too, in the user's words: that step's code is reverted and redone.
+   - The provisional-steps item (code kept, test fixes proposed): its default leaves the code
+     as it is and the contested tests red (the deferred list). "apply the test fixes" (option B)
+     is the answer `Approved: apply all proposed test fixes as written.` (`framegate approve`
+     refuses while it is open). A "no" to one fix is an answer too, in the user's words: that
+     step's code is reverted and redone.
 4. `answers.md` format (overwrite the file; keep the user's wording, do not improve it):
 
    ```
@@ -143,8 +146,8 @@ fail for no reason. Reading files and git log/diff/status are fine.
    ```
 
 5. After the command succeeds, continue with A.2 (finish --no-retro ends in DONE: section D).
-   After answers at the final gate that only took the defaults, that run may end in DONE
-   without a second final gate (nothing changed: approved with the checks already shown).
+   Answers that only take defaults change nothing: `framegate answer` approves the gate as it
+   stands (no run before it; the next run does the retro, then DONE).
    A command that fails: its error in one line, in words, and the decision with a default.
 
 ## D. DONE: wrap-up and cleanup

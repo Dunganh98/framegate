@@ -57,8 +57,6 @@ Scenario keys:
   api_error: {phase: n} -> the first n runs of that phase do no work and end with the result
     "API Error: Can't reach the API server ..." (one turn, no cost; no files); they do not
     count as runs for the other keys
-  resume_fail: n -> the first n runs started with --resume find no session (stderr, exit 1,
-    no files); they do not count as runs for the other keys
   test_question: the test writer's question, one text per TESTS run (a list; the last one for
     later runs), instead of the `questions_in` question
   green_test: true -> every TESTS run also writes test_reference_constant, which passes
@@ -342,11 +340,6 @@ def main() -> int:
         }
         f.write(json.dumps(call) + "\n")
 
-    if "--resume" in sys.argv and state.get("resume_failed", 0) < scen.get("resume_fail", 0):
-        state["resume_failed"] = state.get("resume_failed", 0) + 1
-        state_path.write_text(json.dumps(state), encoding="utf-8")
-        print("No conversation found with session ID: fake", file=sys.stderr)
-        return 1
     lang = DOTNET if scen.get("language") == "dotnet" else PYTHON
     limited = state.setdefault("limited", {})
     if limited.get(phase, 0) < scen.get("usage_limit", {}).get(phase, 0):

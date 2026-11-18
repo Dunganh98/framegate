@@ -22,7 +22,6 @@ import subprocess
 import sys
 import time
 from collections.abc import Sequence
-from typing import Any
 
 from framegate import procs
 
@@ -85,12 +84,7 @@ def read_pid(mark: pathlib.Path) -> int:
 
 def detach(cmd: Sequence[str]) -> int:
     """Start `cmd` outside the caller's process tree and without its pipes; returns the pid."""
-    kw: dict[str, Any] = dict.fromkeys(("stdin", "stdout", "stderr"), subprocess.DEVNULL)
-    if sys.platform == "win32":
-        kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-    else:
-        kw["start_new_session"] = True
-    return subprocess.Popen(list(cmd), **kw).pid
+    return procs.detach(cmd).pid
 
 
 def send(argv: Sequence[str], folder: pathlib.Path) -> int:

@@ -2,7 +2,7 @@
 
 The answer events hold every gate item as it was asked (`asked`) and its answer. A new question
 about the same thing gets no gate item: a file split the same file, a doc proposal the same file
-and new text (doc_proposals.key), any other question the same words. The summary and the final
+and place (doc_proposals.key), any other question the same words. The summary and the final
 facts get one line instead (`asked_again` events since the last answer).
 """
 
@@ -18,6 +18,12 @@ KIND = "asked_again"
 _TAG = re.compile(r"^\[([^\]]+)\]\s*")
 _NO_ANSWER = re.compile(r"^\W*no answer needed\b", re.I)
 _SAME_AS = re.compile(r"^\W*same as item \d+\s*:\s*", re.I)
+
+
+def who(question: str) -> str:
+    """The `[who]` tag of a gate item ("" = none)."""
+    m = _TAG.match(question)
+    return m.group(1) if m else ""
 
 
 def key(question: str) -> str:

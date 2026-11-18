@@ -73,7 +73,7 @@ a section where nothing happened is one line. Exactly these sections:
 
     ## Questions
     1. [<gate item>] <the problem in one line>
-       A: <option> (default) / B: <option>
+       A: <the option that changes nothing> (default) / B: <option>
     2. [<gate item>] ...
 
     ## Left out
@@ -92,8 +92,14 @@ answers (answers.md, questions_archive.md) don't settle it. Otherwise it is not 
 - only one sensible option: decide it, one line under "Decisions I made";
 - already answered, already resolved (e.g. by a scan), or a note: "Left out" with the reason;
 - the same question from two agents: ask it once, the other under "Left out" as `same as [N]`.
-Parked work and the proposed test fixes (provisional steps) are always questions: they block
-the run; give your recommendation as the default. No limit on the number of questions; order
+The default (A) of every question is the option that changes nothing: the code, the tests and
+the spec as they are, the change left for later. Answers that take every default approve the
+task as it stands, with no further run; anything else starts one. A change you recommend is B,
+marked "(recommended)". A decision never needs work: an item that needs a change of code,
+tests or spec is a question. Parked work and the proposed test fixes (provisional steps) are
+always questions: "A: leave it (parked work stays parked; the provisional code stays, its
+contested tests red; both go to the deferred list) (default) / B: <the fix> (recommended)".
+Doc questions keep their own letters (above). No limit on the number of questions; order
 them by impact (what changes most if answered differently first). framegate numbers them 1, 2,
 ... for the human and maps the answers back to the gate items; a decided item gets its decision
 as the answer, a repeated one the answer of the item it repeats.

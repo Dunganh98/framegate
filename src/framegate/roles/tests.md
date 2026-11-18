@@ -47,7 +47,8 @@ You are the TEST WRITER. You write tests from the spec and interface stubs only.
 - Do not write implementation code.
 - If a case is ambiguous or untestable from the spec, write the question to
   {out}/{feature}/questions.md (one bullet per question: the question in plain words, the spec
-  ID with what it means, the options and your recommended default) and continue with
+  ID with what it means, the options; the default is the one that changes nothing (the spec
+  and the tests as they are), your recommendation named if it differs) and continue with
   everything else. Do not stop: all questions are shown to the human together at the next gate.
   Only decisions go there: something you settled yourself is a line in test_summary.md, not
   a question. A question you asked in an earlier round stays open until the gate; do not ask

@@ -167,7 +167,8 @@ def test_a_file_over_the_limit_is_asked_at_the_final_gate(
     to_final_gate(r)
     oq = (r.root / "out/demo/open_questions.md").read_text(encoding="utf-8")
     assert "- [structure report] src/demo/__init__.py has " in oq
-    assert "lines (limit 5). Split it into one file per concept? Default: split it now" in oq
+    assert "Split it into one file per concept? A: leave it for a later cleanup (the " in oq
+    assert "(default) / B: split it now by concept" in oq
     facts = (r.root / "out/demo/final_facts.md").read_text(encoding="utf-8")
     assert "## Gate items (numbered as the final gate shows them): 1" in facts
     assert "1. [structure report] src/demo/__init__.py has" in facts
@@ -179,58 +180,48 @@ def test_a_file_over_the_limit_is_asked_at_the_final_gate(
     assert "(WARN: no code map at docs/map.md)" in out
     # the answer goes to the structure run (here: split it), and is not asked again
     (r.root / "out/demo/answers.md").write_text(
-        "1. Q: split __init__.py?\n   A: Default: split it now by concept\n", encoding="utf-8"
+        "1. Q: split __init__.py?\n   A: B: split it now by concept\n", encoding="utf-8"
     )
     assert r.af("answer", "demo") == 0
     prog = r.progress()
     assert prog["size_answered"] == ["src/demo/__init__.py"]
-    assert prog["structure_findings"][0].endswith(
-        "The human's answer: Default: split it now by concept"
-    )
+    assert prog["structure_findings"][0].endswith("The human's answer: B: split it now by concept")
     n = len(r.calls())
     assert r.af("run", "demo") == EXIT_GATE
     later = [c["prompt"] for c in r.calls()[n:]]
-    assert any("restructure the code" in p and "Default: split it now" in p for p in later)
+    assert any("restructure the code" in p and "B: split it now" in p for p in later)
     assert not (r.root / "out/demo/open_questions.md").exists()
     assert len([e for e in r.events() if e["kind"] == "final_gates"]) == 2
 
 
-def test_answers_that_take_the_defaults_and_change_nothing_finish(demo_repo: DemoRepo) -> None:
-    """Seen live: "accept" and "leave it" at the final gate restarted the whole loop (a fix
-    run that changed nothing, every check and the summary again: 26 minutes) and the human
-    had to approve the same result a second time."""
-    from framegate.orchestrator import take_defaults
-
-    assert take_defaults([{"a": "Default: A (keep the seed)"}, {"a": "accept both"}])
-    assert take_defaults([{"a": "leave it"}, {"a": "Same as item 1: Default: leave it"}])
-    assert take_defaults([{"a": "No answer needed (left out of the brief: a note)"}])
-    assert not take_defaults([{"a": "Default: A"}, {"a": "use seed 12 instead"}])
-    assert not take_defaults([])
+def test_answers_that_only_take_the_defaults_approve_without_a_run(demo_repo: DemoRepo) -> None:
+    """Seen live: "leave the split for later" started a spec update, a test amend, a
+    structure run and every final check again, then a second stop at the same gate."""
     r = demo_repo
     r.add_toml(FAST)
     r.set_toml("gates", "max_file_lines", "5")
     r.scenario()
     to_final_gate(r)
     (r.root / "out/demo/answers.md").write_text(
-        "1. Q: split __init__.py?\n   A: leave it as it is\n", encoding="utf-8"
+        "1. Q: split __init__.py?\n   A: A: leave the split for later\n", encoding="utf-8"
     )
+    n = len(r.calls())
     assert r.af("answer", "demo") == 0
     prog = r.progress()
+    assert prog["phase"] == "RETRO" and not prog.get("structure_findings")
     assert prog["size_answered"] == ["src/demo/__init__.py"]
-    assert not prog.get("structure_findings") and prog["quiet_answers"]["ref"] == "ANS-1"
-    r.scenario(spec_update="none")  # the spec updater finds nothing to write
-    n = len(r.calls())
-    assert r.af("run", "demo") == 0  # no second final gate: the retro, then DONE
-    later = [c["prompt"] for c in r.calls()[n:]]
-    assert not any("restructure the code" in p for p in later)
+    assert r.af("run", "demo") == 0  # the retro, then DONE
+    assert [c["phase"] for c in r.calls()[n:]] == ["RETRO"]
     events = r.events()
     assert len([e for e in events if e["kind"] == "final_gates"]) == 1
     (gate,) = [e for e in events if e["kind"] == "human_gate" and e["gate"] == "final"]
     assert gate["approved"] and gate["from_answers"] == "ANS-1"
     assert [e for e in events if e["kind"] == "answer"][-1]["size_left"] == ["src/demo/__init__.py"]
     assert r.progress()["phase"] == "DONE"
-    log = (r.root / "out/demo/progress.log").read_text(encoding="utf-8")
-    assert "took the defaults and changed nothing" in log
+    # the split left for later is on the deferred list, committed with the task
+    entry = "- D1 [refactor] src/demo/__init__.py: has "
+    assert entry in (r.root / ".framegate/deferred.md").read_text(encoding="utf-8")
+    assert entry in git(r.root, "show", "HEAD:.framegate/deferred.md")
 
 
 def test_code_map_lists_missing_public_types(demo_repo: DemoRepo) -> None:
@@ -255,4 +246,4 @@ def test_a_split_of_a_file_that_was_too_big_before_is_asked_not_done(demo_repo: 
     oq = (r.root / "out/demo/open_questions.md").read_text(encoding="utf-8")
     assert "- [structure report] src/demo/__init__.py had " in oq
     assert "lines before this feature (limit 2); the reviewer proposes: " in oq
-    assert "Default: leave it for a later cleanup" in oq
+    assert "A: leave it for a later cleanup (the deferred list) (default) / B: split it now." in oq

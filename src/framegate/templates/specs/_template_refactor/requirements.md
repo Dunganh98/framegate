@@ -2,6 +2,7 @@
 
 Feature code: XXX   <!-- 2–10 uppercase chars, prefix for all IDs, e.g. MSR -->
 Mode: refactor
+Resolves:   <!-- optional: the deferred work this task does, e.g. D7, D9 (framegate deferred) -->
 
 ## Goal
 <what gets better (a file split, a duplication removed, a concept given its own class) and
@@ -27,7 +28,8 @@ Mode: refactor
      or the test module that holds the helper).
      Every error message: written out in full for one concrete input, with one notation for
      placeholders in the whole spec (repr, str, or str in literal quotes).
-     No criterion requires text in a docstring, a comment or a doc: only behaviour. -->
+     No criterion requires text in a docstring, a comment or a doc: only behaviour
+     (`framegate spec-check` fails such a row). -->
 | ID | Behavior (given / when / then, exact) | Measured with |
 |---|---|---|
 | XXX-R-001 | | |
@@ -83,7 +85,9 @@ Mode: refactor
      (a CI variable, a secret in the vault, a migration of the real database, an environment
      switch): `- OUTSIDE [<where>]: <what must be done> (<why>)`; a person does it by hand.
      Only deploy / CI files and such outside steps: nothing else belongs here. "None." when the feature
-     needs no such change. -->
+     needs no such change.
+     A new test file where the CI lists test files by path: a line for that CI file (the CI
+     runs only the listed ones; `framegate spec-check` warns). -->
 None.
 
 ## Reference follow-up
