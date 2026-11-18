@@ -10,7 +10,7 @@ from conftest import DemoRepo, git, init_git
 from framegate.adapters import get_adapter
 from framegate.adapters.base import CheckResult
 from framegate.adapters.python import PythonAdapter
-from framegate.checks import frame_diff, red_stubs, test_lint, traceability
+from framegate.checks import frame_diff, named_tests, red_stubs, test_lint, traceability
 from framegate.checks import test_smells as smells_check
 from framegate.config import load_config, parse_config
 from framegate.gates import run_gates
@@ -887,3 +887,85 @@ def test_lint_on_the_test_writers_own_lines(demo_repo: DemoRepo) -> None:
     res = test_lint.check(adapter, "demo")
     assert res.status == "FAIL" and "tests/test_new.py:1" in res.output, res.output
     assert "test_old" not in res.output
+
+
+NAMED_CLASSES = """class TestA:
+    def test_x(self) -> None:
+        assert 1 == 1
+
+    def test_y(self) -> None:
+        assert 2 == 2
+
+
+class TestB:
+    def test_z(self) -> None:
+        assert 3 == 3
+"""
+NAMED = """
+## Test data and fixtures
+<!-- name it as `tests/<file>::<Class>`; this `tests/test_old.py::TestB` is a comment -->
+- `tests/test_old.py::TestA`: its fixtures get the new field
+- `tests/test_old.py::TestA::test_y` expects 4
+- `tests/test_old.py::TestB` (unchanged)
+- `tests/test_new.py::TestN` is new
+
+## Notes
+`tests/test_old.py::TestB` outside the section is not read.
+"""
+
+
+def test_a_test_the_spec_names_must_change(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    cfg = load_config(r.root)
+    adapter = get_adapter(cfg)
+    assert named_tests.check(adapter, "demo").status == "PASS"  # the spec names none
+    write(r.root, "tests/test_old.py", NAMED_CLASSES)
+    req = r.root / "specs/demo/requirements.md"
+    req.write_text(req.read_text(encoding="utf-8") + NAMED, encoding="utf-8")
+    assert named_tests.check(adapter, "demo").status == "PASS"  # no marker: not checked
+    git(r.root, "add", "-A")
+    git(r.root, "commit", "-q", "-m", "spec")
+    set_marker(cfg, "spec-approved/demo")
+
+    # everything went into a new file
+    write(
+        r.root,
+        "tests/test_new.py",
+        "class TestN:\n    def test_n(self) -> None:\n        assert 1\n",
+    )
+    res = named_tests.check(adapter, "demo")
+    assert res.status == "FAIL", res.output
+    assert "NOT CHANGED" in res.output and "tests/test_old.py::TestA\n" in res.output
+    assert "tests/test_old.py::TestA::test_y" in res.output.split("NOT CHANGED", 2)[2]
+    assert "not checked (the spec says unchanged): tests/test_old.py::TestB" in res.output
+    assert "not checked (new: not there when the spec was approved): tests/test_new.py::TestN" in (
+        res.output
+    )
+    # a change in the class, but not in the test the spec names
+    write(r.root, "tests/test_old.py", NAMED_CLASSES.replace("1 == 1", "1 == 1.0"))
+    res = named_tests.check(adapter, "demo")
+    assert "changed: tests/test_old.py::TestA\n" in res.output
+    assert res.status == "FAIL" and "NOT CHANGED" in res.output and "TestA::test_y" in res.output
+    write(r.root, "tests/test_old.py", NAMED_CLASSES.replace("2 == 2", "4 == 4"))
+    assert named_tests.check(adapter, "demo").status == "PASS"
+    write(r.root, "tests/test_old.py", NAMED_CLASSES.replace("TestA", "TestRenamed"))
+    res = named_tests.check(adapter, "demo")
+    assert res.status == "FAIL" and "GONE (removed or renamed" in res.output
+
+
+def test_named_tests_without_line_ranges_fall_back_to_the_file(
+    demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r = demo_repo
+    cfg = load_config(r.root)
+    adapter = get_adapter(cfg)
+    monkeypatch.setattr(type(adapter), "test_lines", lambda self, source, names: None)
+    write(r.root, "tests/test_old.py", NAMED_CLASSES)
+    req = r.root / "specs/demo/requirements.md"
+    req.write_text(req.read_text(encoding="utf-8") + NAMED, encoding="utf-8")
+    git(r.root, "add", "-A")
+    git(r.root, "commit", "-q", "-m", "spec")
+    set_marker(cfg, "spec-approved/demo")
+    assert named_tests.check(adapter, "demo").status == "FAIL"
+    write(r.root, "tests/test_old.py", NAMED_CLASSES.replace("3 == 3", "3 == 3.0"))
+    assert named_tests.check(adapter, "demo").status == "PASS"

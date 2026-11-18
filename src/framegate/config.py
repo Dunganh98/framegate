@@ -68,6 +68,7 @@ PHASES = (
     "TRIAGE",
     "DIAGNOSIS",
     "SUMMARY",
+    "DOCS",
     "RETRO",
 )
 #: phase names of earlier versions -> today's name. "PR" was the run that writes the final
@@ -114,6 +115,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "max_budget_usd": (int, float),
         "permission_mode": (str,),
         "test_review_rounds": (int,),
+        "test_check_rounds": (int,),
         "model": (str,),
         "effort": (str,),
         "step_batch_ids": (int,),
@@ -257,6 +259,7 @@ DEFAULT_MODELS = {
     "IMPLEMENT": "sonnet",
     "SPEC_UPDATE": "sonnet",
     "SUMMARY": "sonnet",
+    "DOCS": "sonnet",
     "TEST_REVIEW": "opus",
     "REVIEW": "opus",
     "TRIAGE": "opus",
@@ -277,6 +280,7 @@ DEFAULT_MAX_TURNS = {
     "TRIAGE": 30,
     "DIAGNOSIS": 40,
     "SUMMARY": 30,
+    "DOCS": 30,
     "RETRO": 30,
     "SPEC_UPDATE": 30,
 }
@@ -292,6 +296,7 @@ DEFAULT_MAX_BUDGET_USD = {
     "TRIAGE": 1.5,
     "DIAGNOSIS": 2.0,
     "SUMMARY": 1.5,
+    "DOCS": 1.0,
     "RETRO": 3.0,
     "SPEC_UPDATE": 1.0,
 }
@@ -370,6 +375,8 @@ class Config:
     permission_mode: str = "acceptEdits"
     #: how often the test reviewer's objections go back to the test writer before the gate
     test_review_rounds: int = 2
+    #: how often failed test checks go back to the test writer before the test reviewer runs
+    test_check_rounds: int = 2
     #: [agents] model / effort: one `claude --model` / `--effort` for every phase without its own
     #: (model None = DEFAULT_MODELS; effort None = Claude Code's default)
     model: str | None = None
@@ -602,6 +609,8 @@ class Config:
             "TRIAGE": [p.review_tests, p.out],
             "DIAGNOSIS": [p.out],
             "SUMMARY": [p.out, self.code_map],
+            # plus the documentation files: the write guard (doc_proposals.is_doc)
+            "DOCS": [p.out],
             "RETRO": [p.out],
         }
         return [_as_prefix(x) for x in defaults.get(phase, [])]
@@ -889,6 +898,9 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     cfg.test_review_rounds = agents.get("test_review_rounds", cfg.test_review_rounds)
     if cfg.test_review_rounds < 0:
         raise ConfigError("[agents] test_review_rounds must be >= 0")
+    cfg.test_check_rounds = agents.get("test_check_rounds", cfg.test_check_rounds)
+    if cfg.test_check_rounds < 0:
+        raise ConfigError("[agents] test_check_rounds must be >= 0")
     if "model" in agents:
         cfg.model = agents["model"].strip()
     if "effort" in agents:

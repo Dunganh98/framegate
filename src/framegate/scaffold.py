@@ -284,9 +284,9 @@ def spec_brief(cfg: Config, feature: str) -> str:
             "- IDs: <CODE>-R-001 (requirement), <CODE>-E-001 (edge case), <CODE>-I-001 "
             f"(invariant); regex {cfg.id_pattern}",
             '- plan.md is parsed: "## Step N: <title>" headings, each with one '
-            '"Covers: ID, ID" line. Every ID is covered by exactly one step. A Markdown '
-            "docs file a step names by its path (README.md, CHANGELOG.md, .md under a docs "
-            "folder) becomes writable for that step at the approval.",
+            '"Covers: ID, ID" line. Every ID is covered by exactly one step. No task writes a '
+            "documentation file: what a doc should say goes under `## Proposed doc updates` "
+            "of requirements.md.",
             *(
                 MODE_BRIEF[mode]
                 if mode in MODE_BRIEF

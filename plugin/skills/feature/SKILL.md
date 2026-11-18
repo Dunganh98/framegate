@@ -76,6 +76,24 @@ in step 1 what it refers to (the code map, the code, the docs) and ask in step 2
 you still cannot decide, the requirement itself included if the code and the docs do not
 tell.
 
+Sources, by rank:
+- The code is the current state. Where docs and code disagree, the code says what exists.
+- The user's task is the requirement. Where docs and the task disagree, the task wins.
+- Docs say where the project is heading: context only. A doc can suggest a requirement; it
+  is one only when the user says so.
+- A comment or docstring is no source.
+Requirements come from the task only: a spec never requires text in a docstring, a comment
+or a doc, and neither you nor an agent of the run edits a documentation file. What a doc
+should say afterwards (the work makes it out of date, or the task goes another way than the
+documented plan) is one bullet under `## Proposed doc updates` of requirements.md. A file
+under docs/ (plan, design, architecture, reference): the file, where in it, what it says
+today, the proposed text, why; the user answers it at the final gate (default: later). A
+README, CHANGELOG or handover note: one brief line of what changes; no question. After the
+final gate is approved, one docs step applies the brief ones and the approved ones.
+Program output (an error message, a log line) is behaviour, not documentation: write every
+error message out in full for one concrete input, with one notation for placeholders in the
+whole spec (repr, str, or str in literal quotes); the tests match the whole message.
+
 1. Read the requirements the user gives, then decide everything you can yourself first: read
    the docs, the code map, the code the feature touches and the project knowledge above
    (dot folders of tools such as `.serena/`, `.vscode/`, `.venv/` are machine files, not
@@ -174,10 +192,8 @@ tell.
    import order (leaf modules first; a file after the files it imports), each step covering
    the IDs its file serves (an ID two files serve goes to the later one). The code lands
    whole files at a time anyway; steps cut by ID end in steps with nothing left to build.
-   Files in a plan step: a step may mention any file. A Markdown docs file it names by its
-   path (`README.md`, `CHANGELOG.md`, `.md` under a docs folder) becomes writable for that
-   step at the approval; everything else outside the source folders stays read-only.
-   `spec-check` prints "Documentation files the plan makes writable".
+   Files in a plan step: a step may mention any file; everything outside the source folders
+   stays read-only, the docs included (see "Sources" above).
 4. Create interface stubs in the source paths named above, in the stub style named above: full
    typed signatures, a one-line doc comment per public type and method saying what it is for
    (in words) plus the IDs it serves, bodies that only signal "not implemented". One concept

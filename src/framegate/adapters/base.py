@@ -529,6 +529,11 @@ class LanguageAdapter(abc.ABC):
         supported for this language."""
         return None
 
+    def test_lines(self, source: str, names: Sequence[str]) -> set[int] | None:
+        """The lines (1-based) of the class or test that `names` lead to (`Class`, `test`) in
+        a test file's text; empty: not in it. None: not supported for this language."""
+        return None
+
     # ---------- gates ----------
     @abc.abstractmethod
     def default_gate_commands(self) -> dict[str, list[str]]:
@@ -924,6 +929,7 @@ class LanguageAdapter(abc.ABC):
             "TRIAGE": READ_TOOLS + WRITE_TOOLS + tests + GIT_READ_TOOLS,
             "DIAGNOSIS": READ_TOOLS + ["Write"] + tests + GIT_READ_TOOLS,
             "SUMMARY": READ_TOOLS + WRITE_TOOLS + GIT_READ_TOOLS,  # WRITE_TOOLS: the code map
+            "DOCS": READ_TOOLS + WRITE_TOOLS,
             "RETRO": READ_TOOLS + ["Write"],
             "SPEC_UPDATE": READ_TOOLS + WRITE_TOOLS,
         }

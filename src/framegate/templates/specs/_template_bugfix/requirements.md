@@ -9,9 +9,14 @@ Mode: bugfix
 ## Reproduction
 <!-- One row per way the bug shows. Given / when: the exact input (seed, file, command, steps).
      Observed now: the wrong result, copied from a run of today's code. Expected: the right
-     result and where it follows from (a spec, a rule, the docs). Measured with: the command
-     and date that produced "Observed now".
-     Each row gets a test that FAILS on today's code for this reason and passes once fixed. -->
+     result and where it follows from (the task, a spec, a rule in the code; a doc alone is no
+     source). Measured with: the command and date that produced "Observed now".
+     Each row gets a test that FAILS on today's code for this reason and passes once fixed.
+     A check function, helper or checker a criterion names: its name and module (`src/...`,
+     or the test module that holds the helper).
+     Every error message: written out in full for one concrete input, with one notation for
+     placeholders in the whole spec (repr, str, or str in literal quotes).
+     No criterion requires text in a docstring, a comment or a doc: only behaviour. -->
 | ID | Given / when (exact input) | Observed now (wrong) | Expected (right, and why) | Measured with |
 |---|---|---|---|---|
 | XXX-R-001 | | | | |
@@ -53,7 +58,10 @@ Mode: bugfix
      Observable: the public value a test reads to see the situation happened (the test writer
      turns it into a fixture precondition test).
      Once this table pins data, every E- ID gets a row: the data that shows the case, or
-     `unit-only: <which test builds the case itself>: <why>` (`framegate spec-check`). -->
+     `unit-only: <which test builds the case itself>: <why>` (`framegate spec-check`).
+     Existing tests: name each existing test whose fixtures or assertions change as
+     `tests/<file>::<Class>` (or `::<Class>::<test>`); write `(unchanged)` after a named test
+     that stays as it is. A named test without a changed line fails the test checks. -->
 | ID | Data (seed / file / generator) | Observable that proves the situation | Zero cases allowed |
 |---|---|---|---|
 | XXX-R-001 | | | no |
@@ -77,6 +85,18 @@ None.
      has the same bug, or should take over the fix, note it here so it is not lost (the final
      summary raises it): `- <reference file>: <what should change> (<why>)`. "None." when
      no reference shares the bug. -->
+None.
+
+## Proposed doc updates
+<!-- No step of the task edits a documentation file. What a doc should say once the task is
+     done, or where the task goes another way than the documented plan, is noted here, one
+     bullet each.
+     A file under docs/ (plan, design, architecture, reference): `- <file>, <where in it>:
+     today: <what it says now, quoted or summarised> -> proposed: <the new text> (<why>)`.
+     The owner answers each at the final gate (default: later).
+     A README, CHANGELOG or handover note: `- <file>: <what changes, one brief line>`. No
+     question: applied after the final gate is approved.
+     One docs step then applies them as its own commit. "None." when no doc changes. -->
 None.
 
 ## Non-goals

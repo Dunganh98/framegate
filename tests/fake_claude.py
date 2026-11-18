@@ -6,9 +6,6 @@ scenario file, and prints the result: `--output-format stream-json` -> one JSON 
 (system init, one assistant message per API turn, the result last), else the single result object
 of `--output-format json`.
 
-An IMPLEMENT run appends one line to every file in FRAMEGATE_STEP_DOCS (the documentation
-files the approved plan names for its step), whatever the scenario says.
-
 Scenario keys:
   questions_in: list of phases that ask one question in their first run (TESTS, TEST_REVIEW,
     ...: questions.md, then the normal work; IMPLEMENT: questions.md only = a park request)
@@ -16,6 +13,10 @@ Scenario keys:
   implement_fail: number of IMPLEMENT runs that write a wrong implementation
   park_steps: plan step numbers whose first IMPLEMENT run writes park.md (and half-done code)
   assume: true -> the first successful IMPLEMENT run logs one assumption in steps.md
+  doc_proposals: true -> the first IMPLEMENT run adds two lines to out/demo/doc_proposals.md
+    (CHANGELOG.md, docs/design.md) and the REVIEW run one (docs/plan.md). The DOCS run
+    appends its task's update lines to the files they name; docs_bad: true -> it also
+    changes a source file
   followup: true -> every IMPLEMENT step note has one pipeline follow-up line (the
     Dockerfile), and REVIEW writes one of its own (the CI file) into review.md
   ref_followup: true -> every IMPLEMENT step note, the REVIEW run's review.md and the TRIAGE
@@ -56,6 +57,8 @@ Scenario keys:
   api_error: {phase: n} -> the first n runs of that phase do no work and end with the result
     "API Error: Can't reach the API server ..." (one turn, no cost; no files); they do not
     count as runs for the other keys
+  resume_fail: n -> the first n runs started with --resume find no session (stderr, exit 1,
+    no files); they do not count as runs for the other keys
   test_question: the test writer's question, one text per TESTS run (a list; the last one for
     later runs), instead of the `questions_in` question
   green_test: true -> every TESTS run also writes test_reference_constant, which passes
@@ -303,6 +306,11 @@ DOTNET = {
 }
 
 
+def propose(line: str) -> None:
+    with open("out/demo/doc_proposals.md", "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
+
 def write(rel: str, text: str) -> None:
     p = pathlib.Path(rel)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -321,7 +329,6 @@ def main() -> int:
         call = {
             "phase": phase,
             "agent_env": os.environ.get("FRAMEGATE_AGENT"),
-            "step_docs": os.environ.get("FRAMEGATE_STEP_DOCS"),
             # what an agent's shell would see (framegate.agent_env)
             "env": {
                 "python": shutil.which("python"),
@@ -335,6 +342,11 @@ def main() -> int:
         }
         f.write(json.dumps(call) + "\n")
 
+    if "--resume" in sys.argv and state.get("resume_failed", 0) < scen.get("resume_fail", 0):
+        state["resume_failed"] = state.get("resume_failed", 0) + 1
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        print("No conversation found with session ID: fake", file=sys.stderr)
+        return 1
     lang = DOTNET if scen.get("language") == "dotnet" else PYTHON
     limited = state.setdefault("limited", {})
     if limited.get(phase, 0) < scen.get("usage_limit", {}).get(phase, 0):
@@ -457,10 +469,9 @@ def main() -> int:
             body = "Verdict: OK\n\n## Objections\nNone.\n"
         write("out/demo/test_review.md", body)
     elif phase == "IMPLEMENT":
-        # the documentation files the approved plan names for this step: one line each
-        for doc in json.loads(os.environ.get("FRAMEGATE_STEP_DOCS") or "[]"):
-            old = pathlib.Path(doc).read_text(encoding="utf-8") if os.path.isfile(doc) else ""
-            write(doc, old + f"written in IMPLEMENT run {runs[phase]}\n")
+        if scen.get("doc_proposals") and runs[phase] == 1:
+            propose("- CHANGELOG.md: add() refuses bools")
+            propose("- docs/design.md, Calc: today: 'any number' -> proposed: 'ints only' (built)")
         path = pathlib.Path(lang["impl"])
         cur = path.read_text(encoding="utf-8") if path.is_file() else ""
         # one step ("plan step 2") or a batch ("plan steps 1, 2 in one go"): the last one counts
@@ -555,6 +566,8 @@ def main() -> int:
                 "- REFERENCE FOLLOW-UP [demo/__init__.py]: add() has no check for None "
                 "(the reference crashes the same way)\n"
             )
+        if scen.get("doc_proposals"):
+            propose("- docs/plan.md, Step 2: today: a method -> proposed: a function (it failed)")
         write("out/demo/review.md", lines or "No findings.\n")
     elif phase == "TRIAGE":
         lines = ""
@@ -578,6 +591,14 @@ def main() -> int:
                 f"Fix owner: {owner}\n"
                 "Proposed fix: return a + b.\nEvidence:\n- ran the step tests\n",
             )
+    elif phase == "DOCS":
+        for line in re.findall(r"^- (.+)$", prompt.split("change nothing else:")[1], re.M):
+            doc = re.match(r"[\w./-]+\.md", line)
+            if doc:
+                old = pathlib.Path(doc.group(0))
+                write(doc.group(0), (old.read_text("utf-8") if old.is_file() else "") + line + "\n")
+        if scen.get("docs_bad"):
+            write(lang["impl"], pathlib.Path(lang["impl"]).read_text("utf-8") + "# docs\n")
     elif phase == "SUMMARY":
         write("out/demo/final_summary.md", "# Final summary\nSummary.\n")
         mode = scen.get("brief")

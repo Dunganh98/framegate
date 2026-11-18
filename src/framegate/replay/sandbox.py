@@ -35,6 +35,20 @@ SKIP = shutil.ignore_patterns(
     ".venv", ".git", "out", "__pycache__", ".pytest_cache", ".ruff_cache", ".hypothesis"
 )
 TEST_TIMEOUT = 1800
+#: what a scored run can do without (prune): a tool builds it again, nobody reads it
+VENVS = (".venv", "venv")
+CACHES = (
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    ".hypothesis",
+    "__pycache__",
+    "mutants",
+    "node_modules",
+    ".tox",
+)
+#: the sandbox's evidence: never searched
+KEPT = (".git", "out", "specs", ".framegate", "metrics", "knowledge")
 
 
 class ReplayError(Exception):
@@ -108,9 +122,44 @@ def rmtree(path: pathlib.Path) -> None:
         func(target)
 
     if path.exists():
-        # a .venv holds paths over Windows' 260 characters (tensorflow headers): \\?\ form
-        target = "\\\\?\\" + str(path.resolve()) if os.name == "nt" else path
-        shutil.rmtree(target, onerror=writable)
+        shutil.rmtree(_long(path), onerror=writable)
+
+
+def _long(path: pathlib.Path) -> str:
+    # a .venv holds paths over Windows' 260 characters (tensorflow headers): \\?\ form
+    return "\\\\?\\" + str(path.resolve()) if os.name == "nt" else str(path)
+
+
+def tree_size(path: pathlib.Path) -> int:
+    total = 0
+    for root, _dirs, files in os.walk(_long(path)):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def prune(lay: Layout) -> int:
+    """Delete what a scored run can rebuild: the sandbox's environments and tool caches, and
+    the scored copy of the result. The driver's files, the score, the sandbox's code, git
+    history and framegate files stay. Returns the bytes freed."""
+    doomed = [lay.run / "score" / "result"]
+    for root, dirs, _files in os.walk(lay.sandbox):
+        here = pathlib.Path(root)
+        gone = [
+            d for d in dirs if d in CACHES or (d in VENVS and (here / d / "pyvenv.cfg").is_file())
+        ]
+        doomed += [here / d for d in gone]
+        kept = KEPT if here == lay.sandbox else (".git",)
+        dirs[:] = [d for d in dirs if d not in gone and d not in kept]
+    freed = 0
+    for path in doomed:
+        if path.is_dir() and not path.is_symlink():
+            freed += tree_size(path)
+            rmtree(path)
+    return freed
 
 
 def source(repo: str, base: pathlib.Path, cache: pathlib.Path) -> pathlib.Path:
@@ -281,6 +330,7 @@ def run_tests(
     xml: pathlib.Path,
 ) -> tuple[dict[str, str], str]:
     """pytest on `files` in `tree`: {test: pass | fail | skip} and the last output line.
+    Empty: the tests did not run (no junit file, or a cut-off one).
     The tree's own code is imported first, not what the environment has installed."""
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     env["PYTHONPATH"] = os.pathsep.join(str(tree / r) for r in roots)
@@ -297,19 +347,22 @@ def run_tests(
             errors="replace",
             timeout=TEST_TIMEOUT,
         )
-        output = r.stdout + "\n" + r.stderr
+        output, code = r.stdout + "\n" + r.stderr, r.returncode
     except subprocess.TimeoutExpired:
-        output = f"timeout after {TEST_TIMEOUT} s"
+        output, code = f"timeout after {TEST_TIMEOUT} s", -1
     xml.with_suffix(".log").write_text(output, encoding="utf-8")
     out: dict[str, str] = {}
-    if xml.is_file():
-        for tc in ET.parse(xml).getroot().iter("testcase"):
-            kinds = {child.tag for child in tc}
-            bad = kinds & {"failure", "error"}
-            out[f"{tc.get('classname')}::{tc.get('name')}"] = (
-                "fail" if bad else "skip" if "skipped" in kinds else "pass"
-            )
-    return out, (output.strip().splitlines() or ["(no output)"])[-1]
+    try:
+        cases = list(ET.parse(xml).getroot().iter("testcase")) if xml.is_file() else []
+    except ET.ParseError:  # cut off: the run died while writing it
+        cases = []
+    for tc in cases:
+        kinds = {child.tag for child in tc}
+        bad = kinds & {"failure", "error"}
+        out[f"{tc.get('classname')}::{tc.get('name')}"] = (
+            "fail" if bad else "skip" if "skipped" in kinds else "pass"
+        )
+    return out, (output.strip().splitlines() or [f"no output (exit {code})"])[-1]
 
 
 def build(

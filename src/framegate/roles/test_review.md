@@ -12,7 +12,10 @@ For every spec ID (R, E, I) check:
 - Does each test check what the ID means (its acceptance criterion, edge-case row or invariant)?
 - Missing or weak cases: an edge-case row or input without a test; an assertion too loose to
   fail on a wrong implementation (only "no exception", only a type, `>= 0`, ...).
-- Wrong expectations: a value, exception type or message the spec does not say.
+- Wrong expectations: a value, exception type or message the spec does not say; a full
+  message of the spec matched only by its first words.
+- A test that asserts the wording of a doc, a docstring or a comment: an objection (they are
+  no requirement; an error message or a log line is behaviour and may be matched).
 - Tests coupled to implementation details: private names, call counts, internal structure,
   mocks of the module under test, exact float equality where the spec gives a tolerance.
 - Pinned data (seed, recording) without a fixture precondition test (`test_fixture_*` /
@@ -61,7 +64,8 @@ The adversarial reviewer wrote failing tests in {review_tests}/ (its notes:
 {out}/{feature}/review.md). Decide for each failing test, against the spec only:
 - VALID: the spec (a requirement, edge case, invariant or the design) requires the behavior the
   test expects. Keep the test unchanged.
-- INVALID: the spec does not require it, contradicts it, or the test itself is wrong. Delete
+- INVALID: the spec does not require it, contradicts it, the test itself is wrong, or it
+  asserts the wording of a doc, a docstring or a comment. Delete
   that test (only that test function or method) from {review_tests}/.
 When unsure, keep it VALID: the implementer fixes it or parks it with a question.
 

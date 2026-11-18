@@ -103,9 +103,12 @@ def test_bugfix_tests_must_fail_on_todays_code(demo_repo: DemoRepo) -> None:
     assert r.af("run", "demo") == EXIT_GATE
     assert r.progress()["waiting"]["gate"] == "final"
 
-    reviews = [e for e in r.events() if e["kind"] == "test_review"]
-    assert reviews[0]["failed_checks"] == ["Bug reproduced on today's code"]
-    assert reviews[0]["sent_back"] is True and reviews[-1]["failed_checks"] == []
+    back = [e for e in r.events() if e["kind"] == "test_checks"]
+    assert [e["failed_checks"] for e in back] == [["Bug reproduced on today's code"]]
+    assert [c["phase"] for c in r.calls()][:3] == ["TESTS", "TESTS", "TEST_REVIEW"]
+    assert "PASSES TODAY (does not show the bug)" in r.calls()[1]["prompt"]
+    reviews = [e for e in r.events() if e["kind"] == "test_review"]  # one review, of red tests
+    assert [(e["failed_checks"], e["sent_back"]) for e in reviews] == [([], False)]
     checks = read(r, "out/demo/test_checks.md")
     assert "### Bug reproduced on today's code: PASS" in checks
     assert "2 reproduction test(s) for DEMO-E-001, DEMO-R-001." in checks

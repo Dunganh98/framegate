@@ -286,4 +286,19 @@ def test_doctor_names_a_command_the_rules_deny_and_renamed_names(demo_repo: Demo
     # the role file under its old name still reaches the summary agent
     orch = Orchestrator(cfg, get_adapter(cfg), echo=lambda s: None)
     text = orch.role_text("summary", "demo")
-    assert "Mention the ticket." in text and "A comment or docstring is no evidence" in text
+    assert "Mention the ticket." in text
+    # the source ranking goes to every agent: code, the task, docs, and comments not at all
+    ranks = [
+        text.index(x)
+        for x in (
+            "# Sources, by rank",
+            "1. The code (with the build and test files) is the current state.",
+            "2. The requirement (the task, the approved spec) is what this task must do.",
+            "the task wins, and the disagreement is a proposed doc update",
+            "3. Docs say where the project is heading: context only",
+            "4. A comment or docstring is no source",
+            "(an error message, a log line) is behaviour",
+            "one line in out/demo/doc_proposals.md",
+        )
+    ]
+    assert ranks == sorted(ranks)

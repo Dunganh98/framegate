@@ -28,6 +28,7 @@ PHASE_ORDER = [
     "REVIEW",
     "TRIAGE",
     "SUMMARY",
+    "DOCS",
     "RETRO",
 ]
 
@@ -212,6 +213,7 @@ def final_facts(
     causes: list[tuple[str, str]] | None = None,
     followup: list[str] | None = None,
     unrunnable: list[str] | None = None,
+    doc_updates: list[str] | None = None,
 ) -> str:
     """{out}/{f}/final_facts.md: what the summary agent must report, from the run's records.
     `followup`: the pipeline / reference follow-up sections with their note
@@ -350,6 +352,8 @@ def final_facts(
         out += ["", *unrunnable]
     if followup:
         out += ["", *followup]
+    if doc_updates:
+        out += ["", *doc_updates]
     out += ["", "## Final gates (final_gates.md)", "", "~~~", final_gates.strip(), "~~~"]
     out += ["", "## Open questions", "", open_questions.strip() or "None."]
     items = items or []

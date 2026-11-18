@@ -33,6 +33,8 @@ COLUMNS = (
 
 #: stages before the engine built anything: the task was not started, or only its spec
 NOT_RUN = ("SETUP", "SPEC")
+#: the verdict of a scoring run that gave no result: the next run scores again
+FAILED = "score failed"
 
 
 def verdict(
@@ -40,7 +42,11 @@ def verdict(
 ) -> dict[str, Any]:
     """A hidden test that did not run counts as failed; a skipped one is not proven. A run
     that ended before the engine started is "not run", not "bad": the failing tests say
-    nothing about framegate there."""
+    nothing about framegate there. No result at all (pytest did not run) is "score failed",
+    never "bad"."""
+    if not result:
+        empty: dict[str, Any] = {"passed": 0, "failed": [], "skipped": [], "regressions": []}
+        return {"verdict": FAILED, "hidden": len(proving), **empty}
     by = {
         k: sorted(n for n in proving if result.get(n, "fail") == k)
         for k in ("pass", "fail", "skip")
@@ -122,14 +128,12 @@ def chat_cost(driver: pathlib.Path) -> float:
 def score(lay: Layout) -> dict[str, Any]:
     ex, run = read_json(lay.answer / "exercise.json"), read_json(lay.run / "run.json")
     tree = lay.run / "score" / "result"
-    copy_tree(lay.sandbox, tree, lay.answer / "hidden")
-    result, tail = run_tests(
-        pathlib.Path(run["python"]),
-        tree,
-        ex["pythonpath"],
-        ex["files"],
-        lay.run / "score" / "result.xml",
-    )
+    py, xml = pathlib.Path(run["python"]), lay.run / "score" / "result.xml"
+    try:
+        copy_tree(lay.sandbox, tree, lay.answer / "hidden")
+        result, tail = run_tests(py, tree, ex["pythonpath"], ex["files"], xml)
+    except (OSError, MemoryError) as e:  # no memory, no disk: pytest could not start
+        result, tail = {}, f"{type(e).__name__}: {e}"
     numbers = engine(lay.sandbox, lay.name)
     (lay.run / "retro_proposals.md").write_text(numbers.pop("retro"), encoding="utf-8")
     return {
@@ -143,7 +147,8 @@ def score(lay: Layout) -> dict[str, Any]:
 def _cells(row: dict[str, Any]) -> list[str]:
     if row.get("status") != "scored":
         return [row["name"], row["kind"], row["status"], *[""] * 9, row.get("note", "")]
-    hidden = f"{row['passed']}/{row['hidden']}"
+    failed = row["verdict"] == FAILED
+    hidden = "" if failed else f"{row['passed']}/{row['hidden']}"
     if row["skipped"]:
         hidden += f", {len(row['skipped'])} skipped"
     counted = max(0.0, float(row.get("wall_s", 0)) - float(row.get("waited_s", 0)))
@@ -153,7 +158,7 @@ def _cells(row: dict[str, Any]) -> list[str]:
         row["kind"],
         row["verdict"],
         hidden,
-        str(len(row["regressions"])),
+        "" if failed else str(len(row["regressions"])),
         row["stage"],
         duration(counted),
         f"{row['engine_usd']:.2f}",
@@ -181,8 +186,9 @@ def write_results(out: pathlib.Path, rows: list[dict[str, Any]]) -> None:
         "Verdict: good = every hidden test passes, no regression; not proven = a hidden test "
         "was skipped; bad = a hidden test fails or a test that passed before fails; "
         "not run = the run ended before framegate built anything (the Note says where and "
-        "why): no result for framegate. Total USD = engine + chat + driver. "
-        "Time leaves out usage-limit waits.\n"
+        "why): no result for framegate; score failed = the hidden tests did not run (the Note "
+        "says why): `framegate replay --score-only` scores again. "
+        "Total USD = engine + chat + driver. Time leaves out usage-limit waits.\n"
     )
     (out / "results.md").write_text(f"# Replay results\n\n{table(rows)}\n{note}", encoding="utf-8")
     retros = []

@@ -93,7 +93,7 @@ def test_phase_permissions(project: pathlib.Path, phase: str, rel: str, allowed:
         assert code == 2
         assert f"[{phase}] Blocked write to {rel}" in msg
         hint = {"IMPLEMENT": "park.md", "SPEC": "spec_brief.md"}.get(phase, "questions.md")
-        assert hint in msg
+        assert ("Proposed doc updates" if rel == "README.md" else hint) in msg
 
 
 def test_spec_phase_setup_files_follow_the_config(project: pathlib.Path) -> None:

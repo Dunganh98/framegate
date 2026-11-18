@@ -29,6 +29,8 @@ Rules:
   file to {out}/{feature}/config_update.toml, a copy of framegate.toml with the approved change
   and nothing else. framegate checks it and puts it in place; it refuses a change that weakens
   a check (a lower threshold, something left out, a check switched off).
+- An answer to a `[doc update]` question (apply a proposed doc update, or later) is not a
+  spec change: framegate applies it after the final gate.
 - An answer about code structure (a file to split, where a class belongs) is not a spec change
   unless it settles a design decision the spec names; framegate hands it to the implementer.
 - An answer that only says "default" / "take the default" means the default the question

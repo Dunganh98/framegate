@@ -80,6 +80,24 @@ in step 1 what it refers to (the code map, the code, the docs) and ask in step 2
 you still cannot decide, the requirement itself included if the code and the docs do not
 tell.
 
+Sources, by rank:
+- The code is the current state. Where docs and code disagree, the code says what exists.
+- The user's task is the requirement. Where docs and the task disagree, the task wins.
+- Docs say where the project is heading: context only. A doc can suggest a requirement; it
+  is one only when the user says so.
+- A comment or docstring is no source.
+Requirements come from the task only: a spec never requires text in a docstring, a comment
+or a doc, and neither you nor an agent of the run edits a documentation file. What a doc
+should say afterwards (the work makes it out of date, or the task goes another way than the
+documented plan) is one bullet under `## Proposed doc updates` of requirements.md. A file
+under docs/ (plan, design, architecture, reference): the file, where in it, what it says
+today, the proposed text, why; the user answers it at the final gate (default: later). A
+README, CHANGELOG or handover note: one brief line of what changes; no question. After the
+final gate is approved, one docs step applies the brief ones and the approved ones.
+Program output (an error message, a log line) is behaviour, not documentation: write every
+error message out in full for one concrete input, with one notation for placeholders in the
+whole spec (repr, str, or str in literal quotes); the tests match the whole message.
+
 1. Read what the user reports, then find out everything you can yourself: read the code map,
    the code on the path from the input to the wrong result, and the project knowledge above
    (dot folders of tools such as `.serena/`, `.vscode/`, `.venv/` are machine files, not
@@ -87,8 +105,8 @@ tell.
    - Reproduce it: run today's code with the reported input (the project's run / scan command,
      or the smallest existing test) and copy the wrong result. If you cannot reproduce it, say
      so and ask for the exact input; do not write a report from a guess.
-   - Expected result: where it follows from (an earlier spec, a rule, the docs). If nothing
-     says what is right, that is a question for the user.
+   - Expected result: where it follows from (the user's words, an approved spec, a rule in
+     the code). A doc alone does not say what is right: then it is a question for the user.
    - Must not change: the cases next to the bug that are right today and that a fix could
      break (other inputs, other callers of the same code, saved data, hashes, goldens).
    - Suspected causes: at least two, each with where to look (file: method). You only list
@@ -107,10 +125,8 @@ tell.
    exactly: reproduction rows are R IDs (each gets a test that fails today and passes once
    fixed), must-not-change rows are I IDs (each gets a test that passes today and after).
    Usually one plan step that covers every ID. Do not write tests and do not fix anything.
-   Files in a plan step: a step may mention any file. A Markdown docs file it names by its
-   path (`README.md`, `CHANGELOG.md`, `.md` under a docs folder) becomes writable for that
-   step at the approval; everything else outside the source folders stays read-only.
-   `spec-check` prints "Documentation files the plan makes writable".
+   Files in a plan step: a step may mention any file; everything outside the source folders
+   stays read-only, the docs included (see "Sources" above).
    Then run `framegate spec-check $ARGUMENTS` and fix what it lists.
    Setup files: if the task needs a new package or source folder, a dependency or a tool
    setting, change those files now, in the spec phase: `framegate.toml` and the project's

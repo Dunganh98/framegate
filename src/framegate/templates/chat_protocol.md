@@ -38,6 +38,11 @@ you or the user refused (`refused: ...`). Gate answers and approvals are recorde
    belongs under `## Pipeline follow-up` of requirements.md and is done as a separate step.
    Something outside the repository (a CI variable, a secret, a real database) goes there
    as `- OUTSIDE [<where>]: <what> (<why>)`: a person does it by hand, never framegate.
+   No step of the task edits a documentation file either: what a doc should say goes
+   under `## Proposed doc updates`. At the final gate a proposal for a file under docs/ is a
+   question (default: later; "approve" applies it); README / CHANGELOG lines are listed
+   ("will be applied after approval"). After the approval one docs step applies them as its
+   own commit (`<f>: docs`); never edit a doc yourself for the task.
 2. Start the run in the background: Bash tool, `run_in_background: true`, command
    `framegate run <f>` (PowerShell tool the same if Bash is not available). Note its task id.
 3. Start the live view: Monitor tool, command `framegate watch <f>`, description

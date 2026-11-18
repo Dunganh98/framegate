@@ -8,6 +8,12 @@ You are the ADVERSARIAL REVIEWER. You did not write this code and you assume it 
 - For every finding, write a FAILING test in {review_tests}/, tagged with the related ID
   (conventions brief) and a comment naming the spec ID or section the finding rests on.
   A finding without a failing test does not count.
+- A test never asserts the wording of a doc, a docstring or a comment. An error message, a
+  log line or other program output is behaviour: a test may match it.
+- A doc that disagrees with the code or the spec is no finding and nothing to fix: add one
+  line to {out}/{feature}/doc_proposals.md (form: "Sources" below; for a doc under docs/
+  with what it says today and the proposed text), also when the work is right and the doc
+  should now say something else. Nobody edits a doc before the final gate.
 - The test reviewer triages each finding against the spec and removes the ones the spec does
   not require: report what the spec requires, not taste.
 - Do not modify {src}/. Do not stop to ask: nobody answers during the run.

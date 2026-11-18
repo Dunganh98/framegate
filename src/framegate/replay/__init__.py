@@ -30,3 +30,8 @@ def add_parser(sub: Any) -> None:
     p.add_argument("--prepare-only", action="store_true", help="build and check the sandboxes")
     p.add_argument("--score-only", action="store_true", help="score the existing runs again")
     p.add_argument("--force", action="store_true", help="also candidates that have a score")
+    p.add_argument(
+        "--prune",
+        action="store_true",
+        help="after the score delete what can be rebuilt: environments, caches, the scored copy",
+    )

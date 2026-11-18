@@ -16,6 +16,7 @@ continues with approve / reject / answer / finish, then `run` again. Resumable a
 from __future__ import annotations
 
 import datetime
+import difflib
 import importlib.resources
 import json
 import os
@@ -32,6 +33,7 @@ from framegate import (
     api_error,
     backlog,
     description,
+    doc_proposals,
     followup,
     notify,
     ported,
@@ -50,6 +52,7 @@ from framegate.checks import (
     baseline,
     check_signature,
     existing_members,
+    named_tests,
     plan_files,
     scope_coverage,
     spec_lint,
@@ -246,9 +249,26 @@ KNOWLEDGE_ROLES = {
 }
 KNOWLEDGE_MAX_LINES = 300
 EVIDENCE_RULE = (
-    "# Evidence\n\nThe code (and the build and test files) is the truth; the spec and the docs "
-    "say what is intended. A comment or docstring is no evidence of what the code does: read "
-    "the code. Write as few comments as possible.\n"
+    "# Sources, by rank\n\n"
+    "1. The code (with the build and test files) is the current state. Where docs and code "
+    "disagree, the code says what exists.\n"
+    "2. The requirement (the task, the approved spec) is what this task must do. Where docs "
+    "and the task disagree, the task wins, and the disagreement is a proposed doc update.\n"
+    "3. Docs say where the project is heading: context only, below code and task. Never a "
+    "requirement, never tested, edited only by the docs step after the final gate.\n"
+    "4. A comment or docstring is no source: no requirement, no test and no review finding "
+    "rests on one. Write as few as possible.\n\n"
+    "Program output (an error message, a log line) is behaviour, not documentation: a spec "
+    "may quote it and a test may match it.\n"
+    f"Proposed doc update: one line in {{out}}/{{feature}}/{doc_proposals.FILE} (keep the lines "
+    f"that are there). For {doc_proposals.FORMATS}. Never park or ask for it.\n"
+)
+#: the docs step after the approved final gate (doc_proposals.py): its one run
+DOCS_TASK = (
+    "Feature '{f}': the final gate is approved. Apply exactly these documentation updates, "
+    "each in the file it names, and change nothing else:\n{updates}\n"
+    "Where an update and the code disagree about what exists, the code is right: write what "
+    "the code does. Write no other file."
 )
 #: failed final checks one automatic repair may fix before the human sees them (by the start
 #: of the check's name): the implementer owns the first group, the test writer the second
@@ -357,7 +377,30 @@ LOOK_AROUND = (
     "write them."
 )
 #: names left out of the orientation's file lists
-ORIENTATION_SKIP = {"prompts", "progress.log", "progress.cursor", "progress.json", "parked"}
+#: a later test review round, sent to the session of the round before (not a new agent)
+TEST_REVIEW_AGAIN = (
+    "Feature '{f}': follow-up review (round {round} of at most {rounds}). The test writer "
+    "changed the tests after your review. Do not review everything again. Judge from the diff "
+    "below (read a file only where the diff does not show enough): is each of your objections "
+    "resolved, and did the change break anything else? The mechanical checks ran again: "
+    "{checks} ({out}/{f}/test_checks.md). Write {out}/{f}/test_review.md in the same format as "
+    "before, in full (the human reads only this file): an objection that is not resolved stays "
+    "under Objections, a problem the change brought is a new one. Do not edit tests.{note}\n\n"
+    "## Your objections of round {before}\n{objections}\n\n"
+    "## The test files, changed since round {before}\n"
+)
+#: the test files as the test reviewer last saw them (the follow-up review gets the diff)
+REVIEWED_TESTS = "reviewed_tests"
+#: lines of a failed check / of the test diff shown in a task (the rest: the file)
+SHOWN_LINES = 300
+ORIENTATION_SKIP = {
+    "prompts",
+    "progress.log",
+    "progress.cursor",
+    "progress.json",
+    "parked",
+    REVIEWED_TESTS,
+}
 #: deploy / CI files are no feature's to change (followup.py): the need is noted, not met
 PIPELINE_NOTE = (
     "If the work needs a change in a deploy or CI file (a Dockerfile, a compose or k8s file, "
@@ -654,6 +697,13 @@ def hit_cap(res: dict[str, Any]) -> str | None:
     return None
 
 
+def shown(text: str, limit: int = SHOWN_LINES) -> str:
+    lines = text.splitlines()
+    if len(lines) <= limit:
+        return text
+    return "\n".join([*lines[:limit], f"... ({len(lines) - limit} more lines)"])
+
+
 def cap_label(kind: str, cap: float) -> str:
     return f"turn cap ({cap:g} turns)" if kind == "turns" else f"budget cap ({cap:g} USD)"
 
@@ -746,9 +796,6 @@ class Orchestrator:
         self.adapter = adapter or get_adapter(cfg)
         self.echo = echo
         self._claude: list[str] | None = None
-        #: the documentation files the approved plan names for the step(s) being implemented
-        #: (checks/plan_files.py): writable for that run, committed and parked with its code
-        self.step_docs: list[str] = []
 
     # ---------- helpers ----------
     def fdir(self, feature: str) -> pathlib.Path:
@@ -902,8 +949,10 @@ class Orchestrator:
         role: str | None = None,
         step: str | None = None,
         attempt: int | None = None,
+        resume: str = "",
     ) -> dict[str, Any]:
-        """One fresh headless Claude Code run. The task goes via stdin and the role via
+        """One headless Claude Code run: fresh, or with `resume` the next turn of that session
+        (`claude --resume <session id>`). The task goes via stdin and the role via
         --append-system-prompt-file (no multi-line text on the command line). A run refused by
         the usage limit waits for the reset and runs again; a run that did no work because the
         API could not be reached runs again after a short wait (neither is a failed attempt:
@@ -912,7 +961,7 @@ class Orchestrator:
 
         def once(probe: bool = False) -> tuple[dict[str, Any], UsageLimit | None]:
             return self.run_agent_once(
-                phase, feature, task, feedback, role, step, attempt, probe=probe
+                phase, feature, task, feedback, role, step, attempt, probe=probe, resume=resume
             )
 
         early: tuple[dict[str, Any], UsageLimit | None] | None = None
@@ -1077,6 +1126,7 @@ class Orchestrator:
         step: str | None = None,
         attempt: int | None = None,
         probe: bool = False,
+        resume: str = "",
     ) -> tuple[dict[str, Any], UsageLimit | None]:
         """One `claude -p` run: its result, and the usage limit that refused it (or None).
         `probe`: a try during the usage-limit wait. Refused again, it did no work and cost
@@ -1105,6 +1155,8 @@ class Orchestrator:
             "stream-json",
             "--verbose",
         ]
+        if resume:  # the session's messages; the role is not kept with it and is passed again
+            args += ["--resume", resume]
         budget = self.cfg.budget_cap(phase)
         if budget is not None:
             args += ["--max-budget-usd", f"{budget:g}"]
@@ -1125,7 +1177,7 @@ class Orchestrator:
             # own process group + kill-on-close job: Ctrl+C / SIGTERM / a killed framegate
             # take the whole agent tree (claude, node, shells, dotnet) down with it
             # FRAMEGATE_AGENT, the project's tools first on PATH, no chat memory (agent_env.py)
-            env = agent_env.build(self.adapter, role_name, docs=self.step_docs)
+            env = agent_env.build(self.adapter, role_name)
             _, stdout, stderr = procs.run(args, input=prompt, cwd=self.cfg.root, job=True, env=env)
         except OSError as e:
             stdout, stderr = "", f"could not start claude: {e}"
@@ -1159,6 +1211,7 @@ class Orchestrator:
             error=res.get("is_error"),
             denials=len(denials),
             session=res.get("session_id"),
+            **({"resumed": resume} if resume else {}),
             **token_usage(res),
             **({"usage_limit": True} if limit else {}),
             **({"api_error": True} if not limit and detect_api_error(res) else {}),
@@ -1339,6 +1392,7 @@ class Orchestrator:
         role: str | None = None,
         step: str | None = None,
         retry_turn_cap: bool = True,
+        resume: str = "",
     ) -> dict[str, Any]:
         """Run an agent with the pending feedback and consume it. A run that stops at the turn
         cap or the budget cap is re-run once with a note; if that one stops at a cap too, it is
@@ -1353,6 +1407,7 @@ class Orchestrator:
                 role=role,
                 step=step,
                 attempt=int(prog.get("attempt") or 0) or None,
+                resume=resume,
             )
             prog["feedback"] = ""
             save_progress(self.cfg, feature, prog)
@@ -1525,7 +1580,7 @@ class Orchestrator:
                 **({"fidelity": rep.fidelity} if rep.fidelity else {}),
             )
             if rep.ok:
-                done = commit(self.cfg, f"{feature}: {label}", extra=self.step_docs)
+                done = commit(self.cfg, f"{feature}: {label}")
                 drift = references.differing(rep.fidelity)
                 self.progress(
                     feature,
@@ -1766,13 +1821,8 @@ class Orchestrator:
 
     def revert_src(self, feature: str, label: str) -> str:
         """Save the parked work's uncommitted source changes as a diff and restore the sources
-        to the last commit, so later steps start from code that passed its gates. The step's
-        documentation files (self.step_docs) go the same way."""
+        to the last commit, so later steps start from code that passed its gates."""
         src = [r for r in self.cfg.src_roots if (self.cfg.root / r).exists()]
-        # only the changed ones: git refuses a path it does not know or that is ignored
-        src += [
-            f for f in self.step_docs if git(self.cfg, "status", "--porcelain", "--", f).strip()
-        ]
         if not src:
             return ""
         git(self.cfg, "add", "-A", "--", *src)
@@ -1868,11 +1918,7 @@ class Orchestrator:
             )
             return False
         names = ", ".join(contested)
-        commit(
-            self.cfg,
-            f"{feature}: {label} (PROVISIONAL: tests contested: {names})",
-            extra=self.step_docs,
-        )
+        commit(self.cfg, f"{feature}: {label} (PROVISIONAL: tests contested: {names})")
         sha = git(self.cfg, "rev-parse", "HEAD").strip()
         rec = dict(item, contested=contested, question=question, commit=sha, attempts=attempts)
         prog["provisional"] = [*(prog.get("provisional") or []), rec]
@@ -2034,25 +2080,13 @@ class Orchestrator:
                 self.format_written_tests(feature)
                 sub = self.set_sub(feature, prog, "checks")
             if sub == "checks":
-                self.run_test_checks(feature, prog)
+                if self.checks_back(feature, prog, self.run_test_checks(feature, prog)):
+                    sub = self.set_sub(feature, prog, "write")
+                    continue
                 sub = self.set_sub(feature, prog, "review")
             if sub == "review":
                 rnd = int(prog.get("round") or 0)
-                (self.fdir(feature) / "test_review.md").unlink(missing_ok=True)
-                note = prog.get("human_note") or ""
-                task = self.task_text(
-                    "TEST_REVIEW",
-                    feature,
-                    round=str(rnd + 1),
-                    rounds=str(self.cfg.test_review_rounds + 1),
-                    note=f"\n\nThe human's note at the tests gate (check the tests address it): "
-                    f"{note}"
-                    if note
-                    else "",
-                )
-                self.agent("TEST_REVIEW", feature, prog, task, role="test_review")
-                self.collect_questions(feature, "TEST_REVIEW", "test reviewer")
-                review = self.read_test_review(feature, keep_round=rnd + 1)
+                review, resumed = self.review_tests(feature, prog, rnd)
                 failed = [n for n, s in (prog.get("test_checks") or {}).items() if s != "PASS"]
                 # a round nobody can win: the writer was sent back for these checks already,
                 # they fail exactly as before, and the reviewer has nothing to object to
@@ -2069,6 +2103,7 @@ class Orchestrator:
                     failed_checks=failed,
                     sent_back=back,
                     **({"unchanged_checks": failed} if stuck else {}),
+                    **({"resumed": True} if resumed else {}),
                 )
                 if stuck:
                     self.progress(
@@ -2097,6 +2132,111 @@ class Orchestrator:
                 sub = self.set_sub(feature, prog, "gate")
             break
         self.tests_gate(feature, prog)
+
+    def checks_back(self, feature: str, prog: dict[str, Any], failed: dict[str, str]) -> bool:
+        """Failed test checks (name -> output) go back to the test writer before the test
+        reviewer runs (seen live: it only repeated the check, 0.56 USD a round): at most
+        [agents] test_check_rounds times per gate cycle, and not when they fail exactly as
+        before (then the reviewer and the gate have them)."""
+        sent = int(prog.get("check_rounds") or 0)
+        cap = self.cfg.test_check_rounds
+        if not failed or sent >= cap or self.same_check_failures(prog, list(failed)):
+            return False
+        out = self.cfg.paths.out
+        prog["check_rounds"] = sent + 1
+        prog["feedback"] = (
+            f"These mechanical checks failed ({out}/{feature}/test_checks.md). Fix the tests so "
+            "that they pass; the test reviewer runs after that. If a check cannot pass without "
+            "going against the spec, say why in test_summary.md.\n\n"
+            + "\n\n".join(f"### {n}\n~~~\n{shown(text)}\n~~~" for n, text in failed.items())
+        )
+        log_event(
+            self.cfg,
+            feature,
+            "test_checks",
+            round=sent + 1,
+            failed_checks=list(failed),
+            sent_back=True,
+        )
+        self.progress(
+            feature,
+            f"[TESTS] failed checks: back to the test writer before the test reviewer runs "
+            f"(check round {sent + 1} of {cap}): {', '.join(failed)}",
+        )
+        return True
+
+    def review_tests(self, feature: str, prog: dict[str, Any], rnd: int) -> tuple[TestReview, bool]:
+        """One test review round: (the review, was it the follow-up in the session of the
+        round before). Round 1 is a new agent with the full review. A later round continues
+        that session with its objections, the test diff since then and the checks; without a
+        session, or when that run writes no review (session gone), a new agent reviews in full."""
+        path = self.fdir(feature) / "test_review.md"
+        path.unlink(missing_ok=True)
+        note = prog.get("human_note") or ""
+        extra = {
+            "round": str(rnd + 1),
+            "rounds": str(self.cfg.test_review_rounds + 1),
+            "note": f"\n\nThe human's note at the tests gate (check the tests address it): {note}"
+            if note
+            else "",
+        }
+        last = prog.get("test_review_last") or {}
+        res: dict[str, Any] = {}
+        if rnd and last.get("session") and last.get("round") == rnd:
+            checks = ", ".join(f"{n} {s}" for n, s in (prog.get("test_checks") or {}).items())
+            task = (
+                TEST_REVIEW_AGAIN.format(
+                    **{**self.placeholders(feature), **extra},
+                    before=str(rnd),
+                    checks=checks,
+                    objections="\n".join(f"- {o}" for o in last.get("objections") or []) or "None.",
+                )
+                + f"```diff\n{self.tests_diff(feature)}\n```"
+            )
+            res = self.agent(
+                "TEST_REVIEW", feature, prog, task, role="test_review", resume=last["session"]
+            )
+            if not path.is_file():
+                self.progress(
+                    feature,
+                    "[TESTS] the test reviewer's session could not be continued (no review "
+                    "written): a full review by a new agent instead.",
+                )
+        resumed = path.is_file()
+        if not resumed:
+            task = self.task_text("TEST_REVIEW", feature, **extra)
+            res = self.agent("TEST_REVIEW", feature, prog, task, role="test_review")
+        self.collect_questions(feature, "TEST_REVIEW", "test reviewer")
+        review = self.read_test_review(feature, keep_round=rnd + 1)
+        self.keep_reviewed_tests(feature)
+        prog["test_review_last"] = {
+            "session": res.get("session_id"),
+            "round": rnd + 1,
+            "objections": review.objections,
+        }
+        return review, resumed
+
+    def keep_reviewed_tests(self, feature: str) -> None:
+        base = self.fdir(feature) / REVIEWED_TESTS
+        shutil.rmtree(base, ignore_errors=True)
+        for rel in self.changed_tests():
+            (base / rel).parent.mkdir(parents=True, exist_ok=True)
+            # (.txt: a copy of a test file must not be collected as a test)
+            shutil.copyfile(self.cfg.root / rel, base / (rel + ".txt"))
+
+    def tests_diff(self, feature: str) -> str:
+        """The changed test files against the copies of the last review (keep_reviewed_tests)."""
+        base = self.fdir(feature) / REVIEWED_TESTS
+        kept = {p.relative_to(base).as_posix()[: -len(".txt")] for p in base.rglob("*.txt")}
+
+        def lines(p: pathlib.Path) -> list[str]:
+            return p.read_text("utf-8", errors="replace").splitlines() if p.is_file() else []
+
+        diff: list[str] = []
+        for rel in sorted(kept | set(self.changed_tests())):
+            old, new = lines(base / (rel + ".txt")), lines(self.cfg.root / rel)
+            diff += difflib.unified_diff(old, new, f"a/{rel}", f"b/{rel}", lineterm="")
+        return shown("\n".join(diff)) or "(no test file changed)"
 
     def amend_tests(self, feature: str, prog: dict[str, Any]) -> None:
         """After answers at the final gate (and their spec update): the test writer applies
@@ -2200,7 +2340,8 @@ class Orchestrator:
         set_marker(self.cfg, tests_update_tag(feature))
         return changed
 
-    def run_test_checks(self, feature: str, prog: dict[str, Any]) -> None:
+    def run_test_checks(self, feature: str, prog: dict[str, Any]) -> dict[str, str]:
+        """Runs the test checks; returns the failed ones (name -> output)."""
         sections = []
         status: dict[str, str] = {}
         outputs: dict[str, str] = {}
@@ -2210,6 +2351,7 @@ class Orchestrator:
             ("Traceability", traceability),
             ("Test smells", test_smells),
             ("Lint (the tests' own lines)", test_lint),
+            (named_tests.NAME, named_tests),
         ]:
             res = mod.check(self.adapter, feature)
             status[name] = res.status
@@ -2250,10 +2392,12 @@ class Orchestrator:
             sections.append(ported.checks_section(report))
         path = self.fdir(feature) / "test_checks.md"
         path.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
+        # (the line is cut at PROGRESS_WIDTH: a spec that names no test has nothing to say)
+        quiet = () if named_tests.named(self.cfg, feature) else (named_tests.NAME,)
         self.progress(
             feature,
             "[TESTS] checks: "
-            + ", ".join(f"{n} {s}" for n, s in status.items())
+            + ", ".join(f"{n} {s}" for n, s in status.items() if n not in quiet)
             + (f"; {carried.split(';')[0]}" if carried else "")
             + (f"; existing members asserted without a fixture test: {listed}" if listed else "")
             + (f"; scope coverage: {uncovered}" if uncovered else ""),
@@ -2261,10 +2405,10 @@ class Orchestrator:
         prog["test_checks"] = status
         # what failed and how, this run and the one before it (same_check_failures)
         prog["check_failures_before"] = prog.get("check_failures") or {}
-        prog["check_failures"] = {
-            name: check_signature(outputs[name]) for name, s in status.items() if s != "PASS"
-        }
+        failed = {name: outputs[name] for name, s in status.items() if s != "PASS"}
+        prog["check_failures"] = {name: check_signature(text) for name, text in failed.items()}
         save_progress(self.cfg, feature, prog)
+        return failed
 
     def same_check_failures(self, prog: dict[str, Any], failed: list[str]) -> bool:
         """Did the test writer already get a round for these failed test checks, and do they
@@ -2272,7 +2416,7 @@ class Orchestrator:
         named)? Seen live: "red against stubs" failed on a carried-over test the writer
         may not change; the reviewer said OK twice, and the writer was still sent back
         twice for a failure it could not fix. Then the failure goes to the gate at once."""
-        if not int(prog.get("round") or 0):
+        if not int(prog.get("round") or 0) and not int(prog.get("check_rounds") or 0):
             return False  # the writer has not seen this failure yet
         now, before = prog.get("check_failures") or {}, prog.get("check_failures_before") or {}
         return all(now.get(name) and now.get(name) == before.get(name) for name in failed)
@@ -2445,7 +2589,8 @@ class Orchestrator:
         self.reapprove_spec(feature, prog, "tests")
         set_marker(self.cfg, f"tests-approved/{feature}")
         prog["human_note"] = ""
-        prog["round"] = 0
+        prog["round"] = prog["check_rounds"] = 0
+        shutil.rmtree(self.fdir(feature) / REVIEWED_TESTS, ignore_errors=True)
         self.advance(feature, prog, "IMPLEMENT")
 
     # ---------- IMPLEMENT: per plan step (or batch of small steps), no stops ----------
@@ -2662,9 +2807,6 @@ class Orchestrator:
                 )
             task += self.parked_context(prog, steps) + self.provisional_context(prog)
             task += self.size_context(feature) + self.port_context(feature, prog)
-            # documentation files the approved plan names for these steps: writable now only
-            self.step_docs = plan_files.approved_docs(self.adapter, feature, nums)
-            task += plan_files.task_note(self.step_docs)
             if redo:
                 task += REDO_NOTE.format(**self.placeholders(feature))
             for r in redo:
@@ -2683,10 +2825,7 @@ class Orchestrator:
             item: dict[str, Any] = {"kind": "step", "step": nums[0], "label": label}
             if not one:
                 item["steps"] = nums
-            try:
-                ok = self.implement_loop(feature, prog, task, covered, item)
-            finally:
-                self.step_docs = []
+            ok = self.implement_loop(feature, prog, task, covered, item)
             if ok:
                 prog["completed_steps"] += nums
             if redo:
@@ -3289,6 +3428,7 @@ class Orchestrator:
         d = self.fdir(feature)
         self.file_size_questions(feature, prog)
         self.tool_failure_questions(feature)
+        self.doc_questions(feature, prog)
         self.write_final_facts(feature, prog)
         (d / "final_summary.md").unlink(missing_ok=True)
         (d / "final_brief.md").unlink(missing_ok=True)
@@ -3314,6 +3454,9 @@ class Orchestrator:
         for todo in followup.all_sections(self.cfg, feature):
             # generated: the summary agent cannot drop it
             text += "\n\n" + "\n".join(todo).replace(": ", " (generated by framegate): ", 1)
+        proposed = doc_proposals.section(self.cfg, feature)
+        if proposed:
+            text += "\n\n" + "\n".join(proposed)
         summary.write_text(
             text + "\n\n## Cost, time, turns per phase (generated by framegate)\n\n" + table + "\n",
             encoding="utf-8",
@@ -3341,6 +3484,7 @@ class Orchestrator:
             parse_causes(steps.read_text(encoding="utf-8") if steps.is_file() else ""),
             followup.facts_lines(self.cfg, feature),
             unrunnable.facts_lines(self.cfg),
+            doc_proposals.facts_lines(self.cfg, feature),
         )
         (d / "final_facts.md").write_text(facts, encoding="utf-8")
 
@@ -3363,7 +3507,7 @@ class Orchestrator:
         tool = {
             i
             for i, item in enumerate(self.final_items(feature, prog), 1)
-            if item.startswith(f"[{GATES_WHO}] ")
+            if item.startswith((f"[{GATES_WHO}] ", f"[{doc_proposals.WHO}] "))
         }
         return set(range(1, n + 1)) | tool
 
@@ -3945,6 +4089,7 @@ class Orchestrator:
             )
 
     def phase_retro(self, feature: str, prog: dict[str, Any]) -> None:
+        self.docs_step(feature, prog)
         self.retro_agent(feature, prog)
         prop = self.fdir(feature) / "retro_proposals.md"
         again = backlog.note_repeats(
@@ -3992,10 +4137,108 @@ class Orchestrator:
             self.progress(feature, f"Pull request description: {described.rel}")
         commit(self.cfg, f"{feature}: workflow metrics")
 
+    def doc_questions(self, feature: str, prog: dict[str, Any]) -> None:
+        """A final-gate question for every important doc proposal (doc_proposals.py), with
+        the default "later". One answered in an earlier round is not asked again."""
+        done = [doc_proposals.asked(q) for q in self.open_questions(feature)]
+        done += prog.get("doc_answered") or []
+        lines = [
+            p.question()
+            for p in doc_proposals.proposals(self.cfg, feature)
+            if p.important and p.text not in done
+        ]
+        if not lines:
+            return
+        with open(self.fdir(feature) / "open_questions.md", "a", encoding="utf-8") as fh:
+            for q in lines:
+                fh.write(f"- [{doc_proposals.WHO}] {q}\n")
+        log_event(
+            self.cfg,
+            feature,
+            "questions",
+            phase="SUMMARY",
+            who=doc_proposals.WHO,
+            questions="\n".join(lines),
+        )
+
+    def docs_step(self, feature: str, prog: dict[str, Any]) -> None:
+        """Once, after the final gate is approved: one agent applies the minor doc proposals
+        and the approved important ones, committed as `<f>: docs`. It never blocks the
+        finished task: when the final checks had not passed, the run fails or it changes
+        anything but docs, nothing is applied and the proposals are kept as not applied."""
+        if prog.get("docs_step") is not None:
+            return
+        todo = doc_proposals.to_apply(self.cfg, feature, prog.get("doc_approved") or [])
+        last = [e for e in read_events(self.cfg, feature) if e.get("kind") == "final_gates"]
+        why = ""
+        if todo and (prog.get("parked") or not (last and last[-1].get("passed"))):
+            why = "the final checks did not pass"
+        elif todo:
+            why = self.apply_docs(feature, todo)
+        applied = [] if why else [p.text for p in todo]
+        prog["docs_step"] = {"applied": applied, "why": why}
+        save_progress(self.cfg, feature, prog)
+        if not todo:
+            return
+        log_event(self.cfg, feature, "docs_step", applied=applied, why=why)
+        self.progress(
+            feature,
+            f"[DOCS] {len(applied)} doc update(s) applied, commit '{feature}: docs'."
+            if applied
+            else f"[DOCS] no doc update applied ({why}); the proposals are kept as not applied.",
+        )
+
+    def apply_docs(self, feature: str, todo: list[doc_proposals.Proposal]) -> str:
+        """The docs agent's one run and its commit. "" = committed; else why not (what it
+        changed is taken back)."""
+        before = set(dirty_lines(self.cfg, "all"))
+        task = DOCS_TASK.format(f=feature, updates="\n".join(f"- {p.text}" for p in todo))
+        why = ""
+        try:
+            res, limit = self.run_agent_once(doc_proposals.PHASE, feature, task, role="docs")
+            if limit or res.get("is_error") or detect_api_error(res):
+                why = "the docs agent failed"
+        except Exception as e:  # whatever it is, the finished task goes on
+            why = f"the docs agent failed: {type(e).__name__}"
+        out = self.cfg.paths.out.rstrip("/") + "/"
+        after = dirty_lines(self.cfg, "all")
+        new = [x for x in after if x not in before and not x[3:].startswith(out)]
+        files = [x[3:] for x in new]
+        other = [f for f in files if not doc_proposals.is_doc(self.cfg, f)]
+        if not why and other:
+            why = f"the docs agent changed {', '.join(other)}"
+        if not why and not files:
+            why = "the docs agent changed nothing"
+        try:
+            if not why:
+                git(self.cfg, "add", "-A", "--", *files)
+                git(self.cfg, "commit", "-q", "-m", f"{feature}: docs", "--", *files)
+                return ""
+            for line in new:
+                if line.startswith("??"):
+                    (self.cfg.root / line[3:]).unlink(missing_ok=True)
+                else:
+                    git(self.cfg, "restore", "-s", "HEAD", "-S", "-W", "--", line[3:])
+        except (GitError, OSError) as e:
+            why = why or f"git refused the docs commit: {str(e)[:200]}"
+        return why
+
     def keep_followups(self, feature: str) -> None:
         """The feature ends: its pipeline and reference follow-ups (followup.py) go to
         {specs}/<f>/pipeline_followup.md / reference_followup.md, committed with the metrics
-        row (`framegate cleanup` keeps the spec folder), and to an event each."""
+        row (`framegate cleanup` keeps the spec folder), and to an event each. The proposed
+        doc updates (doc_proposals.py) are kept the same way, marked applied or not."""
+        prog = load_progress(self.cfg, feature)
+        step = prog.get("docs_step") or {}
+        kept = doc_proposals.keep(
+            self.cfg,
+            feature,
+            step.get("applied") or [],
+            prog.get("doc_approved") or [],
+            step.get("why") or "",
+        )
+        if kept:
+            self.progress(feature, f"{doc_proposals.SECTION}, kept: {kept}")
         for kind in followup.KINDS:
             todo = followup.write(self.cfg, feature, durable=True, kind=kind)
             if not todo:
@@ -4535,6 +4778,7 @@ class Orchestrator:
             waiting=None,
             sub="write",
             round=0,
+            check_rounds=0,
             human_note=reason,
             feedback=f"The human rejected the tests. Reason:\n{reason}\n"
             "Revise the tests accordingly.",
@@ -4606,6 +4850,34 @@ class Orchestrator:
                 left = [q.split(" ", 1)[0] for q, a in sized if LEAVE_RE.match(a)]
                 if left:
                     logged["size_left"] = left
+            # answers to the important doc proposals: approved ones go to the docs step
+            docs = {
+                asked: str(it["a"])
+                for it in parse_answer_items(text)
+                if 0 < it["n"] <= len(shown) and (asked := doc_proposals.asked(shown[it["n"] - 1]))
+            }
+            if docs:
+                ok = [t for t, a in docs.items() if doc_proposals.APPROVED.match(a)]
+                prog["doc_answered"] = [*(prog.get("doc_answered") or []), *docs]
+                prog["doc_approved"] = [*(prog.get("doc_approved") or []), *ok]
+                logged["doc_updates"] = {"approved": ok, "later": [t for t in docs if t not in ok]}
+                if len(docs) == len(items):
+                    # nothing but doc answers: nothing to run, the gate stays as it is
+                    mine = [q for q in split_questions(open_q) if doc_proposals.asked(q) in docs]
+                    rest = [q for q in split_questions(open_q) if q not in mine]
+                    self.archive_questions(
+                        feature, "final gate: doc updates", "\n".join(f"- {q}" for q in mine), reply
+                    )
+                    if rest:
+                        oq.write_text("".join(f"- {q}\n" for q in rest), encoding="utf-8")
+                    log_event(self.cfg, feature, "answer", gate="final", parked=[], **logged)
+                    save_progress(self.cfg, feature, prog)
+                    self.echo(
+                        f"Doc updates recorded ({ref}): {len(ok)} approved, {len(docs) - len(ok)} "
+                        "later. The approved ones are applied after the final gate is approved."
+                        f"\nNext: framegate approve {feature}"
+                    )
+                    return EXIT_OK
         if gate == "tests":
             self.archive_questions(feature, "tests gate", open_q, reply)
             log_event(self.cfg, feature, "answer", gate="tests", **logged)
@@ -4614,6 +4886,7 @@ class Orchestrator:
                 phase="SPEC_UPDATE",
                 sub=None,
                 round=0,
+                check_rounds=0,
                 human_note=f"the human answered questions in {out}/{feature}/answers.md",
                 spec_update={
                     "gate": "tests",
@@ -4652,7 +4925,10 @@ class Orchestrator:
                 # answers that only take the defaults: if the spec update and the test
                 # writer then change nothing, the feature is approved with the checks the
                 # human saw (answers_changed_nothing), without a second round of everything
-                quiet = take_defaults(items)
+                # (an answer to a doc proposal changes nothing in the run: the docs step
+                # after the approval applies it)
+                other = [it for it in items if not doc_proposals.asked(it["asked"])]
+                quiet = take_defaults(other) if other else bool(items)
                 prog["quiet_answers"] = (
                     {"ref": ref, "head": git(self.cfg, "rev-parse", "HEAD").strip()}
                     if quiet
@@ -4866,6 +5142,16 @@ class Orchestrator:
         log_event(self.cfg, feature, "human_gate", gate="final", approved=True, reason=None)
         log_event(self.cfg, feature, "finished", retro=False)
         self.reapprove_spec(feature, prog, "final")
+        if doc_proposals.proposals(self.cfg, feature) and prog.get("docs_step") is None:
+            self.take_run_lock(feature)  # the docs step runs an agent
+            try:
+                with procs.stop_signals():
+                    self.docs_step(feature, prog)
+            except KeyboardInterrupt:
+                return EXIT_INTERRUPTED
+            finally:
+                clear_phase(self.cfg)
+                procs.remove_lock(self.cfg.out_dir)
         self.write_metrics(feature)
         prog.update(retro="skipped", metrics_written=True)
         self.advance(feature, prog, "DONE")

@@ -36,6 +36,8 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 #                                  # TRIAGE 1.5, SUMMARY 1.5, RETRO 3.0; 0 = no cap
 # test_review_rounds = 2           # test reviewer objections sent back to the test writer
 #                                  # (per gate cycle) before the tests gate
+# test_check_rounds = 2            # failed test checks sent back to the test writer before the
+#                                  # test reviewer runs (per gate cycle)
 # permission_mode = "acceptEdits"
 # model = ""                       # one `claude --model` for all phases; default per phase:
 #                                  # "sonnet" for TESTS, IMPLEMENT, SPEC_UPDATE, SUMMARY (they follow

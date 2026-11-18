@@ -79,9 +79,9 @@ def test_a_reworded_question_about_the_same_test_is_the_same() -> None:
 def test_an_unwinnable_round_is_not_repeated(demo_repo: DemoRepo) -> None:
     """Seen live: "Red against stubs" failed on a test the writer may not change (carried
     over, green by design); the reviewer said OK twice, and the writer was still sent back
-    twice and asked its question twice. Now: one round for the failure; when it fails the
-    same way again and the reviewer has no objections, it goes to the gate, and the
-    reworded question is collected once."""
+    twice and asked its question twice. Now: one round for the failure, before the reviewer
+    runs; when it fails the same way again and the reviewer has no objections, it goes to
+    the gate, and the reworded question is collected once."""
     r = demo_repo
     r.add_toml(FAST)
     r.defer_tests_gate()
@@ -89,14 +89,21 @@ def test_an_unwinnable_round_is_not_repeated(demo_repo: DemoRepo) -> None:
     assert r.af("approve-spec", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE
     phases = [c["phase"] for c in r.calls()]
-    assert phases[:4] == ["TESTS", "TEST_REVIEW", "TESTS", "TEST_REVIEW"]
-    assert phases[4] == "IMPLEMENT"  # no third writer round (before: two rounds back)
+    # the failed check goes back once without a review; the same failure again: one review
+    assert phases[:4] == ["TESTS", "TESTS", "TEST_REVIEW", "IMPLEMENT"]
+    back = [e for e in r.events() if e["kind"] == "test_checks"]
+    assert [(e["round"], e["failed_checks"], e["sent_back"]) for e in back] == [
+        (1, ["Red against stubs"], True)
+    ]
+    again = r.calls()[1]["prompt"]
+    assert "These mechanical checks failed" in again and "### Red against stubs" in again
+    assert "PASSES AGAINST STUB (weak or wrong test): " in again
     reviews = [e for e in r.events() if e["kind"] == "test_review"]
-    assert [(e["round"], e["sent_back"]) for e in reviews] == [(1, True), (2, False)]
-    assert "unchanged_checks" not in reviews[0]
-    assert reviews[1]["unchanged_checks"] == ["Red against stubs"]
+    assert [(e["round"], e["sent_back"]) for e in reviews] == [(1, False)]
+    assert reviews[0]["unchanged_checks"] == ["Red against stubs"]
     log = (r.root / "out/demo/progress.log").read_text(encoding="utf-8")
-    assert "back to the test writer (round 1 of 2)" in log and "(round 2 of 2)" not in log
+    assert "before the test reviewer runs (check round 1 of 2): Red against stubs" in log
+    assert "back to the test writer (round 1 of 2)" not in log
     assert "failed exactly as in the round before" in log
     assert "1 repeated question(s) dropped" in log
     asked = [e for e in r.events() if e["kind"] == "questions" and e["who"] == "test writer"]
@@ -104,6 +111,19 @@ def test_an_unwinnable_round_is_not_repeated(demo_repo: DemoRepo) -> None:
     # today's end state: the failed check is an item for the final gate
     deferred = [e for e in r.events() if e["kind"] == "tests_gate_deferred"]
     assert "failed checks: Red against stubs" in deferred[0]["reasons"]
+
+
+def test_without_check_rounds_the_reviewer_sees_the_failed_check(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    r.add_toml(FAST)
+    r.defer_tests_gate()
+    r.set_toml("agents", "test_check_rounds", "0")
+    r.scenario(green_test=True)
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE
+    phases = [c["phase"] for c in r.calls()]
+    assert phases[:5] == ["TESTS", "TEST_REVIEW", "TESTS", "TEST_REVIEW", "IMPLEMENT"]
+    assert not [e for e in r.events() if e["kind"] == "test_checks"]
 
 
 def test_a_changed_failure_or_an_objection_still_gets_its_round(demo_repo: DemoRepo) -> None:
@@ -118,6 +138,7 @@ def test_a_changed_failure_or_an_objection_still_gets_its_round(demo_repo: DemoR
     new = {**same, "round": 1, "check_failures": {"A": "x1", "B": "y"}}
     assert not orch.same_check_failures(new, ["A", "B"])  # a check that passed before
     assert not orch.same_check_failures({"round": 1}, ["A"])
+    assert orch.same_check_failures({**same, "check_rounds": 1}, ["A"])  # sent back by the checks
     # the digest: the problem lines, not the count line, the order or the timings
     one = "3 tests for feature f.\nPASSES AGAINST STUB: t::a\nERROR: t::b in 0.12s"
     two = "4 tests for feature f.\nERROR: t::b in 1.5 s\nPASSES AGAINST STUB: t::a"

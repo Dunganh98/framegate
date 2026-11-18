@@ -80,6 +80,14 @@ def test_full_flow_human_mode(demo_repo: DemoRepo, capsys: pytest.CaptureFixture
     assert "also check the message" in r.calls()[2]["prompt"]
     assert "TEST REVIEWER" in r.calls()[1]["role"]
     assert "round 1 of at most 3" in r.calls()[1]["prompt"]
+    # round 2 continues the reviewer's session: its objections and the diff, not a new review
+    again = r.calls()[3]
+    assert "--resume" not in r.calls()[1]["argv"]
+    assert again["argv"][again["argv"].index("--resume") + 1] == "fake"
+    assert "follow-up review (round 2 of at most 3)" in again["prompt"]
+    assert "## Your objections of round 1\n- DEMO-E-001 test_add_rejects_non_int" in again["prompt"]
+    assert "```diff\n" in again["prompt"] and "Red against stubs PASS" in again["prompt"]
+    assert "TEST REVIEWER" in again["role"]
     tg = read(r, "out/demo/tests_gate.md")
     assert "## Open questions: 1" in tg and "1. [test writer] [TESTS] Should add()" in tg
     assert "## Test reviewer: OK, no objections" in tg
@@ -93,6 +101,7 @@ def test_full_flow_human_mode(demo_repo: DemoRepo, capsys: pytest.CaptureFixture
         (1, "OBJECTIONS", True),
         (2, "OK", False),
     ]
+    assert [e.get("resumed") for e in reviews] == [None, True]
     capsys.readouterr()
     assert r.af("status", "demo") == EXIT_GATE
     assert "=== TESTS GATE (demo) ===" in capsys.readouterr().out
@@ -105,6 +114,7 @@ def test_full_flow_human_mode(demo_repo: DemoRepo, capsys: pytest.CaptureFixture
     assert "Check the error message text too" in r.calls()[4]["prompt"]
     assert "The human's note at the tests gate" in r.calls()[5]["prompt"]
     assert "Check the error message text too" in r.calls()[5]["prompt"]
+    assert "--resume" not in r.calls()[5]["argv"]  # a new gate cycle: a full review
     assert "## Open questions: 1" in read(r, "out/demo/tests_gate.md")
 
     # answer: the answers go into the spec (SPEC_UPDATE), then writer + reviewer re-run; the
@@ -487,6 +497,38 @@ def test_tests_gate_auto_stops_when_not_clean(
         assert phases(r) == ["TESTS", "TEST_REVIEW", "TESTS", "TEST_REVIEW"]
     assert r.af("approve", "demo") == 0  # the human decides as in human mode
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
+
+
+def test_follow_up_review_without_its_session_is_a_full_review(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    r.add_toml(FAST)
+    r.scenario(test_review_objections=1, resume_fail=1)
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and gate(r) == "tests"
+    assert phases(r) == ["TESTS", "TEST_REVIEW", "TESTS", "TEST_REVIEW", "TEST_REVIEW"]
+    lost, full = r.calls()[3:]
+    assert "--resume" in lost["argv"] and "--resume" not in full["argv"]
+    assert "review the tests against specs/demo/ (round 2 of at most 3)" in full["prompt"]
+    reviews = [e for e in r.events() if e["kind"] == "test_review"]
+    assert [(e["verdict"], e.get("resumed")) for e in reviews] == [
+        ("OBJECTIONS", None),
+        ("OK", None),
+    ]
+    assert "session could not be continued" in read(r, "out/demo/progress.log")
+
+
+def test_follow_up_review_gets_the_test_diff(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    cfg = load_config(r.root)
+    orch = Orchestrator(cfg, get_adapter(cfg), echo=lambda s: None)
+    (r.root / "tests/test_demo.py").write_text("A = 1\n", encoding="utf-8")
+    orch.keep_reviewed_tests("demo")
+    assert orch.tests_diff("demo") == "(no test file changed)"
+    (r.root / "tests/test_demo.py").write_text("A = 2\n", encoding="utf-8")
+    (r.root / "tests/test_more.py").write_text("B = 1\n", encoding="utf-8")
+    diff = orch.tests_diff("demo")
+    assert "--- a/tests/test_demo.py" in diff and "-A = 1\n+A = 2" in diff
+    assert "+++ b/tests/test_more.py" in diff and "+B = 1" in diff
 
 
 def test_tests_gate_deferred_two_human_gates(

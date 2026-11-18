@@ -22,7 +22,12 @@ Mode: refactor
      that PASS on today's code and must pass after every step: existing tests where they
      assert it already, new characterization tests where not. Use real inputs (seeds,
      recordings); a golden value is measured from today's code ("Measured with": the command
-     and date), never worked out by hand. -->
+     and date), never worked out by hand.
+     A check function, helper or checker a criterion names: its name and module (`src/...`,
+     or the test module that holds the helper).
+     Every error message: written out in full for one concrete input, with one notation for
+     placeholders in the whole spec (repr, str, or str in literal quotes).
+     No criterion requires text in a docstring, a comment or a doc: only behaviour. -->
 | ID | Behavior (given / when / then, exact) | Measured with |
 |---|---|---|
 | XXX-R-001 | | |
@@ -88,10 +93,25 @@ None.
      file>: <what should change> (<why>)`. "None." when there is no such change. -->
 None.
 
+## Proposed doc updates
+<!-- No step of the task edits a documentation file. What a doc should say once the task is
+     done, or where the task goes another way than the documented plan, is noted here, one
+     bullet each.
+     A file under docs/ (plan, design, architecture, reference): `- <file>, <where in it>:
+     today: <what it says now, quoted or summarised> -> proposed: <the new text> (<why>)`.
+     The owner answers each at the final gate (default: later).
+     A README, CHANGELOG or handover note: `- <file>: <what changes, one brief line>`. No
+     question: applied after the final gate is approved.
+     One docs step then applies them as its own commit. "None." when no doc changes. -->
+None.
+
 ## Test data and fixtures
 <!-- One row per ID that needs particular data (a seed, a recording, a rare situation).
      Once this table pins data, every E- ID gets a row: the data that shows the case, or
-     `unit-only: <which test builds the case itself>: <why>` (`framegate spec-check`). -->
+     `unit-only: <which test builds the case itself>: <why>` (`framegate spec-check`).
+     Existing tests: name each existing test whose fixtures or assertions change as
+     `tests/<file>::<Class>` (or `::<Class>::<test>`); write `(unchanged)` after a named test
+     that stays as it is. A named test without a changed line fails the test checks. -->
 | ID | Data (seed / file / generator) | Observable that proves the situation | Zero cases allowed |
 |---|---|---|---|
 | XXX-R-001 | | | no |

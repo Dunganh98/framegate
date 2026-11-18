@@ -482,6 +482,23 @@ class PythonAdapter(LanguageAdapter):
     def test_names(self, source: bytes) -> list[str] | None:
         return python_port.test_names(source)
 
+    def test_lines(self, source: str, names: Sequence[str]) -> set[int] | None:
+        try:
+            body = ast.parse(source).body
+        except SyntaxError:
+            return None
+        node = None
+        for name in names:
+            kinds = (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+            node = next((n for n in body if isinstance(n, kinds) and n.name == name), None)
+            if node is None:
+                return set()
+            body = node.body
+        if node is None:
+            return set()
+        first = min([node.lineno, *(d.lineno for d in node.decorator_list)])
+        return set(range(first, (node.end_lineno or node.lineno) + 1))
+
     def collect_req_tags(self) -> dict[str, list[str]]:
         found: dict[str, list[str]] = {}
         for p in self._test_files():

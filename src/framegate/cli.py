@@ -404,7 +404,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return stats.run(cfg, args.feature, as_json=args.json)
         if args.command == "spec-check":
             from framegate.adapters import get_adapter
-            from framegate.checks import frame_diff, plan_files, spec_lint
+            from framegate.checks import frame_diff, spec_lint
             from framegate.orchestrator import stray_files_text
 
             adapter = get_adapter(cfg)
@@ -416,8 +416,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"- {stray_files_text(stray)}")
             # for the spec brief: the user approves these with the spec
             print("Setup files changed (committed with the spec): " + (", ".join(setup) or "none"))
-            # also for the brief: what the implementer may write beyond its source folders
-            print(plan_files.docs_line(adapter, args.feature))
             n = len(found) + (1 if stray else 0)
             print(f"Spec check: {n} problem(s)" if n else "Spec check: OK")
             return 1 if n else 0

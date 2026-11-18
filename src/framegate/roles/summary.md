@@ -30,7 +30,10 @@ step; with its own section for items outside the repository, done by hand) and "
 follow-up" (what a reference project should change because of this
 feature) in final_facts.md: framegate appends them to the summary and shows them on the brief.
 They are no gate items: never a question, a decision or a "Left out" line, and do not repeat
-them.
+them. "Proposed doc updates" likewise, except the gate items tagged `[doc update]` (a doc
+under docs/ should say something else; no doc was changed): ask each one in the brief, with
+what the doc says today and the proposed text in plain words, "A: later (default) / B: apply
+it after the approval". Never decide one yourself.
 
 ## 2. {out}/{feature}/final_brief.md (what the human reads; ~20 lines when nothing went wrong)
 

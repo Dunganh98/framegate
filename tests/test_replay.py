@@ -200,12 +200,45 @@ def test_score_runs_the_hidden_tests_on_the_result(built: Layout) -> None:
 
 def test_verdict_skipped_is_not_proven_and_a_broken_old_test_is_bad() -> None:
     skipped = score.verdict(["a", "b"], ["old"], {"a": "pass", "b": "skip", "old": "pass"})
-    missing = score.verdict(["a"], [], {})
+    missing = score.verdict(["a"], [], {"other": "pass"})
     regression = score.verdict(["a"], ["old"], {"a": "pass", "old": "fail"})
 
     assert (skipped["verdict"], skipped["skipped"]) == ("not proven", ["b"])
     assert (missing["verdict"], missing["failed"]) == ("bad", ["a"])
     assert (regression["verdict"], regression["regressions"]) == ("bad", ["old"])
+
+
+def test_a_scoring_run_without_a_result_is_score_failed_not_bad(
+    built: Layout, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    died = subprocess.CompletedProcess([], 137, "", "")  # killed: no output, no junit file
+    monkeypatch.setattr(sandbox.subprocess, "run", lambda *a, **kw: died)
+    killed = score.score(built)
+    monkeypatch.setattr(score, "run_tests", lambda *a: (_ for _ in ()).throw(OSError("no memory")))
+    unstarted = score.score(built)
+
+    assert (killed["verdict"], killed["failed"], killed["regressions"]) == ("score failed", [], [])
+    assert killed["result_tail"] == "no output (exit 137)"
+    assert (unstarted["verdict"], unstarted["result_tail"]) == (
+        "score failed",
+        "OSError: no memory",
+    )
+    assert score.verdict(["a"], ["old"], {})["verdict"] == "score failed"
+
+
+def test_a_cut_off_junit_file_is_no_result(tmp_path: pathlib.Path) -> None:
+    def half(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        xml = next(a for a in cmd if a.startswith("--junitxml=")).split("=", 1)[1]
+        pathlib.Path(xml).write_text("<testsuites><testsuite><testcase", "utf-8")
+        return subprocess.CompletedProcess(cmd, 1, "", "")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(sandbox.subprocess, "run", half)
+        found, _tail = sandbox.run_tests(
+            pathlib.Path(sys.executable), tmp_path, ["."], ["t.py"], tmp_path / "r.xml"
+        )
+
+    assert found == {}
 
 
 def test_usage_limit_wait_ends_at_the_next_event_or_now() -> None:
@@ -253,6 +286,7 @@ def test_results_table_and_collected_retros(tmp_path: pathlib.Path) -> None:
     rows = [
         scored("a"),
         {"name": "b", "kind": "feature", "status": "dropped", "note": "no test file"},
+        scored("c", verdict="score failed", passed=0, note="score failed (x): run it again"),
     ]
     (tmp_path / "runs" / "a").mkdir(parents=True)
     (tmp_path / "runs" / "a" / "retro_proposals.md").write_text("1. shorter prompts\n", "utf-8")
@@ -264,6 +298,8 @@ def test_results_table_and_collected_retros(tmp_path: pathlib.Path) -> None:
     good = "| a | bugfix | good | 2/2 | 0 | DONE | 60 min | 6.38 | 9.40 | 17.03 | 1 | 0 |  |"
     assert good in lines
     assert "| b | feature | dropped |  |  |  |  |  |  |  |  |  | no test file |" in lines
+    assert any(line.startswith("| c | bugfix | score failed |  |  | DONE |") for line in lines)
+    assert "score failed = the hidden tests did not run" in lines[-1]
     assert json.loads((tmp_path / "results.json").read_text("utf-8")) == rows
     assert (tmp_path / "retro-proposals.md").read_text("utf-8") == "# a\n\n1. shorter prompts\n"
 
@@ -372,6 +408,110 @@ def test_a_run_that_ended_before_the_task_gets_no_retro_and_the_drivers_reason(
 
     assert row["note"] == "ended at SPEC; Setup: pytest is missing"
     assert driven == ["unstarted"]
+
+
+def test_a_failed_score_is_scored_again_without_a_new_run(
+    tmp_path: pathlib.Path,
+    fake_runs: tuple[run.Options, list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opts, driven = fake_runs
+    opts.prune = True
+    lines: list[str] = []
+    opts.echo = lines.append
+    cands = candidates(tmp_path, "one")
+    failed = scored("one", verdict="score failed", passed=0, result_tail="no output (exit 137)")
+    monkeypatch.setattr(score, "score", lambda lay: failed)
+
+    (first,) = run.run_all(cands, opts)
+    monkeypatch.setattr(score, "score", lambda lay: scored(lay.name))
+    (second,) = run.run_all(cands, opts)
+
+    assert first["note"] == "score failed (no output (exit 137)): run --score-only again"
+    assert second["verdict"] == "good" and driven == ["one"]
+    # scoring again needs the environment: a failed score prunes nothing
+    assert [line for line in lines if "pruned" in line] == ["[one] pruned: 0 MB freed"]
+    assert read_json(opts.out / "runs" / "one" / "score.json")["verdict"] == "good"
+
+
+def filled(lay: Layout) -> None:
+    """A run folder as a scored run leaves it, the long path of a real .venv included."""
+    files = (
+        "driver/log.md",
+        "score.json",
+        "retro_proposals.md",
+        "score/result.xml",
+        "score/result/src/big.py",
+        "sandbox/.git/HEAD",
+        "sandbox/.git/venv/pyvenv.cfg",
+        "sandbox/out/__pycache__/kept.pyc",
+        "sandbox/specs/one.md",
+        "sandbox/.framegate/x.json",
+        "sandbox/framegate.toml",
+        "sandbox/src/calc.py",
+        "sandbox/src/venv/calc.py",  # a package of the project, not an environment
+        "sandbox/src/__pycache__/calc.pyc",
+        "sandbox/.venv/pyvenv.cfg",
+        "sandbox/.venv/" + "d" * 120 + "/" + "e" * 120 + "/x.h",
+        "sandbox/.pytest_cache/v",
+        "sandbox/web/node_modules/a/index.js",
+        "sandbox/mutants/src/calc.py",
+    )
+    prefix = "\\\\?\\" if os.name == "nt" else ""
+    for name in files:
+        path = prefix + str(lay.run / name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write("x" * 10)
+
+
+def test_prune_deletes_what_can_be_rebuilt_and_keeps_the_evidence(tmp_path: pathlib.Path) -> None:
+    lay = Layout(tmp_path, "one")
+    filled(lay)
+
+    freed = sandbox.prune(lay)
+
+    left = {p.relative_to(lay.run).as_posix() for p in lay.run.rglob("*") if p.is_file()}
+    assert left == {
+        "driver/log.md",
+        "score.json",
+        "retro_proposals.md",
+        "score/result.xml",
+        "sandbox/.git/HEAD",
+        "sandbox/.git/venv/pyvenv.cfg",
+        "sandbox/out/__pycache__/kept.pyc",
+        "sandbox/specs/one.md",
+        "sandbox/.framegate/x.json",
+        "sandbox/framegate.toml",
+        "sandbox/src/calc.py",
+        "sandbox/src/venv/calc.py",
+    }
+    assert freed == 70 and sandbox.prune(lay) == 0
+
+
+def test_prune_alone_prunes_scored_runs_and_a_pruned_run_is_not_scored_again(
+    tmp_path: pathlib.Path, fake_runs: tuple[run.Options, list[str]]
+) -> None:
+    opts, driven = fake_runs
+    lines: list[str] = []
+    opts.echo = lines.append
+    cands = candidates(tmp_path, "one")
+    (row,) = run.run_all(cands, opts)
+    lay = Layout(opts.out, "one")
+    filled(lay)
+    write_json(lay.run / "score.json", row)
+    py = lay.sandbox / ".venv" / "python"
+    py.write_text("", "utf-8")
+    write_json(lay.run / "run.json", {"state": "finished", "python": str(py)})
+
+    opts.prune = True
+    run.run_all(cands, opts)
+    opts.score_only = True
+    (again,) = run.run_all(cands, opts)
+
+    assert driven == ["one"] and not (lay.sandbox / ".venv").exists()
+    assert "[one] pruned: 0 MB freed" in lines and again == row
+    assert lines[-1].startswith("[one] cannot be scored again: the sandbox's environment is gone")
 
 
 def test_prepare_only_starts_no_driver(

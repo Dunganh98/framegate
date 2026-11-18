@@ -16,7 +16,10 @@ Feature code: XXX   <!-- 2–10 uppercase chars, prefix for all IDs, e.g. HI2 --
 | XXX-R-001 | | |
 <!-- A text output (a table, JSON, a log line): put one literal example in its acceptance
      criterion (header + one row, a JSON excerpt) that shows separator, order and indentation;
-     the tests compare against it. -->
+     the tests compare against it.
+     A check function, helper or checker a criterion names: its name and module (`src/...`,
+     or the test module that holds the helper).
+     No criterion requires text in a docstring, a comment or a doc: only behaviour. -->
 
 ## Edge cases
 <!-- empty / NaN / missing / out-of-range / unit mismatch / duplicates / ordering / timing / very large input
@@ -24,7 +27,9 @@ Feature code: XXX   <!-- 2–10 uppercase chars, prefix for all IDs, e.g. HI2 --
      EVERY output (return and out-params) on "no result"; which error wins when two inputs are bad.
      Decided by: the existing method / predicate that decides the situation (e.g.
      `World.IsLeagueClub(id)`) and when it is checked (before / after de-duplication, before any
-     work). A parser: the accepted forms (sign, leading zeros, spaces, largest value, overflow). -->
+     work). A parser: the accepted forms (sign, leading zeros, spaces, largest value, overflow).
+     Every error message: written out in full for one concrete input, with one notation for
+     placeholders in the whole spec (repr, str, or str in literal quotes). -->
 | ID | Situation | Expected behavior (exact: value, exception type + message pattern) | Decided by (method, when) |
 |---|---|---|---|
 | XXX-E-001 | | | |
@@ -123,6 +128,18 @@ None.
      port the reference should take over. "None." when there is no such change. -->
 None.
 
+## Proposed doc updates
+<!-- No step of the task edits a documentation file. What a doc should say once the task is
+     done, or where the task goes another way than the documented plan, is noted here, one
+     bullet each.
+     A file under docs/ (plan, design, architecture, reference): `- <file>, <where in it>:
+     today: <what it says now, quoted or summarised> -> proposed: <the new text> (<why>)`.
+     The owner answers each at the final gate (default: later).
+     A README, CHANGELOG or handover note: `- <file>: <what changes, one brief line>`. No
+     question: applied after the final gate is approved.
+     One docs step then applies them as its own commit. "None." when no doc changes. -->
+None.
+
 ## Green against stubs
 <!-- Every test must FAIL before the implementation ("red against stubs"). The exceptions,
      by design, are listed here, one bullet each: `- <test name or node ID>: <why it cannot
@@ -153,7 +170,10 @@ None.
      does, or in the Data cell `unit-only: <which test builds the case itself>: <why no pinned
      data is needed>`. `framegate spec-check` fails an E- ID without a row (seen live: three
      cases the only pinned match did not hold; the test writer and the test reviewer asked
-     about them five times, and one assertion never ran). -->
+     about them five times, and one assertion never ran).
+     Existing tests: name each existing test whose fixtures or assertions change as
+     `tests/<file>::<Class>` (or `::<Class>::<test>`); write `(unchanged)` after a named test
+     that stays as it is. A named test without a changed line fails the test checks. -->
 | ID | Data (seed / file / generator) | Observable that proves the situation | Measured with | Zero cases allowed |
 |---|---|---|---|---|
 | XXX-R-001 | | | | no |

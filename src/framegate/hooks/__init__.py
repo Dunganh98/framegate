@@ -20,10 +20,6 @@ from framegate.config import CONFIG_FILE
 
 #: set by the orchestrator on every `claude -p` agent run (value: the role, e.g. "implement")
 AGENT_ENV = "FRAMEGATE_AGENT"
-#: set by the orchestrator on an implementer run of plan steps: a JSON list of the
-#: documentation files the approved plan names for those steps (checks/plan_files.py). The
-#: write guard lets the implementer write exactly these beyond its source folders.
-DOCS_ENV = "FRAMEGATE_STEP_DOCS"
 
 
 def in_agent_run() -> bool:

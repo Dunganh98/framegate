@@ -149,6 +149,10 @@ def test_defaults_match_the_guide(tmp_path: pathlib.Path) -> None:
 def test_tests_gate_and_review_rounds(tmp_path: pathlib.Path) -> None:
     cfg = parse_config(tmp_path, {"gates": {"tests": "auto"}, "agents": {"test_review_rounds": 0}})
     assert cfg.tests_gate == "auto" and cfg.test_review_rounds == 0
+    assert cfg.test_check_rounds == 2
+    assert parse_config(tmp_path, {"agents": {"test_check_rounds": 0}}).test_check_rounds == 0
+    with pytest.raises(ConfigError, match="test_check_rounds must be >= 0"):
+        parse_config(tmp_path, {"agents": {"test_check_rounds": -1}})
     with pytest.raises(ConfigError, match="defer, human, auto"):
         parse_config(tmp_path, {"gates": {"tests": "skip"}})
     with pytest.raises(ConfigError, match="test_review_rounds must be >= 0"):
