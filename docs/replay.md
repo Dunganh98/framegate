@@ -79,7 +79,10 @@ A file with a mistake is refused with the line and what is wrong.
 6. **Score.** The hidden tests run on a copy of the result. A skipped hidden test is "not
    proven", not a pass. A test that passed on the parent and fails now is a regression. A run
    that ended before framegate built anything is "not run", not "bad": the Note column has the
-   stage and the driver's reason (its `outcome.txt`).
+   stage and the driver's reason (its `outcome.txt`). A scoring run without a result (pytest
+   could not start, was killed, timed out, or ran no test) is "score failed", never "bad":
+   the Note has the reason. The next run, or `--score-only`, scores that candidate again; the
+   run itself is not repeated.
 
 ## Options
 
@@ -90,9 +93,15 @@ A file with a mistake is refused with the line and what is wrong.
 | `--max-usd X`, `--max-hours H` | the caps per candidate (25, 3) |
 | `--only NAME` | this candidate only (repeatable) |
 | `--prepare-only` | build and check the sandboxes; no agent, no tokens |
-| `--score-only` | score the existing runs again |
+| `--score-only` | score the existing runs again. Not possible for a pruned run: it says so |
+| `--prune` | after a candidate is scored, delete what can be rebuilt: the sandbox's environments and tool caches and the scored copy (`score/result`). Prints the MB freed. Alone on a finished round it prunes the scored candidates without running anything |
 | `--force` | also run candidates that have a score. Without it a rerun skips them |
 | `--template` | print an empty candidates file |
+
+A pruned run keeps the evidence: `driver/`, `score.json`, `retro_proposals.md`,
+`score/result.xml` and `.log`, and the sandbox's code, git history, `out/`, `specs/`,
+`.framegate/` and `framegate.toml`. Its environment is gone, so it cannot be scored again;
+`--force` runs the candidate from the start. A candidate whose score failed is not pruned.
 
 `FRAMEGATE_REPLAY_PLUGIN=<folder>` makes the chat load the plugin from that folder (a checkout's
 `plugin/`) instead of the installed one: for measuring a version before its release.
@@ -109,5 +118,8 @@ the driver (default for both: `sonnet`).
 <out>/runs/<name>/sandbox/       the repository as the run left it
 <out>/runs/<name>/driver/        the driver's log.md, report.md and outcome.txt, every chat turn (turn-NN.json)
 <out>/runs/<name>/score.json     the row, with the names of failed and skipped tests
+<out>/runs/<name>/score/         result.xml and result.log of the hidden tests; result/ is the scored copy
 <out>/answers/<name>/            the hidden answer and the check's logs
 ```
+
+`framegate replay` exits 1 if a candidate ended in an error or its score failed.

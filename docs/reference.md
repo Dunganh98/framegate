@@ -26,7 +26,7 @@ a terminal.
 | `framegate doctor [--full] [--tree] [--brief]` | check the setup without agents; ends with a verdict and only what needs action (`--brief`: only that); `--full` also runs the whole test suite; `--tree` runs it too and says what is red on the code as it is ("The tree at setup" below) | after setup or config changes; `--tree` once per repo, in `/framegate:setup` |
 | `framegate commit-setup [--dry-run] [PATH ...]` | the files the setup wrote, in one commit of their own ("The tree at setup" below); `--dry-run` only lists them | last step of `/framegate:setup` |
 | `framegate spec <f> [--mode feature\|bugfix\|refactor]` | create the branch `feat/<f>` and open the spec phase with the mode's templates | start of a feature |
-| `framegate spec-check <f>` | mechanical checks of the spec tables and the stubs (below); lists the setup files the approval commits and the documentation files the plan makes writable; exit 1 on a problem | internal |
+| `framegate spec-check <f>` | mechanical checks of the spec tables and the stubs (below); lists the setup files the approval commits; exit 1 on a problem | internal |
 | `framegate port-stubs <f> [--force]` | a port: write the stubs of its code files from the reference (text kept, function bodies replaced; python); lists imports that will not resolve here ("References and ports") | internal (spec dialogue of a port) |
 | `framegate approve-spec <f> [--force]` | spec-check, `[env] refresh`, then freeze the spec and the setup files ("spec OK"); restarts the feature if the spec changed later | gate 1 |
 | `framegate run <f>` | run the agents until the next human gate or DONE | after every decision |
@@ -68,10 +68,11 @@ mutation score) and never stops to ask.
 | Phase | Agent(s) | Ends with |
 |---|---|---|
 | SPEC | spec dialogue in the chat (`/framegate:feature <f>`; a bug: `/framegate:bugfix <f>`; a refactor: `/framegate:refactor <f>`) | **gate 1**: the spec brief (`out/<f>/spec_brief.md`), then `framegate approve-spec` -> tag `spec-approved/<f>` |
-| TESTS | test writer -> mechanical checks -> **test reviewer** (`roles/test_review.md`); objections go back to the writer, at most `[agents] test_review_rounds` (2) times | **gate 2**: `out/<f>/tests_gate.md` (ID -> tests -> what it checks, check results, reviewer verdict + remaining objections, all open questions batched) -> approve (tag `tests-approved/<f>`) / reject / answer (answers go into the spec first: SPEC_UPDATE). `[gates] tests = "auto"` passes it without a stop when everything is clean |
+| TESTS | test writer -> mechanical checks (a failure goes back to the writer before any review, at most `[agents] test_check_rounds` (2) times) -> **test reviewer** (`roles/test_review.md`); objections and failed checks go back to the writer, at most `[agents] test_review_rounds` (2) times; a later review round continues the reviewer's session | **gate 2**: `out/<f>/tests_gate.md` (ID -> tests -> what it checks, check results, reviewer verdict + remaining objections, all open questions batched) -> approve (tag `tests-approved/<f>`) / reject / answer (answers go into the spec first: SPEC_UPDATE). `[gates] tests = "auto"` passes it without a stop when everything is clean |
 | IMPLEMENT | implementer, one fresh run per plan step | step gates green -> commit. Ambiguity: assume from the spec, log it in `steps.md`. No reasonable assumption, or `max_attempts` failed attempts: the step is **parked** (its code set aside as `out/<f>/parked/*.diff`), the run goes on |
 | REVIEW | adversarial reviewer (bugs as failing tests, structure findings without tests) -> **triage** by the test reviewer -> fixes -> structure fixes | valid findings fixed (or parked), invalid ones removed with a reason, the code restructured with every test green; final gates + structure report |
 | SUMMARY | summary agent (`roles/summary.md`): `final_summary.md` (detail), `final_brief.md` (the gate brief), the code map update (committed) | **gate 3**: the final brief -> approve (retro) / `finish --no-retro` / answer the numbered items (into the spec, then redo only those) |
+| DOCS | docs writer (`roles/docs.md`; Sonnet, 30 turns, 1.0 USD; Read, Glob, Grep, Write, Edit, MultiEdit; writes documentation files and `out/`), once after the approved final gate ("Sources and doc updates") | the doc proposals applied, commit `<f>: docs`; a failed run is reverted and never blocks the task |
 | RETRO | retro agent (reads the retro backlog; a problem seen again is counted there) | `retro_proposals.md` + metrics row -> DONE; then `framegate keep` records your pick in the backlog |
 
 ## Parts
@@ -513,6 +514,32 @@ retro ends with a "Project knowledge" section (`- K1 [<section>]: <fact>`); at D
 chat shows them and `framegate learn <f> K1 K3` (or `all`) appends the ones you pick under
 their section, commits and tags `knowledge-update/<f>` (the frame diff allows that
 change). The engine stays generic; each project's knowledge grows with its runs.
+
+## Sources and doc updates
+
+Every agent of a run gets the ranking with its role: the code is the current state; the task
+and the approved spec are the requirement; docs are context only (never a requirement, never
+tested); a comment or docstring is no source. Program output (an error message, a log line) is
+behaviour: a spec may quote it, a test may match it.
+
+No agent of the loop writes a doc; it proposes: in the spec under `## Proposed doc updates`,
+in a run as a line in `out/<f>/doc_proposals.md` (`src/framegate/doc_proposals.py`). Two
+classes:
+
+- important (`.md` / `.rst` under a `docs/` or `doc/` folder; also a line that names no
+  file): `- <file>, <where>: today: <what it says now> -> proposed: <the new text> (<why>)`.
+  Each is a final-gate question, default "later"; an answer that starts with approve / yes /
+  apply (or now / do it) approves it. Answers that concern only these start no run; the gate
+  stays open.
+- minor (README, CHANGELOG, HANDOVER outside those folders): `- <file>: <one brief line>`. No
+  question; the brief lists them under "Doc updates that will be applied after approval".
+
+After the final gate is approved and the final checks had passed (nothing parked), one docs
+step (phase `DOCS`, role `docs.md`, `[phases.DOCS]`; before the retro, or in `finish
+--no-retro`) applies the minor and the approved important proposals and commits them as
+`<f>: docs`. If the run fails, changes nothing, or changes anything but docs (`out/` aside),
+it is reverted and nothing is applied; the task finishes either way (`docs_step` event).
+`specs/<f>/doc_proposals.md` keeps every proposal marked applied or not applied.
 
 ## Product branch and state branch
 
@@ -1050,6 +1077,12 @@ Between the gates nothing stops:
   `if` / `filter()`). These are NOTEs for the test reviewer, not failures (a heuristic: most
   hits in an existing suite are fine), and every smell counts only in the test files the
   feature changed.
+- Spec-named tests changed (a test check, blocking; `checks/named_tests.py`). An existing test
+  that the spec's "Test data and fixtures" names as `tests/<file>::<Class>` or
+  `tests/<file>::<Class>::<test>` must have a changed line inside it since the spec approval;
+  one that is gone (removed or renamed) fails too. `(unchanged)` after the name: not checked.
+  A test that did not exist at the approval: not checked. Python checks the lines of the class
+  or test; other languages check that the file changed.
 - `test_checks.md` also lists "Existing members asserted" (python, dotnet; a note, never
   blocking): members that the feature's changed test files read inside an assertion, declared
   only in code that existed before the feature (declaration line outside the diff against the
@@ -1187,12 +1220,12 @@ the interactive session); `framegate unlock` clears it.
 
 Turn and cost caps per agent run: `--max-turns` = `[phases.<P>] max_turns`, else
 `[agents] max_turns`, else TESTS 50, TEST_REVIEW 30, IMPLEMENT 80, REVIEW 40, TRIAGE 30, SUMMARY 30,
-RETRO 30. A turn is one model round trip (one assistant message, however many parallel tool calls
+DOCS 30, RETRO 30. A turn is one model round trip (one assistant message, however many parallel tool calls
 it makes); the CLI's `num_turns` counts messages (prompt + every tool result) and runs about 2x
 higher, so framegate logs both (`turns` = round trips from the message stream, `messages` =
 `num_turns`; docs/claude-cli-notes.md). `--max-budget-usd` = `[phases.<P>] max_budget_usd`, else
 `[agents] max_budget_usd`, else TESTS 2.0, TEST_REVIEW 1.5, IMPLEMENT 1.5, REVIEW 1.5, TRIAGE 1.5,
-SUMMARY 1.5, RETRO 3.0 USD (~3x the live FCSim cost per run; `0` = no cap). A run that stops at
+SUMMARY 1.5, DOCS 1.0, RETRO 3.0 USD (~3x the live FCSim cost per run; `0` = no cap). A run that stops at
 either cap is logged (`max_turns` / `max_budget` event). IMPLEMENT: the step gate decides (a
 failed gate is a normal failed attempt whose feedback names the cap); other phases are re-run
 once with a note; if that run stops at a cap too, it is logged (`escalation` event with
@@ -1281,7 +1314,7 @@ Decisions on the output (e.g. "lint fails only in frozen files") read the whole 
 Models and speed:
 - `--model` per phase: `[phases.<P>] model`, else `[agents] model`, else Sonnet for the writers
   that follow the approved spec and the frozen tests (TESTS, IMPLEMENT incl. review fixes,
-  SPEC_UPDATE, SUMMARY) and Opus for the checkers and the retro (TEST_REVIEW, REVIEW, TRIAGE,
+  SPEC_UPDATE, SUMMARY, DOCS) and Opus for the checkers and the retro (TEST_REVIEW, REVIEW, TRIAGE,
   RETRO). `--effort` likewise (`effort`, default: Claude Code's). Each `agent_run` event records
   the model, so cost and failed attempts per model can be compared across features.
 - Small plans run in one implementer run: consecutive steps share a run while their spec IDs add
@@ -1369,15 +1402,9 @@ reads columns of the spec templates' tables; a spec without them is not checked:
   whole) that matches one of the frame check's forbidden patterns (`[frame]
   forbidden_patterns`, else the adapter's: `noqa`, `type: ignore`, `#pragma warning disable`,
   ...) is reported with file and line. The frame check would reject it at every step gate.
-- Files a plan step names (`checks/plan_files.py`): no check. A step may mention any file.
-  A Markdown docs file it names by its path (`README.md`, `CHANGELOG.md`, `.md` under a
-  `docs` / `doc` folder; nothing the frame protects, no tests, specs, setup, deploy / CI,
-  workflow or dot-folder file) is writable for the implementer in that step; everything
-  else outside the source folders stays read-only. `spec-check` prints `Documentation files
-  the plan makes writable (frozen with the spec): step 2: docs/guide.md`. The run reads the
-  list from plan.md at the `spec-approved/<f>` marker and hands it to the write guard
-  (`FRAMEGATE_STEP_DOCS`); the files are committed with the step and set aside with it when
-  it parks.
+- Files a plan step names (`checks/plan_files.py`): a step may mention any file. An existing
+  code file outside the source and test folders is a problem (add the folder to `[paths]
+  src`). Nothing a step names becomes writable.
 `spec-check` also prints `Setup files changed (committed with the spec): ...` and reports
 uncommitted protected files that are not setup files (`approve-spec` refuses on those even
 with `--force`).
@@ -1443,8 +1470,9 @@ in a comment on it or above it. Without a coverage tool the check is SKIPPED.
 
 Questions, assumptions, parked items and failed retries feed the retro. Every step-gate run is
 logged in `out/events.jsonl` (`gate`: phase, step, attempt, `failed` check names, trimmed
-`excerpt`, seconds), as are questions (phase, who, text), test reviews (round, verdict,
-objections), the auto tests gate (`tests_gate_auto`: passed, reasons), answers (gate, text; also
+`excerpt`, seconds), as are questions (phase, who, text), test reviews (`test_review`: round, verdict,
+objections, `resumed: true` when the round continued the reviewer's session), test checks sent
+back before a review (`test_checks`: `round`, `failed_checks`, `sent_back`), the auto tests gate (`tests_gate_auto`: passed, reasons), answers (gate, text; also
 appended to `questions_archive.md` under the questions), parked items (`parked`: step/finding,
 reason, question, failing checks, attempts, diff), redo results, review findings and their triage,
 final gates (`failed`, `skipped`, seconds per check), permission denials (`permission_denials`:
@@ -1478,7 +1506,8 @@ Two sections of retro_input.md carry no IDs:
   `progress.json` unchanged. `keep` and `learn` work on its proposals as usual.
 
 Each `agent_run` event also has `role`, `step`, `attempt`, `session` and the token counts
-(`tokens_in`, `tokens_out`, `cache_read`, `cache_write`), so cost per step and attempt can be
+(`tokens_in`, `tokens_out`, `cache_read`, `cache_write`), and `resumed` (the session id) when
+the run continued a session, so cost per step and attempt can be
 read from `out/events.jsonl`. `progress.json` is written to a temp file and moved into place;
 a line of `events.jsonl` cut short by a killed run is skipped when reading.
 
@@ -1502,9 +1531,13 @@ the hook JSON on stdin, exit 0 silently without `framegate.toml` or `.phase`, an
 2. The write protection holds for every session while a phase is set, the chat included; in the
 SPEC phase the chat may also write the setup files and `out/<f>/spec_brief.md` ("The spec phase
 covers the setup" above); a deploy / CI file (the built-in names, `[protected] extra`) is
-refused in every phase but the pipeline task's. The implementer of a plan step may also write
-the documentation files the approved plan names for that step ("Files a plan step names"
-under the spec check). A path outside the repository is blocked only for the agents of a run
+refused in every phase but the pipeline task's. A documentation file is refused in every
+phase but `DOCS` (the docs step after the final gate): the block tells the agent to add a
+line to `out/<f>/doc_proposals.md` (in the spec phase: under `## Proposed doc updates` of
+requirements.md) and carry on. A doc inside a phase's own write folders (a README in a source
+folder) is not refused; the pipeline task has its own list. In `DOCS` only documentation files
+and `out/` are writable ("Sources and doc updates"). A path outside the repository is
+blocked only for the agents of a run
 (`FRAMEGATE_AGENT` set): a chat session keeps writing its own files there (memory, scratch);
 a `[references]` folder is read-only for both. Shell calls: only plain single commands are pre-approved, so a pipe (`dotnet test ... |
 Select-String`), a `;` / `&&` / `||` chain, several lines, or a `cd` / env-variable prefix would
@@ -1521,6 +1554,18 @@ of a run are built from the same list (`Bash(python -m black *)`), so a run is n
 use a command it is denied; a run without lint rules (reviewer, triage, test reviewer,
 diagnosis) is told that the gates check them. `framegate doctor` WARNs when a
 `[phases.<P>] tools` list denies a command that phase's task names.
+
+Checks first. After the test writer, the test checks run. If one fails, the tests go back to
+the test writer with the check output and no test reviewer starts (event `test_checks`).
+After `[agents] test_check_rounds` send-backs, or when the checks fail exactly as before, the
+reviewer runs and the failure goes on as below.
+
+Follow-up review. Round 1 of the test review is a new agent that reads the spec and all
+tests. A later round of the same gate cycle continues that agent's session: it gets its
+objections, the diff of the test files since its review and the check results, and judges
+whether each objection is resolved and whether the change broke anything else. Without a
+session, or if the continued run writes no `test_review.md`, a new agent reviews in full.
+After a reject or an answer at the tests gate the review is full again.
 
 Test writer <-> test reviewer rounds: failed test checks or objections send the tests back,
 at most `[agents] test_review_rounds` times. A check that fails exactly as in the round
@@ -1545,7 +1590,9 @@ python`: `--req` in its `pytest --help`).
 
 Configuration: `framegate.toml` (all keys optional; see the commented template written by
 `init`). `[agents] claude` or env `FRAMEGATE_CLAUDE` selects the claude executable;
-`[agents] test_review_rounds` (2) bounds the writer <-> reviewer loop; `[gates] tests = "human"`
+`[agents] test_review_rounds` (2) bounds the writer <-> reviewer loop; `[agents]
+test_check_rounds = 2`: how often failed test checks go back to the test writer before the
+test reviewer runs (per gate cycle), 0 = the reviewer always runs; `[gates] tests = "human"`
 (default) or `"auto"` (no stop when all checks pass, the reviewer has no objections and no
 question is open; otherwise it stops as in human mode).
 

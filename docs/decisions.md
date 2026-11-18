@@ -29,3 +29,6 @@ Standing decisions of the user, one line each. Details: docs/AGENTIC_WORKFLOW_SE
 25. Code is the truth, docs are the plan, comments are no evidence; agents write few comments (2026-11-18).
 26. Setup maps the folders with an agent (`framegate survey`), checked mechanically: every code file accounted for (2026-11-18).
 27. A listed test that fails on this machine is not run here again; the summary offers a follow-up task, default skip (2026-11-18).
+28. Sources by rank: code = what exists, the task = the requirement, docs = context only, comments = no source; program output is behaviour and may be specified and tested (2026-11-18). Replaces 25.
+29. No agent of the loop writes a doc. Proposals: docs/ files are final-gate questions (default: later), README / CHANGELOG / handover lines are applied without a question (2026-11-18).
+30. One docs step after the approved final gate applies them as its own commit; a failed step is reverted and never blocks the task (2026-11-18).
