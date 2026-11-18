@@ -4,7 +4,8 @@ scope step   fast checks after each implementation step (tests of current + earl
              with [gates] step_tests = "suite" the whole everyday suite too)
 scope fix    the same checks for a run after the review (review fixes, structure fixes, final
              repair) with the feature's tests and the review tests only: the final gates run
-             the whole suite right after
+             the whole suite right after; with a cover base (structure fixes) also coverage
+             and diff coverage of the lines changed since that commit
 scope idle   a plan step whose run changed nothing since the last green step gate (same
              commit, clean tree): only the step's tests; the rest is that gate's result
              (the orchestrator picks it, never a refactor: an idle refactor step fails)
@@ -25,6 +26,7 @@ failures, and skips coverage, diff coverage and mutation until the redo.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import json
 import re
@@ -32,7 +34,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from framegate import red_tree, references, suite_run, task_base, unrunnable
+from framegate import procs, red_tree, references, suite_run, task_base, unrunnable
 from framegate.adapters.base import (
     NOT_MEASURED,
     Check,
@@ -294,7 +296,7 @@ def _skipped(reason: str) -> Callable[[], CheckResult]:
 STEP_SUITE = "other tests (whole suite; this feature's later steps left out)"
 
 
-def _name_parts(name: str) -> list[str]:
+def name_parts(name: str) -> list[str]:
     """`tests.test_x.TestA::test_b[1]` / `Ns.Class.Method(x: 1)` -> their name parts."""
     head = re.split(r"[(\[]", name, maxsplit=1)[0]
     return [p for p in re.split(r"[.:/\\]+", head) if p]
@@ -316,10 +318,10 @@ def is_test_at(case_name: str, places: list[str]) -> bool:
     """Is the test case (a name from the test report) one of `places` (`file::Class.name`)?
     The name must match, and so must its file or its class: a test of another feature with
     the same method name is not left out."""
-    parts = _name_parts(case_name)
+    parts = name_parts(case_name)
     for where in places:
         file, _, tail = where.rpartition("::")
-        names = _name_parts(tail)
+        names = name_parts(tail)
         if not names or names[-1] not in parts:
             continue
         stem = file.replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0]
@@ -477,6 +479,7 @@ def checks(
     scope: str,
     skip_mutation: bool,
     exp: ExpectedRed | None = None,
+    cover_base: str | None = None,
 ) -> list[Check]:
     tag = frame_diff.approved_tag(feature)
     # an idle step (scope "idle"): the code is the one the last green gate checked, so only
@@ -509,6 +512,9 @@ def checks(
             c.append(
                 Check(STEP_SUITE, lambda: step_suite(adapter, feature, reqs), needs_green=True)
             )
+        if scope == "fix" and cover_base:
+            # structure fixes: the lines they wrote must be reached as at the final gate
+            c += adapter.coverage_checks(cover_base, final_scopes(adapter, feature)[0])
     else:
         cov, mut = final_scopes(adapter, feature)
         waiting = exp or ExpectedRed()
@@ -629,10 +635,24 @@ def gate_report(
     scope: str = "final",
     skip_mutation: bool = False,
     echo: Callable[[str], None] | None = None,
+    *,
+    phase: str = "",
+    progress: Callable[[str], None] | None = None,
+    cover_base: str | None = None,
 ) -> GateReport:
-    """Run all checks of the scope and return the detailed result."""
+    """Run all checks of the scope and return the detailed result. Each check is logged
+    (`check` event: seconds, status); one that runs longer than a minute says so through
+    `progress` every minute. `cover_base`: a fix scope also runs coverage and diff coverage
+    against that commit."""
     adapter.cfg.out_dir.mkdir(parents=True, exist_ok=True)
     lines: list[str] = []
+    where = phase or scope
+
+    def waiting(name: str) -> contextlib.AbstractContextManager[None]:
+        tell = progress
+        if tell is None:
+            return contextlib.nullcontext()
+        return procs.heartbeat(lambda n: tell(f"[{where}] still running {name} ({n} s)"))
 
     def emit(text: str) -> None:
         lines.append(text)
@@ -669,30 +689,42 @@ def gate_report(
         emit("")
     if scope == "idle":
         emit(IDLE_NOTE)
+        adapter.format_beyond = {}
     try:
-        note = "" if scope == "idle" else adapter.format_fix(frame_diff.approved_tag(feature))
+        with waiting("format fix"):
+            note = "" if scope == "idle" else adapter.format_fix(frame_diff.approved_tag(feature))
     except Exception as e:  # the checks below still report the formatting
         note = f"skipped ({type(e).__name__}: {e})"
     if note:
         emit(f"Format fix: {note}")
     if scope != "idle" and getattr(adapter, "format_beyond", None):
         log_event(adapter.cfg, feature, "format_debt", files=adapter.format_beyond)
-    for check in checks(adapter, feature, scope, skip_mutation, exp):
+    for check in checks(adapter, feature, scope, skip_mutation, exp, cover_base):
         t0 = time.monotonic()
         blockers = red_blockers(failed) if check.needs_green else []
         try:
-            res = (
-                CheckResult(
+            if blockers:
+                res = CheckResult(
                     "SKIPPED",
                     f"SKIPPED: not run, {', '.join(blockers)} failed first (it needs a green "
                     "build and green tests; it runs once they pass)",
                 )
-                if blockers
-                else check.run()
-            )
+            else:
+                with waiting(check.name):
+                    res = check.run()
         except Exception as e:  # a crashing check must fail the gate, not the runner
             res = CheckResult("FAIL", f"check crashed: {type(e).__name__}: {e}")
         durations[check.name] = round(time.monotonic() - t0, 1)
+        log_event(
+            adapter.cfg,
+            feature,
+            "check",
+            name=check.name,
+            phase=where,
+            scope=scope,
+            seconds=durations[check.name],
+            status=res.status,
+        )
         if res.status == "FAIL" and res.tool_failure:
             # no result is no verdict: NOT MEASURED, and the final gate asks about it
             tool_failures.append(check.name)
@@ -754,7 +786,7 @@ def gate_report(
         if feature
         else {}
     )
-    extra = run_extra_checks(adapter, feature, emit, durations) if scope == "final" else {}
+    extra = run_extra_checks(adapter, feature, emit, durations, waiting) if scope == "final" else {}
     return GateReport(
         not failed,
         "\n".join(lines),
@@ -828,6 +860,7 @@ def run_extra_checks(
     feature: str,
     emit: Callable[[str], None],
     durations: dict[str, float],
+    waiting: Callable[[str], contextlib.AbstractContextManager[None]] | None = None,
 ) -> dict[str, int]:
     """[gates.extra]: the project's own checks (e.g. a balance measurement), after the gates.
     Reported with their exit code and output tail, full output in {out}/{f}/extra_<name>.log;
@@ -839,12 +872,13 @@ def run_extra_checks(
     codes: dict[str, int] = {}
     for name, cmd in cfg.extra_checks.items():
         t0 = time.monotonic()
-        code, out = run_command(
-            adapter.resolve_command(cmd),
-            cfg.root,
-            env=adapter.tool_env(),
-            timeout=cfg.extra_timeout,
-        )
+        with waiting(name) if waiting else contextlib.nullcontext():
+            code, out = run_command(
+                adapter.resolve_command(cmd),
+                cfg.root,
+                env=adapter.tool_env(),
+                timeout=cfg.extra_timeout,
+            )
         durations[f"extra: {name}"] = round(time.monotonic() - t0, 1)
         codes[name] = code
         log = cfg.feature_out(feature) / f"extra_{name}.log"

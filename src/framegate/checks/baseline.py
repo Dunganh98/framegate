@@ -170,3 +170,21 @@ def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
     if not ids:
         return CheckResult("FAIL", f"No spec IDs found in {cfg.paths.specs}/{feature}/")
     return bugfix(adapter, feature, ids) if mode == "bugfix" else refactor(adapter, feature, ids)
+
+
+#: a test that passes before the code: green by design, or a weak test (only the owner can say)
+_PASSES = re.compile(r"^(?:PASSES AGAINST STUB|PASSES TODAY)\b[^:]*:\s+(\S+)")
+#: any other problem line of the check (ERROR, SKIPPED, FAILS ..., LISTED ..., no report)
+_OTHER = re.compile(r"^(?!NOTE\b)[A-Z]{4,}\b|produced no report|^No \w+ test ran")
+
+
+def green_only(output: str) -> list[str]:
+    """The function names of the tests this check failed for passing before the code, when
+    nothing else failed it; [] otherwise."""
+    names: list[str] = []
+    for line in output.splitlines():
+        if m := _PASSES.match(line):
+            names.append(red_stubs._parts(m.group(1))[-1])
+        elif _OTHER.search(line):
+            return []
+    return names

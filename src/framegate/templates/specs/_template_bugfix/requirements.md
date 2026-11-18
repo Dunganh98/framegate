@@ -24,7 +24,10 @@ Mode: bugfix
 ## Must not change
 <!-- Behavior next to the bug that a fix could break: the neighbouring cases, the other callers
      of the same code, saved data, hashes. Each row gets a test that PASSES today and after the
-     fix. A case of the corrected behavior that already works today belongs here too. -->
+     fix. A case of the corrected behavior that already works today belongs here too, and
+     so does every case that is green before the fix by design: an accepted input, an
+     existing error or behaviour that wins, a must-stay-true case (never an R row: an R
+     test must fail today). -->
 | ID | Behavior to keep (given / when / then, exact) |
 |---|---|
 | XXX-I-001 | |
@@ -93,7 +96,9 @@ None.
      bullet each.
      A file under docs/ (plan, design, architecture, reference): `- <file>, <where in it>:
      today: <what it says now, quoted or summarised> -> proposed: <the new text> (<why>)`.
-     The owner answers each at the final gate (default: later).
+     The owner answers each at the final gate (default: later). Where the task's code now
+     contradicts what it says: `... today: <what it says now, quoted> -> code now: <what the
+     code does instead>`; the owner approves the code (the doc now or later) or rejects it.
      A README, CHANGELOG or handover note: `- <file>: <what changes, one brief line>`. No
      question: applied after the final gate is approved.
      One docs step then applies them as its own commit. "None." when no doc changes. -->

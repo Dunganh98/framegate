@@ -30,7 +30,9 @@ Rules:
   and nothing else. framegate checks it and puts it in place; it refuses a change that weakens
   a check (a lower threshold, something left out, a check switched off).
 - An answer to a `[doc update]` question (apply a proposed doc update, or later) is not a
-  spec change: framegate applies it after the final gate.
+  spec change: framegate applies it after the final gate. Except "C: reject the code" to a
+  doc the code contradicts: the owner's solution in that answer is a spec change like any
+  other (the code then follows the spec, and the doc stays as it is).
 - An answer about code structure (a file to split, where a class belongs) is not a spec change
   unless it settles a design decision the spec names; framegate hands it to the implementer.
 - An answer that only says "default" / "take the default" means the default the question

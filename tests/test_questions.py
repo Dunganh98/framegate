@@ -4,11 +4,13 @@ question as it was asked (the chat rewords it). Both from the M5-moment-scan ret
 from __future__ import annotations
 
 from conftest import DemoRepo
+from framegate import answered
 from framegate.adapters import get_adapter
-from framegate.checks import check_signature
+from framegate.checks import baseline, check_signature
 from framegate.config import load_config
 from framegate.orchestrator import EXIT_GATE, Orchestrator
 from framegate.retro import match_answer, same_question
+from framegate.state import log_event
 
 FAST = "[gates.commands]\nlint = []\nformat = []\ntypecheck = []\n"
 
@@ -227,4 +229,78 @@ def test_answer_items_keep_the_question_as_asked(demo_repo: DemoRepo) -> None:
     assert item["asked"] == "[test writer] [TESTS] Should add() accept floats?"
     assert match_answer("[TESTS] Should add() accept floats?", answer["items"]) == (
         "No, whole numbers only."
+    )
+
+
+SPLIT = "Split src/demo/state.py by concept."
+
+
+def test_an_answered_question_is_not_asked_again(demo_repo: DemoRepo) -> None:
+    """Seen live: the owner answered "split state.py: later" at the first final gate; the
+    reviewer proposed the split again and it was asked at the second."""
+    r = demo_repo
+    cfg = load_config(r.root)
+    orch = Orchestrator(cfg, get_adapter(cfg), echo=lambda s: None)
+    orch.ask_split_later("demo", {SPLIT: ("src/demo/state.py", 500)})
+    orch.ask_split_later(
+        "demo", {"Move the parser out of src/demo/state.py.": ("src/demo/state.py", 500)}
+    )
+    (asked,) = orch.open_questions("demo")
+    log_event(cfg, "demo", "answer", items=[{"n": 1, "asked": asked, "a": "Same as item 2: later"}])
+    log_event(cfg, "demo", "answer", items=[{"n": 1, "asked": f"[test writer] {Q2}", "a": "A"}])
+    (r.root / "out/demo/open_questions.md").unlink()
+
+    orch.ask_split_later("demo", {SPLIT: ("src/demo/state.py", 510)})
+    (r.root / "out/demo/questions.md").write_text(f"- {Q2}\n- {Q1}\n", encoding="utf-8")
+    assert orch.collect_questions("demo", "REVIEW", "adversarial reviewer") == 1
+    assert [q[:26] for q in orch.open_questions("demo")] == ["[adversarial reviewer] Q1:"]
+    events = r.events()
+    assert [e["who"] for e in events if e["kind"] == "asked_again"] == [
+        "the reviewer",
+        "adversarial reviewer",
+    ]
+    lines = answered.lines(events)
+    assert lines[0].startswith("- src/demo/state.py had 510 lines") and lines[0].endswith(
+        ": proposed again by the reviewer; your answer 'later' stands"
+    )
+    assert lines[1].endswith("proposed again by adversarial reviewer; your answer 'A' stands")
+    assert answered.section(events)[0] == "## Answered before: 2"
+    log_event(cfg, "demo", "answer", items=[])
+    assert answered.section(r.events()) == []  # shown at the gate they were asked again for
+
+
+GREEN_ASKED = (
+    "test_reference_constant passes against the stubs: the existing code already accepts the "
+    "input. List it under Green against stubs (default) or drop it?"
+)
+
+
+def test_a_green_test_the_writer_asked_about_is_not_sent_back(demo_repo: DemoRepo) -> None:
+    """Seen live: an accepted input and an existing error that wins pass against the stubs;
+    only the owner can decide, and the writer was sent back twice and asked twice."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.defer_tests_gate()
+    r.scenario(green_test=True, test_question=[GREEN_ASKED])
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE
+    assert [c["phase"] for c in r.calls()][:3] == ["TESTS", "TEST_REVIEW", "IMPLEMENT"]
+    assert not [e for e in r.events() if e["kind"] == "test_checks"]
+    reviews = [e for e in r.events() if e["kind"] == "test_review"]
+    assert [(e["sent_back"], e["failed_checks"]) for e in reviews] == [(False, [])]
+    log = (r.root / "out/demo/progress.log").read_text(encoding="utf-8")
+    assert "Red against stubs: every test that passes before the code is a question" in log
+    deferred = [e for e in r.events() if e["kind"] == "tests_gate_deferred"]
+    assert "failed checks: Red against stubs" in deferred[0]["reasons"]
+
+
+def test_green_only() -> None:
+    head = "3 tests for feature f.\npasses by design (listed): t::x — scan\nNOTE: the spec lists y"
+    assert baseline.green_only(f"{head}\nPASSES AGAINST STUB (weak or wrong test): t.py::C::a[1]")
+    assert baseline.green_only("PASSES TODAY (does not show the bug): tests.t.b") == ["b"]
+    assert baseline.green_only(f"{head}\nPASSES AGAINST STUB (weak): t::a\nERROR (x): t::b") == []
+    assert baseline.green_only("No reproduction test ran.") == []
+    assert (
+        baseline.green_only("PASSES TODAY: t::a\nThe must-not-change tests produced no report")
+        == []
     )

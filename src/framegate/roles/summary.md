@@ -32,8 +32,12 @@ feature) in final_facts.md: framegate appends them to the summary and shows them
 They are no gate items: never a question, a decision or a "Left out" line, and do not repeat
 them. "Proposed doc updates" likewise, except the gate items tagged `[doc update]` (a doc
 under docs/ should say something else; no doc was changed): ask each one in the brief, with
-what the doc says today and the proposed text in plain words, "A: later (default) / B: apply
-it after the approval". Never decide one yourself.
+what the doc says today and the proposed text in plain words, "A: apply it after the task
+(the docs step) / B: later (default)", these letters. One whose item says what the code now does (the task's code
+contradicts the doc): what the doc says, what the code does, and the item's options "A:
+approve the code; the docs step updates the doc / B: approve the code; leave the doc (later)
+(default) / C: reject the code: write your solution". Never decide one yourself. "Answered
+before" (questions the owner answered earlier in the task, proposed again): no gate item.
 
 ## 2. {out}/{feature}/final_brief.md (what the human reads; ~20 lines when nothing went wrong)
 

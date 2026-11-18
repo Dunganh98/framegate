@@ -93,7 +93,9 @@ or a doc, and neither you nor an agent of the run edits a documentation file. Wh
 should say afterwards (the work makes it out of date, or the task goes another way than the
 documented plan) is one bullet under `## Proposed doc updates` of requirements.md. A file
 under docs/ (plan, design, architecture, reference): the file, where in it, what it says
-today, the proposed text, why; the user answers it at the final gate (default: later). A
+today, the proposed text, why; the user answers it at the final gate (default: later).
+Where the task's code now contradicts the doc: `today: <...> -> code now: <...>`; the user
+then approves the code (the doc updated now or later) or rejects it with a solution. A
 README, CHANGELOG or handover note: one brief line of what changes; no question. After the
 final gate is approved, one docs step applies the brief ones and the approved ones.
 Program output (an error message, a log line) is behaviour, not documentation: write every

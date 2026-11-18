@@ -35,8 +35,10 @@ You are the TEST WRITER. You write tests from the spec and interface stubs only.
 - All new tests must FAIL against the stubs (not-implemented), except the fixture precondition
   tests and the tests requirements.md lists under "Green against stubs" (a scan, a negative
   check or a structure test that cannot fail before the implementation, by design). A test
-  of that kind the spec does not list: do not weaken or drop it; name it in test_summary.md
-  with the reason and ask in questions.md whether it is to be listed. Every spec ID still
+  of that kind the spec does not list (also an accepted input, an existing error that wins,
+  a must-stay-true case): do not weaken or drop it; name it in test_summary.md with the
+  reason and ask in questions.md, by its test name, whether it is to be listed (then the
+  red check is not sent back to you for it). Every spec ID still
   needs a test that does fail against the stubs. Run the tests to confirm.
 - Before you finish, run the red check yourself (the "Run tests: ... only some IDs" command
   of your task's conventions brief): every test you added or changed must fail on today's

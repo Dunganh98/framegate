@@ -99,7 +99,9 @@ None.
      bullet each.
      A file under docs/ (plan, design, architecture, reference): `- <file>, <where in it>:
      today: <what it says now, quoted or summarised> -> proposed: <the new text> (<why>)`.
-     The owner answers each at the final gate (default: later).
+     The owner answers each at the final gate (default: later). Where the task's code now
+     contradicts what it says: `... today: <what it says now, quoted> -> code now: <what the
+     code does instead>`; the owner approves the code (the doc now or later) or rejects it.
      A README, CHANGELOG or handover note: `- <file>: <what changes, one brief line>`. No
      question: applied after the final gate is approved.
      One docs step then applies them as its own commit. "None." when no doc changes. -->

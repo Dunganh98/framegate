@@ -91,7 +91,9 @@ or a doc, and neither you nor an agent of the run edits a documentation file. Wh
 should say afterwards (the work makes it out of date, or the task goes another way than the
 documented plan) is one bullet under `## Proposed doc updates` of requirements.md. A file
 under docs/ (plan, design, architecture, reference): the file, where in it, what it says
-today, the proposed text, why; the user answers it at the final gate (default: later). A
+today, the proposed text, why; the user answers it at the final gate (default: later).
+Where the task's code now contradicts the doc: `today: <...> -> code now: <...>`; the user
+then approves the code (the doc updated now or later) or rejects it with a solution. A
 README, CHANGELOG or handover note: one brief line of what changes; no question. After the
 final gate is approved, one docs step applies the brief ones and the approved ones.
 Program output (an error message, a log line) is behaviour, not documentation: write every
@@ -108,7 +110,9 @@ whole spec (repr, str, or str in literal quotes); the tests match the whole mess
    - Expected result: where it follows from (the user's words, an approved spec, a rule in
      the code). A doc alone does not say what is right: then it is a question for the user.
    - Must not change: the cases next to the bug that are right today and that a fix could
-     break (other inputs, other callers of the same code, saved data, hashes, goldens).
+     break (other inputs, other callers of the same code, saved data, hashes, goldens), and
+     every case green before the fix by design (an accepted input, an existing error or
+     behaviour that wins, a must-stay-true case): I rows, never R rows.
    - Suspected causes: at least two, each with where to look (file: method). You only list
      them; the implementer confirms one and rules out the others.
    - Existing data: every field the report names resolved to its exact member, with the line

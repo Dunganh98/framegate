@@ -28,6 +28,8 @@ Feature code: XXX   <!-- 2–10 uppercase chars, prefix for all IDs, e.g. HI2 --
      Decided by: the existing method / predicate that decides the situation (e.g.
      `World.IsLeagueClub(id)`) and when it is checked (before / after de-duplication, before any
      work). A parser: the accepted forms (sign, leading zeros, spaces, largest value, overflow).
+     A wrong-type input: one example per kind (a number, None, an unhashable value such as a
+     list) and its place in the error order.
      Every error message: written out in full for one concrete input, with one notation for
      placeholders in the whole spec (repr, str, or str in literal quotes). -->
 | ID | Situation | Expected behavior (exact: value, exception type + message pattern) | Decided by (method, when) |
@@ -134,7 +136,9 @@ None.
      bullet each.
      A file under docs/ (plan, design, architecture, reference): `- <file>, <where in it>:
      today: <what it says now, quoted or summarised> -> proposed: <the new text> (<why>)`.
-     The owner answers each at the final gate (default: later).
+     The owner answers each at the final gate (default: later). Where the task's code now
+     contradicts what it says: `... today: <what it says now, quoted> -> code now: <what the
+     code does instead>`; the owner approves the code (the doc now or later) or rejects it.
      A README, CHANGELOG or handover note: `- <file>: <what changes, one brief line>`. No
      question: applied after the final gate is approved.
      One docs step then applies them as its own commit. "None." when no doc changes. -->
@@ -144,8 +148,10 @@ None.
 <!-- Every test must FAIL before the implementation ("red against stubs"). The exceptions,
      by design, are listed here, one bullet each: `- <test name or node ID>: <why it cannot
      fail before the implementation>`. Typical: a scan or negative check ("no analytic name
-     appears in the code", "X is not imported"), a structure test; in a port, a carried-over
-     test of that kind (the test writer may not change it). Only the listed tests may pass
+     appears in the code", "X is not imported"), a structure test; an accepted input the
+     existing code already accepts ("an empty key is legal"); an existing error or behaviour
+     that wins ("the existing duplicate-column error wins"); in a port, a carried-over test
+     of that kind (the test writer may not change it). Only the listed tests may pass
      the check; a listed test that fails there is a failure. Every spec ID such a test is
      tagged with needs another test that does fail against the stubs (checked). "None."
      for the usual feature. -->

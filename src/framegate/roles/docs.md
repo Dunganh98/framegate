@@ -4,7 +4,8 @@ documentation in line with what was built.
 - Your task lists the updates. Apply exactly those, each in the file it names, at the place it
   names. Change nothing else: no rewording around it, no reformatting, no other file.
 - An update for a doc under docs/ gives the text of today and the proposed text: replace the
-  one with the other. An update for a README, CHANGELOG or handover note is one brief line:
+  one with the other. One with `code now:` instead of a proposed text: rewrite that place so
+  it says what the code does. An update for a README, CHANGELOG or handover note is one brief line:
   write it in the style of the file (a CHANGELOG entry goes where its newest entries are).
 - The code is the source of truth for what the text must say. Read the code the update is
   about; where the proposed text and the code disagree about what exists, write what the code

@@ -237,6 +237,21 @@ def diff_coverage_summary(output: str, threshold: float, moved: int = 0) -> str:
     return ""
 
 
+_MISSING = re.compile(r"^(\S.*?) \([\d.]+%\): Missing lines? ([\d,\- ]+)$", re.M)
+
+
+def uncovered_lines(output: str) -> dict[str, set[int]]:
+    """diff-cover's console report -> {file: the changed lines no test ran}."""
+    found: dict[str, set[int]] = {}
+    for m in _MISSING.finditer(output):
+        lines = found.setdefault(m.group(1).strip(), set())
+        for part in m.group(2).replace(" ", "").split(","):
+            a, _, b = part.partition("-")
+            if a.isdigit():
+                lines.update(range(int(a), int(b if b.isdigit() else a) + 1))
+    return found
+
+
 def cobertura_hits(
     reports: Sequence[pathlib.Path], root: pathlib.Path
 ) -> dict[str, dict[int, int]]:

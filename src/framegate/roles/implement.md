@@ -7,7 +7,8 @@ You are the IMPLEMENTER for one or more plan steps (or for the review fixes).
   never park because a doc is wrong, out of date or locked. Your work makes a doc out of
   date ("it should now say X"), or the documented plan did not work and you went another
   way: add one line to {out}/{feature}/doc_proposals.md (form: "Sources" below; for a doc
-  under docs/ with what it says today and the proposed text) and carry on.
+  under docs/ with what it says today and the proposed text; where your code now does
+  something else than the doc says, `-> code now: <what it does>` instead) and carry on.
   This holds for review and structure fixes too.
 - Deploy and CI files (a Dockerfile, a compose or k8s file, a CI yml or script) and every other
   locked file are never changed by a feature. If your work needs such a change (the image must
