@@ -1,6 +1,6 @@
 # <Feature name> — Requirements
 
-Feature code: XXX   <!-- 2–10 uppercase chars, prefix for all IDs, e.g. HI2 -->
+Feature code: XXX   <!-- 2–10 uppercase chars, prefix for all IDs, e.g. ABC -->
 Resolves:   <!-- optional: the deferred work this task does, e.g. D7, D9 (framegate deferred) -->
 
 ## Context
@@ -15,32 +15,20 @@ Resolves:   <!-- optional: the deferred work this task does, e.g. D7, D9 (frameg
 | ID | Requirement | Acceptance criterion (testable: given / when / then) |
 |---|---|---|
 | XXX-R-001 | | |
-<!-- A text output (a table, JSON, a log line): put one literal example in its acceptance
-     criterion (header + one row, a JSON excerpt) that shows separator, order and indentation;
-     the tests compare against it.
-     A check function, helper or checker a criterion names: its name and module (`src/...`,
-     or the test module that holds the helper).
-     No criterion requires text in a docstring, a comment or a doc: only behaviour
-     (`framegate spec-check` fails such a row).
-     A requirement that widens what an input may be (aware as well as naive datetimes, a new
-     type, a new range): list every place the function uses that input; the tests reach each
-     with the new kind (seen live: the tests faked an empty frame, so the new input never
-     reached the row filter that crashed on it). -->
+<!-- A text output: one literal example in its criterion; the tests compare against it.
+     A check function or helper a criterion names: its name and module.
+     Only behaviour: no criterion requires text in a docstring, a comment or a doc.
+     A requirement that widens what an input may be (a new type, a new range): list every
+     place the code uses that input; the tests reach each one with the new kind. -->
 
 ## Edge cases
-<!-- empty / NaN / missing / out-of-range / unit mismatch / duplicates / ordering / timing / very large input
-     Every new function: does it clamp / validate its own inputs (or rely on the caller); the value of
-     EVERY output (return and out-params) on "no result"; which error wins when two inputs are bad.
-     Decided by: the existing method / predicate that decides the situation (e.g.
-     `World.IsLeagueClub(id)`) and when it is checked (before / after de-duplication, before any
-     work). A parser: the accepted forms (sign, leading zeros, spaces, largest value, overflow).
-     A wrong-type input: the rule by type first ("anything that is not exactly a `str` is
-     refused"; does a subclass count?), checked before any lookup, and its place in the error
-     order; then one example per kind (a number, None, an unhashable value such as a list).
-     Seen live: examples only, and the reviewer found three look-alikes in two rounds (an
-     unhashable object equal to a valid name, a numpy array, an unhashable str subclass).
-     Every error message: written out in full for one concrete input, with one notation for
-     placeholders in the whole spec (repr, str, or str in literal quotes). -->
+<!-- empty / missing / out-of-range / duplicates / ordering / timing / very large input.
+     Every new function: does it validate its own inputs; the value of every output on "no
+     result"; which error wins when two inputs are bad. A parser: the accepted forms.
+     Decided by: the existing method that decides the situation, and when it is checked.
+     A wrong-type input: the rule by type first ("anything that is not exactly an X is
+     refused"; does a subclass count?), its place in the error order, then one example per kind.
+     Every error message: in full for one input, one notation for placeholders in the spec. -->
 | ID | Situation | Expected behavior (exact: value, exception type + message pattern) | Decided by (method, when) |
 |---|---|---|---|
 | XXX-E-001 | | | |
@@ -52,56 +40,39 @@ Resolves:   <!-- optional: the deferred work this task does, e.g. D7, D9 (frameg
 
 ## Overlaps and sources of truth
 <!-- Every pair of IDs that can apply to the same input: which one wins. Every value that must
-     equal another (a copy, a derived value): its source, and whether the source can change
-     later (then: equal at which moment?). "None" only if no two IDs overlap. -->
+     equal another (a copy, a derived value): its source, and at which moment they are equal. -->
 | IDs / value | Shared situation | Rule that wins / source and moment of equality |
 |---|---|---|
 | XXX-R-001 vs XXX-E-001 | | |
 
 ## Existing data this spec reads
-<!-- Every existing field / flag / event a requirement names in words ("his goal", "the moment's
-     goal event"): the exact member and where it is set. Tests read these members, not look-alikes
-     (seen live: "the moment's goal event" was read as a flag with another meaning). "None" only if
-     the requirements name no existing data.
-     Assigned as: the line of code that sets the member, copied in backticks (e.g.
-     `Player = shooter.Index`), so an id-vs-index or raw-vs-clamped mix-up shows now (seen live: a
-     "player" field held the index in the match, not the player id). `framegate spec-check`
-     looks for it in the file "Set where" names. `n/a: <why>` when no code assigns it. -->
+<!-- Every existing field / flag / event a requirement names in words: the exact member and
+     where it is set. Assigned as: the line of code that sets it, copied in backticks
+     (`framegate spec-check` looks for it in the file "Set where" names); `n/a: <why>` when no
+     code assigns it. "None" only if the requirements name no existing data. -->
 | Words in the spec | Exact member / event | Set where (file: method) | Assigned as (code, copied) |
 |---|---|---|---|
 | | | | |
 
 ## References
-<!-- Other projects on this machine that the agents read for this task (never write): only
-     names declared in framegate.toml `[references]` (`framegate spec-brief` lists them). Only
-     the ones listed here are given to the agents; `framegate approve-spec` pins each one's
-     commit, and a run warns when it moved. "None." when the task needs none. -->
+<!-- Other projects the agents read for this task (never write): only names declared in
+     framegate.toml `[references]`, pinned at their commit by the approval. "None." if none. -->
 | Name | Files / folders that matter | What for |
 |---|---|---|
 | | | |
 
 ## Ported from
-<!-- Only when this feature copies code of a reference ("file for file, same names"); else
-     "None." and nothing below. Then the tests are the reference's tests, carried over, and the
-     code is the reference's code, changed only as "What may differ" says; every step gate and
-     the final gate show how far each target file is from its source (not blocking).
-     Reference: its name in `[references]`. Commit: the commit you read (spec-brief shows it).
-     One row per file, with paths relative to the reference's folder / to this repository;
-     Kind `tests` = a test file of the reference to carry over, `code` = everything else.
-     The stubs of the `code` rows are not written by hand: `framegate port-stubs <feature>`
-     writes each target as the reference's text with the function bodies replaced.
-     What may differ: every allowed deviation, one bullet each (import names, things only this
-     repository has, things left out). A difference that is not listed is a review finding.
-     Ticket / plan / ADR numbers and repository names inside the reference's docstrings and
-     comments stay the reference's, word for word (they say where the code comes from, and
-     every reworded line is a difference to explain); list a bullet here only where this
-     repository must not carry one.
-     Kept quirks: behaviours of the reference the port keeps on purpose although a stricter
-     reading of this spec would forbid them (a regex `$` that accepts a trailing newline,
-     `json.dumps` writing NaN), one bullet each: `- <file: function>: <the behaviour>`. The
-     reviewer writes no finding about them and the triage dismisses one by citing the line.
-     A behaviour of the reference that IS to be fixed here is no quirk: it is a requirement
-     of this spec, and a line under "Reference follow-up". -->
+<!-- Only when this feature copies code of a reference file for file; else "None." and nothing
+     below. The tests and the code are then the reference's, changed only as listed here.
+     Reference: its name in `[references]`. Commit: the commit you read. One row per file;
+     Kind `tests` = a test file to carry over, `code` = everything else
+     (`framegate port-stubs <feature>` writes the stubs of the `code` rows).
+     What may differ: every allowed deviation, one bullet each; any other difference is a
+     review finding. Ticket numbers and repository names in the reference's docstrings and
+     comments stay the reference's, word for word.
+     Kept quirks: behaviours of the reference kept on purpose against a stricter reading of
+     this spec: `- <file: function>: <the behaviour>`. One that is fixed here is a
+     requirement of this spec and a line under "Reference follow-up". -->
 Reference:
 Commit:
 
@@ -116,88 +87,58 @@ Kept quirks:
 -
 
 ## Pipeline follow-up
-<!-- Deploy files (Dockerfile, compose, k8s manifests, ...) and CI files (yml, scripts) are
-     never changed by a feature, not even now: they stay locked. What must change there
-     BECAUSE of this feature is a separate step after it; note it here so it is not lost
-     (the final summary raises it). One bullet per change: `- <file>: <what must change>
-     (<why>)`, e.g. `- platform/deploy/Dockerfile: COPY the new runner/ folder (the image
-     must contain the new package)`, a new dependency the image must install, a new test
-     selection for CI. Something that is no file of this repository
-     (a CI variable, a secret in the vault, a migration of the real database, an environment
-     switch): `- OUTSIDE [<where>]: <what must be done> (<why>)`; a person does it by hand.
-     Only deploy / CI files and such outside steps: nothing else belongs here. "None." when the
-     feature needs no such change.
-     A new test file where the CI lists test files by path: a line for that CI file (the CI
-     runs only the listed ones; `framegate spec-check` warns). -->
+<!-- Deploy and CI files are never changed by a feature. What must change there because of it
+     is a separate step afterwards: `- <file>: <what must change> (<why>)`. Something that is
+     no file of this repository (a CI variable, a secret, a database migration):
+     `- OUTSIDE [<where>]: <what must be done> (<why>)`; a person does it by hand.
+     Only deploy / CI files and such outside steps (also a new test file where the CI lists
+     test files by path); "None." when there is no such change. -->
 None.
 
 ## Reference follow-up
-<!-- A reference (another project, read-only) is never changed by a feature. What the
-     REFERENCE should change because of this feature is work for that project; note it here
-     so it is not lost (the final summary raises it, and the list is kept in this folder).
-     One bullet per change: `- <reference file>: <what should change> (<why>)`, e.g.
-     `- platform/runner/common.py: parse_ts() must refuse a non-string instead of crashing
-     (fixed in this port; the reference has the same bug)`, a deliberate improvement of a
-     port the reference should take over. "None." when there is no such change. -->
+<!-- A reference is never changed by a feature. What it should change because of this one:
+     `- <reference file>: <what should change> (<why>)`. "None." when there is no such change. -->
 None.
 
 ## Proposed doc updates
-<!-- No step of the task edits a documentation file. What a doc should say once the task is
-     done, or where the task goes another way than the documented plan, is noted here, one
-     bullet each.
-     A file under docs/ (plan, design, architecture, reference): `- <file>, <where in it>:
-     today: <what it says now, quoted or summarised> -> proposed: <the new text> (<why>)`.
-     The owner answers each at the final gate (default: later). Where the task's code now
-     contradicts what it says: `... today: <what it says now, quoted> -> code now: <what the
-     code does instead>`; the owner approves the code (the doc now or later) or rejects it.
-     A README, CHANGELOG or handover note: `- <file>: <what changes, one brief line>`. No
-     question: applied after the final gate is approved.
-     One docs step then applies them as its own commit. "None." when no doc changes. -->
+<!-- No step of the task edits a documentation file; what a doc should say afterwards is noted
+     here, one bullet each. "None." when no doc changes.
+     A file under docs/: `- <file>, <where in it>: today: <what it says now, quoted or
+     summarised> -> proposed: <the new text> (<why>)`; where the task's code now contradicts
+     it: `... today: <what it says now, quoted> -> code now: <what the code does instead>`.
+     The owner answers each at the final gate (default: later).
+     A README, CHANGELOG or handover note: `- <file>: <what changes, one brief line>`. -->
 None.
 
 ## Green against stubs
-<!-- Every test must FAIL before the implementation ("red against stubs"). The exceptions,
-     by design, are listed here, one bullet each: `- <test name or node ID>: <why it cannot
-     fail before the implementation>`. Typical: a scan or negative check ("no analytic name
-     appears in the code", "X is not imported"), a structure test; an accepted input the
-     existing code already accepts ("an empty key is legal"); an existing error or behaviour
-     that wins ("the existing duplicate-column error wins"); in a port, a carried-over test
-     of that kind (the test writer may not change it). Only the listed tests may pass
-     the check; a listed test that fails there is a failure. Every spec ID such a test is
-     tagged with needs another test that does fail against the stubs (checked). "None."
-     for the usual feature. -->
+<!-- Every test must fail before the implementation. The exceptions by design, one bullet
+     each: `- <test name or node ID>: <why it cannot fail before the implementation>` (a scan
+     or negative check, behaviour the existing code already has, a carried-over test of a
+     port). Only these may pass the red check, and every spec ID of such a test needs another
+     test that does fail. "None." for the usual feature. -->
 None.
 
 ## Test data and fixtures
 <which recorded/synthetic data the tests use, where it lives, how it is generated>
-<!-- One row per ID that needs particular data (a seed, a recording, a rare situation).
-     Observable: the public value a test reads to see the situation happened, with code that
-     exists before this feature (the test writer turns it into a fixture precondition test).
-     Zero cases: may a check over picked cases pass with none? Default "no".
-     Measured with: every number in an acceptance criterion ("gives 2", ">= 4") is measured
-     with this spec's own definition (the command and date, or "by hand: <how>"), never copied
-     from another test (seen live: a count copied from a test that counted another way).
-     Counted outputs: for every count / field a requirement defines, a row with data where it
-     is not 0 (not its default); for a variant (a mode, a driver, another world) one value that
-     differs from the base case. Else an implementation that always returns 0 passes.
-     Edge cases and named outcomes: once this table pins data, EVERY E- ID gets its own row
-     (several IDs in one cell are fine: "XXX-E-001, E-002", "XXX-E-003..E-005"), and so does
-     every outcome or branch a rule names in words ("saved", "blocked", "no reach"), also when
-     the base data is the same. Does the pinned data hold the case? If not: other data that
-     does, or in the Data cell `unit-only: <which test builds the case itself>: <why no pinned
-     data is needed>`. `framegate spec-check` fails an E- ID without a row (seen live: three
-     cases the only pinned match did not hold; the test writer and the test reviewer asked
-     about them five times, and one assertion never ran).
-     Existing tests: name each existing test whose fixtures or assertions change as
-     `tests/<file>::<Class>` (or `::<Class>::<test>`); write `(unchanged)` after a named test
-     that stays as it is. A named test without a changed line fails the test checks. -->
+<!-- One row per ID that needs particular data. Observable: the public value a test reads to
+     see the situation happened, with code that exists before this feature. Zero cases: may
+     a check over picked cases pass with none?
+     Measured with: every number in an acceptance criterion is measured with this spec's own
+     definition (the command and date, or "by hand: <how>"), never copied from another test.
+     Every count or field a requirement defines: data where it is not its default; every
+     variant: one value that differs from the base case.
+     Once this table pins data, every E- ID and every outcome a rule names gets a row: the
+     data that holds the case, or `unit-only: <which test builds the case itself>: <why>`.
+     Existing tests whose fixtures or assertions change: `tests/<file>::<Class>` (or
+     `::<Class>::<test>`); `(unchanged)` after a named test that stays as it is.
+     A new test that must go into an existing file: a line with its ID and the file,
+     `XXX-R-002: in tests/<file>` (checked: the tests must touch that file). -->
 | ID | Data (seed / file / generator) | Observable that proves the situation | Measured with | Zero cases allowed |
 |---|---|---|---|---|
 | XXX-R-001 | | | | no |
 
 ## Verification harness
-<how to prove this works end to end on real data, e.g. "run pipeline on recorded failure case
- F-17; health index must decrease monotonically over the last 72h">
+<how to prove this works end to end on real data: the command, the data, the expected result>
 
 ## Open questions
 <must be empty before approval>

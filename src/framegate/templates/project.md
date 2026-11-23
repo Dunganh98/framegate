@@ -15,7 +15,7 @@
 
 ## Test harness
 <!-- fast vs slow tests (filters), how fixtures are made (seeds, factories, recordings), how to
-     find data for a situation (scan commands), known behaviour of test drivers / bots -->
+     find data for a situation (scan commands) -->
 
 ## Tools
 <!-- project commands agents may use (they also need a [phases.<P>] tools rule) -->

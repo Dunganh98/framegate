@@ -68,6 +68,9 @@ commands:
   survey                  an agent reads the code and build files and maps the source and
                           test folders and what is not the project's code; every code file
                           must be accounted for (out/survey.json, read by probe); minutes
+  uses <symbol> [--file <path>]  every place in the source (not the tests) that reads
+                          the function or variable, as file:line: line (for the spec:
+                          check each use site when a requirement changes an input)
   probe [--json]          the project facts every run depends on, read in seconds: the
                           interpreter, the test / lint / format / type commands and whether
                           each tool answers --version, folders, base branch, remote, deploy
@@ -210,6 +213,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--scope", choices=["framework", "project"], default="")
     p = sub.add_parser("deferred", help="the deferred-work list (.framegate/deferred.md)")
     p.add_argument("--file", default="", help="only the entries on this file")
+    p.add_argument("--later", default="", help="add: split this over-limit file later")
+    p.add_argument("--feature", default="", help="with --later: the task that deferred it")
+    p = sub.add_parser("uses", help="where the source reads a function or a variable")
+    p.add_argument("symbol")
+    p.add_argument("--file", default="", help="only under this source file or folder")
     p = sub.add_parser("gates")
     p.add_argument("feature")
     p.add_argument("--scope", choices=["step", "final"], default="final")
@@ -407,12 +415,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "deferred":
             from framegate import deferred
 
+            if args.later:
+                entry = deferred.split_later(cfg, args.feature, args.later)
+                print(entry.line() if entry else f"error: no file {args.later}")
+                return 0 if entry else 1
             lines = deferred.listing(cfg, args.file)
             end = ":" if lines else "."
             print(f"{len(lines)} open deferred item(s) in {deferred.PATH}{end}")
             for line in lines:
                 print(line)
             return 0
+        if args.command == "uses":
+            from framegate import uses
+            from framegate.adapters import get_adapter
+
+            return uses.run(cfg, get_adapter(cfg), args.symbol, args.file)
         if args.command == "spec-check":
             from framegate.adapters import get_adapter
             from framegate.checks import frame_diff, spec_lint
@@ -430,6 +447,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             from framegate import deferred
 
             for line in deferred.plan_note(cfg, args.feature):  # a note for the spec brief
+                print(line)
+            from framegate.checks import structure
+
+            over = structure.plan_over_limit(adapter, args.feature)
+            for line in deferred.over_limit_note(cfg, args.feature, over):
                 print(line)
             # for the spec brief: the user approves these with the spec
             print("Setup files changed (committed with the spec): " + (", ".join(setup) or "none"))

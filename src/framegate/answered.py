@@ -4,6 +4,10 @@ The answer events hold every gate item as it was asked (`asked`) and its answer.
 about the same thing gets no gate item: a file split the same file, a doc proposal the same file
 and place (doc_proposals.key), any other question the same words. The summary and the final
 facts get one line instead (`asked_again` events since the last answer).
+
+Among the open questions a question is its asker and the spec IDs it names (`identity`): a
+new one takes the open one's place. Not against answered ones: a new question on the same
+IDs after an answer is a real question.
 """
 
 from __future__ import annotations
@@ -18,6 +22,9 @@ KIND = "asked_again"
 _TAG = re.compile(r"^\[([^\]]+)\]\s*")
 _NO_ANSWER = re.compile(r"^\W*no answer needed\b", re.I)
 _SAME_AS = re.compile(r"^\W*same as item \d+\s*:\s*", re.I)
+_SPEC_ID = re.compile(r"\b(?:[A-Z][A-Z0-9]*-)?([REI]-\d{3})\b")
+#: how a question closed by a passing check is logged (`question_resolved` events)
+RESOLVED = "resolved by the writer"
 
 
 def who(question: str) -> str:
@@ -34,6 +41,18 @@ def key(question: str) -> str:
     if who == doc_proposals.WHO:
         return "doc " + doc_proposals.key(doc_proposals.asked(question))
     return " ".join(re.findall(r"[a-z0-9]+", body.lower()))
+
+
+def identity(question: str) -> str:
+    """What a question (`[who] text`) is about: its asker and the spec IDs it names. Two
+    open questions with the same identity are one question, whatever the words. "" = it names
+    no spec ID, or it is a file split / a doc proposal (they have keys of their own)."""
+    m = _TAG.match(question)
+    asker, body = (m.group(1), question[m.end() :]) if m else ("", question)
+    ids = sorted(set(_SPEC_ID.findall(body)))
+    if not ids or asker in (STRUCTURE_WHO, doc_proposals.WHO):
+        return ""
+    return f"about {asker}: {' '.join(ids)}"
 
 
 def answers(events: list[dict[str, Any]]) -> dict[str, str]:

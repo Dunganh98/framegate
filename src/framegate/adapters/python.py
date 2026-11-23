@@ -69,6 +69,9 @@ ENV_STAMP = (
 )
 
 
+_IMPORTORSKIP = re.compile(r"""importorskip\(\s*["']([\w.]+)["']""")
+
+
 def deselect_args(entries: Sequence[str]) -> list[str]:
     """pytest options that leave out these test files / node ids."""
     return [a for e in entries for a in ("--deselect", e)]
@@ -195,6 +198,7 @@ class PythonAdapter(LanguageAdapter):
     name = "python"
     source_suffixes = (".py",)
     file_scoped_lint = True
+    line_suppression = r"#\s*(?:noqa|type:\s*ignore|pragma:\s*no\s*cover)\b"
 
     @classmethod
     def detect(cls, root: pathlib.Path) -> bool:
@@ -250,6 +254,34 @@ class PythonAdapter(LanguageAdapter):
             pip = ["python", "-m", "pip"] if data.get("pip") else ["uv", "pip"]
             facts["refresh"] = [*pip, "install", "-e", ".", "--no-deps"]
         return facts
+
+    def missing_frameworks(self) -> dict[str, str] | None:
+        declared = python_probe.declared(self.root)
+        guarded: dict[str, str] = {}
+        for p in self._test_files():
+            text = p.read_text(encoding="utf-8", errors="replace")
+            for mod in _IMPORTORSKIP.findall(text):
+                guarded.setdefault(mod, f"importorskip in {self.rel(p)}")
+        if not declared and not guarded:
+            return {}
+        args = [json.dumps(list(declared)), json.dumps(list(guarded))]
+        code, out = run_command(
+            [self.python, "-c", python_probe.MISSING_SCRIPT, *args],
+            self.root,
+            timeout=PROBE_TIMEOUT,
+        )
+        found = [x for x in out.splitlines() if x.startswith("MISSING ")]
+        if code != 0 or not found:
+            return None
+        reqs, mods = json.loads(found[-1].removeprefix("MISSING "))
+        gaps: dict[str, str] = {}
+        for text in reqs:
+            name = re.split(r"[\s<>=!~;\[(]", text, maxsplit=1)[0]
+            gaps.setdefault(name.lower().replace("_", "-"), declared[text])
+        for mod in mods:
+            if mod.split(".")[0].lower().replace("_", "-") not in gaps:
+                gaps.setdefault(mod, guarded[mod])
+        return gaps
 
     def test_runner(self) -> list[str]:
         return [self.python, "-m", "pytest"]
@@ -422,9 +454,10 @@ class PythonAdapter(LanguageAdapter):
         paths: Sequence[str] | None = None,
         fail_fast: bool = False,
         junit: pathlib.Path | None = None,
+        extra: Sequence[str] = (),
     ) -> TestRun:
         cmd = [self.python, "-m", "pytest", "-q", "--no-header", "-p", "no:cacheprovider"]
-        cmd += self.pytest_args
+        cmd += [*self.pytest_args, *extra]
         ids = [i for i in (req_ids or []) if i]
         if ids:
             cmd += ["--req", ",".join(ids)]
@@ -478,6 +511,27 @@ class PythonAdapter(LanguageAdapter):
         code, out = run_command([self.python, "-c", probe, *names], self.root)
         found = [x for x in out.splitlines() if x.startswith("FOUND")]
         return set(found[-1].split()[1:]) if code == 0 and found else None
+
+    def red_stub_run(self, req_ids: Sequence[str], report: pathlib.Path) -> TestRun:
+        # a test file that cannot load must not stop the run: the check judges the others
+        return self.run_tests(
+            req_ids=req_ids, junit=report, extra=["--continue-on-collection-errors"]
+        )
+
+    def broken_at(self, tree: pathlib.Path, names: Sequence[str]) -> set[str] | None:
+        files = {n.split("::")[0].replace(".", "/") + ".py": n for n in names}
+        files = {rel: n for rel, n in files.items() if (tree / rel).is_file()}
+        if not files:
+            return set()
+        # the tree's own sources, not an editable install of the working tree
+        roots = [*(str(tree / r) for r in self.cfg.src_roots), str(tree)]
+        env = {**os.environ, "PYTHONPATH": os.pathsep.join(roots)}
+        cmd = [self.python, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"]
+        code, out = run_command([*cmd, *self.pytest_args, *files], tree, env=env, timeout=600)
+        if code == 0:
+            return set()
+        bad = {m.replace("\\", "/") for m in re.findall(r"^ERROR\s+(\S+)", out, re.M)}
+        return {n for rel, n in files.items() if rel in bad}
 
     def test_names(self, source: bytes) -> list[str] | None:
         return python_port.test_names(source)
@@ -995,6 +1049,22 @@ class PythonAdapter(LanguageAdapter):
     # ---------- frame ----------
     def default_forbidden_patterns(self) -> list[str]:
         return [r"type:\s*ignore", r"noqa", r"pragma:\s*no cover", r"pytest\.skip", r"xfail"]
+
+    def definition_pattern(self, name: str) -> str:
+        n = re.escape(name)
+        return (
+            rf"^\s*(?:async\s+)?(?:def|class)\s+{n}\b"
+            rf"|^\s*(?:\w+\.)*{n}\s*(?::[^=]+)?=(?!=)"
+        )
+
+    def guard_patterns(self) -> dict[str, str]:
+        return {
+            "# noqa": r"#\s*noqa\b(?::\s*[A-Z]+\d*(?:\s*,\s*[A-Z]+\d*)*)?",
+            "# type: ignore": r"#\s*type:\s*ignore\b(?:\[[^\]]*\])?",
+            "pragma: no cover": r"#\s*pragma:\s*no\s*cover\b",
+            "except Exception": r"^\s*except\s+\(?\s*(?:Base)?Exception\b",
+            "bare except": r"^\s*except\s*:",
+        }
 
     def default_protected_paths(self) -> list[str]:
         return [

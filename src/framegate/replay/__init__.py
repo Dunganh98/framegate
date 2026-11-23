@@ -3,7 +3,7 @@ the commit, scored with the commit's own tests (docs/replay.md).
 
 candidates.py  the candidates file
 sandbox.py     the run folder: cut clone, hidden answer, environment, the mechanical check
-score.py       hidden tests against the result, the engine's numbers, the results table
+score.py       hidden tests and probes against the result, the scorecard, the results tables
 run.py         the driver agent, the caps, the scheduler, the command
 chat.py        one chat message of the driver (`python -m framegate.replay.chat`)
 driver.md      the driver's instructions

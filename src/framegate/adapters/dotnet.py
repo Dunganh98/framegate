@@ -1511,6 +1511,24 @@ class DotnetAdapter(LanguageAdapter):
         return path
 
     # ---------- frame ----------
+    def definition_pattern(self, name: str) -> str:
+        n = re.escape(name)
+        # a member declaration (`public int Name(` / `Name {` / `Name =`), or an assignment
+        return (
+            rf"^\s*(?:(?:public|private|protected|internal|static|readonly|const|override|"
+            rf"virtual|async|sealed|abstract|partial)\s+)+[\w<>\[\],.?]+\s+{n}\b"
+            rf"|^\s*(?:this\.)?{n}\s*=(?!=)"
+        )
+
+    def guard_patterns(self) -> dict[str, str]:
+        return {
+            "#pragma warning disable": r"#\s*pragma\s+warning\s+disable\b[^\n]*",
+            "SuppressMessage": r"\bSuppressMessage\b",
+            "ExcludeFromCodeCoverage": r"\bExcludeFromCodeCoverage\b",
+            "catch (Exception)": r"\bcatch\s*\(\s*(?:System\.)?Exception\b",
+            "bare catch": r"\bcatch\s*(?:\{|$)",
+        }
+
     def default_forbidden_patterns(self) -> list[str]:
         return [
             r"#\s*pragma\s+warning\s+disable",

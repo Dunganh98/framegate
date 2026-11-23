@@ -27,6 +27,7 @@ Scenario keys:
     marks it VALID
   review_invalid: true -> the reviewer also writes an invalid finding (negative ints rejected);
     TRIAGE deletes it and marks it INVALID
+  repair_objection: text -> the follow-up review of a final repair objects with it
   structure: true -> the first REVIEW run lists one structure finding in review.md
   brief: true -> SUMMARY also writes out/demo/final_brief.md (plain-words sections, gate item 1
     asked as question 1); "filtered" -> asks item 2 first, then item 1, one untagged decision,
@@ -536,6 +537,14 @@ def main() -> int:
             target.parent.mkdir(parents=True, exist_ok=True)
             with open(target, "a", encoding="utf-8") as f:
                 f.write(f"## Step {step or 'fix'} — add\nBuilt add().\n{note}")
+    elif phase == "REVIEW" and "follow-up review of a final repair" in prompt:
+        objection = scen.get("repair_objection")
+        write(
+            "out/demo/repair_review.md",
+            f"Verdict: OBJECTIONS\n\n## Objections\n- {objection}\n"
+            if objection
+            else "Verdict: OK\n\n## Objections\nNone.\n",
+        )
     elif phase == "REVIEW":
         lines = ""
         if scen.get("review_finding"):

@@ -1,4 +1,5 @@
-"""`framegate replay`: the candidates file, the sandbox, the score, the caps, the scheduler.
+"""`framegate replay`: the candidates file, the sandbox, the score, the scorecard, the caps,
+the scheduler.
 No test calls claude or the network."""
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ EXAMPLE = """\
 - tests: tests/test_controller.py, tests/conftest.py
 - install: uv pip install --python {py} -r requirements.txt
 - install: uv pip install --python {py} deltalake
+- probes: tests/test_pin.py
 - max-usd: 10
 
 ### Task
@@ -35,7 +37,13 @@ A released lock must be free at once.
 
 ```
 ## not a candidate
+### Facts
 ```
+
+### Facts
+- F1 [lease time, expiry]: The lease time stays 60 s,
+  also for a released lock.
+- F2 [other holders]: A lock another run holds is never released.
 
 ## contract-key
 - repo: https://example.org/da-core.git
@@ -55,8 +63,13 @@ def test_candidates_file_is_parsed() -> None:
     )
     assert first.tests == ["tests/test_controller.py", "tests/conftest.py"]
     assert len(first.install) == 2 and first.max_usd == 10 and first.max_hours is None
-    assert first.task.startswith("A released lock") and "## not a candidate" in first.task
-    assert second.name == "contract-key" and second.task == ""
+    assert first.task.startswith("A released lock") and first.task.endswith("### Facts\n```")
+    assert first.probes == ["tests/test_pin.py"]
+    assert [f.line() for f in first.facts] == [
+        "- F1 [lease time, expiry]: The lease time stays 60 s, also for a released lock.",
+        "- F2 [other holders]: A lock another run holds is never released.",
+    ]
+    assert (second.name, second.task, second.facts, second.probes) == ("contract-key", "", [], [])
 
 
 def test_candidates_file_errors_name_the_line() -> None:
@@ -64,20 +77,24 @@ def test_candidates_file_errors_name_the_line() -> None:
         "## one\n- repo: r\n- comit: abc1234\n- kind: fix\nstray\n"
         "## Two Words\n- repo: r\n\n"
         "## one\n- repo: r\n- commit: abc1234\n- kind: feature\n"
+        "## facts\n- repo: r\n- commit: abc1234\n- kind: feature\n"
+        "### Facts\n- F1 [a]: one\n- F1 [b]: two\n- no id\n"
     )
 
     with pytest.raises(CandidatesError) as e:
         parse(bad)
 
     assert str(e.value).splitlines() == [
-        "line 3: unknown field 'comit' (known: repo, commit, kind, tests, pythonpath, python, "
-        "install, setup, max-usd, max-hours)",
-        "line 5: expected `- field: value` or `### Task`, got 'stray'",
+        "line 3: unknown field 'comit' (known: repo, commit, kind, tests, pythonpath, "
+        "probes, python, install, setup, max-usd, max-hours)",
+        "line 5: expected `- field: value`, `### Task` or `### Facts`, got 'stray'",
         "line 1: candidate 'one' has no `- commit:`",
         "line 4: kind 'fix' is not one of feature, bugfix, refactor",
         "line 6: 'Two Words' is not a candidate name (a-z, 0-9, '-'); "
         "a heading inside a task needs ### or deeper",
         "line 9: candidate 'one' is there twice",
+        "line 19: fact F1 is there twice",
+        "line 20: expected `- F1 [topic words]: the fact`, got '- no id'",
     ]
 
 
@@ -182,6 +199,91 @@ def test_candidate_whose_tests_pass_on_the_parent_is_dropped(
         build(c, Layout(tmp_path, "later"), repo["root"], this_python)
 
 
+PIN = "import calc\n\n\ndef test_add_keeps_floats():\n    assert calc.add(0.5, 0.5) == 1.0\n"
+
+
+def pinned_candidate(repo: dict[str, Any]) -> Candidate:
+    c = Candidate("sub", str(repo["root"]), repo["target"], "feature", task="Add sub.")
+    c.facts, c.probes = parse(EXAMPLE)[0].facts, ["tests/test_pin.py"]
+    return c
+
+
+@pytest.fixture(scope="module")
+def pinned(repo: dict[str, Any], tmp_path_factory: pytest.TempPathFactory) -> Layout:
+    """A candidate with two facts and one probe (in probes/sub/ next to the candidates file)."""
+    base = tmp_path_factory.mktemp("pinned")
+    (base / "probes" / "sub" / "tests").mkdir(parents=True)
+    (base / "probes" / "sub" / "tests" / "test_pin.py").write_text(PIN, encoding="utf-8")
+    lay = Layout(base / "out", "sub")
+    build(pinned_candidate(repo), lay, repo["root"], this_python, base / "probes" / "sub")
+    return lay
+
+
+def test_facts_go_to_the_driver_and_probes_stay_outside_the_sandbox(pinned: Layout) -> None:
+    facts = (pinned.driver / "facts.md").read_text("utf-8").splitlines()
+    deny = read_json(pinned.sandbox / ".claude" / "settings.local.json")["permissions"]["deny"]
+
+    assert facts[1] == "- F2 [other holders]: A lock another run holds is never released."
+    assert (pinned.driver / "task.md").read_text("utf-8") == "Add sub.\n"
+    assert not list(pinned.sandbox.rglob("facts.md")) + list(pinned.sandbox.rglob("test_pin.py"))
+    assert any(rule.endswith("/probes/**)") for rule in deny)
+    assert any(rule.endswith("/runs/*/driver/**)") for rule in deny)
+    ex = read_json(pinned.answer / "exercise.json")
+    assert ex["probes"] == ["tests.test_pin::test_add_keeps_floats"]
+
+
+def test_a_probe_that_is_missing_or_fails_before_the_task_drops_the_candidate(
+    repo: dict[str, Any], tmp_path: pathlib.Path
+) -> None:
+    folder = tmp_path / "probes" / "sub"
+    with pytest.raises(ReplayError, match="probe file tests/test_pin.py is not in"):
+        build(pinned_candidate(repo), Layout(tmp_path, "sub"), repo["root"], this_python, folder)
+    (folder / "tests").mkdir(parents=True)
+    (folder / "tests" / "test_pin.py").write_text(PIN.replace("1.0", "2.0"), encoding="utf-8")
+
+    with pytest.raises(ReplayError, match="a probe does not pass on the parent.*keeps_floats"):
+        build(pinned_candidate(repo), Layout(tmp_path, "sub"), repo["root"], this_python, folder)
+
+
+def test_a_failed_probe_is_broke_a_rule_and_the_scorecard_counts_facts_and_lines(
+    pinned: Layout,
+) -> None:
+    probes = pinned.out.parent / "probes" / "sub"
+    files = ["tests/test_pin.py"]
+    calc = pinned.sandbox / "src" / "calc.py"
+    calc.write_text(CALC + SUB, encoding="utf-8")
+    write_json(pinned.driver / "facts_used.json", ["F2", "F9"])
+    kept = score.score(pinned, files, probes)
+    calc.write_text(CALC.replace("a + b", "int(a) + int(b)") + SUB, encoding="utf-8")
+    (pinned.driver / "facts_used.json").unlink()
+    (pinned.driver / "log.md").write_text("fact F1 given for: lease?\n", encoding="utf-8")
+    broke = score.score(pinned, files, probes)
+    unprobed = score.score(pinned)
+
+    assert (kept["verdict"], kept["probes_passed"], kept["probes"]) == ("good", 1, 1)
+    assert (kept["facts"], kept["facts_used"]) == (2, ["F2"])
+    assert (kept["src_lines"], kept["commit_src_lines"]) == (4, 4)
+    assert (broke["verdict"], broke["passed"], broke["probes_passed"]) == ("broke a rule", 1, 0)
+    assert broke["probes_failed"] == ["tests.test_pin::test_add_keeps_floats"]
+    assert (broke["facts_used"], broke["src_lines"]) == (["F1"], 6)
+    assert unprobed["verdict"] == "good" and "probes" not in unprobed
+    assert not list(pinned.sandbox.rglob("test_pin.py"))
+    assert score._cells({**scored("x"), **broke})[4] == "0/1"
+
+
+def test_probes_that_did_not_run_are_a_failed_score(
+    pinned: Layout, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def run_tests(py: Any, tree: Any, roots: Any, files: Any, xml: pathlib.Path) -> Any:
+        return ({}, "no tests ran") if xml.name == "probes.xml" else ({"a": "pass"}, "1 passed")
+
+    monkeypatch.setattr(score, "run_tests", run_tests)
+
+    row = score.score(pinned, ["tests/test_pin.py"], pinned.out.parent / "probes" / "sub")
+
+    assert (row["verdict"], row["result_tail"]) == ("score failed", "probes: no tests ran")
+
+
 # ---------- the score ----------
 def test_score_runs_the_hidden_tests_on_the_result(built: Layout) -> None:
     before = score.score(built)
@@ -206,6 +308,80 @@ def test_verdict_skipped_is_not_proven_and_a_broken_old_test_is_bad() -> None:
     assert (skipped["verdict"], skipped["skipped"]) == ("not proven", ["b"])
     assert (missing["verdict"], missing["failed"]) == ("bad", ["a"])
     assert (regression["verdict"], regression["regressions"]) == ("bad", ["old"])
+
+
+def test_a_probe_that_did_not_run_fails_and_a_skipped_one_does_not_pass() -> None:
+    assert score.probed(["p", "q"], {"p": "pass", "q": "skip"}) == {
+        "probes": 2,
+        "probes_passed": 1,
+        "probes_failed": [],
+    }
+    assert score.probed([], {"p": "fail"})["probes_failed"] == ["p"]
+    assert score.probed(["p"], {"other": "pass"})["probes_failed"] == ["p"]
+
+
+def event(kind: str, **data: Any) -> dict[str, Any]:
+    return {"kind": kind, "feature": "f", "ts": "2026-11-16T10:00:00", **data}
+
+
+def test_flow_counts_questions_late_bugs_and_send_backs() -> None:
+    valid = {"test": "t1", "verdict": "VALID"}
+    events = [
+        event("questions", questions="- one\n- two"),
+        event("test_checks", sent_back=True),
+        event("test_review", sent_back=True),
+        event("test_review", sent_back=False),
+        event("gate", attempt=1, passed=False),
+        event("gate", attempt=2, passed=True),
+        event("triage", findings=[valid, {"test": "t2", "verdict": "DISMISSED"}]),
+        event("triage", findings=[valid]),
+        event("final_gates", passed=False),
+        event("final_gates", passed=True),
+        {**event("final_gates", passed=False), "feature": "other"},
+    ]
+
+    assert score.flow(events, "f") == {"questions": 2, "late_bugs": 2, "send_backs": 3}
+    assert score.flow([], "f") == {"questions": 0, "late_bugs": 0, "send_backs": 0}
+
+
+def test_source_lines_leave_out_tests_documents_and_framegates_files() -> None:
+    numstat = (
+        "3\t1\tsrc/calc.py\n10\t0\ttests/test_calc.py\n5\t0\tdocs/calc.md\n"
+        "7\t0\tspecs/sub/plan.md\n2\t0\tframegate.toml\n4\t0\t.framegate/map.json\n"
+        "-\t-\tsrc/logo.png\n0\t2\tpyproject.toml\ngarbage\n"
+    )
+
+    patch = (
+        "diff --git a/src/calc.py b/src/calc.py\n--- a/src/calc.py\n+++ b/src/calc.py\n"
+        "@@ -1,2 +1,3 @@\n def add(a, b):\n-    return a+b\n+    return a + b\n+\n"
+        "diff --git a/tests/test_calc.py b/tests/test_calc.py\n@@ -1 +1,2 @@\n+import calc\n"
+    )
+
+    assert score.source_lines(numstat) == 6
+    assert score.patch_lines(patch) == 3
+
+
+def test_a_run_without_scorecard_data_shows_dashes(tmp_path: pathlib.Path) -> None:
+    lay = Layout(tmp_path, "empty")
+    (lay.driver).mkdir(parents=True)
+    (lay.driver / "facts.md").write_text("- F1 [a]: one\n", encoding="utf-8")
+
+    card = score.scorecard(lay)
+    cells = score._details({**scored("empty"), **card})
+
+    assert card == {
+        "questions": None,
+        "late_bugs": None,
+        "send_backs": None,
+        "facts": 1,
+        "facts_used": None,
+        "src_lines": None,
+        "commit_src_lines": None,
+    }
+    assert cells[5:] == ["-/1", "-", "-", "-", "- / -"]
+    # a row of an older framegate: no scorecard keys at all
+    assert score._details(scored("old"))[5:] == ["-", "-", "-", "-", "- / -"]
+    assert score._cells(scored("old"))[4] == "-"
 
 
 def test_a_scoring_run_without_a_result_is_score_failed_not_bad(
@@ -283,8 +459,10 @@ def scored(name: str, **over: Any) -> dict[str, Any]:
 
 
 def test_results_table_and_collected_retros(tmp_path: pathlib.Path) -> None:
+    card = {"probes": 3, "probes_passed": 2, "facts": 4, "facts_used": ["F1"], "questions": 5}
+    card |= {"late_bugs": 1, "send_backs": 2, "src_lines": 41, "commit_src_lines": 38}
     rows = [
-        scored("a"),
+        scored("a", **card),
         {"name": "b", "kind": "feature", "status": "dropped", "note": "no test file"},
         scored("c", verdict="score failed", passed=0, note="score failed (x): run it again"),
     ]
@@ -295,11 +473,13 @@ def test_results_table_and_collected_retros(tmp_path: pathlib.Path) -> None:
 
     lines = (tmp_path / "results.md").read_text("utf-8").splitlines()
     # 17.03: engine + chat + driver
-    good = "| a | bugfix | good | 2/2 | 0 | DONE | 60 min | 6.38 | 9.40 | 17.03 | 1 | 0 |  |"
-    assert good in lines
-    assert "| b | feature | dropped |  |  |  |  |  |  |  |  |  | no test file |" in lines
-    assert any(line.startswith("| c | bugfix | score failed |  |  | DONE |") for line in lines)
-    assert "score failed = the hidden tests did not run" in lines[-1]
+    assert "| a | bugfix | good | 2/2 | 2/3 | 0 | DONE | 60 min | 17.03 |  |" in lines
+    assert "| b | feature | dropped |  |  |  |  |  |  | no test file |" in lines
+    assert any(line.startswith("| c | bugfix | score failed |  | - |  | DONE |") for line in lines)
+    assert "score failed = the hidden tests did not run" in lines[lines.index("## Details") - 2]
+    assert "| a | 6.38 | 9.40 | 1 | 0 | 1/4 | 5 | 1 | 2 | 41 / 38 |" in lines
+    assert "| c | 6.38 | 9.40 | 1 | 0 | - | - | - | - | - / - |" in lines
+    assert not any(line.startswith("| b |") for line in lines[lines.index("## Details") :])
     assert json.loads((tmp_path / "results.json").read_text("utf-8")) == rows
     assert (tmp_path / "retro-proposals.md").read_text("utf-8") == "# a\n\n1. shorter prompts\n"
 
@@ -338,7 +518,7 @@ def fake_runs(
     and ends before the task for the one named `unstarted`."""
     driven: list[str] = []
 
-    def fake_build(c: Candidate, lay: Layout, src: pathlib.Path, env: Any) -> None:
+    def fake_build(c: Candidate, lay: Layout, src: pathlib.Path, env: Any, probes: Any) -> None:
         write_json(lay.run / "run.json", {"state": "prepared", "python": sys.executable})
 
     def driver(lay: Layout, c: Candidate, caps: run.Caps, src: pathlib.Path) -> dict[str, Any]:
@@ -355,7 +535,7 @@ def fake_runs(
 
     monkeypatch.setattr(run, "build", fake_build)
     monkeypatch.setattr(score, "engine", engine)
-    monkeypatch.setattr(score, "score", lambda lay: scored(lay.name))
+    monkeypatch.setattr(score, "score", lambda lay, *a: scored(lay.name))
 
     def retro(lay: Layout) -> str:
         driven.append(f"retro {lay.name}")
@@ -421,10 +601,10 @@ def test_a_failed_score_is_scored_again_without_a_new_run(
     opts.echo = lines.append
     cands = candidates(tmp_path, "one")
     failed = scored("one", verdict="score failed", passed=0, result_tail="no output (exit 137)")
-    monkeypatch.setattr(score, "score", lambda lay: failed)
+    monkeypatch.setattr(score, "score", lambda lay, *a: failed)
 
     (first,) = run.run_all(cands, opts)
-    monkeypatch.setattr(score, "score", lambda lay: scored(lay.name))
+    monkeypatch.setattr(score, "score", lambda lay, *a: scored(lay.name))
     (second,) = run.run_all(cands, opts)
 
     assert first["note"] == "score failed (no output (exit 137)): run --score-only again"
@@ -510,7 +690,9 @@ def test_prune_alone_prunes_scored_runs_and_a_pruned_run_is_not_scored_again(
     (again,) = run.run_all(cands, opts)
 
     assert driven == ["one"] and not (lay.sandbox / ".venv").exists()
-    assert "[one] pruned: 0 MB freed" in lines and again == row
+    # the verdict stays; the numbers that need no environment are read again
+    assert "[one] pruned: 0 MB freed" in lines and again == {**row, **score.scorecard(lay)}
+    assert again["questions"] is None and read_json(lay.run / "score.json") == again
     assert lines[-1].startswith("[one] cannot be scored again: the sandbox's environment is gone")
 
 
@@ -535,6 +717,7 @@ def test_driver_instructions_are_filled_for_the_run(tmp_path: pathlib.Path) -> N
     assert "{{" not in text
     assert "`/framegate:bugfix lock-free`" in text and "after 2 hours" in text and "10 USD" in text
     assert f"  - `{lay.answer.parent}`" in text and f"  - `{tmp_path / 'repo'}`" in text
+    assert "fact F1 given for: <question, short>" in text and "`facts_used.json`" in text
 
 
 def test_chat_call_sends_a_slash_command_as_argument_and_text_through_stdin() -> None:

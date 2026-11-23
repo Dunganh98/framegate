@@ -56,7 +56,8 @@ How to treat the items:
   an adapter tool rule), it was a wrong form of an allowed command (propose a conventions-brief
   or task line), or the denial was right (the phase must not do that; "Not acted on" with why).
   Group repeated denials of the same kind in one proposal.
-Also look at mutation survivors.
+Also look at mutation survivors (mutation_survivors.md; its `## Earlier run` sections are
+the survivors of failed runs).
 
 Write {out}/{feature}/retro_proposals.md. Start with the counts line from retro_input.md, then
 a section `## Brief`: what the human reads and answers by number. One line per proposal, same
@@ -76,9 +77,8 @@ Then one detailed section per proposal:
 End with the "Not acted on" list ("Not acted on: none" if empty).
 
 Then a section `## Project knowledge`: facts this run showed that every later feature of this
-project needs and that no single spec holds (e.g. "the fingerprint test hashes the whole
-report; a new field needs [JsonIgnore] or an entry in its exclusion list", "the test bot always
-answers the deadline", "find seeds with `<scan command>`"). One line each, at most 5, only facts
+project needs and that no single spec holds (e.g. "the snapshot test serializes the whole
+report; a new field needs an entry in its exclusion list"). One line each, at most 5, only facts
 not already in the project knowledge ({knowledge}, shown in your instructions):
 
     - K1 [<section>]: <fact>

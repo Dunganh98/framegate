@@ -15,17 +15,28 @@ ID that only such tests prove (nothing would fail if it were not built). The lis
 a port carries such tests over from its reference (seen live, da-argos: a carried-over scan
 failed this check in three rounds, and the test writer may not change a carried test), and a
 normal feature can have a structure test of its own.
+
+The verdict covers the tests the feature added or changed. A test file it did not touch
+that cannot load (the run reports every file it collects) is a note when it was broken
+before the task: listed in [gates] unrunnable_tests, recorded as failing then (regression
+baseline), or it cannot be loaded at the spec-approved commit either (asked once per set
+of files, in a scratch worktree; out/<feature>/red_before.json). A file that loads there
+stays an error: the task broke it. Seen live: an old test file without its framework
+failed this check in every round, and the test writer could do nothing about it.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 
-from framegate.adapters.base import CheckResult, LanguageAdapter
+from framegate import task_base, unrunnable
+from framegate.adapters.base import CheckResult, LanguageAdapter, TestCase
 from framegate.config import Config
 from framegate.report import short_name
 from framegate.specs import feature_ids
+from framegate.state import GitError, git
 
 FIXTURE_NAME = re.compile(r"^(?:test_)?fixture_", re.I)
 GREEN_SECTION = "Green against stubs"
@@ -114,6 +125,79 @@ def only_green_ids(
     }
 
 
+#: under a test that passes before the code: what the test writer can do about it
+PASSES_REMEDY = (
+    "For a new test that passes: make it fail first (assert the accepted case next to the "
+    "refused one), or ask to list it as green against stubs"
+)
+
+
+UNTOUCHED_HINT = (
+    "(an error in a test file the feature did not touch, which loads at the spec-approved "
+    "commit: the stubs or a test file of this task broke it)"
+)
+BEFORE_FILE = "red_before.json"
+
+
+def broken_before(adapter: LanguageAdapter, feature: str, names: list[str]) -> set[str]:
+    """Of the load errors `names`, those that cannot load at the spec-approved commit
+    either (LanguageAdapter.broken_at). Kept in out/<feature>/red_before.json per commit
+    and set of names. Empty when it cannot be told."""
+    cfg = adapter.cfg
+    if not names:
+        return set()
+    path = cfg.feature_out(feature) / BEFORE_FILE
+    try:
+        commit = git(cfg, "rev-parse", f"spec-approved/{feature}^{{commit}}").strip()
+        key = [commit, sorted(names)]
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        if isinstance(data, dict) and data.get("key") == key:
+            return {str(n) for n in data.get("broken") or []}
+        with task_base.scratch(cfg, commit) as tree:
+            found = adapter.broken_at(tree, key[1])
+        if found is None:
+            return set()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"key": key, "broken": sorted(found)}), encoding="utf-8")
+        return found
+    except (GitError, OSError):
+        return set()
+
+
+def own_cases(
+    adapter: LanguageAdapter, feature: str, cases: list[TestCase]
+) -> tuple[list[TestCase], list[str]]:
+    """(the cases the verdict covers, a note per case left out): an error in a test file
+    the feature did not touch is left out when it was broken before the task (see the
+    module text). Without the spec approval marker nothing is left out."""
+    from framegate import gates
+
+    cfg = adapter.cfg
+    touched = adapter.changed_since(f"spec-approved/{feature}")
+    if touched is None:
+        return cases, []
+    known = gates.regression_baseline(cfg, feature)
+    kept: list[TestCase] = []
+    notes: list[str] = []
+    unsure: list[TestCase] = []
+    for c in cases:
+        if c.outcome != "error" or any(unrunnable.matches(cfg, c.name, f) for f in touched):
+            kept.append(c)
+        elif entry := unrunnable.entry_of(cfg, c.name):
+            why = cfg.unrunnable_tests[entry]
+            notes.append(f"NOTE: cannot load, listed in unrunnable_tests ({why}): {c.name}")
+        elif c.name in known:
+            notes.append(f"NOTE: could not load before the task either: {c.name}")
+        else:
+            unsure.append(c)
+    before = broken_before(adapter, feature, [c.name for c in unsure])
+    notes += [f"NOTE: could not load before the task: {c.name}" for c in unsure if c.name in before]
+    return [*kept, *(c for c in unsure if c.name not in before)], notes
+
+
 def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
     cfg = adapter.cfg
     ids = feature_ids(cfg, feature)
@@ -125,6 +209,8 @@ def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
         tail = "\n".join(run.output.splitlines()[-20:])
         return CheckResult("FAIL", f"Test run produced no report (collection crashed?)\n{tail}")
     green = feature_green(cfg, feature)
+    counted, notes = own_cases(adapter, feature, run.cases)
+    run.cases = counted
 
     def by_design(name: str) -> GreenTest | None:
         return next((g for g in green if g.matches(name)), None)
@@ -164,7 +250,9 @@ def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
         "tests (not written, renamed, or without a spec-ID tag)"
         for n in unseen
     ]
+    lines += notes
     lines += [f"PASSES AGAINST STUB (weak or wrong test): {n}" for n in passed]
+    lines += [PASSES_REMEDY] if passed else []
     lines += [
         f"LISTED AS GREEN BY DESIGN BUT RED (the spec's '{GREEN_SECTION}' says it cannot "
         f"fail before the implementation; the test or the stubs are not what the spec "
@@ -177,6 +265,11 @@ def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
         for i, places in alone.items()
     ]
     lines += [f"ERROR (import/fixture/collection problem): {n}" for n in errored]
+    touched = adapter.changed_since(f"spec-approved/{feature}") if errored else None
+    if touched is not None and not all(
+        any(unrunnable.matches(cfg, n, f) for f in touched) for n in errored
+    ):
+        lines.append(UNTOUCHED_HINT)
     lines += [f"SKIPPED: {n}" for n in skipped]
     lines += [f"FAILS FOR ANOTHER REASON THAN THE STUB: {n}" for n in other]
     lines += [

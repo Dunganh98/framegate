@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 
 from framegate import procs, red_tree, references, suite_run, task_base, unrunnable
 from framegate.adapters.base import (
+    GATE_NAMES,
     NOT_MEASURED,
     Check,
     CheckResult,
@@ -50,6 +51,7 @@ from framegate.adapters.base import (
 from framegate.checks import (
     frame_diff,
     mutation,
+    removed_guards,
     structure,
     test_smells,
     traceability,
@@ -456,6 +458,9 @@ def task_lines(adapter: LanguageAdapter, feature: str) -> Callable[[str], set[in
     return lines
 
 
+KEPT_NOTE = "left unformatted (a suppression comment would move off its line)"
+
+
 def lint_checks(adapter: LanguageAdapter, feature: str) -> list[Check]:
     """The lint / format / typecheck / imports checks. With `file_scoped_lint` they run on the
     whole tree (mypy needs it) and a finding counts only on a line the task wrote."""
@@ -465,6 +470,8 @@ def lint_checks(adapter: LanguageAdapter, feature: str) -> list[Check]:
 
     def scoped(check: Check) -> CheckResult:
         res = check.run()
+        if check.name == GATE_NAMES["format"]:  # format_files left them so on purpose
+            res = red_tree.without_files(adapter, res, set(adapter.format_kept), KEPT_NOTE)
         changed = task_files(adapter, feature)
         if changed is None:
             return res
@@ -546,6 +553,8 @@ def checks(
                 c.append(adapter.regression_check())
             # diff coverage counts the task's own lines, not the ones the formatter rewrote
             c += adapter.coverage_checks(task_base.task_base(adapter, tag) or tag, cov, cover_tests)
+        if feature:
+            c.append(Check(removed_guards.NAME, lambda: removed_guards.check(adapter, feature)))
         c.append(Check("traceability", lambda: traceability.check(adapter, feature)))
         c.append(Check("test smells", lambda: test_smells.check(adapter, feature)))
         if cover_tests:

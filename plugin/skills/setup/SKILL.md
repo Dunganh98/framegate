@@ -193,7 +193,7 @@ file. Then edit framegate.toml, only the keys whose row differs from framegate's
 - row 3 `[python] pytest_args`, `[dotnet]` or `[generic]`;
 - rows 4-6 `[gates.commands]` `lint` / `format` / `typecheck`: the lines the probe printed
   after "set" (with `format_fix` when it names one), `[]` for "off";
-- row 7 `[paths] src` (one folder or a list, e.g. `["core", "autoload", "scenes"]`) and `tests`;
+- row 7 `[paths] src` (one folder or a list, e.g. `["src", "lib"]`) and `tests`;
 - row 8 `[git] base`; row 9 `[git] state_branch = "framegate/{base}"` for yes;
 - row 10 `[protected] extra`; row 11 `[env] refresh`; row 12 `[references]`.
 

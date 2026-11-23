@@ -228,6 +228,7 @@ def run_one(c: Candidate, opts: Options, src: pathlib.Path) -> dict[str, Any]:
     row: dict[str, Any] = {"name": c.name, "kind": c.kind}
     run_json, score_json = lay.run / "run.json", lay.run / "score.json"
     state, earlier = read_json(run_json), read_json(score_json)
+    probes = opts.base / "probes" / c.name
     # a score that failed is no score: scored again, the run is not repeated
     retry = earlier.get("verdict") == scoring.FAILED and not (opts.force or opts.prepare_only)
     if opts.score_only or retry:
@@ -240,7 +241,12 @@ def run_one(c: Candidate, opts: Options, src: pathlib.Path) -> dict[str, Any]:
         if not pathlib.Path(state.get("python") or "-").is_file():
             note = "the sandbox's environment is gone (pruned): --force runs the candidate again"
             opts.echo(f"[{c.name}] cannot be scored again: {note}")
-            return earlier or {**row, "status": "not scorable", "note": note}
+            if not earlier:
+                return {**row, "status": "not scorable", "note": note}
+            # the verdict stays; what the events, the driver's files and git say is read again
+            earlier.update(scoring.scorecard(lay))
+            write_json(score_json, earlier)
+            return earlier
         if retry:
             opts.echo(f"[{c.name}] the score failed last time: scoring again")
     else:
@@ -252,7 +258,7 @@ def run_one(c: Candidate, opts: Options, src: pathlib.Path) -> dict[str, Any]:
         if state.get("state") != "prepared" or opts.force:
             opts.echo(f"[{c.name}] building the sandbox")
             try:
-                build(c, lay, src, opts.env)
+                build(c, lay, src, opts.env, probes)
             except ReplayError as e:
                 write_json(run_json, {"state": "dropped", "reason": str(e)})
                 opts.echo(f"[{c.name}] dropped: {e}")
@@ -275,11 +281,13 @@ def run_one(c: Candidate, opts: Options, src: pathlib.Path) -> dict[str, Any]:
         opts.echo(f"[{c.name}] ended at {stage}: retro")
         state["retro"] = opts.retro(lay)
         write_json(run_json, state)
-    row.update(scoring.score(lay), status="scored")
+    row.update(scoring.score(lay, c.probes, probes), status="scored")
     row.update({k: state[k] for k in ("stopped", "wall_s", "driver_usd", "retro") if k in state})
     failed = row["verdict"] == scoring.FAILED
     why = f"score failed ({str(row.get('result_tail', ''))[:200]}): run --score-only again"
     notes = [why] if failed else []
+    broken = row.get("probes_failed") or []
+    notes += [f"probes failed: {', '.join(broken)}"[:200]] if broken else []
     notes += [state.get("stopped") or ("" if stage == "DONE" else f"ended at {stage}")]
     notes += [outcome(lay.driver)] if stage != "DONE" else []
     notes += [f"retro {state['retro']}"] if "retro" in state else []
@@ -366,7 +374,7 @@ def main(args: argparse.Namespace) -> int:
             rows[c.name] = earlier
     ordered = [rows[c.name] for c in cands if c.name in rows]
     scoring.write_results(out, ordered)
-    print("\n" + scoring.table(ordered))
+    print("\n" + scoring.table(ordered) + "\n" + scoring.details(ordered))
     print(f"Results: {out / 'results.md'}")
     bad = any(r["status"] == "error" or r.get("verdict") == scoring.FAILED for r in ordered)
     return 1 if bad else 0

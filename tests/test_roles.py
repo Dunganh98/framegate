@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from framegate.orchestrator import package_text
+import pathlib
+
+from framegate.config import parse_config
+from framegate.orchestrator import Orchestrator, package_text
 
 
 def test_test_writer_must_ask_instead_of_dropping_cases() -> None:
@@ -33,3 +36,24 @@ def test_spec_updater_keeps_ids_and_marks_changes() -> None:
     assert "(answer ANS-2)" in text and "new ID" in text
     for name in ("requirements.md", "design.md", "plan.md"):
         assert name in text
+
+
+def test_the_spec_is_followed_and_the_guidelines_are_in_both_roles(tmp_path: pathlib.Path) -> None:
+    tests = package_text("roles", "tests.md")
+    assert "only for a contradiction inside the spec" in tests
+    assert "first make it fail" in tests
+    review = package_text("roles", "test_review.md")
+    assert "## Spec conformance" in review and "| Spec ID | Test file | Fixture as" in review
+    assert "a subclass, an object that" in review
+    guide = package_text("templates", "coding_guidelines.md")
+    rules = [line[2:] for line in guide.splitlines() if line.startswith("- ")]
+    assert len(rules) == 5 and len(guide.splitlines()) <= 15
+    orch = Orchestrator(parse_config(tmp_path, {}))
+    for role in ("implement", "review"):
+        assert not any(rule in package_text("roles", f"{role}.md") for rule in rules), role
+        text = orch.role_text(role, "demo")
+        assert text.count("# Coding guidelines") == 1 and all(r in text for r in rules), role
+    assert "# Coding guidelines" not in orch.role_text("tests", "demo")
+    summary = package_text("roles", "summary.md")
+    assert "{out}/{feature}/questions.md" in summary and "over the size limit" in summary
+    assert "(a replay)" not in package_text("templates", "chat_protocol.md")

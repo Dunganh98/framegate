@@ -40,6 +40,7 @@ from framegate import (
     deferred,
     description,
     doc_proposals,
+    env_gaps,
     followup,
     format_split,
     notify,
@@ -68,6 +69,8 @@ from framegate.checks import (
     existing_members,
     named_tests,
     plan_files,
+    red_stubs,
+    removed_guards,
     scope_coverage,
     spec_lint,
     test_lint,
@@ -286,9 +289,17 @@ DOCS_TASK = (
     "Where an update and the code disagree about what exists, the code is right: write what "
     "the code does. Write no other file."
 )
+#: roles that get templates/coding_guidelines.md appended (role_text)
+GUIDELINE_ROLES = ("implement", "review")
 #: failed final checks one automatic repair may fix before the human sees them (by the start
 #: of the check's name): the implementer owns the first group, the test writer the second
-FINAL_SRC_CHECKS = (*GATE_NAMES.values(), "regression", "coverage run", "full test suite")
+FINAL_SRC_CHECKS = (
+    *GATE_NAMES.values(),
+    "regression",
+    "coverage run",
+    "full test suite",
+    removed_guards.NAME,
+)
 FINAL_TESTS_CHECKS = ("diff coverage", "mutation score", "unreached assertions")
 #: final checks that run the whole suite: their repair run is checked with the suite too
 WHOLE_SUITE_CHECKS = ("regression", "full test suite")
@@ -366,6 +377,22 @@ TEST_REVIEW_AGAIN = (
     "## The objections of round {before}\n{objections}\n\n"
     "## The test files, changed since round {before}\n"
 )
+#: after a final repair that changed source files: a new reviewer agent with a short task
+#: (as the follow-up test review), before the gate goes to the human
+REPAIR_REVIEW = (
+    "Feature '{f}': follow-up review of a final repair (follow-up only). The final gates "
+    "failed ({failed}) and a repair run changed source files. Do not review the feature "
+    "again. Judge only the diff below against what the spec says must not change "
+    "({specs}/{f}/requirements.md): does the repair change behavior the spec keeps, remove "
+    "a check, a suppression or an error handler the code needs, or go beyond the failed "
+    "checks? Read a source file only where the diff does not show enough. Write "
+    "{out}/{f}/repair_review.md: a line `Verdict: OK` or `Verdict: OBJECTIONS`, then "
+    "`## Objections` with one bullet per objection (file, what changed, the spec text or ID "
+    "it goes against) or `None.`. Write no test and change no other file.\n\n"
+    "## Must not change (from the spec)\n{keep}\n\n"
+    "## The repair diff\n"
+)
+REPAIR_WHO = "repair review"
 #: the test files as the test reviewer last saw them (the follow-up review gets the diff)
 REVIEWED_TESTS = "reviewed_tests"
 #: lines of a failed check / of the test diff shown in a task (the rest: the file)
@@ -490,7 +517,10 @@ TASKS = {
     "FIX_FINAL": "Feature '{f}': the final gates failed these checks: {failed}. Make them pass "
     "without editing tests: fix the code. A failing test that existed before this feature means "
     "the feature broke behavior that test pins: restore it, unless the spec asks for the new "
-    "behavior (then park with that question). Check with: {check}\n" + NO_STOP,
+    "behavior (then park with that question). Do not make a check pass by removing a "
+    "suppression comment or a broad error handler; a removal the spec needs is one line of "
+    "your step note: `Removed <guard> in <file>: <spec ID>, <why>`. Check with: {check}\n"
+    + NO_STOP,
     "TESTS_STRENGTHEN": "Feature '{f}': the implementation passes its tests, but the final gates "
     "found the tests too weak: {failed}. Add or sharpen tests so they catch what is listed "
     "below (uncovered changed lines; surviving mutants in {out}/{f}/mutation_survivors.md; "
@@ -809,6 +839,8 @@ class Orchestrator:
 
     def role_text(self, role: str, feature: str) -> str:
         text = package_text("roles", f"{role}.md").rstrip() + "\n\n" + EVIDENCE_RULE
+        if role in GUIDELINE_ROLES:
+            text += "\n\n" + package_text("templates", "coding_guidelines.md").rstrip()
         if self.cfg.roles_extra_dir:
             folder = self.cfg.root / self.cfg.roles_extra_dir
             extra = folder / f"{role}.md"
@@ -1375,30 +1407,120 @@ class Orchestrator:
         text = qfile.read_text(encoding="utf-8").strip()
         qfile.unlink()
         tag = f"[{who}] "
-        mine = [o.removeprefix(tag) for o in self.open_questions(feature) if o.startswith(tag)]
+        asked = self.open_questions(feature)
         items: list[str] = []
-        repeats = 0
+        repeats = replaced = 0
         for q in split_questions(text):
             while q.startswith(tag):  # an agent that tags its own bullets
                 q = q.removeprefix(tag)
+            about = answered.identity(tag + q)
+            old = next((o for o in asked if about and answered.identity(o) == about), None)
+            mine = [o.removeprefix(tag) for o in asked if o.startswith(tag)]
+            if old == tag + q:
+                repeats += 1
+            elif old is not None:
+                # the same asker about the same spec IDs: the new wording takes its place
+                asked[asked.index(old)] = tag + q
+                items = [q if i == old.removeprefix(tag) else i for i in items]
+                replaced += 1
+                self.supersede(feature, phase, who, about, old, tag + q)
             # asked again in a later round (seen live: the human answered one question twice)
-            if any(same_question(q, o) for o in [*mine, *items]):
+            elif any(same_question(q, o) for o in mine):
                 repeats += 1
             elif not self.answered_before(feature, tag + q, who):
                 items.append(q)
+                asked.append(tag + q)
         if repeats:
             self.progress(feature, f"[{phase}] {repeats} repeated question(s) dropped.")
+        if replaced:
+            self.progress(
+                feature,
+                f"[{phase}] {replaced} question(s) took the place of an open one (the same "
+                "asker and spec IDs): shown once.",
+            )
+        if replaced:
+            self.write_open_questions(feature, asked)
+        elif items:
+            with open(d / "open_questions.md", "a", encoding="utf-8") as fh:
+                for q in items:
+                    fh.write(f"- {tag}" + q.replace("\n", "\n  ") + "\n")
         if not items:
             return 0
-        with open(d / "open_questions.md", "a", encoding="utf-8") as fh:
-            for q in items:
-                fh.write(f"- {tag}" + q.replace("\n", "\n  ") + "\n")
         kept = "\n".join("- " + q.replace("\n", "\n  ") for q in items)
         log_event(
-            self.cfg, feature, "questions", phase=phase, who=who, questions=kept, repeats=repeats
+            self.cfg,
+            feature,
+            "questions",
+            phase=phase,
+            who=who,
+            questions=kept,
+            repeats=repeats + replaced,
         )
         self.progress(feature, f"[{phase}] {len(items)} question(s) collected for the next gate.")
         return len(items)
+
+    def supersede(self, feature: str, phase: str, who: str, about: str, old: str, new: str) -> None:
+        """Log an open question replaced by a new one with the same identity; `repeats`:
+        how often that happened to this question."""
+        before = [
+            e
+            for e in read_events(self.cfg, feature)
+            if e.get("kind") == "question_superseded" and e.get("about") == about
+        ]
+        log_event(
+            self.cfg,
+            feature,
+            "question_superseded",
+            phase=phase,
+            who=who,
+            about=about,
+            superseded=old[:1000],
+            question=new[:1000],
+            repeats=len(before) + 1,
+        )
+
+    def write_open_questions(self, feature: str, questions: list[str]) -> None:
+        path = self.fdir(feature) / "open_questions.md"
+        if not questions:
+            path.unlink(missing_ok=True)
+            return
+        text = "".join("- " + q.replace("\n", "\n  ") + "\n" for q in questions)
+        path.write_text(text, encoding="utf-8")
+
+    def close_resolved(self, feature: str, prog: dict[str, Any], status: dict[str, str]) -> None:
+        """An open question that names a test check which failed in an earlier round and
+        passes now is closed (logged, archived): the writer resolved it. Seen live: the
+        owner was asked about a test the writer had already made fail first."""
+        before = set(prog.get("checks_failed") or [])
+        prog["checks_failed"] = sorted(n for n, s in status.items() if s != "PASS")
+        red = baseline.name(feature_mode(self.cfg, feature))
+        asked = self.open_questions(feature)
+        closed: dict[str, str] = {}
+        for name in sorted(n for n in before if status.get(n) == "PASS"):
+            names = [name, red_stubs.GREEN_SECTION, "red check"] if name == red else [name]
+            for q in asked:
+                if q not in closed and any(n.lower() in q.lower() for n in names):
+                    closed[q] = name
+        if not closed:
+            return
+        self.write_open_questions(feature, [q for q in asked if q not in closed])
+        with open(self.fdir(feature) / "questions_archive.md", "a", encoding="utf-8") as fh:
+            for q, name in closed.items():
+                log_event(
+                    self.cfg,
+                    feature,
+                    "question_resolved",
+                    question=q[:1000],
+                    check=name,
+                    how=answered.RESOLVED,
+                )
+                fh.write(f"\n---\n<!-- TESTS -->\n- {q}\n\n{answered.RESOLVED}: {name} passes\n")
+        self.progress(
+            feature,
+            f"[TESTS] {len(closed)} open question(s) closed, {answered.RESOLVED}: "
+            + ", ".join(sorted(set(closed.values())))
+            + " pass(es) now.",
+        )
 
     def open_questions(self, feature: str) -> list[str]:
         p = self.fdir(feature) / "open_questions.md"
@@ -2411,7 +2533,8 @@ class Orchestrator:
         path = self.fdir(feature) / "test_checks.md"
         path.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
         # (the line is cut at PROGRESS_WIDTH: a spec that names no test has nothing to say)
-        quiet = () if named_tests.named(self.cfg, feature) else (named_tests.NAME,)
+        names = named_tests.named(self.cfg, feature) or named_tests.named_files(self.cfg, feature)
+        quiet = () if names else (named_tests.NAME,)
         self.progress(
             feature,
             "[TESTS] checks: "
@@ -2425,6 +2548,7 @@ class Orchestrator:
         prog["check_failures_before"] = prog.get("check_failures") or {}
         failed = {name: outputs[name] for name, s in status.items() if s != "PASS"}
         prog["check_failures"] = {name: check_signature(text) for name, text in failed.items()}
+        self.close_resolved(feature, prog, status)
         save_progress(self.cfg, feature, prog)
         return failed
 
@@ -2609,6 +2733,7 @@ class Orchestrator:
         set_marker(self.cfg, f"tests-approved/{feature}")
         prog["human_note"] = ""
         prog["round"] = prog["check_rounds"] = 0
+        prog["checks_failed"] = []
         shutil.rmtree(self.fdir(feature) / REVIEWED_TESTS, ignore_errors=True)
         self.advance(feature, prog, "IMPLEMENT")
 
@@ -3269,6 +3394,7 @@ class Orchestrator:
                 "Change them so the feature's tests reach them, or undo that part; do not "
                 "edit tests."
             )
+        head = git(self.cfg, "rev-parse", "HEAD").strip()
         if owner == "src":
             changed = self.repair_final_src(feature, prog, failed)
         else:
@@ -3276,7 +3402,60 @@ class Orchestrator:
         log_event(self.cfg, feature, "final_repair", owner=owner, failed=failed, changed=changed)
         if not changed:
             self.progress(feature, f"[final gates] the {who} changed nothing; the result stands.")
+        else:
+            self.review_repair(feature, prog, head, failed)
         return changed
+
+    def review_repair(
+        self, feature: str, prog: dict[str, Any], since: str, failed: list[str]
+    ) -> None:
+        """A final repair that changed source files: the reviewer (a new agent, a short task)
+        looks at that diff against the spec's "Must not change". Its objections are items of
+        the final gate. Seen live: a repair made a check pass by removing what it checked."""
+        roots = self.cfg.src_roots
+        try:
+            files = git(self.cfg, "diff", "--name-only", since, "HEAD", "--", *roots).split()
+            diff = git(self.cfg, "diff", since, "HEAD", "--", *roots)
+        except GitError:
+            return
+        if not files:
+            return
+        path = self.fdir(feature) / "repair_review.md"
+        path.unlink(missing_ok=True)
+        req = self.cfg.spec_dir(feature) / "requirements.md"
+        spec = req.read_text(encoding="utf-8") if req.is_file() else ""
+        keep = references.section(spec, "Must not change").strip()
+        task = REPAIR_REVIEW.format(
+            **self.placeholders(feature),
+            failed=", ".join(failed),
+            keep=keep or "(no such section: judge against the requirements and edge cases)",
+        )
+        task += f"```diff\n{shown(diff)}\n```\n\n{LOOK_AROUND}"
+        self.agent("REVIEW", feature, prog, task, role="review")
+        self.collect_questions(feature, "REVIEW", "adversarial reviewer")
+        if path.is_file():
+            review = parse_test_review(path.read_text(encoding="utf-8"))
+            objections = review.objections
+        else:
+            objections = ["the reviewer wrote no repair_review.md: nobody looked at the repair"]
+        if objections:
+            with open(self.fdir(feature) / "open_questions.md", "a", encoding="utf-8") as fh:
+                for o in objections:
+                    fh.write(f"- [{REPAIR_WHO}] " + o.replace("\n", "\n  ") + "\n")
+        log_event(
+            self.cfg,
+            feature,
+            "repair_review",
+            follow_up=True,
+            files=files,
+            verdict="OBJECTIONS" if objections else "OK",
+            objections=objections,
+        )
+        self.progress(
+            feature,
+            f"[final gates] repair review ({len(files)} source file(s)): "
+            + (f"{len(objections)} objection(s) for the final gate" if objections else "OK"),
+        )
 
     def structure_lines(self, feature: str, output: str) -> bool:
         """Are all lines a diff-coverage output names as uncovered from the structure-fix
@@ -3611,6 +3790,8 @@ class Orchestrator:
         steps = d / "steps.md"
         again = answered.section(read_events(self.cfg, feature))
         again = ["", *again] if again else []
+        crossed = structure_check.crossed_lines(read_events(self.cfg, feature))
+        crossed = ["", *crossed] if crossed else []
         facts = final_facts(
             feature,
             plan_steps(self.cfg, feature),
@@ -3625,7 +3806,7 @@ class Orchestrator:
             parse_causes(steps.read_text(encoding="utf-8") if steps.is_file() else ""),
             followup.facts_lines(self.cfg, feature),
             unrunnable.facts_lines(self.cfg),
-            [*doc_proposals.facts_lines(self.cfg, feature), *again],
+            [*doc_proposals.facts_lines(self.cfg, feature), *again, *crossed],
         )
         (d / "final_facts.md").write_text(facts, encoding="utf-8")
 
@@ -4574,6 +4755,12 @@ class Orchestrator:
         set_phase(self.cfg, "SPEC")
         log_event(self.cfg, feature, "spec_started", mode=has)
         self.echo(f"SPEC phase set for {feature}" + (f" ({has})." if has != "feature" else "."))
+        gaps = env_gaps.write(self.cfg, self.adapter, feature)
+        if gaps:
+            log_event(self.cfg, feature, "env_gaps", missing=len(gaps) - 2)
+            self.echo(f"Environment facts ({self.cfg.paths.out}/{feature}/{env_gaps.FILE}):")
+            for line in gaps[2:]:
+                self.echo(line)
         self.echo(
             f"Spec dialogue: /framegate:feature {feature} in Claude Code (it runs this command "
             f"too); manual end of the phase: framegate approve-spec {feature}"

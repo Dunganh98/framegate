@@ -23,6 +23,7 @@ import csv
 from dataclasses import dataclass, field
 from typing import Any
 
+from framegate import task_base
 from framegate.adapters.base import NOT_MEASURED, LanguageAdapter
 from framegate.checks.existing_members import base_ref
 from framegate.checks.frame_diff import path_matches
@@ -116,9 +117,11 @@ def change_stats(adapter: LanguageAdapter, feature: str) -> dict[str, Any] | Non
     if ref is None:
         return None
     try:
+        names = drop_machine_files(cfg, git(cfg, "diff", "--name-only", ref).split())
+        # the lines: against the start formatted as the gates format (a rewrap is no change)
+        ref = task_base.formatted(adapter, ref, f"start/{feature}") if feature else ref
         numstat = git(cfg, "diff", "--numstat", ref, "--", *cfg.src_roots)
         modified = git(cfg, "diff", "--numstat", "--diff-filter=M", ref, "--", *cfg.src_roots)
-        names = drop_machine_files(cfg, git(cfg, "diff", "--name-only", ref).split())
     except GitError:
         return None
 

@@ -445,6 +445,44 @@ def merge_scoped(before: str, after: str, lines: set[int]) -> str:
     return "".join(out)
 
 
+def _code(line: str, start: int) -> str:
+    return re.sub(r"[\s'\"]", "", line[:start])
+
+
+def keep_suppressed(before: str, after: str, rx: re.Pattern[str]) -> tuple[str, list[int]]:
+    """`after` (a formatter's output for `before`) without the rewrites that put a
+    suppression comment (`rx`) next to other code: there the lines stay as they were.
+    Returns (the text, the first line in `before` of each rewrite left out)."""
+    import difflib
+
+    a, b = before.splitlines(keepends=True), after.splitlines(keepends=True)
+    out: list[str] = []
+    kept: list[int] = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        old = [_code(x, m.start()) for x in a[i1:i2] if (m := rx.search(x))]
+        new = [_code(x, m.start()) for x in b[j1:j2] if (m := rx.search(x))]
+        if tag != "equal" and new and any(x not in new for x in old):
+            out += a[i1:i2]
+            kept.append(i1 + 1)
+        else:
+            out += b[j1:j2]
+    return "".join(out), kept
+
+
+def keep_suppressed_file(path: pathlib.Path, old: bytes, pattern: str) -> list[int]:
+    """keep_suppressed on a file a formatter just rewrote (`old`: its bytes before)."""
+    new = path.read_bytes()
+    if not pattern or new == old:
+        return []
+    try:
+        text, kept = keep_suppressed(old.decode("utf-8"), new.decode("utf-8"), re.compile(pattern))
+    except UnicodeDecodeError:
+        return []
+    if kept:
+        path.write_bytes(text.encode("utf-8"))
+    return kept
+
+
 #: `path(line,col): error CODE: message` (MSBuild / dotnet format / Roslyn diagnostics)
 DIAGNOSTIC = re.compile(
     r"^\s*(?P<path>[^\s(][^(]*?)\((?P<line>\d+),\d+\):\s+(?:error|warning|info)\s"
@@ -520,6 +558,12 @@ class LanguageAdapter(abc.ABC):
     def red_stub_run(self, req_ids: Sequence[str], report: pathlib.Path) -> TestRun:
         """Run the feature's tests against the stubs with a JUnit report. Every case must fail."""
         return self.run_tests(req_ids=req_ids, junit=report)
+
+    def broken_at(self, tree: pathlib.Path, names: Sequence[str]) -> set[str] | None:
+        """Of the test cases `names` (load errors of a run), those whose test file cannot
+        be loaded in `tree` either (a checkout of an earlier commit). None: not known for
+        this language."""
+        return None
 
     def stub_failure_problem(self, case: TestCase) -> str | None:
         """For a case that failed against the stubs: a reason why the failure does not count
@@ -615,6 +659,25 @@ class LanguageAdapter(abc.ABC):
     line_scoped_format: ClassVar[bool] = False
     #: set by format_files: file -> lines the formatter rewrote outside the task's own
     format_beyond: dict[str, int] = {}  # noqa: RUF012 (replaced per call, not changed)
+    #: a comment that silences a tool on its own line (regex; "" = none). Seen live: the
+    #: formatter split a statement, its `# type: ignore` landed on another line, and the
+    #: implementer got the type error as its own. Such a statement stays unformatted.
+    line_suppression: ClassVar[str] = ""
+    #: set by format_files: file -> first lines of the statements left unformatted for that
+    format_kept: dict[str, list[int]] = {}  # noqa: RUF012 (replaced per call, not changed)
+
+    #: how a comment line starts (framegate uses leaves such lines out)
+    comment_prefixes: ClassVar[tuple[str, ...]] = ("#", "//")
+
+    def definition_pattern(self, name: str) -> str:
+        """Regex of a line that defines or assigns `name` (not a read of it); "" = not
+        known for this language: `framegate uses` then lists every line with the name."""
+        return ""
+
+    def guard_patterns(self) -> dict[str, str]:
+        """What a repair must not quietly remove (checks/removed_guards.py): label -> regex
+        of a suppression or a handler that catches everything. {} = none known."""
+        return {}
 
     def format_fix_enabled(self) -> bool:
         """[gates] format_fix, with the adapter's own format check or with a configured
@@ -695,6 +758,7 @@ class LanguageAdapter(abc.ABC):
         Sets format_beyond: file -> lines rewritten that were not changed since base_ref
         (debt from before the task, fixed with it)."""
         self.format_beyond = {}
+        self.format_kept = {}
         files = [
             f
             for f in files
@@ -706,8 +770,9 @@ class LanguageAdapter(abc.ABC):
         if not cmds:
             return ""
         scoped = self.line_scoped_format and bool(base_ref)
-        before = {f: (self.root / f).read_bytes() for f in files} if base_ref else {}
-        task_lines = {f: changed_lines(self.cfg, str(base_ref), f) for f in before}
+        keep = self.line_suppression
+        before = {f: (self.root / f).read_bytes() for f in files} if base_ref or keep else {}
+        task_lines = {f: changed_lines(self.cfg, base_ref, f) for f in before} if base_ref else {}
         failed = []
         for cmd in cmds:
             code, out = run_command(cmd, self.root, env=self.tool_env(), timeout=900)
@@ -716,8 +781,10 @@ class LanguageAdapter(abc.ABC):
                 failed.append(f"{cmd[0]} exit {code}: {out.strip().splitlines()[-1:] or ''}")
         for f, old in before.items():
             path = self.root / f
+            if kept := keep_suppressed_file(path, old, keep):
+                self.format_kept = {**self.format_kept, f: kept}
             new = path.read_bytes()
-            lines = task_lines[f] if new != old else None
+            lines = task_lines.get(f) if new != old else None
             if lines is None:
                 continue
             try:
@@ -733,6 +800,12 @@ class LanguageAdapter(abc.ABC):
         )
         if lint and fmt:
             note += ", the linter's safe fixes first"
+        if self.format_kept:
+            where = ", ".join(f"{f}:{n}" for f, ns in self.format_kept.items() for n in ns)
+            note += (
+                "; left unformatted (formatting would move a suppression comment off its "
+                f"line): {where}"
+            )
         return note + (f" (formatter problems: {'; '.join(failed)})" if failed else "")
 
     def scope_diagnostics(self, output: str, base_ref: str | None) -> tuple[str, int, int]:
@@ -1005,6 +1078,12 @@ class LanguageAdapter(abc.ABC):
         """(the interpreter / toolchain executable every run uses, where it comes from);
         None = this language has none to name."""
         return None
+
+    def missing_frameworks(self) -> dict[str, str] | None:
+        """Frameworks the project declares (dependencies, optional extras, modules its
+        tests skip without) that this environment lacks: name -> where it is declared.
+        {} = none, or not known for this language; None = the environment did not answer."""
+        return {}
 
     def env_facts(self) -> dict[str, Any]:
         """One instant question to the project's environment. Keys, all optional: `version`

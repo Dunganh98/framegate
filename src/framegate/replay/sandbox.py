@@ -1,13 +1,14 @@
 """The run folder of one candidate.
 
   <out>/runs/<name>/sandbox/   clone cut at the parent commit, no remote, its own .venv
-  <out>/runs/<name>/driver/    the driver agent's files (task.md, turns, log, report)
+  <out>/runs/<name>/driver/    the driver agent's files (task.md, facts.md, turns, log, report)
   <out>/answers/<name>/        the hidden answer: the commit's tests, patch and message, and
                                which tests prove the task. No agent may read it.
 
 The mechanical check: the commit's tests run on the parent and on the commit. A test that
 fails on the parent (or cannot be collected there) and passes on the commit proves the task.
-A candidate without such a test is dropped.
+A candidate without such a test is dropped. Its probes (tests of the candidate's author, in
+probes/<name>/ next to the candidates file) must pass on both.
 """
 
 from __future__ import annotations
@@ -370,9 +371,10 @@ def build(
     lay: Layout,
     src: pathlib.Path,
     env: Callable[[Candidate, pathlib.Path], pathlib.Path] = make_env,
+    probes: pathlib.Path | None = None,
 ) -> None:
-    """Build and check the run folder. Raises ReplayError with the reason to drop the
-    candidate."""
+    """Build and check the run folder. `probes`: the folder of the candidate's probe files.
+    Raises ReplayError with the reason to drop the candidate."""
 
     def git(*args: str) -> str:
         return sh(["git", "-C", src, *args])
@@ -396,6 +398,9 @@ def build(
     files = [t for t in tests if runnable(t)]
     if not files:
         raise ReplayError("the commit changes no test file (name them with `- tests:`)")
+    lost = [t for t in c.probes if not (probes and (probes / t).is_file())]
+    if lost:
+        raise ReplayError(f"probe file {lost[0]} is not in {probes}")
     hidden = lay.answer / "hidden"
     for t in tests:
         shown = subprocess.run(["git", "-C", str(src), "show", f"{full}:{t}"], capture_output=True)
@@ -408,6 +413,9 @@ def build(
     (lay.answer / "commit.patch").write_text(git("diff", parent, full), encoding="utf-8")
     lay.driver.mkdir(parents=True)
     (lay.driver / "task.md").write_text((c.task or message) + "\n", encoding="utf-8")
+    if c.facts:
+        text = "\n".join(f.line() for f in c.facts) + "\n"
+        (lay.driver / "facts.md").write_text(text, encoding="utf-8")
     # a file, not a shell argument: the shells mangle quotes in the candidate's setup text
     setup = f"/framegate:setup {c.setup}".strip()
     (lay.driver / "setup.txt").write_text(setup + "\n", encoding="utf-8")
@@ -415,6 +423,7 @@ def build(
     with open(lay.sandbox / ".git" / "info" / "exclude", "a", encoding="utf-8") as f:
         f.write("\n.venv/\n.claude/settings.local.json\n")
     secret = [rule_path(p) for p in (lay.answer.parent, lay.sources, src)]
+    secret += [rule_path(probes.parent)] if probes and c.probes else []
     write_deny(
         lay.sandbox, deny_rules([*secret, rule_path(lay.out / "runs") + "/*/driver"]), CHAT_RULES
     )
@@ -429,8 +438,17 @@ def build(
     cut_clone(src, full, check / "commit")
     found: dict[str, dict[str, str]] = {}
     tails: dict[str, str] = {}
+    pins: dict[str, dict[str, str]] = {}
     for name in ("base", "commit"):
         found[name], tails[name] = run_tests(py, check / name, roots, files, check / f"{name}.xml")
+        if probes and c.probes:
+            shutil.copytree(probes, check / name, dirs_exist_ok=True)
+            xml = check / f"{name}-probes.xml"
+            pins[name], tail = run_tests(py, check / name, roots, c.probes, xml)
+            broken = sorted(n for n, v in pins[name].items() if v != "pass")
+            if broken or not pins[name]:
+                where = "the parent" if name == "base" else "the commit"
+                raise ReplayError(f"a probe does not pass on {where}: {broken[:3] or tail}")
         rmtree(check / name)
     proving = sorted(
         n
@@ -452,6 +470,7 @@ def build(
             "pythonpath": roots,
             "proving": proving,
             "base_pass": sorted(n for n, v in found["base"].items() if v == "pass"),
+            "probes": sorted(pins.get("commit", {})),
         },
     )
     write_json(lay.run / "run.json", {"state": "prepared", "python": str(py)})

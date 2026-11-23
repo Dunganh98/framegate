@@ -15,6 +15,7 @@ refuses an unknown id, the task's final commit removes the entry. The owner may 
 from __future__ import annotations
 
 import datetime
+import json
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -181,6 +182,45 @@ def plan_note(cfg: Config, feature: str) -> list[str]:
         "requirements.md), or leave it:",
         *(e.line() for e in found),
     ]
+
+
+#: out/<feature>/<this>: the over-limit files the spec check already named (said once)
+NOTED = "over_limit_noted.json"
+SPLIT = "split it into one file per concept"
+
+
+def over_limit_note(cfg: Config, feature: str, over: list[tuple[str, int]]) -> list[str]:
+    """For the spec brief, once per file: the files the plan names that are already over
+    the size limit (`over`: structure.plan_over_limit) and have no refactor entry yet."""
+    path = cfg.feature_out(feature) / NOTED
+    try:
+        seen = [str(x) for x in json.loads(path.read_text(encoding="utf-8"))]
+    except (OSError, ValueError, TypeError):
+        seen = []
+    listed = {f for e in read(cfg)[0] if e.kind == "refactor" for f in e.files}
+    new = [(f, n) for f, n in over if f not in seen and f not in listed]
+    if not new:
+        return []
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps([*seen, *(f for f, _ in new)]), encoding="utf-8")
+    return [
+        f"Files the plan names that are already over the size limit ({cfg.max_file_lines} "
+        "lines): ask the user once per file: split it in this task (a plan step of its own), "
+        f"or later (`framegate deferred --later <file> --feature {feature}`):",
+        *(f"- {f}: {n} lines" for f, n in new),
+    ]
+
+
+def split_later(cfg: Config, feature: str, rel: str) -> Entry | None:
+    """The user's "later" to a file over the size limit: an entry of the list (None: no
+    such file)."""
+    rel = rel.replace("\\", "/")
+    file = cfg.root / rel
+    if not file.is_file():
+        return None
+    n = len(file.read_text(encoding="utf-8", errors="replace").splitlines())
+    text = f"{SPLIT} ({n} lines, limit {cfg.max_file_lines})"
+    return add(cfg, feature or "the spec dialogue", [Item("refactor", text, [rel])])[0]
 
 
 def listing(cfg: Config, file: str = "") -> list[str]:

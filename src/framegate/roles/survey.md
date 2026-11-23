@@ -22,7 +22,7 @@ not the project's code. You only read; you change nothing.
    vendored, deploy or CI scripts, examples, notebooks, tooling of the developers). Open
    files and follow imports where the folder's role is not plain from its name.
 3. A source folder is the folder the code is imported from: with an import root such as
-   `pythonpath = . platform/services`, `platform/services` (or its subfolders) is a source
+   `pythonpath = . services`, `services` (or its subfolders) is a source
    folder, even without an `__init__.py` above it.
 4. Every code file the task lists must end up under a source folder, a test folder, or an
    exclusion with its reason. A loose file at the root (`main.py`) is listed as a file.
@@ -32,10 +32,10 @@ not the project's code. You only read; you change nothing.
 Your last message is this JSON and nothing else, in one ```json block:
 
     {
-      "src": [{"path": "data", "evidence": "pyproject.toml [tool.setuptools.packages.find]"}],
+      "src": [{"path": "app", "evidence": "pyproject.toml [tool.setuptools.packages.find]"}],
       "tests": {"path": "tests", "evidence": "pytest.ini testpaths"},
-      "excluded": [{"path": "platform/deploy", "reason": "deploy scripts, not imported"}],
-      "notes": ["the ingest service is imported as `ingest` through pytest.ini pythonpath"]
+      "excluded": [{"path": "deploy", "reason": "deploy scripts, not imported"}],
+      "notes": ["the `api` package is imported through pytest.ini pythonpath"]
     }
 
 Paths are relative to the project root, with `/`. `evidence` names the file (and the key)

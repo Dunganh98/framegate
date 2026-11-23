@@ -107,7 +107,7 @@ def test_an_unwinnable_round_is_not_repeated(demo_repo: DemoRepo) -> None:
     assert "before the test reviewer runs (check round 1 of 2): Red against stubs" in log
     assert "back to the test writer (round 1 of 2)" not in log
     assert "failed exactly as in the round before" in log
-    assert "1 repeated question(s) dropped" in log
+    assert "1 question(s) took the place of an open one" in log
     asked = [e for e in r.events() if e["kind"] == "questions" and e["who"] == "test writer"]
     assert len(asked) == 1 and asked[0]["questions"].startswith("- RUN-R-004: `test_runner")
     # today's end state: the failed check is an item for the final gate
@@ -168,7 +168,9 @@ def test_a_repeated_question_is_collected_once(demo_repo: DemoRepo) -> None:
     # the next round: the same question again, a new one, and the new one twice
     qfile.write_text(f"- {Q1_AGAIN}\n- {Q2}\n- {Q2}\n", encoding="utf-8")
     assert orch.collect_questions("demo", "TESTS", "test writer") == 1
-    assert any("2 repeated question(s) dropped" in x for x in lines)
+    assert any("1 repeated question(s) dropped" in x for x in lines)
+    # the same asker about the same spec IDs: the new wording takes the old one's place
+    assert any("1 question(s) took the place of an open one" in x for x in lines)
     # another asker may ask the same thing (its view differs); its own tag is not doubled
     qfile.write_text(f"- [test reviewer] {Q1}\n", encoding="utf-8")
     assert orch.collect_questions("demo", "TEST_REVIEW", "test reviewer") == 1
@@ -177,7 +179,7 @@ def test_a_repeated_question_is_collected_once(demo_repo: DemoRepo) -> None:
 
     kept = orch.open_questions("demo")
     assert [q[:22] for q in kept] == [
-        "[test writer] Q1: MSC-",
+        "[test writer] Q1 (repe",
         "[test writer] Q2: MSC-",
         "[test reviewer] Q1: MS",
     ]
@@ -186,6 +188,47 @@ def test_a_repeated_question_is_collected_once(demo_repo: DemoRepo) -> None:
     assert (
         events[1]["questions"].startswith("- Q2: MSC-R-006") and "Q1" not in events[1]["questions"]
     )
+    over = [e for e in r.events() if e["kind"] == "question_superseded"]
+    assert [(e["who"], e["about"], e["repeats"]) for e in over] == [
+        ("test writer", "about test writer: R-001 R-005", 1)
+    ]
+    assert over[0]["superseded"].startswith("[test writer] Q1: MSC-")
+
+
+def test_a_question_is_its_asker_and_its_spec_ids() -> None:
+    about = answered.identity(f"[test writer] {GREEN}")
+    assert about == "about test writer: R-004"
+    assert answered.identity(f"[test writer] {GREEN_OTHER}") == about  # other words, same IDs
+    assert answered.identity(f"[test reviewer] {GREEN}") != about
+    assert answered.identity("[test writer] Are floats fine?") == ""
+    assert answered.identity("[structure report] src/a.py: split it (R-001)") == ""
+    # only among open questions: after an answer, the same IDs in other words are asked
+    events = [{"kind": "answer", "items": [{"asked": f"[test writer] {GREEN}", "a": "keep it"}]}]
+    known = answered.answers(events)
+    assert about not in known and answered.key(f"[test writer] {GREEN_OTHER}") not in known
+    assert known[answered.key(f"[test writer] {GREEN}")] == "keep it"
+
+
+def test_a_question_about_a_check_that_passes_now_is_closed(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    cfg = load_config(r.root)
+    lines: list[str] = []
+    orch = Orchestrator(cfg, get_adapter(cfg), echo=lines.append)
+    (r.root / "out/demo").mkdir(parents=True, exist_ok=True)
+    orch.write_open_questions(
+        "demo", [f"[test writer] {GREEN_ASKED}", "[test writer] Are floats fine as input?"]
+    )
+    prog: dict = {}
+    red = {"Red against stubs": "FAIL", "Traceability": "PASS"}
+    orch.close_resolved("demo", prog, red)
+    assert len(orch.open_questions("demo")) == 2 and prog["checks_failed"] == ["Red against stubs"]
+    orch.close_resolved("demo", prog, {**red, "Red against stubs": "PASS"})
+    assert orch.open_questions("demo") == ["[test writer] Are floats fine as input?"]
+    (done,) = [e for e in r.events() if e["kind"] == "question_resolved"]
+    assert done["how"] == "resolved by the writer" and done["check"] == "Red against stubs"
+    archive = (r.root / "out/demo/questions_archive.md").read_text(encoding="utf-8")
+    assert "resolved by the writer: Red against stubs passes" in archive
+    assert any("1 open question(s) closed, resolved by the writer" in x for x in lines)
 
 
 def test_an_answer_is_found_by_the_question_as_asked() -> None:

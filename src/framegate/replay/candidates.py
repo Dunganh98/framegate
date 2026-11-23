@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 KINDS = ("feature", "bugfix", "refactor")
 REQUIRED = ("repo", "commit", "kind")
-LISTS = ("tests", "pythonpath")
+LISTS = ("tests", "pythonpath", "probes")
 FIELDS = (*REQUIRED, *LISTS, "python", "install", "setup", "max-usd", "max-hours")
 
 TEMPLATE = """\
@@ -19,17 +19,31 @@ TEMPLATE = """\
 - kind: <feature | bugfix | refactor>
 
 ### Task
-<what is wanted, as the user would say it; never taken from the diff.
-Leave this section out to use the commit message.>
+<what is wanted, as a user would report it: short, no function, file or test names;
+never taken from the diff. Leave this section out to use the commit message.>
+
+### Facts
+- F1 [<topic words>]: <a detail the user knows and gives only when asked about it>
 """
 
 _NAME = re.compile(r"[a-z0-9]+(-[a-z0-9]+)*")
 _FIELD = re.compile(r"-\s+([A-Za-z-]+)\s*:\s*(.*)")
 _SHA = re.compile(r"[0-9a-fA-F]{7,40}")
+_FACT = re.compile(r"-\s+(F\d+)\s*\[([^\]]+)\]\s*:\s*(\S.*)")
 
 
 class CandidatesError(Exception):
     """Every problem of the file, one per line: `line N: what is wrong`."""
+
+
+@dataclass
+class Fact:
+    id: str
+    topics: str
+    text: str
+
+    def line(self) -> str:
+        return f"- {self.id} [{self.topics}]: {self.text}"
 
 
 @dataclass
@@ -51,6 +65,10 @@ class Candidate:
     max_hours: float | None = None
     #: what the user tells the setup up front (sent with /framegate:setup), e.g. mutation off
     setup: str = ""
+    #: what the user knows and says only when asked (the driver's facts.md)
+    facts: list[Fact] = field(default_factory=list)
+    #: test files under probes/<name>/ next to the candidates file: pass before and after
+    probes: list[str] = field(default_factory=list)
 
 
 def _number(value: str) -> float | None:
@@ -100,6 +118,7 @@ def _candidate(
             caps["max-usd"],
             caps["max-hours"],
             value("setup"),
+            probes=lists["probes"],
         ),
         [],
     )
@@ -114,7 +133,9 @@ def parse(text: str) -> list[Candidate]:
     fields: dict[str, tuple[int, str]] = {}
     install: list[str] = []
     task: list[str] = []
-    in_task = fence = False
+    facts: list[Fact] = []
+    part = ""  # "task" or "facts": the ### section the lines belong to
+    fence = False
 
     def close() -> None:
         if cur is None:
@@ -122,6 +143,7 @@ def parse(text: str) -> list[Candidate]:
         cand, found = _candidate(cur[0], cur[1], fields, install, "\n".join(task))
         errors.extend(found)
         if cand:
+            cand.facts = facts
             out.append(cand)
 
     for n, raw in enumerate(text.splitlines(), 1):
@@ -131,7 +153,7 @@ def parse(text: str) -> list[Candidate]:
         if raw.startswith("## ") and not fence:
             close()
             name = raw[3:].strip()
-            cur, fields, install, task, in_task = None, {}, [], [], False
+            cur, fields, install, task, facts, part = None, {}, [], [], [], ""
             if not _NAME.fullmatch(name):
                 errors.append(
                     f"line {n}: '{name}' is not a candidate name (a-z, 0-9, '-'); "
@@ -144,15 +166,26 @@ def parse(text: str) -> list[Candidate]:
                 names.add(name)
         elif cur is None:
             continue  # the title, notes, and the rest of a section whose name was refused
-        elif in_task:
+        elif line.lower() in ("### task", "### facts") and not fence:
+            part = line[4:].lower()
+        elif part == "task":
             task.append(raw)
-        elif line.lower() == "### task":
-            in_task = True
+        elif part == "facts":
+            m = _FACT.fullmatch(line)
+            if m and any(f.id == m.group(1) for f in facts):
+                errors.append(f"line {n}: fact {m.group(1)} is there twice")
+            elif m:
+                facts.append(Fact(m.group(1), m.group(2).strip(), m.group(3).strip()))
+            elif line and facts and not line.startswith("-"):
+                facts[-1].text += " " + line  # a fact goes on in the next line
+            elif line:
+                errors.append(f"line {n}: expected `- F1 [topic words]: the fact`, got '{line}'")
         elif line:
             m = _FIELD.fullmatch(line)
             key = m.group(1).lower() if m else ""
             if not m:
-                errors.append(f"line {n}: expected `- field: value` or `### Task`, got '{line}'")
+                want = "`- field: value`, `### Task` or `### Facts`"
+                errors.append(f"line {n}: expected {want}, got '{line}'")
             elif key not in FIELDS:
                 errors.append(f"line {n}: unknown field '{key}' (known: {', '.join(FIELDS)})")
             elif not m.group(2).strip():

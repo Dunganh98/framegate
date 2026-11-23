@@ -18,6 +18,11 @@ never edit `progress.json`, tags or anything under the out folder by hand (the e
 
 !`framegate spec $ARGUMENTS`
 
+If the output above has `declared but not installed: <name>` lines (also in
+out/$ARGUMENTS/env_facts.md): before you write a requirement or a test that needs that
+framework, ask the user: drop those tests/requirements, allow installing it, or another
+way. Write the answer into requirements.md.
+
 If the output above says the spec is **already approved**, do not start the dialogue: run
 `framegate status $ARGUMENTS --brief`, tell the user in one line where the feature stands and
 ask: continue it (default; then the run protocol below, by state as in its section B), or change
@@ -84,6 +89,9 @@ Sources, by rank:
 - A comment or docstring is no source.
 Deferred work: read the entries `framegate deferred --file <path>` prints for the files the
 task touches; when the task does one, write `Resolves: D<n>` in requirements.md.
+When a requirement changes what an input may be (None, another type or unit, a wider
+range): run `framegate uses <name>` for that function or variable, check every use site it
+lists and name in design.md each one that must change.
 Requirements come from the task only: a spec never requires text in a docstring, a comment
 or a doc, and neither you nor an agent of the run edits a documentation file. What a doc
 should say afterwards (the work makes it out of date, or the task goes another way than the
@@ -102,8 +110,7 @@ whole spec (repr, str, or str in literal quotes); the tests match the whole mess
    the docs, the code map, the code the feature touches and the project knowledge above
    (dot folders of tools such as `.serena/`, `.vscode/`, `.venv/` are machine files, not
    project context: do not read through them, and no spec names one). Work
-   through this checklist and settle each point from those sources (each gap cost a live run
-   questions, assumptions or a parked step):
+   through this checklist and settle each point from those sources:
    - requirements and acceptance criteria; edge cases (empty, NaN, missing, out-of-range,
      units, timing, ordering); failure behavior; non-goals;
    - overlaps: which requirements can apply to the same input, and which one wins; which stored
@@ -112,7 +119,7 @@ whole spec (repr, str, or str in literal quotes); the tests match the whole mess
      situation), how a test sees from outside that the situation happened, and whether a check
      over picked cases may pass with zero cases;
    - edge cases against the pinned data: for each edge case, and each outcome a rule names in
-     words ("saved", "blocked", "no result"), does the pinned data hold it? Scan for data that
+     words, does the pinned data hold it? Scan for data that
      does (the project's scan command), or decide now that a test builds the case itself
      (`unit-only: <why>` in the fixture table). `framegate spec-check` refuses an edge case
      without a fixture row; undecided, the test writer and the test reviewer each ask about it;
@@ -123,8 +130,8 @@ whole spec (repr, str, or str in literal quotes); the tests match the whole mess
      null, undefined enum values) and what a copy / clone shares;
    - serialized data: which existing golden / hash / snapshot / save tests serialize a type
      this feature changes, and is the new member in or out of them;
-   - existing data: every existing concept a requirement names in words ("the moment's goal
-     event", "his rating") resolved to one exact member and where it is set (read the code),
+   - existing data: every existing concept a requirement names in words resolved to
+     one exact member and where it is set (read the code),
      with the line that assigns it copied into the spec (an id or an index? raw or clamped?);
    - rejected input: which existing method decides each rejected case and when it is checked;
      for a parser the accepted forms (sign, largest value, overflow); for a command, each
@@ -150,15 +157,14 @@ whole spec (repr, str, or str in literal quotes); the tests match the whole mess
      reference's tests and copy its files instead of writing their own, and every step gate
      and the final gate show how far each file is from its source. Also for a port:
      - "Kept quirks" (in "Ported from"): read the reference for behaviours a stricter reading
-       of your spec would forbid (a regex `$` that also accepts a trailing newline,
-       `json.dumps` writing NaN / Infinity, a loose parse). Each one is a decision: kept on
+       of your spec would forbid (a loose parse, a value written in a non-standard form).
+       Each one is a decision: kept on
        purpose -> one bullet under "Kept quirks" (the reviewer then writes no finding about
        it); to be fixed here -> a requirement or edge case of the spec, and one bullet under
        "Reference follow-up" (the reference has it too). Ask the user only where neither is
        clearly right;
      - carried tests that cannot fail before the implementation: look through the reference's
-       test files for scans and negative checks ("no analytic name appears in the code", "X
-       is not imported"). List each under "Green against stubs" with its reason, and make
+       test files for scans and negative checks ("X is not imported"). List each under "Green against stubs" with its reason, and make
        sure every ID such a test serves has another test that does fail against the stubs;
      - a reference test file that will be carried over only in part (it tests code that is
        not ported): say so in "What may differ", so the test reviewer can tell a test left
@@ -183,8 +189,8 @@ whole spec (repr, str, or str in literal quotes); the tests match the whole mess
    answered differently first). Each: the problem in one line, then "A: ... (default) / B: ..."
    on one line:
 
-       1. A free kick inside the box?
-          A: not allowed, the rules forbid it (default) / B: allowed as an indirect kick
+       1. An empty name?
+          A: refused with an error (default) / B: accepted and stored as "unnamed"
 
    Repeat until nothing is open; usually one round.
 3. Write requirements.md, design.md and plan.md following the templates exactly (the ID format,
@@ -195,8 +201,7 @@ whole spec (repr, str, or str in literal quotes); the tests match the whole mess
    on an earlier step's code, or changes the same method, gets a "Depends on: Step N" line.
    A port: the plan follows the files, not the IDs: one step per `code` target file, in
    import order (leaf modules first; a file after the files it imports), each step covering
-   the IDs its file serves (an ID two files serve goes to the later one). The code lands
-   whole files at a time anyway; steps cut by ID end in steps with nothing left to build.
+   the IDs its file serves (an ID two files serve goes to the later one).
    Files in a plan step: a step may mention any file; everything outside the source folders
    stays read-only, the docs included (see "Sources" above).
 4. Create interface stubs in the source paths named above, in the stub style named above: full
@@ -222,7 +227,9 @@ whole spec (repr, str, or str in literal quotes); the tests match the whole mess
    ID, copied code that is not in the named file: read the code again and correct the spec's
    wording too; a forbidden marker in a stub, e.g. a lint or type suppression: write the stub
    so that it needs none). `framegate approve-spec` runs the same check and refuses while it
-   fails.
+   fails. When it lists "Files the plan names that are already over the size limit": ask
+   the user once per file: split it in this task (add a plan step) or later; for "later"
+   run `framegate deferred --later <file> --feature $ARGUMENTS`.
    Setup files: if the task needs a new package or source folder, a dependency or a tool
    setting, change those files now, in the spec phase: `framegate.toml` and the project's
    packaging / test / tool-config files (e.g. `pyproject.toml`, `requirements*.txt`,
@@ -256,7 +263,7 @@ whole spec (repr, str, or str in literal quotes); the tests match the whole mess
        **How it is proven** — the 3 most important checks of the tests and gates (rest on request)
        **Not proven** — the 3 most important things to check by using it (feel, balance, UI ...)
        **Decisions I made for you** — one line each, with what it rules out
-         ("Goals from rebounds count for the free kick: rules out crediting the rebounder.")
+         ("An empty name is refused: rules out unnamed entries.")
        **Project details that matter** — existing code / data it relies on, invariants it
          must keep (saves, hashes, public APIs)
        **Setup files changed** — one line: the files `spec-check` lists, each with why

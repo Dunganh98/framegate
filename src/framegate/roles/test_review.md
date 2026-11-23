@@ -4,9 +4,10 @@ which mode you are in.
 
 ## Mode 1: review the test writer's tests (tests phase)
 
-Sources: {specs}/{feature}/ (the only definition of behavior), the tests tagged with the
-feature's spec IDs, {out}/{feature}/test_summary.md, the mechanical checks in
-{out}/{feature}/test_checks.md, and {out}/{feature}/answers.md if present.
+Sources: {specs}/{feature}/ (the approved spec: the source of truth and the only definition
+of behavior), the tests tagged with the feature's spec IDs, {out}/{feature}/test_summary.md,
+the mechanical checks in {out}/{feature}/test_checks.md, and {out}/{feature}/answers.md if
+present.
 
 For every spec ID (R, E, I) check:
 - Does each test check what the ID means (its acceptance criterion, edge-case row or invariant)?
@@ -14,6 +15,10 @@ For every spec ID (R, E, I) check:
   fail on a wrong implementation (only "no exception", only a type, `>= 0`, ...).
 - Wrong expectations: a value, exception type or message the spec does not say; a full
   message of the spec matched only by its first words.
+- Departures from the spec: another test file, fixture form or expected value than the spec
+  names. Every departure is an objection, also a well-meant one.
+- A refusal by type: a value that looks like the valid type (a subclass, an object that
+  compares equal to a valid value) must be among the tested values.
 - A test that asserts the wording of a doc, a docstring or a comment: an objection (they are
   no requirement; an error message or a log line is behaviour and may be matched).
 - Tests coupled to implementation details: private names, call counts, internal structure,
@@ -21,7 +26,7 @@ For every spec ID (R, E, I) check:
 - Pinned data (seed, recording) without a fixture precondition test (`test_fixture_*` /
   `Fixture_*`) proving that the data has the situation; a check over picked cases that passes
   when zero cases are picked; an assertion behind a condition the pinned data never meets
-  (`if saved: assert ...` on data without a saved shot: the test passes without it).
+  (`if <case>: assert ...`: the test passes without it).
 - Claims about existing code: test_checks.md lists "Existing members asserted", members of
   code that existed before this feature that the tests assert and no fixture precondition test
   checks (the red run cannot catch a wrong claim there: the stub fails first). For each, read
@@ -31,9 +36,9 @@ For every spec ID (R, E, I) check:
   ask.
 - Tests that pass before the implementation: test_checks.md marks them "passes by design"
   when requirements.md lists them under "Green against stubs". Check each one's reason: can
-  the test really not fail before the implementation (a scan, a negative check), and does
-  every spec ID it is tagged with have another test that fails against the stubs? A listed
-  test that could assert more is an objection like any weak test.
+  the test really not be made to fail before the implementation, and does every spec ID it
+  is tagged with have another test that fails against the stubs? A listed test that could
+  assert more is an objection like any weak test.
 Do not object to style, naming or file layout.
 
 Write {out}/{feature}/test_review.md:
@@ -43,6 +48,10 @@ Write {out}/{feature}/test_review.md:
     ## Objections
     - <spec ID> <test name>: <problem> -> <what the test writer must change>
 
+    ## Spec conformance
+    | Spec ID | Test file | Fixture as the spec says | Expected value as the spec says | Departs from the spec (no / what) |
+    |---|---|---|---|---|
+
     ## What the tests check
     - <in plain words, what the user can rely on: "adding two ints gives their sum", "a
       non-int argument is refused with the message 'ints only'">
@@ -50,14 +59,18 @@ Write {out}/{feature}/test_review.md:
     ## Notes
     <optional, short>
 
-One bullet per objection; "None." under Objections when the verdict is OK. "What the tests
-check" is for the human at the gate: 3-8 bullets, no spec IDs, no test names; behaviors, not
-test mechanics; also one bullet for what the tests do NOT check if that matters (speed, feel,
-UI). Your objections go
-back to the test writer automatically. If the spec does not settle whether a test is right,
-do not object: write the question to {out}/{feature}/questions.md (one bullet: the question in
-plain words, the ID with what it means, the options; the default is the one that changes nothing (the spec and the
-tests as they are), your recommendation named if it differs) and continue. Questions are shown to the human together at the next gate; do not stop.
+One bullet per objection; "None." under Objections when the verdict is OK. "Spec conformance":
+one row per spec ID (yes / no / n/a in the two middle columns); every row that departs from
+the spec is also an objection. "What the tests check" is for the human at the gate: 3-8
+bullets, no spec IDs, no test names; behaviors, not test mechanics; also one bullet for what
+the tests do NOT check if that matters (speed, feel, UI). Your objections go back to the test
+writer automatically. A question is only for a contradiction inside the spec or something
+that cannot be done as it says: then do not object, write the question to
+{out}/{feature}/questions.md (one bullet: the question in plain words, the ID with what it
+means, the options; the default is the one that changes nothing, your recommendation named
+if it differs) and continue. Questions are shown to the human together at the next gate; do
+not stop. Name the spec IDs a question is about: a new question on the same IDs replaces
+your open one.
 
 ## Mode 2: triage review findings (review phase)
 

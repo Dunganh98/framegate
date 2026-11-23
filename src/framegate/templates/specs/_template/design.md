@@ -14,12 +14,9 @@
 
 ## Mirrored code
 <!-- Only when a requirement says "as <X> does / computes". One row per such requirement: the
-     method and lines of X, and every choice X makes that the new code (and the tests' data) must
-     copy: cut-offs (e.g. t < 0.6), raw vs clamped values, tie-breaks, order of checks. For a
-     variant (another strike type, per grade, "had he chosen X"): which input fields change and
-     how; every other field is copied unchanged. A port ("Ported from" in requirements.md)
-     needs no rows here: the files are the reference's; what it keeps on purpose against a
-     stricter reading goes under "Kept quirks" there. -->
+     method and lines of X, and every choice X makes that the new code (and the tests' data)
+     must copy: cut-offs, raw vs clamped values, tie-breaks, order of checks. A port ("Ported
+     from" in requirements.md) needs no rows here. -->
 | Requirement | Mirrors (file: method, lines) | Choices to copy / fields that change |
 |---|---|---|
 | | | |
@@ -30,10 +27,8 @@
      test leaves it out). -->
 
 ## Error handling
-<!-- One row per rule: which exception / result, where it is raised, what callers do. Every row
-     names the spec ID whose acceptance criterion tests it: a rule written only here gets no
-     test (seen live: "the first failing job is the one reported" had no ID; the implementer
-     assumed the opposite). `framegate spec-check` fails on a row without an ID. -->
+<!-- One row per rule. Every row names the spec ID whose acceptance criterion tests it: a rule
+     written only here gets no test (`framegate spec-check` fails on a row without an ID). -->
 | Situation | Exception / result, where raised, what callers do | Spec ID |
 |---|---|---|
 | | | |
@@ -48,4 +43,4 @@
 <approved new dependencies, or "none">
 
 ## Architecture constraints
-<import/layer rules, e.g. "features/ must not import from api/"; mirror them in the import checker config>
+<import/layer rules; mirror them in the import checker config>

@@ -22,6 +22,11 @@ phase:
 
 !`framegate spec $ARGUMENTS --mode bugfix`
 
+If the output above has `declared but not installed: <name>` lines (also in
+out/$ARGUMENTS/env_facts.md): before you write a requirement or a test that needs that
+framework, ask the user: drop those tests/requirements, allow installing it, or another
+way. Write the answer into requirements.md.
+
 If the output above says the spec is **already approved**, do not start the dialogue: run
 `framegate status $ARGUMENTS --brief`, tell the user in one line where it stands and ask:
 continue it (default; then the run protocol below, by state as in its section B), or change the
@@ -88,6 +93,9 @@ Sources, by rank:
 - A comment or docstring is no source.
 Deferred work: read the entries `framegate deferred --file <path>` prints for the files the
 task touches; when the task does one, write `Resolves: D<n>` in requirements.md.
+When a requirement changes what an input may be (None, another type or unit, a wider
+range): run `framegate uses <name>` for that function or variable, check every use site it
+lists and name in design.md each one that must change.
 Requirements come from the task only: a spec never requires text in a docstring, a comment
 or a doc, and neither you nor an agent of the run edits a documentation file. What a doc
 should say afterwards (the work makes it out of date, or the task goes another way than the

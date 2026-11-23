@@ -11,7 +11,7 @@ not read specs, gate files or logs. Every message you write to them:
 - puts the decision and its default first (one line), details after, and only on request;
 - is short: one or two lines for states and errors, about one screen for a gate brief;
 - uses plain words: no spec ID, test name or file path without its meaning in words ("the
-  'no shot without a free kick' rule", not "FK-R-004").
+  'an empty name is refused' rule", not "ABC-E-004").
 "More detail" / "show me X": show the relevant part of the file (final_summary.md,
 final_gates.md, tests_gate.md, test_summary.md, the spec files, retro_proposals.md, the pull
 request's description `<specs>/<f>/pr_description.md`), not all of it.
@@ -45,7 +45,7 @@ you or the user refused (`refused: ...`). Gate answers and approvals are recorde
    own commit (`<f>: docs`); never edit a doc yourself for the task.
 2. Start the run in the background: Bash tool, `run_in_background: true`, command
    `framegate run <f>` (PowerShell tool the same if Bash is not available). Note its task id.
-   If it prints `runs detached` (a replay), its task ends at once and the run goes on: only
+   If it prints `runs detached`, its task ends at once and the run goes on: only
    the live view and status tell its end; its output is the log file it names.
 3. Start the live view: Monitor tool, command `framegate watch <f>`, description
    `framegate <f>`, `timeout_ms: 1800000`.
