@@ -14,15 +14,15 @@ never change the project's source or tests.
 ## 0. The command-line tool
 
 Run `framegate --version`. If the command is not found, tell the user in one line
-("Installing the framegate CLI 0.12.5 for your user") and run
+("Installing the framegate CLI 0.12.7 for your user") and run
 
-    uv tool install "git+https://github.com/Dunganh98/framegate@v0.12.5"
+    uv tool install "git+https://github.com/Dunganh98/framegate@v0.12.7"
 
 then `framegate --version` again. If `uv` is missing or the install fails, show the error and
 the two ways out, then stop: install uv (https://docs.astral.sh/uv/) and run the setup again,
 or clone the repository and run `uv tool install --editable <clone>`. An installed CLI of
-another version than 0.12.5 (this plugin's): do not install over it yourself. Run
-`framegate preflight --plugin-version 0.12.5` and act on its lines: `RUN: <command>`: run it,
+another version than 0.12.7 (this plugin's): do not install over it yourself. Run
+`framegate preflight --plugin-version 0.12.7` and act on its lines: `RUN: <command>`: run it,
 then `framegate --version` again (say nothing when it worked, one line when it failed).
 `KEPT: ...`: a task is in progress, the update waits; say so in one line and go on. If the
 command fails with `invalid choice: 'preflight'` or `invalid choice: 'setup'` (a tool too

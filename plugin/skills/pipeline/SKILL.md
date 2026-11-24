@@ -15,9 +15,9 @@ is no spec, no test and no background run here: a yml change has no unit test.
 
 ## Start check (your first step)
 
-This plugin is version 0.12.5. Before anything else run this command yourself:
+This plugin is version 0.12.7. Before anything else run this command yourself:
 
-    framegate preflight $ARGUMENTS --plugin-version 0.12.5
+    framegate preflight $ARGUMENTS --plugin-version 0.12.7
 
 `Start check: ok`: without a word. `KEPT:` lines (a task in progress, here or in another
 repository, keeps the versions it was started with): one line to the user in all: an update
@@ -30,7 +30,7 @@ command, or `framegate pipeline` below, fails with `invalid choice`, the install
 command-line tool is older than this plugin. Bring it to this version, then repeat the
 command:
 
-    uv tool install --force "git+https://github.com/Dunganh98/framegate@v0.12.5"
+    uv tool install --force "git+https://github.com/Dunganh98/framegate@v0.12.7"
 
 ## 1. Start: the list
 
