@@ -156,6 +156,30 @@ def key(text: str) -> str:
     return f"{file} {_words(text[m.end() :] if m else text)}"
 
 
+_LINE_PAREN = re.compile(r"\([^()]*\blines?\b[^()]*\)", re.I)
+
+
+def same_change(text: str) -> tuple[str, str, str] | None:
+    """(file, section, proposed text) without line numbers, case, spacing, end punctuation."""
+    m = _LINE.match(text)
+    file = _FILE.search(text)
+    if not m or not file or file.end() > len(m.group("head")):
+        return None
+    where = _LINE_NO.sub(" ", _LINE_PAREN.sub(" ", m.group("head")[file.end() :]))
+    new = " ".join(m.group("new").lower().split()).rstrip(" .;,:!")
+    return file.group(0).replace("\\", "/").lower(), _words(where), new
+
+
+def merged(found: list[Proposal]) -> list[Proposal]:
+    """`found` with the proposals of the same change as one (the first; a contradiction)."""
+    out: dict[object, Proposal] = {}
+    for n, p in enumerate(found):
+        k = same_change(p.text) or n
+        if k not in out or (p.contradicts and not out[k].contradicts):
+            out[k] = p
+    return list(out.values())
+
+
 def verdict(question: str, answer: str) -> str:
     """The owner's answer to a `[doc update]` item: "approved" (A), "later" (B, the default)
     or "rejected" (C, a contradiction only: the answer is the owner's solution and changes
@@ -293,7 +317,8 @@ def _read(path: pathlib.Path) -> str:
 
 def proposals(cfg: Config, feature: str) -> list[Proposal]:
     """Every proposal of the task: the spec's first, then the run's; one per key (the first
-    wording, a contradiction over a plain one), none for a file framegate writes itself."""
+    wording, a contradiction over a plain one) and per change (merged), none for a file
+    framegate writes itself."""
     spec = _bullets(_spec_section(_read(cfg.spec_dir(feature) / "requirements.md")))
     run = _bullets(_read(cfg.root / run_file(cfg, feature)))
     out: dict[str, Proposal] = {}
@@ -307,7 +332,7 @@ def proposals(cfg: Config, feature: str) -> list[Proposal]:
         old = out.get(key(fixed))
         if old is not None and old.important:
             out[key(fixed)] = Proposal(fixed, f"{old.origin}, corrected to the code")
-    return list(out.values())
+    return merged(list(out.values()))
 
 
 def among(p: Proposal, answered: list[str]) -> bool:

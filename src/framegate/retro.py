@@ -633,6 +633,21 @@ def add_knowledge(text: str, section: str, line: str) -> str:
     return "\n".join([*lines[:at], line, *lines[at:]]) + "\n"
 
 
+_FENCE = re.compile(r"^(```|~~~)[ \t]*diff\b.*?^\1", re.M | re.S)
+_GENERAL_FILE = re.compile(r"specs/_template|templates/specs/|\broles/\w+\.md")
+_GENERAL_RULE = re.compile(r"^\W*General rule\W*:\W*\w", re.M | re.I)
+
+
+def ungeneral_changes(proposals: str) -> list[str]:
+    """Headings of the proposals that change a template or role without `General rule:`."""
+    found = []
+    for part in re.split(r"^(?=##\s)", proposals, flags=re.M):
+        diffs = [m.group(0) for m in _FENCE.finditer(part)]
+        if any(_GENERAL_FILE.search(d) for d in diffs) and not _GENERAL_RULE.search(part):
+            found.append(part.splitlines()[0].lstrip("# ").strip())
+    return found
+
+
 def missing_ids(proposals: str, ids: list[str]) -> list[str]:
     """IDs from retro_input.md that retro_proposals.md never mentions."""
     present = {m.group(0) for m in ITEM_ID.finditer(proposals)}

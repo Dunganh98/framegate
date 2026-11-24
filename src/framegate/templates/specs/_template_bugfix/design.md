@@ -25,10 +25,13 @@
 
 ## Error handling
 <!-- Only if the fix adds or changes an error rule; else "None". Every row names the spec ID
-     whose test covers it (`framegate spec-check` fails on a row without one). -->
-| Situation | Exception / result, where raised, what callers do | Spec ID |
-|---|---|---|
-| | | |
+     whose test covers it (`framegate spec-check` fails on a row without one).
+     Source: where the error type, the message and what is allowed come from: `task`,
+     `code: <file>:<symbol>` (existing code that refuses this way), `docs: <file>` or `asked`
+     (the user answered). `framegate spec-check` fails a row without one: ask the user. -->
+| Situation | Exception / result, where raised, what callers do | Spec ID | Source (task / code: <file>:<symbol> / docs: <file> / asked) |
+|---|---|---|---|
+| | | | |
 
 ## Dependencies
 <approved new dependencies, or "none">

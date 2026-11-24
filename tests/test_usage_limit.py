@@ -11,7 +11,9 @@ import pytest
 from conftest import DemoRepo
 from framegate import orchestrator
 from framegate.orchestrator import EXIT_GATE, LIMIT_WAIT_FILE
-from framegate.usage_limit import clock_reset, detect_usage_limit
+from framegate.usage_limit import UsageLimit, clock_reset, detect_usage_limit, wait_until
+
+SECOND = datetime.timedelta(seconds=1)
 
 UTC = datetime.timezone.utc
 NOW = datetime.datetime(2026, 11, 10, 17, 0, tzinfo=UTC)
@@ -188,3 +190,11 @@ def test_unknown_zone_falls_back_to_local_time() -> None:
     at = clock_reset("resets 4pm (Nowhere/Atlantis)", now)
     assert at is not None and at.tzinfo is not None
     assert (at.hour, at.minute, at.date()) == (16, 0, datetime.date(2026, 11, 11))
+
+
+def test_the_wait_ends_at_the_reset_ahead_or_after_the_default() -> None:
+    now = datetime.datetime(2026, 11, 24, 12, 0, tzinfo=datetime.timezone.utc)
+    hour = datetime.timedelta(hours=1)
+    assert wait_until(UsageLimit(now + hour, ""), now, 900, 60) == now + hour + 60 * SECOND
+    assert wait_until(UsageLimit(now - hour, ""), now, 900, 60) == now + 960 * SECOND
+    assert wait_until(UsageLimit(None, ""), now, 900, 60) == now + 960 * SECOND

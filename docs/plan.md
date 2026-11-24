@@ -243,7 +243,13 @@ defaults, then turn it on.
 
 **3. Simplify pass.** One agent shrinks the task's diff with the tests unchanged, before the
 review. *Evidence:* the task's diff is often larger than the original author's (21 source lines
-against 6, 18 against 5).
+against 6, 18 against 5). *Result so far:* six runs, no diff made smaller. *Candidate redesign,
+not decided:* less code at write time (the implementer takes the first that works: not needed
+at all, already in the code base, standard library, installed dependency, one clear line,
+minimum code); the pass becomes a review that lists numbered findings (delete, reuse, merge)
+with the lines each saves; the engine applies one finding at a time and keeps it only when the
+tests pass and the diff is smaller. The pass touches no test file, only files of the task's
+diff, and removes no error handling.
 
 **4. Mechanical work as commands, not model turns.** Setup becomes two commands: one installs,
 surveys and prints the confirmation table, one writes the files and runs the setup check. The
@@ -252,7 +258,8 @@ runs the chat read as many tokens as all engine agents together, and setup alone
 model turns per project.
 
 **5. Fast lane.** A small bug fix with a reproduction skips the plan steps and mutation.
-*Evidence:* a 6-line bug fix took 27 minutes.
+*Evidence:* a 6-line bug fix took 27 minutes. *Candidate threshold:* few files, few changed
+lines, no listed path, all three as settings.
 
 **6. Before-PR flow and the project's CI rules.** Before the pull request: rebase on the latest
 base, run the checks and the project's CI rules again, and write the pull request text from the
@@ -271,7 +278,9 @@ evidence linked in the brief. *Status of the decision:* probably. *Trigger:* a t
 correctness cannot be judged from unit tests, and recorded data the run can reach.
 
 **8. Security pass, by trigger only.** A separate look when the change puts values into SQL or
-shell text, or touches a listed path. Not on every task.
+shell text, or touches a listed path. Not on every task. *Candidate shape:* scanners for secrets,
+dependencies and the changed paths as gates; a reviewer that starts from the trust boundaries
+and shows a proof for every serious finding.
 
 **9. Early stop on friction.** Stop retrying before the attempt limit when signals say the spec
 or the interface is wrong: the same tests failing across attempts, blocked writes to tests or
@@ -286,6 +295,16 @@ spec template lacks a section. *Trigger:* together with item 1.
 sub-specs in one reply. Shared interfaces are frozen before any sub-task starts; each sub-task
 has its own worktree and the files it may write; merges happen one at a time, with integration
 checks after each; one final gate and one retro. *Trigger:* single tasks run clean end to end.
+
+**Candidate checks, not decided** (from two public skill sets, `addyosmani/agent-skills` and
+`DietrichGebert/ponytail`; order is set after the next replay round):
+- Diff floor: a task's diff adds no suppression or skip, deletes no test file, removes no
+  assert from a surviving test, adds no empty error handler and loosens no threshold.
+- Bug-fix proof: the new test fails on the base commit and passes on the task's head.
+- Rule checks proven at setup: each project rule check is run once on a known violation and
+  once on a clean control.
+- Review findings: each names a concrete failing case; the final summary has a "Not checked"
+  line.
 
 **When a project needs it:** the experiment mode, the Azure Pipelines template, presets (after
 two set-up projects show what repeats), the retro panel (when the single retro's proposals keep

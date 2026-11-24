@@ -63,3 +63,21 @@ def test_the_spec_named_test_file_must_be_touched(demo_repo: DemoRepo) -> None:
     (r.root / "tests/test_cli.py").write_text("def test_sub() -> None:\n    assert 1\n", "utf-8")
     res = named_tests.check(adapter, "demo")
     assert res.status == "PASS" and "touched: tests/test_cli.py (DEMO-R-002)" in res.output
+
+
+def test_unchanged_after_two_tests_on_a_line_marks_both(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    cfg = load_config(r.root)
+    req = r.root / "specs/demo/requirements.md"
+    lines = (
+        "\n## Test data and fixtures\n"
+        "- `tests/test_old.py::TestA::test_x` and `tests/test_old.py::TestA::test_y` (unchanged)\n"
+        "- `tests/test_old.py::TestB` (unchanged), `tests/test_old.py::TestC` gets a field\n"
+    )
+    req.write_text(req.read_text(encoding="utf-8") + lines, encoding="utf-8")
+    assert named_tests.named(cfg, "demo") == [
+        ("tests/test_old.py", ("TestA", "test_x"), True),
+        ("tests/test_old.py", ("TestA", "test_y"), True),
+        ("tests/test_old.py", ("TestB",), True),
+        ("tests/test_old.py", ("TestC",), False),
+    ]

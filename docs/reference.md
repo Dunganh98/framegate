@@ -325,7 +325,11 @@ the task may edit; for a bug fix the design of the fix when there is more than o
 point with no observable effect on callers or stored data is a decision the chat makes itself.
 design.md, "Public interfaces", has one row per new or changed public member with where its
 shape comes from (`task`, `code: <pattern>`, `docs: <file>`, `asked`); `spec-check` fails a
-row without a source and a public name of the stubs without a row. A reply that describes the
+row without a source and a public name of the stubs without a row. design.md, "Error
+handling", has a "Source" column: every refusal says where its error type, message and
+allowed input come from (`task`, `code: <file>:<symbol>`, `docs: <file>`, `asked`);
+`spec-check` fails a row without one. It also fails a row with an ID whose text says the case
+is untested or undefined (drop the ID, or define the behaviour). A reply that describes the
 task instead of answering the questions is not "ok" and takes no default: it is the
 requirement, and the questions it leaves open are asked again.
 
@@ -657,7 +661,9 @@ behaviour: a spec may quote it, a test may match it.
 
 No agent of the loop writes a doc; it proposes: in the spec under `## Proposed doc updates`,
 in a run as a line in `out/<f>/doc_proposals.md` (`src/framegate/doc_proposals.py`). One
-proposal per file and place (the first wording; a contradiction wins over a plain one), none
+proposal per file and place (the first wording; a contradiction wins over a plain one), one
+for two lines with the same file, section and proposed text (line numbers, case, spacing and
+end punctuation aside), none
 for a file framegate writes itself (specs, out, metrics, tests, the code map, the knowledge
 file) or an agent's memory file (`CLAUDE.md`, `AGENTS.md`). The kinds:
 
@@ -675,7 +681,9 @@ file) or an agent's memory file (`CLAUDE.md`, `AGENTS.md`). The kinds:
   question; the brief lists them under "Doc updates that will be applied after approval".
 - code text: a docstring or comment in a source file is no doc. One that the task's code
   makes wrong is reworded by the plan step that changes the file (plan.md names the lines:
-  `Reword: <file>:<lines>`). In a file no step changes it is one line, `- code text: <source
+  `Reword: <file>:<lines>`; the step gate's check `plan rewords` fails while the step's
+  diff leaves those lines, numbered as at the spec approval, untouched). In a file no step
+  changes it is one line, `- code text: <source
   file>:<lines>: today: <quoted> -> code now: <what the code does>`, listed in the final
   summary ("Stale docstrings and comments in source files"): never a question, never part of
   the docs step. `spec-check` refuses a requirement row whose subject is docstring or comment
@@ -1312,7 +1320,8 @@ Between the gates nothing stops:
 - Spec-named tests changed (a test check, blocking; `checks/named_tests.py`). An existing test
   that the spec's "Test data and fixtures" names as `tests/<file>::<Class>` or
   `tests/<file>::<Class>::<test>` must have a changed line inside it since the spec approval;
-  one that is gone (removed or renamed) fails too. `(unchanged)` after the name: not checked.
+  one that is gone (removed or renamed) fails too. `(unchanged)` after the name, on its
+  line: not checked (`spec-check` wants one test per line there, each with its file).
   A test that did not exist at the approval: not checked. Python checks the lines of the class
   or test; other languages check that the file changed. A test file the spec names for a spec
   ID must be touched too (`NOT TOUCHED` otherwise). Only an explicit placement counts: a line
@@ -1597,6 +1606,11 @@ Models and speed:
   as provisional when tests are contested), and only the steps left are parked and redone
   (`batch_split` event). A question that contests no test stops the kept part at the first
   step whose spec IDs it names; when it names none, nothing is kept.
+- A step gate whose tests pass prints notes, never a failure (`checks/step_notes.py`; kept
+  in `out/<f>/step_gate_notes.md` for the next implementer runs and the reviewer): per
+  function the step changed, the lines no test of the feature runs (one coverage run of the
+  feature's tests; Python), and the comments of the changed files that the step left alone
+  and that mention a member of the spec's "Existing data this spec reads" table.
 - A step gate judges only what belongs to the task: the tests of the step's IDs and the
   earlier steps'. The whole suite runs once, at the final gate (seen live: run at every step,
   it failed each one on tests that were red before the task). `[gates] step_tests = "suite"`
@@ -1922,7 +1936,8 @@ with their status), so the retro names a problem it sees again instead of propos
 ("The retro backlog" above).
 The retro must mention every ID in `retro_proposals.md` (a proposal, or "Not acted on" with a
 one-line reason); if IDs are missing it is re-run once with them as feedback, then a warning is
-printed and logged (`retro_coverage` event).
+printed and logged (`retro_coverage` event). The same re-run when a proposal's diff changes a
+spec template or a role without a line `General rule: <sentence valid for any project>`.
 
 retro_input.md also holds, as context without IDs, the five slowest checks, the
 orchestrator's exit records, what the reviewer wrote about a final repair, and the open

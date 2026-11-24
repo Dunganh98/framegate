@@ -20,6 +20,8 @@ from an older template) is not checked.
   dialogue surfaced only at a step gate, where nobody could fix it.
 - "Shape from" column (design.md: Public interfaces): every new or changed public member
   says where its shape comes from; see interface_source_problems.
+- An ID on an untested case, two tests on a line of "Test data and fixtures", a refusal
+  without a source (design.md: Error handling): checks/spec_rows.py.
 - "Suspected causes" (a bug report): every cause names the row whose test reaches it, or why
   it is ruled out; see checks/suspected_causes.py.
 """
@@ -501,7 +503,7 @@ def problems(cfg: Config, feature: str, adapter: LanguageAdapter | None = None) 
     """Everything the spec check finds; [] = fine. With the adapter also the forbidden
     markers in the stubs."""
     from framegate import deferred, references  # they read the spec with this module
-    from framegate.checks import plan_files, red_stubs, suspected_causes
+    from framegate.checks import plan_files, red_stubs, spec_rows, suspected_causes
 
     plan = _read(cfg.spec_dir(feature) / "plan.md")
     return [
@@ -514,6 +516,7 @@ def problems(cfg: Config, feature: str, adapter: LanguageAdapter | None = None) 
         *doc_text_problems(cfg, feature),
         *suspected_causes.spec_problems(cfg, feature),
         *interface_source_problems(cfg, feature, adapter),
+        *spec_rows.problems(cfg, feature),
         *(stub_marker_problems(adapter) if adapter is not None else []),
         *(plan_files.outside_problems(adapter, plan) if adapter is not None else []),
     ]

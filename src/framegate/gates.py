@@ -37,7 +37,7 @@ import functools
 import json
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from framegate import (
@@ -66,7 +66,9 @@ from framegate.adapters.base import (
 from framegate.checks import (
     frame_diff,
     mutation,
+    plan_rewords,
     removed_guards,
+    step_notes,
     structure,
     test_smells,
     traceability,
@@ -648,6 +650,7 @@ def checks(
     skip_mutation: bool,
     exp: ExpectedRed | None = None,
     cover_base: str | None = None,
+    steps: Sequence[int] = (),
 ) -> list[Check]:
     tag = frame_diff.approved_tag(feature)
     # an idle step (scope "idle"): the code is the one the last green gate checked, so only
@@ -702,6 +705,13 @@ def checks(
                     Check(
                         EXISTING_TESTS, lambda: existing_tests(adapter, feature, found, contested)
                     )
+                )
+        if steps and feature and scope != "fix":
+            plan = adapter.cfg.spec_dir(feature) / "plan.md"
+            text = plan.read_text(encoding="utf-8") if plan.is_file() else ""
+            if plan_rewords.step_ranges(text, steps):
+                c.append(
+                    Check(plan_rewords.NAME, lambda: plan_rewords.check(adapter, feature, steps))
                 )
         if scope == "fix" and cover_base:
             # structure fixes: the lines they wrote must be reached as at the final gate
@@ -799,6 +809,8 @@ class GateReport:
     #: checks whose tool cannot run on this machine (base.not_measured): passed over, never
     #: counted as passed; `results` has the reason and the fix
     not_measured: list[str] = field(default_factory=list)
+    #: a step gate whose tests pass: what checks/step_notes.py found (never part of the verdict)
+    notes: list[str] = field(default_factory=list)
 
     def excerpt(self, lines_per_check: int = 12, limit: int = 2000) -> str:
         """A trimmed excerpt of the failing checks' output (for events and the retro)."""
@@ -832,11 +844,12 @@ def gate_report(
     phase: str = "",
     progress: Callable[[str], None] | None = None,
     cover_base: str | None = None,
+    steps: Sequence[int] = (),
 ) -> GateReport:
     """Run all checks of the scope and return the detailed result. Each check is logged
     (`check` event: seconds, status); one that runs longer than a minute says so through
     `progress` every minute. `cover_base`: a fix scope also runs coverage and diff coverage
-    against that commit."""
+    against that commit. `steps`: the plan steps a step gate judges."""
     adapter.cfg.out_dir.mkdir(parents=True, exist_ok=True)
     lines: list[str] = []
     where = phase or scope
@@ -892,7 +905,7 @@ def gate_report(
         emit(f"Format fix: {note}")
     if scope != "idle" and getattr(adapter, "format_beyond", None):
         log_event(adapter.cfg, feature, "format_debt", files=adapter.format_beyond)
-    for check in checks(adapter, feature, scope, skip_mutation, exp, cover_base):
+    for check in checks(adapter, feature, scope, skip_mutation, exp, cover_base, steps):
         t0 = time.monotonic()
         blockers = red_blockers(failed) if check.needs_green else []
         try:
@@ -980,6 +993,15 @@ def gate_report(
         else {}
     )
     extra = run_extra_checks(adapter, feature, emit, durations, waiting) if scope == "final" else {}
+    notes: list[str] = []
+    if scope == "step" and steps and feature and not red_blockers(failed):
+        try:
+            with waiting("step notes"):
+                notes = step_notes.lines(adapter, feature)
+        except Exception:  # notes, never a reason to fail the gate
+            notes = []
+        for line in ["", *notes] if notes else []:
+            emit(line)
     return GateReport(
         not failed,
         "\n".join(lines),
@@ -994,6 +1016,7 @@ def gate_report(
         tool_failures,
         fidelity,
         not_measured,
+        notes,
     )
 
 

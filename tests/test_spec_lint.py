@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from conftest import DemoRepo
 from framegate.adapters import get_adapter
-from framegate.checks import spec_lint
+from framegate.checks import spec_lint, spec_rows
 from framegate.config import load_config
 from framegate.orchestrator import package_text
 
@@ -331,3 +331,73 @@ def test_a_public_member_says_where_its_shape_comes_from(demo_repo: DemoRepo) ->
             if t.section == "Public interfaces"
         ]
         assert table.column("shape from") == 1, kind
+
+
+ROWS = """\
+
+## Edge cases
+| ID | Situation | Expected behavior |
+|---|---|---|
+| DEMO-E-002 | a NaN argument | Undefined and untested |
+| DEMO-E-003 | an unset key | raises KeyError matching "undefined" |
+| DEMO-E-004 | an undefined name in the input | returned as it is |
+
+## Test data and fixtures
+- `tests/test_old.py::TestA::test_x` and `::test_y` (unchanged)
+- `tests/test_old.py::TestA::test_x`, `tests/test_old.py::TestB` (unchanged)
+- `tests/test_old.py::TestB::test_z` (unchanged)
+
+| ID | Data | Observable |
+|---|---|---|
+| DEMO-E-004 | unit-only: no test: left open | none |
+"""
+SOURCES = """\
+## Error handling
+| Situation | Exception / result | Spec ID | Source (task / code: <file>:<symbol> / docs: <file> / asked) |
+|---|---|---|---|
+| a bool | `TypeError` | DEMO-E-001 | task |
+| a float | `TypeError` | DEMO-E-001 | `code: src/demo/__init__.py:add` |
+| a str | `TypeError` | DEMO-E-001 | docs: docs/api.md |
+| a list | `TypeError` | DEMO-E-001 | asked |
+| a dict | `ValueError("no dicts")` | DEMO-E-001 | |
+| a set | `ValueError` | DEMO-E-001 | code: as the others |
+"""  # noqa: E501
+
+
+def test_an_id_on_an_untested_case_and_two_tests_on_a_line_are_refused(
+    demo_repo: DemoRepo,
+) -> None:
+    r = demo_repo
+    cfg = load_config(r.root)
+    req = r.root / "specs/demo/requirements.md"
+    req.write_text(spec(r, "requirements.md") + ROWS, encoding="utf-8")
+    untested = spec_rows.untested_id_problems(cfg, "demo")
+    assert [x.split(":")[0] for x in untested] == [
+        "requirements.md, Edge cases, DEMO-E-002",
+        "requirements.md, Test data and fixtures, DEMO-E-004",
+    ]
+    assert untested[0].endswith("Drop the ID (a case left open has none), or define the behaviour")
+    named = spec_rows.named_test_line_problems(cfg, "demo")
+    assert len(named) == 2, named
+    assert "a test named without its file" in named[0]
+    assert "more than one existing test on a line" in named[1]
+    assert set(untested + named) <= set(spec_lint.problems(cfg, "demo"))
+
+
+def test_a_refusal_needs_a_source(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    cfg = load_config(r.root)
+    (r.root / "specs/demo/design.md").write_text(SOURCES, encoding="utf-8")
+    found = spec_rows.refusal_source_problems(cfg, "demo")
+    assert len(found) == 2 and found == spec_lint.problems(cfg, "demo"), found
+    assert found[0].startswith('design.md, Error handling, "a dict": no source for this refusal')
+    assert found[0].endswith("is a question to the user first")
+    assert '"a set": no source for this refusal ("code: as the others")' in found[1]
+    (r.root / "specs/demo/design.md").write_text(DESIGN, encoding="utf-8")
+    assert spec_rows.refusal_source_problems(cfg, "demo") == []  # no column: an older spec
+    for mode in ("_template", "_template_bugfix", "_template_refactor"):
+        text = package_text("templates", "specs", mode, "design.md")
+        (r.root / "specs/demo/design.md").write_text(text, encoding="utf-8")
+        assert spec_rows.refusal_source_problems(cfg, "demo") == []
+        errors = [t for t in spec_lint.tables(text) if t.section == "Error handling"]
+        assert errors and errors[0].column("source") == 3

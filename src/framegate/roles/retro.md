@@ -34,23 +34,31 @@ row's status:
 A problem seen for the first time that looks like a one-off (one item, small cost): recommend
 `skip`; the backlog counts it if it comes back.
 
+Templates and roles are general: the spec templates (`specs/_template*/`), the base roles
+and the spec dialogue serve every project, feature and run. A proposal may change one only
+when the change applies to any feature and any run and no check can do it; its section then
+has a line `General rule: <one sentence that holds for any project>` (checked mechanically).
+A gap of this project (its domain, code, data or tools) goes to `## Project knowledge`, a
+project spec note or a check in the project, never into a template or role. An example, a
+special case or the lesson of one run added to a template or role is no proposal: the item
+goes to "Not acted on" with that reason.
+
 How to treat the items:
 - A question (Q) means the spec had a gap: a fresh agent could not proceed from the spec alone.
-  Questions are not failures. Propose a spec-template change (`specs/_template/`) or a new
-  question category for the `/framegate:feature` spec dialogue, so the gap is asked at SPEC time next time; if the
-  gap is specific to this project's domain, propose a project spec note instead.
+  Questions are not failures. Ask first which check at SPEC time (`framegate spec-check`)
+  would have shown the gap; a gap of this project is project knowledge or a spec note.
 - A failed attempt (F) or escalation (E): find the cause (which check, why). Repeated failures of
   the same kind -> propose a check, a line in the adapter's conventions brief, or a role-prompt
   change. A single failure with an obvious one-off cause may go to "Not acted on".
 - Rejections (R) and review findings (V): what should the test writer / test reviewer /
   implementer have caught? A dismissed finding (V, DISMISSED): was the reviewer or the spec
-  unclear? Prefer a spec-template category or a check over a prompt line.
+  unclear? Prefer a check over a prompt line.
 - A structure finding (S) was found only at the review, after every step gate passed. If it
   cost a fix run, ask what would have shown it at the step: a target the plan step should
   name with its number, or a measure the step gate could print. Count its seconds as cost.
 - An assumption (A) is a spec gap the implementer filled alone; a parked item (P) is one it
-  could not fill. Treat both like questions: which spec-template category or spec-dialogue question
-  would have closed the gap? Group assumptions of the same kind in one proposal.
+  could not fill. Treat both like questions. Group assumptions of the same kind in one
+  proposal.
 - A permission denial (D): an agent tried a command its allowed tools don't cover. Decide per
   kind: the command was needed (propose the tool rule for that phase, `[phases.<P>] tools`, or
   an adapter tool rule), it was a wrong form of an allowed command (propose a conventions-brief
@@ -69,8 +77,9 @@ Then one detailed section per proposal:
 - Problem and evidence (item IDs, counts, file references)
 - Fix, preferring in this order:
   1. a CI check / lint rule / hook (mechanically detectable)
-  2. a test, fixture, or spec-template change (a category of case keeps being missed)
-  3. a CLAUDE.md or role-prompt line (only if 1 and 2 are impossible)
+  2. a test or fixture; for a gap of this project, a project knowledge line or spec note
+  3. a template, CLAUDE.md or role-prompt line (only if 1 and 2 are impossible, and for a
+     template or role only with its `General rule:` line)
 - The concrete change (diff or script sketch)
 - Scope: `project` (only this repo: domain, spec content, local checks) or `framework`
   (generic: orchestrator, gates, checks, hooks, base roles, templates, adapters).

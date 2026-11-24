@@ -22,6 +22,7 @@ from framegate import procs
 from framegate.config import ConfigError, load_config
 from framegate.detached import ENV as DETACH_ENV
 from framegate.replay import MAX_HOURS, MAX_USD
+from framegate.replay import limit as limits
 from framegate.replay import score as scoring
 from framegate.replay.candidates import TEMPLATE, Candidate, CandidatesError, parse
 from framegate.replay.chat import claude_exe, read_pid
@@ -182,6 +183,7 @@ def claude_driver(lay: Layout, c: Candidate, caps: Caps, src: pathlib.Path) -> d
         "stopped": why,
         "wall_s": round(time.time() - start),
         "driver_usd": round(float(answer.get("total_cost_usd") or 0), 2),
+        **({} if why else limits.record(limits.detect(lay.driver))),
     }
 
 
@@ -217,6 +219,8 @@ class Options:
     retro: Callable[[Layout], str] = retro
     env: Callable[[Candidate, pathlib.Path], pathlib.Path] = make_env
     echo: Callable[[str], None] = field(default=lambda line: print(line, flush=True))
+    #: the wait for a usage-limit reset (seconds); True = interrupted
+    wait: Callable[[float], bool] = STOP.wait
     #: the candidates file: no agent of a run may read it
     file: pathlib.Path | None = None
 
@@ -258,7 +262,9 @@ def run_one(c: Candidate, opts: Options, src: pathlib.Path) -> dict[str, Any]:
             if opts.prune:
                 _prune(lay, opts)
             return earlier
-        if state.get("state") != "prepared" or opts.force:
+
+        def prepare() -> str:
+            """Build the sandbox; the reason when the candidate is dropped."""
             opts.echo(f"[{c.name}] building the sandbox")
             try:
                 hide = author_paths(opts.base, opts.file, opts.out)
@@ -266,16 +272,35 @@ def run_one(c: Candidate, opts: Options, src: pathlib.Path) -> dict[str, Any]:
             except ReplayError as e:
                 write_json(run_json, {"state": "dropped", "reason": str(e)})
                 opts.echo(f"[{c.name}] dropped: {e}")
-                return {**row, "status": "dropped", "note": str(e).splitlines()[0]}
+                return str(e).splitlines()[0]
+            return ""
+
+        if state.get("state") != "prepared" or opts.force:
+            if why := prepare():
+                return {**row, "status": "dropped", "note": why}
             state = read_json(run_json)
         if opts.prepare_only:
             return {**row, "status": "prepared"}
         caps = Caps(c.max_usd or opts.caps.usd, c.max_hours or opts.caps.hours)
-        opts.echo(f"[{c.name}] running (caps: {caps.usd:g} USD, {caps.hours:g} h)")
-        write_json(run_json, {**state, "state": "running"})
-        driven = opts.driver(lay, c, caps, src)
+
+        def start() -> dict[str, Any]:
+            opts.echo(f"[{c.name}] running (caps: {caps.usd:g} USD, {caps.hours:g} h)")
+            write_json(run_json, {**read_json(run_json), "state": "running"})
+            return opts.driver(lay, c, caps, src)
+
+        def rebuild() -> None:
+            if why := prepare():
+                raise ReplayError(why)
+
+        # the caps count per run of the driver: a wait for the reset is outside them
+        driven, limited = limits.drive(start, rebuild, opts.wait, opts.echo, c.name)
         if driven.get("stopped") == "interrupted":
             raise ReplayError("interrupted")
+        state = read_json(run_json)
+        if limited:
+            write_json(run_json, {**state, **driven, "state": limits.LIMITED, "reason": limited})
+            opts.echo(f"[{c.name}] {limits.LIMITED}: {limited}")
+            return {**row, "status": limits.LIMITED, "verdict": limits.LIMITED, "note": limited}
         state = {**state, **driven, "state": "stopped" if driven.get("stopped") else "finished"}
         write_json(run_json, state)
 

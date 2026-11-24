@@ -1,7 +1,8 @@
 """An existing test the spec names must change. requirements.md, "Test data and fixtures",
-names it as `tests/<file>::<Class>` or `tests/<file>::<Class>::<test>`; `(unchanged)` right
-after the name says it stays as it is. Seen live: the spec said a test class's fixtures must
-change, the test writer put everything in a new file, and only the test reviewer noticed.
+names it as `tests/<file>::<Class>` or `tests/<file>::<Class>::<test>`; `(unchanged)`
+after the name, on its line, says it stays as it is. Seen live: the spec said a test class's
+fixtures must change, the test writer put everything in a new file, and only the test
+reviewer noticed.
 
 A test file the spec names for a spec ID must be touched. Only an explicit placement
 counts: a line `<ID>[, <ID>]: in tests/<file>` (the template's form), or a table column
@@ -21,6 +22,7 @@ from framegate.state import GitError, git, tag_exists
 NAME = "Spec-named tests changed"
 SECTION = "Test data and fixtures"
 _COMMENT = re.compile(r"<!--.*?-->", re.S)
+_UNCHANGED = re.compile(r"\(unchanged\)", re.I)
 
 
 def named(cfg: Config, feature: str) -> list[tuple[str, tuple[str, ...], bool]]:
@@ -33,11 +35,14 @@ def named(cfg: Config, feature: str) -> list[tuple[str, tuple[str, ...], bool]]:
     rest = text[head.end() :]
     end = re.search(r"^##\s", rest, re.M)
     folder = re.escape(cfg.paths.tests.replace("\\", "/").strip("/"))
-    name = re.compile(rf"`({folder}/[^`\s:]+)::(\w+)(?:::(\w+))?`(\s*\(unchanged\))?", re.I)
+    name = re.compile(rf"`({folder}/[^`\s:]+)::(\w+)(?:::(\w+))?`", re.I)
     found: dict[tuple[str, tuple[str, ...]], bool] = {}
-    for m in name.finditer(rest[: end.start()] if end else rest):
-        key = (m.group(1), tuple(x for x in m.group(2, 3) if x))
-        found[key] = found.get(key, False) or bool(m.group(4))
+    for line in (rest[: end.start()] if end else rest).splitlines():
+        for m in name.finditer(line):
+            key = (m.group(1), tuple(x for x in m.group(2, 3) if x))
+            # the marker counts for every test named before it on its line
+            same = bool(_UNCHANGED.search(line, m.end()))
+            found[key] = found.get(key, False) or same
     return [(rel, names, same) for (rel, names), same in found.items()]
 
 

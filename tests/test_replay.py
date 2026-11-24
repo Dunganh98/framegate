@@ -16,6 +16,7 @@ import pytest
 
 from framegate import cli
 from framegate.replay import chat, guard, run, sandbox, score
+from framegate.replay import limit as limits
 from framegate.replay.candidates import Candidate, CandidatesError, parse
 from framegate.replay.sandbox import Layout, ReplayError, build, read_json, write_json
 
@@ -992,3 +993,64 @@ def test_the_guard_keeps_every_call_inside_the_run(tmp_path: pathlib.Path) -> No
     hook = json.loads((lay.driver / ".claude/settings.local.json").read_text(encoding="utf-8"))
     command = hook["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
     assert command == "python -m framegate.replay.guard --up 1"  # no path: any shell runs it
+
+
+# ---------- the usage limit ----------
+def test_a_driver_that_died_on_the_usage_limit_is_detected(tmp_path: pathlib.Path) -> None:
+    now = datetime.datetime(2026, 11, 24, 12, 0, tzinfo=datetime.timezone.utc)
+    assert limits.detect(tmp_path, now) is None  # no driver output at all
+    write_json(tmp_path / "driver.json", {"is_error": False, "result": "the usage limit hit"})
+    assert limits.detect(tmp_path, now) is None
+    text = "You've hit your limit · resets 4pm (UTC)"
+    write_json(tmp_path / "driver.json", {"is_error": True, "result": text})
+    hit = limits.record(limits.detect(tmp_path, now))["usage_limit"]
+    assert hit == {"message": text, "reset": "2026-11-24T16:00:00+00:00"}
+    assert limits.wait_seconds(hit, now) == 4 * 3600 + limits.MARGIN_S
+    write_json(tmp_path / "driver.json", {"is_error": True, "result": "API Error: 429 again"})
+    found = limits.detect(tmp_path, now)
+    assert found is not None and found.reset_at is None
+    assert limits.wait_seconds({"reset": None}, now) == limits.DEFAULT_WAIT_S + limits.MARGIN_S
+    far = (now + datetime.timedelta(hours=limits.WAIT_MAX_HOURS + 1)).isoformat()
+    assert limits.wait_seconds({"reset": far}, now) is None
+    near = (now + datetime.timedelta(hours=1)).isoformat()
+    assert limits.wait_seconds({"reset": near}, now) == 3600 + limits.MARGIN_S
+
+
+def test_a_usage_limit_is_not_run_and_the_candidate_runs_again_after_the_wait(
+    tmp_path: pathlib.Path, fake_runs: tuple[run.Options, list[str]]
+) -> None:
+    opts, driven = fake_runs
+    plain, waits = opts.driver, []
+    limited = {"usage_limit": {"message": "hit your limit", "reset": None}, "stopped": ""}
+
+    def once(lay: Layout, c: Candidate, caps: run.Caps, src: pathlib.Path) -> dict[str, Any]:
+        first = c.name not in driven
+        return {**plain(lay, c, caps, src), **(limited if first else {})}
+
+    def always(lay: Layout, c: Candidate, caps: run.Caps, src: pathlib.Path) -> dict[str, Any]:
+        return {**plain(lay, c, caps, src), **limited}
+
+    opts.wait = lambda seconds: bool(waits.append(seconds))
+    opts.driver = once
+    (row,) = run.run_all(candidates(tmp_path, "one"), opts)
+    assert (row["status"], row["verdict"]) == ("scored", "good")
+    assert driven == ["one", "one"] and waits == [limits.DEFAULT_WAIT_S + limits.MARGIN_S]
+
+    opts.driver = always
+    cands = candidates(tmp_path, "two")
+    (row,) = run.run_all(cands, opts)
+    assert row["verdict"] == row["status"] == "not run: usage limit"
+    assert row["note"] == "hit your limit; the next round runs it again"
+    assert driven.count("two") == limits.RERUNS + 1 and len(waits) == 1 + limits.RERUNS
+    folder = opts.out / "runs" / "two"
+    assert read_json(folder / "run.json")["state"] == limits.LIMITED
+    assert not (folder / "score.json").exists()
+    assert "| two | bugfix | not run: usage limit |" in score.table([row])
+    opts.driver = plain
+    (row,) = run.run_all(cands, opts)  # the next round: built and run again
+    assert row["verdict"] == "good" and driven.count("two") == limits.RERUNS + 2
+
+    opts.wait = lambda seconds: True  # Ctrl+C in the wait
+    opts.driver = always
+    (row,) = run.run_all(candidates(tmp_path, "three"), opts)
+    assert (row["status"], row["note"]) == ("error", "ReplayError: interrupted")
