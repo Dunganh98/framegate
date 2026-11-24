@@ -9,9 +9,9 @@ skills, updated by Claude Code), the command-line tool (`framegate`, installed w
 the workflow tools in the project's environment (for Python: the framegate pytest plugin).
 The user asked for this, so nothing is kept back, also with a task in progress.
 
-This plugin is version 0.12.7.
+This plugin is version 0.13.0.
 
-1. Run `framegate update --plugin-version 0.12.7` and act on every line it prints:
+1. Run `framegate update --plugin-version 0.13.0` and act on every line it prints:
    - `Start check: ok ...`: everything is in line. Say so in one line with the version and
      stop.
    - `RUN: <command>`: the command-line tool is not at this plugin's version and cannot
@@ -25,7 +25,7 @@ This plugin is version 0.12.7.
      this folder is no framegate project: the command-line tool is still updated.
    - The command fails with `invalid choice: 'update'` (a tool older than this one): run
 
-         uv tool install --force "git+https://github.com/Dunganh98/framegate@v0.12.7"
+         uv tool install --force "git+https://github.com/Dunganh98/framegate@v0.13.0"
 
      then step 1 again.
    - An install that fails (no network, no access to the repository, `framegate` running in
