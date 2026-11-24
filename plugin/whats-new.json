@@ -1,4 +1,5 @@
 {
+  "0.13.0": "new framegate defect logs a bug that escaped a task; a low-risk task can pass the final gate alone (off by default, strict rules); setup is two commands; a default answer never starts rework; the spec dialogue asks about new interfaces.",
   "0.12.7": "setup surveys the source and test folders from the code; tests that are red on your machine are listed once and not held against a task; moved code no longer counts as new; agents no longer edit your design docs, they propose changes.",
   "0.12.6": "new framegate replay measures framegate on real commits; a tree that is red before the task is recorded, not blamed on it; gates judge only the files the task changed; the usage-limit wait can be woken with framegate wake.",
   "0.12.5": "pull request descriptions keep special characters on Azure DevOps, start with a whole paragraph of the task, and no longer list items closed as not needed.",
