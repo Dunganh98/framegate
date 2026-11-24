@@ -36,10 +36,13 @@
 
 ## Error handling
 <!-- One row per rule. Every row names the spec ID whose acceptance criterion tests it: a rule
-     written only here gets no test (`framegate spec-check` fails on a row without an ID). -->
-| Situation | Exception / result, where raised, what callers do | Spec ID |
-|---|---|---|
-| | | |
+     written only here gets no test (`framegate spec-check` fails on a row without an ID).
+     Source: where the error type, the message and what is allowed come from: `task`,
+     `code: <file>:<symbol>` (existing code that refuses this way), `docs: <file>` or `asked`
+     (the user answered). `framegate spec-check` fails a row without one: ask the user. -->
+| Situation | Exception / result, where raised, what callers do | Spec ID | Source (task / code: <file>:<symbol> / docs: <file> / asked) |
+|---|---|---|---|
+| | | | |
 
 ## Command-line surface
 <!-- Only for a feature with a command or script (else "None"): one row per option. -->

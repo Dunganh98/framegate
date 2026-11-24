@@ -11,6 +11,7 @@ import pytest
 from conftest import DemoRepo, git, init_git
 from framegate.config import load_config
 from framegate.gates import GateReport, gate_report
+from framegate.orchestrator import package_text
 from framegate.retro import (
     add_knowledge,
     archive_rounds,
@@ -20,6 +21,7 @@ from framegate.retro import (
     missing_ids,
     parse_answer_items,
     split_questions,
+    ungeneral_changes,
 )
 from framegate.state import feature_finished
 from test_checks import adapter_for, write
@@ -377,3 +379,22 @@ def test_retro_of_a_run_that_stopped_before_done(
     capsys.readouterr()
     assert r.af("retro", "demo") == 1
     assert "passed the final gate" in capsys.readouterr().err
+
+
+def test_a_template_or_role_change_needs_a_general_rule() -> None:
+    fence = "`" * 3
+    template = f"{fence}diff\n--- specs/_template/requirements.md\n+<!-- a line -->\n{fence}\n"
+    role = "~~~diff\n framegate/roles/tests.md:\n+- a line\n~~~\n"
+    check = f"{fence}python\n# framegate/checks/x.py reads specs/_template/plan.md\n{fence}\n"
+    text = (
+        "## Brief\n1. a -> a template line in specs/_template/ (recommend: take)\n\n"
+        f"## 1. A gap\nFix:\n{template}Scope: framework\n\n"
+        f"## 2. Another\n{role}\n"
+        f"## 3. With the rule\n{template}General rule: every refusal names its source.\n\n"
+        f"## 4. A check\nThe template has it (specs/_template/plan.md:12).\n{check}"
+    )
+    assert ungeneral_changes(text) == ["1. A gap", "2. Another"]
+    assert ungeneral_changes("") == []
+    role_text = package_text("roles", "retro.md")
+    assert "General rule: <one sentence that holds for any project>" in role_text
+    assert "Propose a spec-template change" not in role_text

@@ -54,6 +54,16 @@ class UsageLimit:
     message: str
 
 
+def wait_until(
+    limit: UsageLimit, now: datetime.datetime, default_s: float, margin_s: float
+) -> datetime.datetime:
+    """When to try again: the reset still ahead (else `default_s` from now) plus a margin."""
+    reset = limit.reset_at if limit.reset_at and limit.reset_at > now else None
+    return (reset or now + datetime.timedelta(seconds=default_s)) + datetime.timedelta(
+        seconds=margin_s
+    )
+
+
 def _zone(name: str | None) -> datetime.tzinfo | None:
     """The named time zone, or None (= local time) when it is unknown here (Windows without
     the tzdata package has no zone database)."""

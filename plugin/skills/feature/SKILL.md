@@ -149,6 +149,7 @@ whole spec (repr, str, or str in literal quotes); the tests match the whole mess
      option's default, what happens without a value, and the message + exit code of a bad one;
    - error rules and text output: every rule in design.md's "Error handling" has a spec ID
      with an acceptance criterion; every text output has one literal example line;
+     every refusal has a source there (task, existing code, docs, or asked): none, ask;
    - mirrored code (only when a requirement says "as X does"): the method and lines of X and
      the choices to copy (cut-offs, raw vs clamped values, tie-breaks, order of checks);
    - new functions: which inputs each clamps itself, what every output holds on "no result",

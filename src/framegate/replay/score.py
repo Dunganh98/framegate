@@ -515,7 +515,8 @@ def write_results(out: pathlib.Path, rows: list[dict[str, Any]]) -> None:
         "fails; "
         "not run = the run ended before framegate built anything (the Note says where and "
         "why): no result for framegate; score failed = the hidden tests did not run (the Note "
-        "says why): `framegate replay --score-only` scores again. "
+        "says why): `framegate replay --score-only` scores again; not run: usage limit = the "
+        "driver died on the usage limit: the next round runs the candidate again. "
         "Total USD = engine + chat + driver. Time leaves out usage-limit waits.\n"
     )
     more = (

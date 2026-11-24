@@ -528,3 +528,30 @@ def test_the_default_leaves_the_doc_when_the_owners_text_contradicts_the_code(
     assert f"- [ ] {DESIGN} (run): not applied (later). Owner's note: say 'ints and bools'" in kept(
         r
     )
+
+
+def test_two_lines_with_the_same_file_section_and_text_are_one_proposal(
+    demo_repo: DemoRepo,
+) -> None:
+    r = demo_repo
+    cfg = load_config(r.root)
+    one = "docs/design.md, §9 flags (line 349 / 360): today: `[--all]` -> proposed: add 'x 2'"
+    two = "docs/design.md, §9 Flags (lines 349 and 360): today: `[--all];` -> proposed: Add  'x 2'."
+    other = "docs/design.md, §8 exits (line 351): today: `[--all]` -> proposed: add 'exit 3'"
+    assert doc_proposals.key(one) != doc_proposals.key(two)
+    assert doc_proposals.same_change(one) == doc_proposals.same_change(two)
+    assert doc_proposals.same_change(one) != doc_proposals.same_change(other)
+    assert doc_proposals.same_change(README) is None
+    req = r.root / "specs/demo/requirements.md"
+    req.write_text(REQUIREMENTS + f"\n## Proposed doc updates\n- {one}\n", encoding="utf-8")
+    run = r.root / doc_proposals.run_file(cfg, "demo")
+    run.parent.mkdir(parents=True, exist_ok=True)
+    run.write_text(f"- {two}\n- {README}\n- {README}, again\n", encoding="utf-8")
+    found = doc_proposals.proposals(cfg, "demo")
+    assert [p.shown() for p in found] == [
+        f"{one} (spec)",
+        f"{README} (run)",
+        f"{README}, again (run)",
+    ]
+    run.write_text(f"- {two}\n- {other}\n", encoding="utf-8")
+    assert len(doc_proposals.proposals(cfg, "demo")) == 2

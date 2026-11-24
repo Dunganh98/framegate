@@ -28,7 +28,7 @@ import re
 import shutil
 import sys
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from typing import Any
 
 from framegate import (
@@ -77,6 +77,7 @@ from framegate.checks import (
     removed_guards,
     scope_coverage,
     spec_lint,
+    step_notes,
     suspected_causes,
     test_lint,
     test_smells,
@@ -129,6 +130,7 @@ from framegate.retro import (
     parse_answer_items,
     same_question,
     split_questions,
+    ungeneral_changes,
 )
 from framegate.retro import build as build_retro_input
 from framegate.specs import (
@@ -166,7 +168,7 @@ from framegate.state import (
     switch_branch,
     tag_exists,
 )
-from framegate.usage_limit import UsageLimit, detect_usage_limit
+from framegate.usage_limit import UsageLimit, detect_usage_limit, wait_until
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -1104,10 +1106,7 @@ class Orchestrator:
         - the user wakes it: `framegate wake <f>` deletes {out}/{f}/limit_wait.json.
         None = the caller starts the same run again."""
         now = now_utc()
-        reset = limit.reset_at if limit.reset_at and limit.reset_at > now else None
-        until = (reset or now + datetime.timedelta(seconds=LIMIT_DEFAULT_WAIT_S)) + (
-            datetime.timedelta(seconds=LIMIT_MARGIN_S)
-        )
+        until = wait_until(limit, now, LIMIT_DEFAULT_WAIT_S, LIMIT_MARGIN_S)
         seconds = (until - now).total_seconds()
         local = until.astimezone().strftime("%a %H:%M")
         label = step or phase
@@ -1422,7 +1421,12 @@ class Orchestrator:
             )
 
     def gate(
-        self, feature: str, prog: dict[str, Any], scope: str, cover_base: str | None = None
+        self,
+        feature: str,
+        prog: dict[str, Any],
+        scope: str,
+        cover_base: str | None = None,
+        steps: Sequence[int] = (),
     ) -> GateReport:
         """gate_report with the phase, timing events and a heartbeat on the progress log."""
         return gate_report(
@@ -1432,6 +1436,26 @@ class Orchestrator:
             phase=str(prog.get("phase") or ""),
             progress=lambda text: self.progress(feature, text),
             cover_base=cover_base,
+            steps=steps,
+        )
+
+    def keep_gate_notes(self, feature: str, label: str, notes: list[str]) -> None:
+        """A green step gate's notes (checks/step_notes.py), kept for the next runs."""
+        if not notes:
+            return
+        path = self.fdir(feature) / step_notes.FILE
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(f"## {label}\n\n" + "\n".join(notes) + "\n\n")
+        self.progress(feature, f"[{label}] step gate notes (not blocking): {self.rel(path)}")
+
+    def gate_notes_context(self, feature: str) -> str:
+        """Task lines that point at the notes of the step gates ("" = none)."""
+        path = self.fdir(feature) / step_notes.FILE
+        if not path.is_file():
+            return ""
+        return (
+            f"\n\nNotes of the step gates (not failures): {self.rel(path)}. Lines no test of "
+            "the feature runs, and comments beside changed code that may be out of date."
         )
 
     def timed_check(
@@ -1757,7 +1781,12 @@ class Orchestrator:
                 if not question and self.unchanged_since_green(feature, prog, item):
                     scope = "idle"  # only the step's tests; the rest is the last gate's result
                     self.progress(feature, f"[{label}] {IDLE_PROGRESS}")
-                rep = None if question else self.gate(feature, prog, scope, item.get("cover_base"))
+                nums = item_steps(item) if item.get("kind") == "step" else []
+                rep = (
+                    None
+                    if question
+                    else self.gate(feature, prog, scope, item.get("cover_base"), nums)
+                )
                 if rep is not None and rep.ok and self.idle_refactor_step(feature, item):
                     # green tests prove nothing here: they were green before the step
                     text = (
@@ -1805,6 +1834,7 @@ class Orchestrator:
                 **({"fidelity": rep.fidelity} if rep.fidelity else {}),
             )
             if rep.ok:
+                self.keep_gate_notes(feature, label, rep.notes)
                 self.commit_format(feature, label, sorted(self.adapter.format_beyond))
                 done = commit(self.cfg, f"{feature}: {label}")
                 drift = references.differing(rep.fidelity)
@@ -2154,7 +2184,7 @@ class Orchestrator:
             return False
         label = item["label"]
         set_contested(self.cfg, self.contested(prog) + contested)
-        rep = self.gate(feature, prog, "step")
+        rep = self.gate(feature, prog, "step", steps=item_steps(item))
         if not rep.ok:
             set_contested(self.cfg, self.contested(prog))
             self.progress(
@@ -2220,13 +2250,14 @@ class Orchestrator:
         kept: list[PlanStep] = []
         for k in range(most, 0, -1):
             ids = before + [i for s in batch[:k] for i in s.reqs]
+            nums = [s.num for s in batch[:k]]
             self.set_check_scope(prog, ids, feature)
-            if self.gate(feature, prog, "step").ok:
+            if self.gate(feature, prog, "step", steps=nums).ok:
                 kept, contested = batch[:k], []  # the contested tests are not these steps'
                 break
             if contested:
                 set_contested(self.cfg, self.contested(prog) + contested)
-                if self.gate(feature, prog, "step").ok:
+                if self.gate(feature, prog, "step", steps=nums).ok:
                     kept = batch[:k]
                     break
         self.set_check_scope(prog, reqs, feature)
@@ -3161,6 +3192,7 @@ class Orchestrator:
             task += self.parked_context(prog, steps) + self.provisional_context(prog)
             task += self.later_context(feature, covered)
             task += self.size_context(feature) + self.port_context(feature, prog)
+            task += self.gate_notes_context(feature)
             if redo:
                 task += REDO_NOTE.format(**self.placeholders(feature))
             for r in redo:
@@ -3389,7 +3421,7 @@ class Orchestrator:
                     + ". Read that code against the report and write a failing test where "
                     "it is still wrong."
                 )
-            task += self.formatted_note(feature)
+            task += self.formatted_note(feature) + self.gate_notes_context(feature)
             self.agent("REVIEW", feature, prog, task)
             self.collect_questions(feature, "REVIEW", "adversarial reviewer")
             self.take_structure_findings(feature, prog)
@@ -4677,6 +4709,10 @@ class Orchestrator:
         f = self.fdir(feature) / "retro_proposals.md"
         return missing_ids(f.read_text(encoding="utf-8") if f.is_file() else "", ids)
 
+    def retro_ungeneral(self, feature: str) -> list[str]:
+        f = self.fdir(feature) / "retro_proposals.md"
+        return ungeneral_changes(f.read_text(encoding="utf-8") if f.is_file() else "")
+
     def stopped_text(self, feature: str, prog: dict[str, Any]) -> str:
         """Where a run that did not reach DONE stands and why, for the retro."""
         w, i = prog.get("waiting") or {}, prog.get("interrupted") or {}
@@ -4729,19 +4765,34 @@ class Orchestrator:
         ids = self.write_retro_input(feature, stopped)
         self.agent("RETRO", feature, prog, self.task_text("RETRO", feature))
         missing = self.retro_missing(feature, ids)
+        ungeneral = self.retro_ungeneral(feature)
         first = list(missing)
-        if missing:
+        if missing or ungeneral:
+            file = f"{self.cfg.paths.out}/{feature}/retro_proposals.md"
+            what, feedback = [], []
+            if missing:
+                what.append(f"miss {', '.join(missing)}")
+                feedback.append(
+                    f"{file} does not address these items of {self.cfg.paths.out}/{feature}/"
+                    f"retro_input.md: {', '.join(missing)}. Keep the existing proposals and add "
+                    "each missing ID: in a proposal, or in the 'Not acted on' list with a "
+                    "one-line reason."
+                )
+            if ungeneral:
+                what.append(f"change a template or role without a general rule: {len(ungeneral)}")
+                feedback.append(
+                    f"{file}: these proposals change a spec template or a role and have no "
+                    f"`General rule:` line: {'; '.join(ungeneral)}. A change that holds for any "
+                    "feature and any run gets that line; a gap of this project becomes project "
+                    "knowledge or a project check; anything else goes to 'Not acted on'."
+                )
             self.progress(
-                feature, f"[RETRO] proposals miss {', '.join(missing)}; re-running the retro once."
+                feature, f"[RETRO] proposals {'; '.join(what)}; re-running the retro once."
             )
-            prog["feedback"] = (
-                f"{self.cfg.paths.out}/{feature}/retro_proposals.md does not address these items "
-                f"of {self.cfg.paths.out}/{feature}/retro_input.md: {', '.join(missing)}. Keep "
-                "the existing proposals and add each missing ID: in a proposal, or in the "
-                "'Not acted on' list with a one-line reason."
-            )
+            prog["feedback"] = "\n".join(feedback)
             self.agent("RETRO", feature, prog, self.task_text("RETRO", feature))
             missing = self.retro_missing(feature, ids)
+            ungeneral = self.retro_ungeneral(feature)
         log_event(
             self.cfg,
             feature,
@@ -4750,6 +4801,7 @@ class Orchestrator:
             missing_first=first,
             missing=missing,
             rerun=bool(first),
+            ungeneral=ungeneral,
         )
         if missing:
             self.progress(
