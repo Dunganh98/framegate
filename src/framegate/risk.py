@@ -8,7 +8,12 @@ reason, shown on the final brief and logged (`risk` event) next to the human's d
 rating can be compared with what the human did before `[gates] final = "auto"` is switched on.
 
 Limits: `[risk]` in framegate.toml (config.Risk). A project without a measured diff coverage or
-mutation score is never low risk: there the frame proves less.
+mutation score is never low risk: there the frame proves less (but see mutation off below).
+
+A configured check that measured nothing (NOT MEASURED: the tool cannot run here, or gave no
+result) is a reason for `elevated`, named with its fix; `[gates] final = "auto"` never passes
+it. Mutation testing switched off on purpose (`[gates] mutation_tool = "none"`, a decision of
+the setup) is no reason.
 """
 
 from __future__ import annotations
@@ -18,7 +23,7 @@ import csv
 from dataclasses import dataclass, field
 from typing import Any
 
-from framegate.adapters.base import LanguageAdapter
+from framegate.adapters.base import NOT_MEASURED, LanguageAdapter
 from framegate.checks.existing_members import base_ref
 from framegate.checks.frame_diff import path_matches
 from framegate.config import drop_machine_files
@@ -45,21 +50,35 @@ class Assessment:
     reasons: list[str] = field(default_factory=list)
     #: the numbers behind it (changed lines, files, removed lines, assumptions, features)
     facts: dict[str, Any] = field(default_factory=dict)
+    #: check -> reason and fix, for configured checks that measured nothing (also a reason)
+    not_measured: dict[str, str] = field(default_factory=dict)
 
     @property
     def low(self) -> bool:
         return self.level == LOW
 
+    @property
+    def auto(self) -> bool:
+        """May `[gates] final = "auto"` pass the final gate without a stop? Only a low-risk
+        feature with every check measured."""
+        return self.low and not self.not_measured
+
     def as_dict(self) -> dict[str, Any]:
-        return {"level": self.level, "reasons": self.reasons, "facts": self.facts}
+        out = {"level": self.level, "reasons": self.reasons, "facts": self.facts}
+        return {**out, "not_measured": self.not_measured} if self.not_measured else out
 
     def line(self, auto: bool) -> str:
         """The final brief's risk line."""
-        if self.low:
-            return "Risk: low (clean run, small change, coverage and mutation measured)" + (
-                "" if auto else '; with [gates] final = "auto" this gate would not have stopped'
-            )
-        return "Risk: elevated: " + "; ".join(self.reasons)
+        if not self.low:  # an unmeasured check is one of the reasons
+            return "Risk: elevated: " + "; ".join(self.reasons)
+        proven = (
+            "coverage measured, mutation off by config"
+            if self.facts.get("mutation_off")
+            else "coverage and mutation measured"
+        )
+        return f"Risk: low (clean run, small change, {proven})" + (
+            "" if auto else '; with [gates] final = "auto" this gate would not have stopped'
+        )
 
 
 def moved_lines(diff: str) -> tuple[int, int]:
@@ -155,6 +174,7 @@ def assess(
     version; `items`: the numbered items the gate would ask; `assumptions`: logged ones."""
     cfg, limits = adapter.cfg, adapter.cfg.risk
     reasons: list[str] = []
+    not_measured: dict[str, str] = {}
     facts: dict[str, Any] = {"assumptions": assumptions, "open_items": items}
 
     runs = [e for e in events if e.get("kind") == "final_gates"]
@@ -164,9 +184,20 @@ def assess(
         reasons.append("the final gates did not run")
     elif not last.get("passed"):
         reasons.append("final gates failed: " + ", ".join(last.get("failed") or []))
+    mutation_off = (cfg.mutation_tool or "").lower() == "none"
+    if mutation_off:
+        facts["mutation_off"] = True
     for prefix, name in MEASURED.items():
+        if mutation_off and name == "mutation score":
+            continue  # the project's decision (setup), not a gap of this feature
         found = [res for check, res in results.items() if check.startswith(prefix)]
-        if last and not any(res.startswith("PASS") for res in found):
+        if not last or any(res.startswith("PASS") for res in found):
+            continue
+        blocked = [res for res in found if res.startswith(NOT_MEASURED)]
+        if blocked:  # configured, but the tool measured nothing: no proof
+            not_measured[name] = blocked[0].removeprefix(NOT_MEASURED).lstrip(": ")
+            reasons.append(f"{name} {NOT_MEASURED}: {not_measured[name]}")
+        else:  # failed, or left out by the config or by a red check before it
             reasons.append(f"{name} was not measured")
 
     if prog.get("parked"):
@@ -220,4 +251,4 @@ def assess(
         reasons.append(
             f"{done} finished feature(s) in this repository (low risk needs {limits.min_features})"
         )
-    return Assessment(ELEVATED if reasons else LOW, reasons, facts)
+    return Assessment(ELEVATED if reasons else LOW, reasons, facts, not_measured)

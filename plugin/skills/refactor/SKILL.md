@@ -40,8 +40,11 @@ at load: a command-line tool older than this plugin does not have it yet):
 It compares this plugin with the command-line tool and with the workflow tools in the
 project's environment, updates what it may and prints the rest. Act on every line, then go on:
 
-- `Start check: ok ...` and `KEPT: ...` lines: without a word (work in progress keeps the
-  versions it was started with; the next new feature, bug fix or refactor brings them in line).
+- `Start check: ok ...`: without a word.
+- `KEPT: ...` lines: an update is waiting. A task in progress (this one or another one, also
+  in another repository) keeps the versions it was started with, so nothing was updated.
+  One line to the user in all: which update waits for which task, and that
+  `/framegate:update` does it now. Never run an install command for a `KEPT:` line.
 - `UPDATED: ...`: one line to the user: what was brought to which version; a `CHANGED
   versions` part as it is (a pinned package moved: the user decides whether to keep it).
 - `RUN: <command>`: the command-line tool is not at this plugin's version and cannot replace
@@ -74,6 +77,11 @@ the language, how tests are written here, the code map and the project knowledge
 
 ## Part 1: the scope dialogue
 
+If the user gave only a name (`$ARGUMENTS`), it is just the branch and folder name: find out
+in step 1 what it refers to (the code map, the code, the docs) and ask in step 2 only what
+you still cannot decide, the requirement itself included if the code and the docs do not
+tell.
+
 1. Read what the user wants, then decide everything you can yourself: read the code map, the
    code in question, its callers and its existing tests, and the project knowledge above
    (dot folders of tools such as `.serena/`, `.vscode/`, `.venv/` are machine files, not
@@ -105,6 +113,10 @@ the language, how tests are written here, the code map and the project knowledge
    following the templates exactly: step 1 has the "Covers:" line with every ID; later steps
    need none (every step is checked with all the characterization tests) but get a "Depends
    on: Step N" line. Do not write tests and do not move any code.
+   Files in a plan step: a step may mention any file. A Markdown docs file it names by its
+   path (`README.md`, `CHANGELOG.md`, `.md` under a docs folder) becomes writable for that
+   step at the approval; everything else outside the source folders stays read-only.
+   `spec-check` prints "Documentation files the plan makes writable".
    Then run `framegate spec-check $ARGUMENTS` and fix what it lists.
    Setup files: if the task needs a new package or source folder, a dependency or a tool
    setting, change those files now, in the spec phase: `framegate.toml` and the project's

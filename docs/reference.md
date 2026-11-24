@@ -20,15 +20,17 @@ a terminal.
 | `framegate init` | write the starter files (config, spec templates, project facts, .gitignore lines) | once per repo |
 | `framegate install-tools [--dry-run] [--update]` | install what the workflow needs into the project's environment (python: the framegate pytest plugin, pytest, pytest-cov, hypothesis, diff-cover, and with a framegate.toml the lint / format / type tools its gate commands name); `--update` also brings the framegate pytest plugin there to the command-line tool's version; reports versions it changed; works before `init` | first step of `/framegate:setup`, after config changes |
 | `framegate probe [--json]` | the project facts every run depends on, from instant checks only (no test run, no linter over the code, no agent): language, the interpreter the run uses, the test / lint / format / type commands with where each comes from and whether the tool answers `--version` there, source and test folders, base branch, remote and host, deploy / CI paths locked or to lock, editable install, references; works before `init` (proposals from the project's own files) and with a framegate.toml (the configured values); always exit 0 | step 1 of `/framegate:setup` |
-| `framegate update [--plugin-version X]` | bring this machine in line with the installed plugin at any time: prints the install command for the command-line tool (it cannot replace itself while it runs), then updates the project's workflow tools; `/framegate:update` does both in the chat. A task between "spec OK" and DONE is the only thing the start check leaves alone; `update` does not |
-| `framegate preflight [<f>] [--plugin-version X] [--check]` | the start check: the command-line tool at the plugin's version (prints the install command for the chat), the project environment's workflow tools at the tool's version (updated here, unless the feature's spec is approved, `--check` is given or no feature is named), a session with outdated skills told to restart, a short setup check; one line when all is in line; always exit 0 | first step of `/framegate:feature`, `:bugfix`, `:refactor`; `:resume` with `--check` |
-| `framegate doctor [--full] [--brief]` | check the setup without agents; ends with a verdict and only what needs action (`--brief`: only that); `--full` also runs the whole test suite | after setup or config changes |
+| `framegate update [--plugin-version X]` | bring this machine in line with the installed plugin at any time: prints the install command for the command-line tool (it cannot replace itself while it runs), then updates the project's workflow tools; `/framegate:update` does both in the chat. Tasks between "spec OK" and DONE are the only thing the start check leaves alone; `update` does not, except while a run is active (it says so and updates nothing that run uses) |
+| `framegate preflight [<f>] [--plugin-version X] [--check]` | the start check: the command-line tool at the plugin's version (prints the install command for the chat), the project environment's workflow tools at the tool's version (updated here), a session with outdated skills told to restart, a short setup check; one line when all is in line; always exit 0. Nothing is updated while a task is in progress, with `--check` or without a feature: the update waits (`KEPT:`), "The start check and updates" below | first step of `/framegate:feature`, `:bugfix`, `:refactor`, `:pipeline`, `:resume` |
+| `framegate doctor [--full] [--tree] [--brief]` | check the setup without agents; ends with a verdict and only what needs action (`--brief`: only that); `--full` also runs the whole test suite; `--tree` runs it too and says what is red on the code as it is ("The tree at setup" below) | after setup or config changes; `--tree` once per repo, in `/framegate:setup` |
+| `framegate commit-setup [--dry-run] [PATH ...]` | the files the setup wrote, in one commit of their own ("The tree at setup" below); `--dry-run` only lists them | last step of `/framegate:setup` |
 | `framegate spec <f> [--mode feature\|bugfix\|refactor]` | create the branch `feat/<f>` and open the spec phase with the mode's templates | start of a feature |
-| `framegate spec-check <f>` | mechanical checks of the spec tables and the stubs (below); lists the setup files the approval commits; exit 1 on a problem | internal |
+| `framegate spec-check <f>` | mechanical checks of the spec tables and the stubs (below); lists the setup files the approval commits and the documentation files the plan makes writable; exit 1 on a problem | internal |
 | `framegate port-stubs <f> [--force]` | a port: write the stubs of its code files from the reference (text kept, function bodies replaced; python); lists imports that will not resolve here ("References and ports") | internal (spec dialogue of a port) |
 | `framegate approve-spec <f> [--force]` | spec-check, `[env] refresh`, then freeze the spec and the setup files ("spec OK"); restarts the feature if the spec changed later | gate 1 |
 | `framegate run <f>` | run the agents until the next human gate or DONE | after every decision |
 | `framegate watch <f>` | follow the progress lines of a run | while it runs |
+| `framegate wake <f>` | a run that waits for the Claude usage limit tries again now ("Usage limit" below) | the limit was refilled before the time the run waits for |
 | `framegate status [f] [--brief]` | state of one or all features | any time |
 | `framegate gate-summary <f>` | the brief of the waiting gate (decision and default first, plain words) | at a gate |
 | `framegate approve <f>` | accept the gate: final gate -> retro, then DONE (tests gate -> implement) | at a gate |
@@ -47,6 +49,7 @@ a terminal.
 | `framegate spec-brief <f>` | the project's spec conventions (the feature skill reads it) | internal |
 | `framegate protocol` | the chat run protocol (the skills read it) | internal |
 | `framegate unlock [--force]` | clear a lock left by a killed run | after a crash |
+| `framegate replay <candidates.md>` | real commits as tasks, each delivered in a sandbox cut before the commit and scored with the commit's own tests ([replay.md](replay.md)) | measuring framegate |
 | `framegate hook ...` | the Claude Code hooks (called by the plugin) | internal |
 
 Exit codes: 0 done, 1 error, 10 waiting at a gate, 130 interrupted (run again to resume).
@@ -82,11 +85,13 @@ mutation score) and never stops to ask.
 Once per repository: `/framegate:setup` in the chat (it runs `framegate probe`, reads a little,
 shows one table of the project's facts to confirm with "ok" or "5: use black", then writes
 framegate.toml, `.framegate/project.md` and the code map, runs `framegate init` and
-`framegate doctor --brief`, and offers a small smoke feature in one line; a few minutes), or by hand `framegate init [--language
+`framegate doctor --tree --brief` (the setup check and one look at the tree as it is: "The
+tree at setup" below), offers to commit the setup's files (`framegate commit-setup`) and a
+small smoke feature in one line; a few minutes plus one run of the whole suite), or by hand `framegate init [--language
 python|dotnet|generic]` (framegate.toml, spec templates, `.framegate/project.md`, .gitignore
-lines; commit them) and `framegate doctor` (checks config, git, that framegate.toml is on the base
-branch, the claude CLI, the chat's allow rules, the tools, the gate commands and the test selection by spec ID, without agents; `--full` also times the
-whole suite). Any language without a built-in adapter uses the generic adapter: test, coverage,
+lines), `framegate doctor --tree` (checks config, git, that framegate.toml is on the base
+branch, the claude CLI, the chat's allow rules, the tools, the gate commands and the test selection by spec ID, without agents; `--full` only times the
+whole suite, `--tree` also says what is red) and `framegate commit-setup`. Any language without a built-in adapter uses the generic adapter: test, coverage,
 mutation and format commands with placeholders in `[generic]` (docs/adapters.md), no framegate
 code. Also the plugin installed (docs/plugin.md), and an allow rule so the
 skills can run the CLI without a prompt after the first turn (an `allowed-tools` grant of a skill
@@ -94,13 +99,85 @@ only lasts for the turn it was invoked in): `"Bash(framegate *)"` and `"PowerShe
 under `permissions.allow` in `.claude/settings.local.json` (or answer the first prompt with
 "always allow").
 
+### The tree at setup
+
+A feature and a refactor start on a green tree. Seen in three of three replay runs on real
+repositories: the untouched tree was already red (failing tests, lint, format) and the gates
+blamed the task; the setup ended with uncommitted files and the first `framegate spec` was
+refused. So the setup looks at the tree once per project, and closes with a commit. (A bug
+fix records its own start: `[gates] regression_baseline`, under "Markers, commits, known
+failures".)
+
+`framegate doctor --tree` (`src/framegate/tree_check.py`) runs the whole suite once (the
+final gate's regression run) and uses doctor's own lint / format / typecheck / imports
+results and tool list; nothing runs twice. The setup ends on a green tree: a failing test
+that is not listed is a FAIL (verdict "not ready") until it is made to run or listed with
+its reason. After the verdict it prints plain lines:
+
+| Line | Meaning | What the setup chat does |
+|---|---|---|
+| `TESTS: 412 run, 3 fail (...)` | the count | |
+| `LISTED: <test>: <reason>` | an entry of `[gates] unrunnable_tests`, every time; "(matches no test of the suite)" when it is stale | names them once; for the debt entries (a `->` line counts them) it suggests one bug-fix or refactor task |
+| `PROBLEM: N test(s) fail on the untouched tree and are not listed:` then one line per test with the first line of its failure | red tests nobody decided about (doctor FAILs) | per test: makes it run (a missing package), or proposes an entry, the user confirms, the chat writes it. Two kinds of reason: this machine cannot run it (a database, a service, another operating system), or `red before any task: ...` (the project's own debt) |
+| `PROBLEM: the whole suite did not run to the end` / `gave no per-test results` | nothing is known about the tests (doctor FAILs) | fixes the test command or `[gates] regression_timeout` first |
+| `DEBT: <check>: N line(s) in M file(s) (most in ...)` | a lint / format / typecheck / imports check fails on the code as it is; its size is the output lines that name a file | proposes ONE clean-up task (`/framegate:refactor <name>`) as a follow-up the user accepts or skips; no question per file |
+| `MUTATION: <tool> cannot run on this machine: <why>` | e.g. WSL has no `python3` (doctor's tool check; for mutmut in WSL it now asks WSL instead of waiting for the first mutation run) | makes it run, or asks once and writes `[gates] mutation_tool = "none"` |
+| `Tree: green.` / `Tree: not green (see the lines above).` | the last line | |
+
+`[gates] unrunnable_tests` (`src/framegate/unrunnable.py`): the tests that are red before
+any task, each with its reason: this machine cannot run them, or they are the project's own
+debt (the reason then starts with "red before any task"):
+
+```toml
+[gates]
+unrunnable_tests = [
+  { test = "tests/test_db.py", reason = "needs a PostgreSQL server" },
+  { test = "tests/test_tty.py::test_resize", reason = "Linux only" },
+  { test = "tests/test_todo.py", reason = "red before any task: placeholder tests" },
+]
+```
+
+- `test` names the file: a whole test file (`tests/test_db.py` covers
+  `tests.test_db::test_connect[1]`) or one test in it (`tests/test_db.py::test_connect`). A
+  bare test name (`test_connect`) is a config error, as is an entry without a `reason`.
+- The engine cannot tell "this machine lacks a database" from "really broken". The chat
+  proposes, the user confirms, then the entry is written. Nothing is listed by itself.
+- The listed tests still run with the suite: where the database exists they pass and count.
+  A **failure** of a listed test is left out, in every mode (feature, bug fix, refactor):
+  at the step gates (the step's tests, the whole suite, the review tests), in the final
+  regression check and in the record `[gates] regression_baseline` takes. The check's result
+  line says "listed in unrunnable_tests, left out: N". Any other failing test still fails.
+- Named every time: the final gate report starts with "Listed tests", and final_facts.md
+  has "Not checked" with each test and its reason, for one line in the summary. A green
+  result says nothing about these tests.
+- Limits: a run without per-test results cannot be told apart (it fails as before). A test
+  file that cannot even be collected (an import that is missing here) stops the whole run:
+  take it out of the test command (`[python] pytest_args = ["--ignore=..."]`). With
+  `coverage_scope = "suite"` the final coverage run is the regression run and fails on any
+  red test, as it does for the regression baseline.
+
+Format and lint debt during a task needs no setting: the format fix formats a file the task
+touches whole and counts those lines for the summary; files the task does not touch are left
+alone ("Markers, commits, known failures").
+
+`framegate commit-setup [--dry-run] [PATH ...]` commits what the setup wrote, in one commit
+of its own ("framegate: setup") on the current branch: framegate.toml, the knowledge file,
+the code map, the spec template folders, `.gitignore`, the packaging / test / tool-config
+files that changed (python: the `req` marker line in the pytest config), and each `PATH`
+(a tag helper the setup added). Only these paths are committed: other changes, staged or
+not, stay as they are; ignored files are never added. With `[git] state_branch` framegate's
+own files are left out (they live on the state branch: `framegate state init`), so only the
+product-side files are committed. `--dry-run` lists the files; the setup chat shows the list
+and asks once (default: yes).
+
 Then you only type requirements, answers and gate decisions:
 
 A bug fix starts with `/framegate:bugfix <name>` and a refactor with `/framegate:refactor
 <name>` instead of step 1: the same flow with another first proof ("Modes" below).
 
 1. `/framegate:feature <name>`: creates the branch `feat/<name>` from `[git] base` (`main`) in
-   this checkout (refused with uncommitted changes to tracked files; an existing branch is used
+   this checkout (refused with uncommitted changes to tracked files: the refusal lists them
+   and the one `git commit` command that commits them as they are; an existing branch is used
    only if it is this feature's), sets the SPEC phase and starts the spec dialogue. Claude
    decides what the docs, the code map, the code and `.framegate/project.md` settle, asks only
    only the real decisions (see "Which questions are asked" below), writes
@@ -623,8 +700,11 @@ The skills only call these commands; everything works the same from a terminal.
 ```
 framegate init [--language python|dotnet|generic]  # framegate.toml, specs/_template/,
                                             # .framegate/project.md, .gitignore lines
-framegate doctor [--full] [--brief]         # check the setup without agents; ends with a
-                                            # verdict + what needs action (--brief: only that)
+framegate doctor [--full] [--tree] [--brief]  # check the setup without agents; ends with a
+                                            # verdict + what needs action (--brief: only that);
+                                            # --tree: the whole suite once, and what is red on
+                                            # the code as it is ("The tree at setup")
+framegate commit-setup [--dry-run] [PATH ...]  # the setup's files in one commit of their own
 framegate probe [--json]                    # the project facts in seconds: interpreter, test /
                                             # lint / format / type commands (+ does each tool
                                             # answer --version), folders, base branch, remote,
@@ -634,8 +714,10 @@ framegate update [--plugin-version X]       # tool and project tools at the plug
 framegate preflight [<f>] [--plugin-version X] [--check]
                                             # the skills' start check: tool at the plugin's
                                             # version (prints the install command), project
-                                            # tools at the tool's version (updates them unless
-                                            # <f> is in progress / --check), restart notice
+                                            # tools at the tool's version; a task in progress
+                                            # or --check: nothing is updated, the update
+                                            # waits; restart notice; off: [update] check =
+                                            # false, FRAMEGATE_UPDATE_CHECK=0
 framegate spec <f> [--mode feature|bugfix|refactor]
                                             # branch feat/<f> from [git] base + SPEC phase,
                                             # with the mode's spec templates
@@ -649,7 +731,11 @@ framegate approve-spec <f> [--force]        # spec-check, [env] refresh, commit 
 framegate run <f>                           # runs to the next gate (tests, final) or DONE;
                                             # progress lines on stdout + out/<f>/progress.log
 framegate watch <f>                         # live view: new progress lines until the run ends
+framegate wake <f>                          # a run waiting for the usage limit tries again now
 framegate status [<f>] [--brief]            # all features / one; --brief = short, for the chat
+framegate status --all                      # every open task on this machine, any repository
+framegate retro <f>                         # the retro of a run that stopped before DONE
+framegate note <f> <text>                   # one line of the chat, for the retro
 framegate gate-summary <f>                  # chat digest of the waiting gate
 framegate approve <f>                       # tests gate -> implement; final gate -> retro
 framegate reject <f> --reason "..."         # tests gate: writer + test reviewer re-run with it
@@ -698,7 +784,8 @@ framegate unlock [--force]                  # clear a stale .phase/.reqs left by
 Branch per feature (`[git]`): `spec` creates `<branch_prefix><f>` (`feat/`) from `base` (`main`)
 and marks it (`git config branch.<b>.framegateFeature`); it switches to an existing branch only
 if it carries that mark or the feature's spec folder, refuses with uncommitted changes to tracked
-files (untracked files are fine) and while a run is active, and only notes an already approved
+files (untracked files are fine; the refusal lists the files and prints the one command that
+commits them as they are: `git commit -m "Changes before <f>" -- <files>`) and while a run is active, and only notes an already approved
 spec (no SPEC phase). `[git] branch = false` stays on the current branch. A checkout whose
 framegate.toml is not on `main` yet sets `base` to the branch that has it. In a repository a
 team shares, `[git] state_branch` keeps framegate's files off the base and out of the pull
@@ -714,7 +801,7 @@ forget, silent if it fails. `cleanup` keeps `specs/<f>/`, the metrics row and th
 `out/events.jsonl`, refuses while the feature's run is active or before DONE (`--force`), and
 prints the `git push origin --delete` line for tags that were pushed (`[git] markers = "tags"`).
 
-**Markers, commits, known failures.** `spec-approved/<f>`, `tests-approved/<f>`, `spec-update/<f>`, `tests-update/<f>` and `knowledge-update/<f>` are private refs (`refs/<name>`) by default: `git diff tests-approved/<f>` resolves them like a tag, but no `git push`, `--tags` or `--all` publishes them to a shared remote. `[git] markers = "tags"` stores git tags instead (needed for a CI job that runs `framegate gates`); tags left by an older framegate are still read and replaced on the next write. A workflow commit stages only the workflow's paths (`[paths] src`, `tests`, `specs`, `metrics`, the knowledge file, the code map), never the whole working tree: your notes and unrelated edits stay out. `[gates] regression_baseline = true`: `approve-spec` runs the whole suite once and records the tests that already fail (`out/<f>/regression_baseline.json`, kept on a second approval); the final regression check then fails only on other failures (with the default `coverage_scope = "feature"`).
+**Markers, commits, known failures.** `spec-approved/<f>`, `tests-approved/<f>`, `spec-update/<f>`, `tests-update/<f>`, `knowledge-update/<f>` and `config-update/<f>` are private refs (`refs/<name>`) by default: `git diff tests-approved/<f>` resolves them like a tag, but no `git push`, `--tags` or `--all` publishes them to a shared remote. `[git] markers = "tags"` stores git tags instead (needed for a CI job that runs `framegate gates`); tags left by an older framegate are still read and replaced on the next write. A workflow commit stages only the workflow's paths (`[paths] src`, `tests`, `specs`, `metrics`, the knowledge file, the code map), never the whole working tree: your notes and unrelated edits stay out. Lint, format, typecheck and imports, in every mode (Python): the checks run on the whole tree, and a finding counts only in a file the task changed since the tests were approved, or since the spec was approved (the tests the task wrote). Findings in other files are left out of the verdict and of the output ("in files the task did not change (left out): N line(s)"). Limits: a type error the task causes in a file it did not change is not reported (the tests have to find it), and a failure that names no file (an import contract, a crashed tool) always counts. `[gates] regression_baseline` is about tests only: `approve-spec` runs the whole suite once and records the tests that already fail (`out/<f>/regression_baseline.json`; never a test tagged with one of the feature's own spec IDs; kept on a second approval). The step gates and the final regression check (with the default `coverage_scope = "feature"`) leave them out. Not set, it is on for a bug fix (the bug can have a failing test already) and off for a feature and a refactor, which start on a green tree; `true` / `false` in framegate.toml sets it for every mode. Formatting debt, in every mode: the format fix formats a changed file whole, so debt from before the task in a file the task touches is fixed with it, without a question. The lines the formatter rewrote outside the task's own lines are counted (`format_debt` event) and listed in final_facts.md ("Formatted beyond the task's lines"), for one line in the summary. Files the task does not touch are left as they are.
 
 **The spec phase covers the setup.** Everything the human adds or changes happens before
 "spec OK"; after it the frame is locked and no agent (and no later hand edit) may change a
@@ -973,7 +1060,10 @@ Between the gates nothing stops:
   using up its attempts. The same for a step gate whose frame check reports nothing but
   `PROTECTED PATH CHANGED` on paths the implementer may not write: it can neither have caused
   nor fix that, so it parks after that attempt, without a diagnosis run, and the reason names
-  the files (a `SUPPRESSION ADDED` is its own line to remove: normal retry).
+  the files (a `SUPPRESSION ADDED` is its own line to remove: normal retry). The frame
+  check counts a suppression by its text, per file: a line that the formatter re-wrapped,
+  or whose comment was shortened, removes one and adds the same one, which is no new
+  suppression; more of the same than before are still reported.
 - When every plan step is parked (none done, none provisional) there is nothing to review:
   the reviewer, the final checks and the summary run are skipped (`review_skipped` event,
   counted by `framegate stats <f>`), and the final gate comes at once with the parked items;
@@ -981,12 +1071,47 @@ Between the gates nothing stops:
   The first round that builds something goes through the whole review.
 - When the same checks fail `[agents] diagnose_after` attempts in a row (default 2), a
   diagnosis run (Opus, `roles/diagnosis.md`) reads everything, runs the tests and changes
-  nothing: it writes the root cause, the fix owner (`src` / `tests` / `spec`) and one
-  proposed fix (`out/<f>/diagnoses/<item>.md`, `diagnosis` event). `src`: the proposal goes
-  to the implementer's next attempt (it always gets that attempt). `tests` / `spec`: the item
-  parks at once with the proposal as its question; at the final gate one reply approves it,
-  and the redo sends it to the phase that owns the file (spec updater, test writer,
-  implementer).
+  nothing: it writes the root cause, the fix owner (`src` / `tests` / `spec` / `config` /
+  `setup`) and one proposed fix (`out/<f>/diagnoses/<item>.md`, `diagnosis` event). `src`: the proposal
+  goes to the implementer's next attempt (it always gets that attempt). `tests` / `spec` /
+  `config`: the item parks at once with the proposal as its question; at the final gate one
+  reply approves it, and the redo sends it to the phase that owns the file (spec updater,
+  test writer, implementer).
+- `Fix owner: config` is a change to framegate.toml that keeps every check as strict as it
+  is: a timeout, a tool path, a command that runs the same check, agent settings. No agent
+  may write that file. When the answer approves the proposal, the spec updater writes the
+  whole new file to `out/<f>/config_update.toml`; framegate checks it, puts it in place,
+  commits it alone (`<f>: framegate.toml updated from answers ANS-n`), tags it
+  `config-update/<f>` and goes on with the new config. The `config_update` event holds each
+  change as `key: old -> new`, and final_facts.md lists them under "framegate.toml changed
+  during the task". The frame check accepts framegate.toml while it is exactly the tagged
+  file. Not applied: a file that does not load, and a change that weakens a check
+  (`src/framegate/config_change.py`). That is a lower `diff_coverage` / `mutation_score`,
+  a new `unrunnable_tests` entry, a command that is emptied or gets an argument that leaves
+  something out (`--exclude`, `--ignore`, `-k` ...), and every key that is not known to be
+  harmless (`mutation_tool`, `regression_baseline`, `[paths]`, `[protected]`, `[frame]`,
+  `[risk]` ...). Such a change belongs to the setup (`/framegate:setup`), outside a task.
+  It is never offered for approval: the diagnosis names it with `Fix owner: setup`, and a
+  `config` proposal is checked when the diagnosis is read (the `[section]` and the TOML
+  line of its "Proposed fix"). The parked item's question is then "This needs the setup:
+  <key: old -> new> ... Run /framegate:setup ..., then continue this task"; its redo runs
+  once the gate inputs changed, or on "redo anyway". An approved change that is refused
+  all the same parks the work again with that question; nothing is redone.
+- A redo that cannot end differently is not run. Work that parked on something no
+  implementer run can change ("unfixable in IMPLEMENT", or a diagnosis with owner `tests`
+  / `spec` / `config`) keeps a digest of what the gates read outside the source folders:
+  every tracked file outside `[paths] src`, the review tests, the out folder and the code
+  map (the spec, the frozen tests, framegate.toml, packaging and tool config), uncommitted
+  changes to such files, and the two records of what was red at the spec approval. When
+  the answer only approves ("ok", "Approved: apply the proposed fix as written") and the
+  digest is still the same after the spec updater and the test writer ran, the approved
+  change was not made: the item parks again at once ("not redone: nothing changed since it
+  parked", `redo_result` with `unchanged`), without an implementer or a diagnosis run, and
+  its question says what is missing. An answer that says more than an approval is new
+  information and its redo always runs; so does "redo anyway" (for a change framegate
+  cannot see: an installed package, a service). Seen live in three of three replay runs:
+  an approved framegate.toml change nobody could apply, redone with the same failed
+  attempts and a second diagnosis that found the same thing.
 - Provisional steps: when only named frozen tests are wrong (park.md starts with `Park kind:
   tests-wrong` and `Contested tests: A, B`, or a diagnosis says `Fix owner: tests` with a
   `Contested tests:` line) and the step's code passes every other check of its step gate, the
@@ -1072,6 +1197,58 @@ task again. A reset further away than `[agents] limit_wait_max_hours` (default 6
 wait), e.g. a weekly limit, or a limit still there after 4 waits, stops the run like Ctrl+C
 (exit 130, `interrupted` with the reset time); `framegate run <f>` after the reset goes on.
 
+The time claude names is the latest end of the wait, not the only one (seen live: a run slept
+1 h 40 min after the limit had been refilled). Two things end it early:
+
+- **A try that gets through.** Every `[agents] limit_probe_minutes` (default 5; `0` = no
+  tries) framegate starts the refused run again. Claude refuses a run at the limit before
+  any model call, so a refused try costs nothing; it leaves no `agent_run` event and no run
+  files. The try that gets through is the run itself (the same task, the same model): no
+  extra call is paid for, and the run goes on from there.
+- **`framegate wake <f>`.** The waiting run tries again within 5 seconds (in the chat: tell
+  it the limit is back). While a run waits, `out/<f>/limit_wait.json` exists; the command
+  deletes it, and so may you. A run that is not waiting: exit 1, nothing happens. If the
+  limit is still there, the run is refused again and a new wait starts (it counts as one of
+  the 4).
+
+Ctrl+C / a stop during the wait behaves as before (exit 130, state kept). The end of a wait is
+a `usage_limit_over` event (`how`: `reset`, `probe` or `wake`; `waited_s`; `probes`).
+
+**The start check and updates.** Three pieces run at one version: the plugin (Claude Code
+updates it), the command-line tool (one per machine) and the project environment's workflow
+tools (one per project). The start check (`framegate preflight`) brings the last two to the
+plugin's version, but never under a task in progress:
+
+- "spec OK" (`approve-spec`) writes the framegate version into the task's `progress.json`
+  (`framegate`) and the task into a list for this machine (`<claude config>/framegate/tasks/`,
+  one small file per task; `framegate run` adds a task an older version approved). A task
+  leaves the list when it is DONE or its run files are gone (`cleanup`).
+- While any task on this machine is in the list, or a task in this checkout is between
+  "spec OK" and DONE, no start check prints the install command for the command-line tool:
+  also not the start check of a new task, here or in another repository. The workflow
+  tools of a project are kept while a task of that project is in progress. The check says
+  so in one `KEPT:` line (an update is waiting, and for which task); the next start check
+  after DONE updates. At DONE, `framegate run` and `status --brief` name a waiting update
+  in one line (`/framegate:update`).
+- A task without activity for 14 days (its newest event; without one, the time its
+  `progress.json` was written) no longer holds an update back. It stays in the list.
+- `framegate status --all` shows the list as one table: repository, task, mode, phase,
+  last activity, `stale`. Works in any folder.
+- `framegate update` / `/framegate:update` updates at once, tasks in progress or not. It
+  refuses only while a run is active (`PROBLEM: a framegate run is active ...`): replacing
+  the files of a running tool breaks that run.
+- Off altogether: `[update] check = false` in framegate.toml (this project) or env
+  `FRAMEGATE_UPDATE_CHECK=0` (this machine or session; it wins over the file). Then
+  `preflight` and `status` compare nothing and update nothing (`Start check: ok (...; the
+  update check is off)`); a missing framegate part in the project environment and a missing
+  claude CLI are still named. `framegate update` still works. For a pinned setup or a
+  replay of old tasks.
+
+Seen on a replay over three repositories (0.12.0): tasks went to 0.12.1 and 0.12.2 during
+their runs and a `status` failed on an import. The check kept the versions of the feature it
+was called for only, so the start check of the next task replaced the one tool of the
+machine under the tasks still running.
+
 API / connection error: a run of any phase that did no work because the API could not be
 reached (an error result whose text starts with "API Error:", e.g. "API Error: Can't reach
 the API server ... (ENOTFOUND)", or an error result with no cost and at most one turn) is not
@@ -1101,14 +1278,11 @@ Models and speed:
 - Small plans run in one implementer run: consecutive steps share a run while their spec IDs add
   up to at most `[agents] step_batch_ids` (15; 0 = one run per step). The batch is checked,
   committed, parked and redone as one unit (`steps 1, 2, 3`).
-- The implementer checks only with the step command (its steps' tests and the earlier ones); the
-  step gate runs everything else: after the step's tests it runs the whole suite (the
-  adapter's everyday selection: `[dotnet] base_filter`, `[python] pytest_args`), and fails on
-  any red test that is not a test of this feature's later or parked steps, a contested test,
-  or a test that already failed when the spec was approved (`regression_baseline`). Seen
-  live: a step made helpers public and broke another feature's frozen public-surface test;
-  both step gates passed and the break showed in a later fix run. `[gates] step_tests =
-  "feature"` keeps the step gate to the step's own tests (a suite too slow to run per step).
+- A step gate judges only what belongs to the task: the tests of the step's IDs and the
+  earlier steps'. The whole suite runs once, at the final gate (seen live: run at every step,
+  it failed each one on tests that were red before the task). `[gates] step_tests = "suite"`
+  runs it at every step gate too, leaving out this feature's later steps, contested tests
+  and tests that already failed when the spec was approved.
   The runs after the review (review fixes, structure fixes, a final-gate repair) are checked
   with the feature's tests (its spec IDs; with parked steps the done steps' IDs) and the
   review tests folder, not with the whole suite: the final gates run it right after (seen
@@ -1118,9 +1292,13 @@ Models and speed:
   Before checking, the gates format the changed source files
   and the changed review tests, and the test writer's files are formatted after each of its
   runs (`[gates] format_fix`, default on, only with the adapter's own format check), so a
-  formatting slip costs no attempt and never sits in a file the implementer may not edit. For
+  formatting slip costs no attempt and never sits in a file the implementer may not edit.
+  The same files first get the linter's safe fixes (import order, an unused import):
+  `ruff check --fix` when the lint command is ruff, else `[gates.commands] lint_fix` (with
+  `{files}`; `[]` = off; `[gates] format_fix = false` turns both fixes off). For
   .NET the format / lint checks report only findings on changed lines, and the format fix keeps
-  only its changes there: no churn in code the feature did not touch.
+  only its changes there: no churn in code the feature did not touch. For Python the lint /
+  format / typecheck / imports checks count only findings in files the task changed.
 - `[references]` (name = path, or `{ path, note }`): other projects the agents may read, see
   "References and ports".
 - `[gates.extra]` (name = command): project checks after the final gates, e.g. a balance
@@ -1143,12 +1321,25 @@ not started when the typecheck, the regression or the coverage run failed before
 with that reason): it needs a green build and green tests.
 
 Tool failures: a mutation check that fails without a score (the tool crashed, could not build
-its own copy, was cut short) is a tool failure, not a statement about the tests. The gate
-report says so under the check (`TOOL FAILURE: ...`), the `final_gates` event lists it in
-`tool_failures`, and no repair run is started for it. The final gate asks instead (an item the
+its own copy, was cut short) is a tool failure, not a statement about the tests: it is shown
+as `[NOT MEASURED]`, never as FAIL, with `TOOL FAILURE: ...` under the check. The
+`final_gates` event lists it in `tool_failures` and `not_measured`, and no repair run is
+started for it. The final gate asks instead (an item the
 brief always shows): run the final checks again (any answer does; the default), or approve as
 is. The .NET adapter starts a failed Stryker run a second time first (with `--diag` when
 Stryker's output offers it; the first output is kept in `out/<f>/stryker/<project>.first.log`).
+
+Not measured: a mutation check whose tool cannot run on this machine (Python on Windows: no
+WSL, or no WSL distribution with `python3`, or the venv for mutmut cannot be built; `native`
+runner: mutmut is not installed, or the machine is Windows; .NET: Stryker.NET is not installed)
+is `NOT MEASURED`, not SKIPPED and not FAIL. The gate report shows `[NOT MEASURED] mutation
+score` with the reason and the one-line fix (`... Fix: ...`), its last line says `ALL GATES
+PASSED (NOT MEASURED, the tool cannot run here: ...)`, and the `final_gates` event lists the
+check in `not_measured` (its `results` entry has the reason and the fix). No repair run and no
+question. The brief shows it with the scores and on the risk line; a pull request's
+description shows it with the reason. `framegate stats` marks the run (`PASS (not measured:
+...)`). Mutation off on purpose (`[gates] mutation_tool = "none"`, written by the setup
+after the user confirmed) is SKIPPED: no risk reason, no stop.
 
 Spec check (`framegate spec-check <f>`, also the first step of `approve-spec`, which refuses
 while it finds something; `--force` approves anyway and logs `spec_check` with `forced`). It
@@ -1169,6 +1360,15 @@ reads columns of the spec templates' tables; a spec without them is not checked:
   whole) that matches one of the frame check's forbidden patterns (`[frame]
   forbidden_patterns`, else the adapter's: `noqa`, `type: ignore`, `#pragma warning disable`,
   ...) is reported with file and line. The frame check would reject it at every step gate.
+- Files a plan step names (`checks/plan_files.py`): no check. A step may mention any file.
+  A Markdown docs file it names by its path (`README.md`, `CHANGELOG.md`, `.md` under a
+  `docs` / `doc` folder; nothing the frame protects, no tests, specs, setup, deploy / CI,
+  workflow or dot-folder file) is writable for the implementer in that step; everything
+  else outside the source folders stays read-only. `spec-check` prints `Documentation files
+  the plan makes writable (frozen with the spec): step 2: docs/guide.md`. The run reads the
+  list from plan.md at the `spec-approved/<f>` marker and hands it to the write guard
+  (`FRAMEGATE_STEP_DOCS`); the files are committed with the step and set aside with it when
+  it parks.
 `spec-check` also prints `Setup files changed (committed with the spec): ...` and reports
 uncommitted protected files that are not setup files (`approve-spec` refuses on those even
 with `--force`).
@@ -1190,6 +1390,20 @@ tests that failed>`; the `risk` event and the `human_gate` event (`risk`) record
 your decision, so you can compare before switching on `[gates] final = "auto"`: then a low-risk
 feature passes the final gate without a stop (`human_gate` with `auto: true`, retro, DONE;
 nothing is pushed, the PR stays yours). Everything else stops as before.
+A configured check that is NOT MEASURED (the tool cannot run here, or gave no result) is a
+reason for `elevated`, with its fix: `Risk: elevated: mutation score NOT MEASURED: <reason>.
+Fix: <fix>`. A score below the threshold is a reason as before; `mutation_tool = "none"` (off
+on purpose, a setup decision) is not.
+
+A final check whose tool gave no result is asked at the final gate: run the final checks
+again (the default; the answer re-runs them), or finish without it. With the same result a
+second time the default becomes "finish without it", and the question points to
+`/framegate:setup` to repair the tool.
+
+The task's own lines: lint, typecheck and imports findings and diff coverage count only the
+lines the task wrote. The format fix formats a touched file whole, so the comparison base is
+the approved commit with those files run through the same fixes (`refs/framegate/task-base/`,
+`task_base.py`): a line only the formatter rewrote is the same on both sides.
 
 Several source folders: `[paths] src` takes one folder or a list (`["core", "autoload",
 "scenes"]`). The implementer may write all of them; the frame diff, the forbidden patterns,
@@ -1243,6 +1457,17 @@ The retro must mention every ID in `retro_proposals.md` (a proposal, or "Not act
 one-line reason); if IDs are missing it is re-run once with them as feedback, then a warning is
 printed and logged (`retro_coverage` event).
 
+Two sections of retro_input.md carry no IDs:
+- `## Chat`: the chat's notes. The engine does not see the chat, so the skills record one
+  line per question to the user outside a gate brief (with the reply), per thing done by
+  hand and per refusal: `framegate note <f> <text>` (a `chat_note` event, 300 characters;
+  the retro gets the newest 40).
+- `## Run state: stopped before DONE`: only with `framegate retro <f>`, the retro of a run
+  that was given up, hit a cap or ended in an error. It works in any phase after "spec OK"
+  and before the final gate is passed, names the phase reached, why the run stopped and the
+  last progress lines, and leaves the task as it is: no metrics row, no commit,
+  `progress.json` unchanged. `keep` and `learn` work on its proposals as usual.
+
 Each `agent_run` event also has `role`, `step`, `attempt`, `session` and the token counts
 (`tokens_in`, `tokens_out`, `cache_read`, `cache_write`), so cost per step and attempt can be
 read from `out/events.jsonl`. `progress.json` is written to a temp file and moved into place;
@@ -1268,7 +1493,9 @@ the hook JSON on stdin, exit 0 silently without `framegate.toml` or `.phase`, an
 2. The write protection holds for every session while a phase is set, the chat included; in the
 SPEC phase the chat may also write the setup files and `out/<f>/spec_brief.md` ("The spec phase
 covers the setup" above); a deploy / CI file (the built-in names, `[protected] extra`) is
-refused in every phase but the pipeline task's. A path outside the repository is blocked only for the agents of a run
+refused in every phase but the pipeline task's. The implementer of a plan step may also write
+the documentation files the approved plan names for that step ("Files a plan step names"
+under the spec check). A path outside the repository is blocked only for the agents of a run
 (`FRAMEGATE_AGENT` set): a chat session keeps writing its own files there (memory, scratch);
 a `[references]` folder is read-only for both. Shell calls: only plain single commands are pre-approved, so a pipe (`dotnet test ... |
 Select-String`), a `;` / `&&` / `||` chain, several lines, or a `cd` / env-variable prefix would
@@ -1315,10 +1542,12 @@ question is open; otherwise it stops as in human mode).
 
 Python projects: add framegate (pinned) to the dev dependencies; its pytest plugin provides the
 `req` marker and `--req ID,ID` selection. mutmut needs fork, so on Windows the mutation gate runs
-through WSL (`[gates] mutation_runner = "auto"`, default; `[env] wsl_distro` picks the
-distribution) in a WSL-side venv with the project's dependencies. Install once inside WSL:
-`curl -LsSf https://astral.sh/uv/install.sh | sh` (or `sudo apt install python3-venv`). Without
-WSL the gate is SKIPPED with the reason. Details: docs/adapters.md.
+through WSL (`[gates] mutation_runner = "auto"`, default) in a WSL-side venv with the project's
+dependencies. `[env] wsl_distro` picks the distribution; without it the default one is used,
+or, when that one has no `python3` (Docker Desktop's `docker-desktop`), the first other one
+that has. Install once inside WSL: `curl -LsSf https://astral.sh/uv/install.sh | sh` (or `sudo
+apt install python3-venv`). Without a usable WSL the check is NOT MEASURED with the reason and
+the fix, and `framegate doctor` warns (`tool: mutmut (mutation)`). Details: docs/adapters.md.
 
 .NET projects (xUnit, `language = "dotnet"`, detected from a root `*.sln`/`*.slnx`/`*.csproj`):
 install framegate with the `dotnet` extra (`pip install "framegate[dotnet]"`, brings diff-cover)

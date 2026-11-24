@@ -1868,7 +1868,7 @@ synthesizer (points 1-3 are not built).
 
 **Origin:** ours (user request, 2026-11-10). The parallel scheduling ideas (worktree per agent, write scopes, serialized merges) come from harnessOrch.
 
-**Trigger:** single features run clean end to end (decision 10 in HANDOVER.md), and 9.1 telemetry exists, so the cost and retries of an epic can be compared with single features.
+**Trigger:** single features run clean end to end (docs/decisions.md, 10), and 9.1 telemetry exists, so the cost and retries of an epic can be compared with single features.
 
 **Goal:** you give one big task. Opus splits it into sub-features. You approve the split, then all sub-specs **in one reply**. One agent per sub-feature then runs the existing loop, several at once. At the end you get **one** final gate with a summary of every sub-feature.
 
@@ -2048,7 +2048,7 @@ gate. FCSim needs a code map before its next feature.
 
 ### 9.11 Scope: one lean core, adapters, modes; the rest in the project's setup
 
-Decided 2026-11-12 (HANDOVER decision 14), when the second kind of target repo (Python services
+Decided 2026-11-12 (docs/decisions.md, 13), when the second kind of target repo (Python services
 with Databricks / Kafka / Spark behind them) raised the question of what belongs in this
 repository.
 

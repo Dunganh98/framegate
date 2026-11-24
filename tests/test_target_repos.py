@@ -116,8 +116,10 @@ def test_baseline_is_recorded_at_spec_approval_and_used_by_the_final_gates(
     assert json.loads(path.read_text(encoding="utf-8"))["failing"] == ["kept"]
 
 
-def test_baseline_off_by_default(demo_repo: DemoRepo) -> None:
-    r = demo_repo
+def test_baseline_off_runs_nothing_at_the_approval(demo_repo: DemoRepo) -> None:
+    r = demo_repo  # the fixture sets regression_baseline = false
+    assert load_config(r.root).regression_baseline is False
+    assert parse_config(r.root, {}).regression_baseline is None  # the default: by mode
     assert r.af("approve-spec", "demo") == 0
     assert not (r.root / "out" / "demo" / gates.BASELINE_FILE).exists()
     cfg = load_config(r.root)
@@ -229,6 +231,33 @@ def test_configured_format_fix(demo_repo: DemoRepo, python_exe: str) -> None:
         parse_config(r.root, {"gates": {"commands": {"format_fix": ["black", "src"]}}})
     with pytest.raises(ConfigError, match="unknown key"):
         parse_config(r.root, {"gates": {"commands": {"formatfix": ["x"]}}})
+
+
+def test_the_linters_safe_fixes_run_where_the_format_fix_runs(demo_repo: DemoRepo) -> None:
+    """Seen live (black as the format check, ruff as the lint check): the test writer's file
+    failed lint on its imports, and the implementer may not edit tests."""
+    r = demo_repo
+    black = {"format": ["python", "-m", "black", "--check", "{src}"]}  # and no format fix
+    adapter = get_adapter(parse_config(r.root, {"gates": {"commands": black}}))
+    (fix,) = adapter.lint_fix_commands(["tests/test_x.py"])
+    assert fix[1:] == ["-m", "ruff", "check", "--fix", "--no-unsafe-fixes", "--quiet"] + [
+        "tests/test_x.py"
+    ]
+    test = r.root / "tests" / "test_x.py"
+    test.write_text(
+        "import os\nimport sys\n\n\ndef test_a() -> None:\n    assert sys.path\n", "utf-8"
+    )
+    assert adapter.format_files(["tests/test_x.py"]) == "lint fixes in 1 changed file(s)"
+    assert "import os" not in test.read_text("utf-8")
+    # another linter has no fix mode unless the project names one; [] and format_fix = false: off
+    for off in (
+        {"commands": {"lint": ["flake8", "{src}"]}},
+        {"commands": {"lint_fix": []}},
+        {"format_fix": False},
+    ):
+        assert get_adapter(parse_config(r.root, {"gates": off})).lint_fix_commands(["a.py"]) == []
+    own = parse_config(r.root, {"gates": {"commands": {"lint_fix": ["fixer", "{files}", "-q"]}}})
+    assert get_adapter(own).lint_fix_commands(["a.py"]) == [["fixer", "a.py", "-q"]]
 
 
 def test_configured_format_fix_runs_on_the_changed_files(demo_repo: DemoRepo) -> None:

@@ -901,6 +901,7 @@ def test_format_fix_and_project_checks(demo_repo: DemoRepo) -> None:
     assert "def helper(x):\n    return x" in impl.read_text(encoding="utf-8")
     assert "format" not in rep.failed
     rep = gate_report(orch.adapter, "demo", "final")
+    assert not (r.root / ".coverage").exists()  # the coverage data stays in the out folder
     assert rep.extra == {"balance": 0, "broken": 3}
     assert "[OK] balance (full output: out/demo/extra_balance.log)" in rep.report
     assert "slide win rate 0.31" in rep.report and "[EXIT 3] broken" in rep.report
@@ -1186,12 +1187,13 @@ def test_usage_limit_waits_then_runs_again(
     waits: list[float] = []
     monkeypatch.setattr(
         "framegate.orchestrator.sleep_until",
-        lambda until: waits.append((until - orchestrator.now_utc()).total_seconds()),
+        lambda until, wake=None: waits.append((until - orchestrator.now_utc()).total_seconds()),
     )
     to_final_gate(r)
     impl = [c for c in r.calls() if c["phase"] == "IMPLEMENT"]
     assert len(impl) == 2 and impl[0]["prompt"] == impl[1]["prompt"]
-    assert len(waits) == 1 and 150 < waits[0] <= 185  # reset in 120 s + 60 s margin
+    # reset in 120 s + 60 s margin: sooner than the first try in between (5 min)
+    assert len(waits) == 1 and 150 < waits[0] <= 185
     ev = [e for e in r.events() if e["kind"] == "usage_limit"]
     assert len(ev) == 1 and ev[0]["phase"] == "IMPLEMENT" and ev[0]["reset"]
     gates = [e for e in r.events() if e["kind"] == "gate" and e.get("step")]

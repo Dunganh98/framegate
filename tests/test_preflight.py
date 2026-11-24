@@ -6,6 +6,7 @@ framegate pytest plugin 0.8.0; nothing re-ran `install-tools`, nothing noticed."
 
 from __future__ import annotations
 
+import datetime
 import json
 import pathlib
 from collections.abc import Callable
@@ -14,7 +15,7 @@ import pytest
 
 import framegate
 from conftest import DemoRepo
-from framegate import cli, preflight, pytools
+from framegate import cli, preflight, procs, pytools
 from framegate.adapters import get_adapter
 from framegate.adapters.python import PythonAdapter
 from framegate.config import load_config
@@ -276,6 +277,150 @@ def test_a_finished_task_is_updated_like_new_work(
     assert tools.updates == 1 and lines[1].startswith("UPDATED: the project environment")
 
 
+def other_task(home: pathlib.Path, root: pathlib.Path, feature: str, phase: str) -> pathlib.Path:
+    """A task of another repository in this machine's list, as its "spec OK" wrote it."""
+    progress = root / "out" / feature / "progress.json"
+    progress.parent.mkdir(parents=True, exist_ok=True)
+    progress.write_text(json.dumps({"phase": phase, "framegate": OTHER}), encoding="utf-8")
+    entry = home / "framegate" / "tasks" / f"{feature}.json"
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    data = {"root": str(root), "feature": feature, "progress": str(progress)}
+    entry.write_text(json.dumps(data), encoding="utf-8")
+    return entry
+
+
+def test_spec_ok_writes_down_the_version_the_task_runs_with(
+    demo_repo: DemoRepo, claude_home: pathlib.Path
+) -> None:
+    r = demo_repo
+    assert not list(claude_home.glob("framegate/tasks/*.json"))
+    assert r.af("approve-spec", "demo") == 0
+    assert r.progress()["framegate"] == V
+    [entry] = claude_home.glob("framegate/tasks/*.json")
+    data = json.loads(entry.read_text(encoding="utf-8"))
+    assert (data["feature"], data["framegate"]) == ("demo", V)
+    assert pathlib.Path(data["root"]) == r.root.resolve()
+    cfg = load_config(r.root)
+    [task] = preflight.tasks_in_progress(cfg)
+    assert (task.feature, task.version, task.pid) == ("demo", V, 0)
+    # a task an older version approved: a run writes down what is missing, and only that
+    progress = r.root / "out" / "demo" / "progress.json"
+    progress.write_text(json.dumps({"phase": "IMPLEMENT"}), encoding="utf-8")
+    entry.unlink()
+    preflight.record_start(cfg, "demo")
+    assert r.progress() == {"phase": "IMPLEMENT", "framegate": V}
+    progress.write_text(json.dumps({"phase": "IMPLEMENT", "framegate": OTHER}), encoding="utf-8")
+    preflight.record_start(cfg, "demo")
+    assert r.progress()["framegate"] == OTHER and entry.is_file()
+    # DONE: the task leaves the list
+    progress.write_text(json.dumps({"phase": "DONE"}), encoding="utf-8")
+    assert preflight.tasks_in_progress(cfg) == [] and not entry.exists()
+    # no spec OK yet: nothing to write down
+    preflight.record_start(cfg, "nothing-here")
+    assert not list(claude_home.glob("framegate/tasks/*.json"))
+
+
+def test_a_new_task_does_not_replace_the_tool_under_a_task_in_progress_here(
+    demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r = demo_repo
+    assert r.af("approve-spec", "demo") == 0
+    tools = Tools(monkeypatch, OTHER)
+    code, lines = check("next-task", NEWER)
+    assert code == 0 and tools.updates == 0 and len(lines) == 3
+    assert not any(line.startswith("RUN:") for line in lines)
+    assert lines[1].startswith(f"KEPT: the command-line tool is {V}, the plugin {NEWER} (demo is")
+    assert "The update waits until it is DONE; /framegate:update does it now." in lines[1]
+    assert lines[2].startswith(f"KEPT: the project environment has framegate {OTHER}")
+    assert "(demo is in progress" in lines[2]
+    # the task itself: the version it was started with is named
+    code, lines = check("demo", NEWER)
+    assert f"(demo is in progress (started with framegate {V}) and keeps" in lines[1]
+    assert "The update waits until it is DONE" in lines[1]
+
+
+def test_a_task_in_another_repository_keeps_the_tool_of_this_machine(
+    demo_repo: DemoRepo,
+    monkeypatch: pytest.MonkeyPatch,
+    claude_home: pathlib.Path,
+    tmp_path: pathlib.Path,
+) -> None:
+    tools = Tools(monkeypatch, OTHER)
+    elsewhere = tmp_path / "elsewhere"
+    entry = other_task(claude_home, elsewhere, "port-x", "IMPLEMENT")
+    other_task(claude_home, elsewhere, "second", "REVIEW")
+    code, lines = check("demo", NEWER)
+    assert code == 0 and not any(line.startswith("RUN:") for line in lines)
+    assert lines[1].startswith(
+        f"KEPT: the command-line tool is {V}, the plugin {NEWER} (port-x in {elsewhere} and 1 "
+        "more is in progress and keeps the tool it was started with). The update waits"
+    )
+    assert tools.updates == 1 and lines[2].startswith("UPDATED: the project environment")
+    # resume / status of this project: nothing is updated from there, as before
+    code, lines = check(None, NEWER)
+    assert "nothing is updated from here" in lines[1]
+    # both DONE (or cleaned up): the next start check updates, and the list is cleared
+    for name in ("port-x", "second"):
+        other_task(claude_home, elsewhere, name, "DONE")
+    code, lines = check("demo", NEWER)
+    assert lines[1].startswith("RUN: uv tool install --force") and not entry.exists()
+    other_task(claude_home, elsewhere, "port-x", "IMPLEMENT")
+    (elsewhere / "out" / "port-x" / "progress.json").unlink()
+    assert check("demo", NEWER)[1][1].startswith("RUN:") and not entry.exists()
+
+
+def test_update_waits_for_a_run_that_is_going(
+    demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r = demo_repo
+    assert r.af("approve-spec", "demo") == 0
+    cfg = load_config(r.root)
+    procs.write_lock(cfg.out_dir, "demo")  # this process: alive
+    tools = Tools(monkeypatch, OTHER)
+    code, lines = check(None, NEWER, update=True)
+    assert code == 0 and len(lines) == 2
+    assert lines[1].startswith("PROBLEM: a framegate run is active (demo, pid ")
+    assert "replacing the command-line tool now would break it" in lines[1]
+    code, lines = check(None, V, update=True)
+    assert tools.updates == 0 and "replacing the project's workflow tools now" in lines[1]
+    # everything in line: nothing to say about the run
+    tools.version = V
+    assert check(None, V, update=True)[1][0].startswith("Start check: ok")
+    procs.remove_lock(cfg.out_dir)
+    tools.version = OTHER
+    assert check(None, NEWER, update=True)[1][1].startswith("RUN: uv tool install")
+
+
+def test_the_update_check_can_be_switched_off(
+    demo_repo: DemoRepo,
+    monkeypatch: pytest.MonkeyPatch,
+    claude_home: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    r = demo_repo
+    r.add_toml("[update]\ncheck = false\n")  # or FRAMEGATE_UPDATE_CHECK=0: tests/test_config.py
+    assert load_config(r.root).update_check is False
+    tools = Tools(monkeypatch, OTHER)
+    plugin_on_disk(claude_home, "100.0.0")  # no restart notice either
+    for feature, only in (("demo", False), (None, False), ("demo", True)):
+        assert check(feature, NEWER, check_only=only) == (
+            0,
+            [f"Start check: ok (framegate {V}; the update check is off)."],
+        )
+    assert tools.updates == 0
+    capsys.readouterr()
+    assert cli.main(["status"]) == 0
+    assert "/framegate:update" not in capsys.readouterr().out
+    # what would stop a run at once is still said
+    tools.version = ""
+    assert check("demo", NEWER)[1][1].startswith("PROBLEM: the project environment has no")
+    # the user's own `framegate update` still works
+    plugin_on_disk(claude_home, NEWER)
+    tools.version = OTHER
+    code, lines = check(None, NEWER, update=True)
+    assert lines[1].startswith("RUN: uv tool install --force")
+
+
 def test_update_keeps_nothing(
     demo_repo: DemoRepo,
     monkeypatch: pytest.MonkeyPatch,
@@ -307,3 +452,59 @@ def test_update_keeps_nothing(
     plugin_on_disk(claude_home, V)
     assert cli.main(["status", "demo", "--brief"]) == 0
     assert "/framegate:update" not in capsys.readouterr().out
+
+
+def last_event(root: pathlib.Path, feature: str, days_ago: int) -> None:
+    ts = (datetime.datetime.now() - datetime.timedelta(days=days_ago)).isoformat()
+    line = json.dumps({"ts": ts, "feature": feature, "kind": "gate"})
+    (root / "out" / "events.jsonl").write_text(line + "\n", encoding="utf-8")
+
+
+def test_a_task_without_activity_for_14_days_no_longer_holds_the_update_back(
+    claude_home: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    elsewhere = tmp_path / "elsewhere"
+    entry = other_task(claude_home, elsewhere, "port-x", "IMPLEMENT")
+    last_event(elsewhere, "port-x", 13)
+    assert any(x.startswith("KEPT:") for x in check("demo", NEWER, start=tmp_path)[1])
+    last_event(elsewhere, "port-x", 14)
+    assert any(x.startswith("RUN:") for x in check("demo", NEWER, start=tmp_path)[1])
+    assert entry.exists()
+
+
+def test_status_all_is_one_table_of_the_open_tasks_of_this_machine(
+    demo_repo: DemoRepo,
+    claude_home: pathlib.Path,
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert demo_repo.af("approve-spec", "demo") == 0
+    elsewhere = tmp_path / "elsewhere"
+    other_task(claude_home, elsewhere, "old", "REVIEW")
+    last_event(elsewhere, "old", 20)
+    other_task(claude_home, tmp_path / "third", "finished", "DONE")
+    monkeypatch.chdir(tmp_path)  # no framegate project: the list is the machine's
+    capsys.readouterr()
+    assert cli.main(["status", "--all"]) == 0
+    head, *rows, legend = capsys.readouterr().out.splitlines()
+    assert head.split() == ["Repository", "Task", "Mode", "Phase", "Last", "activity"]
+    old, demo = sorted((row.split() for row in rows), key=lambda row: row[1] == "demo")
+    assert old[:4] == [str(elsewhere), "old", "?", "REVIEW"]
+    assert old[-4:] == ["(20", "d", "ago)", "stale"]
+    assert demo[1:4] == ["demo", "feature", "TESTS"] and "stale" not in demo
+    assert legend.startswith("stale: no activity for 14 days")
+
+
+def test_done_names_the_update_that_waited(
+    demo_repo: DemoRepo, claude_home: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    r = demo_repo
+    assert r.af("approve-spec", "demo") == 0
+    progress = r.root / "out" / "demo" / "progress.json"
+    progress.write_text(json.dumps({"phase": "DONE"}), encoding="utf-8")
+    plugin_on_disk(claude_home, NEWER)
+    capsys.readouterr()
+    assert r.af("run", "demo") == 0
+    done, note = capsys.readouterr().out.splitlines()[-2:]
+    assert done == "Feature demo: DONE." and "/framegate:update" in note

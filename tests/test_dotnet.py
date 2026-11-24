@@ -676,7 +676,8 @@ def test_mutation_skips(tagged: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -
     assert a.mutation_check("f", "t", ["src/App/x.py"]).status == "PASS"
     monkeypatch.setattr(a, "stryker_command", lambda: None)
     res = a.mutation_check("f", "t", ["src/App/Calc.cs"])
-    assert res.status == "SKIPPED" and "dotnet tool install -g dotnet-stryker" in res.output
+    assert res.status == "NOT MEASURED"
+    assert res.summary == "Stryker.NET is not installed. Fix: dotnet tool install -g dotnet-stryker"
     monkeypatch.setattr(a, "stryker_command", lambda: ["dotnet-stryker"])
     assert "no test project" in a.mutation_check("f", "t", ["src/App/Calc.cs"]).output
 

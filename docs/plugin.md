@@ -20,7 +20,9 @@ plugin/
   skills/setup/SKILL.md             # /framegate:setup: framegate probe, one table of the
                                     # project's facts to confirm, framegate.toml,
                                     # .framegate/project.md and the code map, framegate
-                                    # doctor, optional smoke run
+                                    # doctor --tree (the setup check and what is red on
+                                    # the code as it is), framegate commit-setup,
+                                    # optional smoke run
   skills/feature/SKILL.md           # /framegate:feature <f>: branch + spec dialogue, then the run
                                     # protocol (injected: framegate protocol)
   skills/bugfix/SKILL.md            # /framegate:bugfix <f>: bug report dialogue (spec --mode
@@ -95,8 +97,13 @@ How a machine gets the new version:
   CLI not found, no framegate part in the project environment). Everything in line prints
   one line (`Start check: ok ...`) and the skill says nothing.
   Work in progress (the spec is approved) keeps the tool **and** the project's tools it was
-  started with (`KEPT:` lines; by hand: `framegate install-tools --update`).
-  `/framegate:resume` runs the check with `--check` (reports only, never updates);
+  started with (`KEPT:` lines: an update is waiting; by hand: `/framegate:update`). This
+  holds for every task in progress on the machine, not only the one the skill was called
+  for: the tool is one per machine, and the start check of a new task replaced it under
+  running tasks (docs/reference.md, "The start check and updates"; switch: `[update] check`,
+  `FRAMEGATE_UPDATE_CHECK=0`).
+  `/framegate:resume` runs the same check (a finished task and one in its spec phase are
+  brought up to date, unless another task is in progress);
   `/framegate:status` does not run it (a glance, and its permission stays `framegate status`).
   `/framegate:setup` installs the tool the same way and runs `install-tools --update`.
   An editable install from a clone is replaced by the tagged version too: on a development

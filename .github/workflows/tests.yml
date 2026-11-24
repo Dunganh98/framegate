@@ -34,7 +34,7 @@ jobs:
           uv run ruff format --check src tests
           uv run mypy src
       - name: Tests (everything but the `slow` ones, which need WSL / dotnet builds)
-        run: uv run pytest -m "not slow" -q --durations=15 --junitxml=report.xml
+        run: uv run pytest -m "not slow" -q -n auto --durations=15 --junitxml=report.xml
       - name: Failed tests as annotations (readable without the log)
         if: failure()
         shell: bash

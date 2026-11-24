@@ -37,6 +37,7 @@ from framegate.adapters.base import (
     diff_coverage_summary,
     incomplete_reason,
     incomplete_result,
+    not_measured,
     parse_junit,
     run_command,
 )
@@ -50,6 +51,11 @@ MODULE_RULE = "Bash(python -m "
 MUTMUT_ENV_VERSION = 2  # 2: pytest plugin --req-paths
 #: files whose content keys the WSL venv (besides the requirement list itself)
 LOCK_FILES = ("pyproject.toml", "uv.lock", "poetry.lock", "Pipfile.lock", "pdm.lock")
+#: mutmut needs fork: (reason, fix) when it is told to run with a Windows interpreter
+NATIVE_WINDOWS = (
+    "mutmut does not run on native Windows",
+    'set [gates] mutation_runner = "auto" (it then runs through WSL)',
+)
 #: mutmut 3 statuses (mutmut/stats.py); "skipped" / "not checked" don't count
 DETECTED = {"killed", "timeout", "caught by type check", "segfault"}
 SURVIVED = {"survived", "no tests", "suspicious"}
@@ -175,6 +181,7 @@ def _shell_quote(arg: str) -> str:
 class PythonAdapter(LanguageAdapter):
     name = "python"
     source_suffixes = (".py",)
+    file_scoped_lint = True
 
     @classmethod
     def detect(cls, root: pathlib.Path) -> bool:
@@ -356,9 +363,15 @@ class PythonAdapter(LanguageAdapter):
         if self.cfg.mutation_tool == "none":
             out.append(("mutmut (mutation)", True, "mutation off ([gates] mutation_tool = none)"))
         elif self.mutation_runner() == "wsl":
-            out.append(
-                ("mutmut (mutation)", True, "runs in WSL (checked by the first mutation run)")
-            )
+            # the same probe as the mutation check: what doctor says is what the gate will do
+            found = wsl.probe(self.root, self.cfg.wsl_distro)
+            where = f"runs in WSL {found.distro}" if found.distro else "runs in WSL"
+            detail = f"{where} ({found.note})" if found.note else where
+            if found.root is None:
+                detail = f"mutation testing cannot run here: {found.problem}. Fix: {found.fix}"
+            out.append(("mutmut (mutation)", found.root is not None, detail))
+        elif os.name == "nt":
+            out.append(("mutmut (mutation)", False, ". Fix: ".join(NATIVE_WINDOWS)))
         else:
             ok = self._has_module("mutmut")
             out.append(("mutmut (mutation)", ok, self.python if ok else "install mutmut"))
@@ -541,6 +554,12 @@ class PythonAdapter(LanguageAdapter):
         status = "error" if reason else PYTEST_STATUS.get(code, "error")
         return TestRun(status, code, out, cases, incomplete=reason)
 
+    def _coverage_env(self) -> dict[str, str]:
+        """A coverage run's environment: its data file in the out folder (seen live: a
+        `.coverage` left untracked in the project root when the task was done)."""
+        data = self.root / self.cfg.paths.out / ".coverage"
+        return {**os.environ, "COVERAGE_FILE": str(data)}
+
     def scope_coverage_reports(
         self, req_ids: Sequence[str], files: Sequence[str]
     ) -> tuple[list[pathlib.Path], str]:
@@ -556,7 +575,7 @@ class PythonAdapter(LanguageAdapter):
         cmd += [f"--cov={root}" for root in self.cfg.src_roots]
         cmd += [f"--cov-report=xml:{xml}"]
         timeout = self.cfg.coverage_timeout
-        code, out = run_command(cmd, self.root, timeout=timeout)
+        code, out = run_command(cmd, self.root, env=self._coverage_env(), timeout=timeout)
         reason = incomplete_reason(code, out, timeout) or PYTEST_INCOMPLETE.get(code, "")
         if reason or not xml.is_file():
             return [], f"coverage run incomplete ({reason or 'no report'})"
@@ -615,7 +634,7 @@ class PythonAdapter(LanguageAdapter):
             else:
                 note = "\nSKIPPED coverage: pytest-cov is not installed in the project environment"
             timeout = self.cfg.coverage_timeout
-            code, out = run_command(cmd, self.root, timeout=timeout)
+            code, out = run_command(cmd, self.root, env=self._coverage_env(), timeout=timeout)
             reason = incomplete_reason(code, out, timeout) or PYTEST_INCOMPLETE.get(code, "")
             if not reason and collect and code in (0, 1) and not xml.is_file():
                 reason = "coverage file missing"
@@ -644,6 +663,8 @@ class PythonAdapter(LanguageAdapter):
                     tool,
                     str(report),
                     f"--compare-branch={base_ref}",
+                    # the base itself, not its merge base with HEAD (task_base.py)
+                    "--diff-range-notation=..",
                     f"--fail-under={self.cfg.diff_coverage}",
                 ],
                 self.root,
@@ -688,33 +709,40 @@ class PythonAdapter(LanguageAdapter):
         changed = [f for f in changed_src if f.endswith(".py")]
         if not changed:
             return CheckResult("PASS", "No changed Python source files to mutate.")
-        modules = self._mutmut_modules(changed)
+        return self._mutmut(feature, self._mutmut_modules(changed), scope)
+
+    def mutation_trial(self) -> CheckResult | None:
+        """The setup's trial (doctor --tree): mutmut finds the code and pytest loads
+        framegate's plugin, through the final gate's path; no mutant runs. The first trial
+        on a machine builds the WSL venv once (cached for the gates)."""
+        if (self.cfg.mutation_tool or "mutmut") != "mutmut":
+            return None
+        return self._mutmut("", [], None, trial=True)
+
+    def _mutmut(
+        self, feature: str, modules: Sequence[str], scope: TestScope | None, trial: bool = False
+    ) -> CheckResult:
         if self.mutation_runner() == "wsl":
-            return self._mutmut_wsl(feature, modules, scope)
+            return self._mutmut_wsl(feature, modules, scope, trial)
         if os.name == "nt":
-            return CheckResult(
-                "SKIPPED",
-                "SKIPPED: mutmut does not support native Windows; set [gates] mutation_runner = "
-                '"wsl" (or "auto") or run the final gates in CI',
-            )
+            return not_measured(*NATIVE_WINDOWS)
         if not self._has_module("mutmut"):
-            return CheckResult("SKIPPED", "SKIPPED: mutmut is not installed")
+            return not_measured(
+                f"mutmut is not installed for {self.python}",
+                "add mutmut to the project's dev dependencies and install them",
+            )
         work = self._mutmut_dir()
         spec = self._mutmut_spec(modules, str(self.root), str(work / "result.json"), scope)
+        spec["trial"] = trial
         (work / "spec.json").write_text(json.dumps(spec, indent=1), encoding="utf-8")
         cmd = [self.python, str(work / "runner.py"), str(work / "spec.json")]
-        return self._mutmut_finish(feature, modules, cmd, "native")
+        return self._mutmut_finish(feature, modules, cmd, "native", trial)
 
     # ---------- mutmut internals ----------
     def _mutmut_modules(self, changed: Sequence[str]) -> list[str]:
-        """Changed files -> module names as mutmut names them (relative to `src/`)."""
-        roots = [r.rstrip("/") + "/" for r in self.cfg.src_roots]
-
-        def module(f: str) -> str:
-            root = next((r for r in roots if f.startswith(r)), "")
-            return f[len(root) : -3].replace("/", ".")
-
-        mods = [module(f) for f in changed]
+        """Changed files -> module names as mutmut names them: the path from the root, a
+        leading `src.` dropped (mutmut 3 drops only that one)."""
+        mods = [f[:-3].replace("/", ".").removeprefix("src.") for f in changed]
         return sorted({m[: -len(".__init__")] if m.endswith(".__init__") else m for m in mods})
 
     def _mutmut_dir(self) -> pathlib.Path:
@@ -739,49 +767,78 @@ class PythonAdapter(LanguageAdapter):
             "pytest_addopts": " ".join(
                 _shell_quote(a) for a in [*self.pytest_args, *self.scope_args(scope)]
             ),
+            "also_copy": self._mutmut_also_copy(),
+            # mutmut guesses its folder (src/ or one named like the project); seen live: a
+            # project with packages at the root, and mutmut found nothing to mutate
+            "source_paths": [r.rstrip("/") for r in self.cfg.src_roots],
         }
 
+    def _mutmut_also_copy(self) -> list[str]:
+        """The tracked files outside the source folders. mutmut runs the tests in its own
+        folder with the sources, tests/ and the packaging files only; a test that reads
+        another file of the repository (`docs/x.md`) would fail there."""
+        cmd = ["git", "-c", "core.quotepath=off", "ls-files"]
+        code, out = run_command(cmd, self.root, timeout=120)
+        own = (*(r.rstrip("/") + "/" for r in self.cfg.src_roots), "tests/", "test/")
+        return [f for f in out.splitlines() if not f.startswith(own)] if code == 0 else []
+
     def _mutmut_wsl(
-        self, feature: str, modules: Sequence[str], scope: TestScope | None = None
+        self,
+        feature: str,
+        modules: Sequence[str],
+        scope: TestScope | None = None,
+        trial: bool = False,
     ) -> CheckResult:
-        distro = self.cfg.wsl_distro
-        wsl_root, problem = wsl.probe(self.root, distro)
-        if wsl_root is None:
-            return CheckResult(
-                "SKIPPED",
-                f"SKIPPED: mutation testing via WSL is unavailable: {problem}. mutmut does not "
-                "support native Windows; run the final gates in CI or fix WSL.",
+        found = wsl.probe(self.root, self.cfg.wsl_distro)
+        if found.root is None:
+            return not_measured(
+                f"mutation testing via WSL is unavailable: {found.problem} (mutmut does not "
+                "run on native Windows)",
+                found.fix,
             )
         work = self._mutmut_dir()
-        root_wsl: str = wsl_root
+        wsl_root = root_wsl = found.root
+        distro = found.distro
 
         def w(path: pathlib.Path) -> str:
             return wsl.to_wsl(path, self.root, root_wsl, distro)
 
         reqs, files, stamp = self._wsl_requirements(w)
         spec = self._mutmut_spec(modules, wsl_root, w(work / "result.json"), scope)
+        if scope_plugin_missing(reqs):
+            # seen live: an installed framegate and a project that does not name it left
+            # the venv without the plugin, and pytest refused `--req` (a run without a result)
+            plugin = importlib.resources.files("framegate").joinpath("pytest_plugin.py")
+            (work / f"{SCOPE_PLUGIN}.py").write_text(
+                plugin.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+            spec["pythonpath"] = w(work)
+            spec["pytest_addopts"] = f"{spec['pytest_addopts']} -p {SCOPE_PLUGIN}".strip()
         repo_key = hashlib.sha256(wsl_root.encode("utf-8")).hexdigest()[:16]
         spec.update(
             venv=f"~/.cache/framegate/venvs/{repo_key}",
             stamp=stamp,
             requirements=reqs,
             requirement_files=files,
+            trial=trial,
         )
         (work / "spec.json").write_text(json.dumps(spec, indent=1), encoding="utf-8")
         cmd = wsl.wsl_command(["python3", w(work / "runner.py"), w(work / "spec.json")], distro)
-        return self._mutmut_finish(feature, modules, cmd, f"WSL {distro}" if distro else "WSL")
+        where = f"WSL {distro}" if distro else "WSL"
+        return self._mutmut_finish(feature, modules, cmd, where, trial)
 
     def _wsl_requirements(
         self, w: Callable[[pathlib.Path], str]
     ) -> tuple[list[str], list[str], str]:
         """What the WSL venv needs: the project's dependencies (all extras and dependency
-        groups, requirements*.txt), mutmut and pytest, and framegate itself (its pytest plugin)
-        from this source tree when framegate runs from one. The project itself is not installed:
-        mutmut puts its mutated copy on sys.path. Returns (requirements, -r files, stamp)."""
+        groups, requirements*.txt), mutmut, pytest, hypothesis (the review tests use it), and
+        framegate itself (its pytest plugin) from this source tree when framegate runs from
+        one. The project itself is not installed: mutmut puts its mutated copy on sys.path.
+        Returns (requirements, -r files, stamp)."""
         reqs, files = collect_requirements(self.root)
         own = framegate_source()
         reqs = [r for r in reqs if not (own and req_name(r) == "framegate")]
-        reqs += ["mutmut>=3", "pytest"] + ([w(own)] if own else [])
+        reqs += ["mutmut>=3", "pytest", "hypothesis"] + ([w(own)] if own else [])
         reqs = [translate_drive_paths(r, w) for r in reqs]
         digest = hashlib.sha256()
         digest.update(json.dumps([MUTMUT_ENV_VERSION, __version__, reqs]).encode("utf-8"))
@@ -791,7 +848,7 @@ class PythonAdapter(LanguageAdapter):
         return reqs, [w(f) for f in files], digest.hexdigest()
 
     def _mutmut_finish(
-        self, feature: str, modules: Sequence[str], cmd: list[str], where: str
+        self, feature: str, modules: Sequence[str], cmd: list[str], where: str, trial: bool = False
     ) -> CheckResult:
         result_file = self.root / self.cfg.paths.out / ".mutmut" / "result.json"
         result_file.unlink(missing_ok=True)
@@ -805,12 +862,22 @@ class PythonAdapter(LanguageAdapter):
             return CheckResult("FAIL", f"mutmut runner ({where}) failed (exit {code}):\n{out}")
         res = json.loads(result_file.read_text(encoding="utf-8"))
         if not res.get("ok"):
-            return CheckResult(
-                "SKIPPED",
-                f"{res.get('setup_log', '')}\nSKIPPED: {res.get('error')} ({where}); "
-                f"{res.get('hint', '')}",
+            return not_measured(
+                f"{res.get('error')} ({where})",
+                str(res.get("hint") or "see the setup log under the check"),
+                log=str(res.get("setup_log", "")),
             )
         output = str(res.get("run_output", ""))
+        if trial:
+            secs = f"{where}, {res.get('seconds')} s" + (
+                ", venv reused" if res.get("venv_reused") else ", venv built"
+            )
+            if res.get("run_code") == 0:
+                return CheckResult(
+                    "PASS", output, output.strip().replace(chr(10), "; ") + f" ({secs})"
+                )
+            last = output.strip().splitlines()[-1:] or ["mutmut cannot run here"]
+            return CheckResult("FAIL", output, f"{last[0]} ({secs})")
         reason = incomplete_reason(int(res.get("run_code") or 0), output, self.cfg.mutation_timeout)
         if reason:
             return incomplete_result(reason, output, f"mutation run ({where})")
@@ -963,6 +1030,16 @@ def write_survivors(path: pathlib.Path, tally: MutmutTally, shows: Mapping[str, 
 def req_name(req: str) -> str:
     m = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", req)
     return re.sub(r"[-_.]+", "-", m.group(1)).lower() if m else ""
+
+
+#: framegate's pytest plugin (`--req`), as a file of its own beside the mutmut runner
+SCOPE_PLUGIN = "framegate_req_plugin"
+
+
+def scope_plugin_missing(reqs: Sequence[str]) -> bool:
+    """Do the WSL venv's requirements leave framegate out (not run from a source tree, not
+    named by the project)? Then its pytest plugin goes along as a file."""
+    return framegate_source() is None and "framegate" not in map(req_name, reqs)
 
 
 def collect_requirements(root: pathlib.Path) -> tuple[list[str], list[pathlib.Path]]:

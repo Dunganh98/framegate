@@ -14,6 +14,7 @@ from conftest import DemoRepo, git
 from framegate import chat, notify, procs
 from framegate.config import Config, load_config
 from framegate.orchestrator import EXIT_GATE, Orchestrator
+from framegate.state import log_event
 
 FAST = "[gates.commands]\nlint = []\nformat = []\ntypecheck = []\n"
 LINE_RE = re.compile(r"^\d\d:\d\d:\d\d \S.* \[\$\d+\.\d\d\]$")
@@ -223,7 +224,7 @@ def test_watch_follows_a_live_run(demo_repo: DemoRepo) -> None:
     assert "IMPLEMENT start" in first
     o.progress("demo", "DONE")
     procs.remove_lock(r.root / "out")
-    rest, _ = p.communicate(timeout=30)
+    rest, _ = p.communicate(timeout=90)  # watch may miss the lock and wait its 30 s
     assert p.returncode == 0
     assert "DONE" in rest and "watch ended:" in rest.splitlines()[-1]
 
@@ -402,6 +403,11 @@ def test_status_brief_and_overview(demo_repo: DemoRepo, capsys: pytest.CaptureFi
     assert out[2] == "Last progress:" and "TESTS GATE" in out[-1]
     assert r.af("status", "nope", "--brief") == 0
     assert "No feature 'nope' here" in capsys.readouterr().out
+    # seen live: the cost dropped from $3.33 to $1.93 when the spec was approved again
+    cfg = load_config(r.root)
+    before = Orchestrator(cfg, echo=lambda s: None).cost_so_far("demo")
+    log_event(cfg, "demo", "spec_approved")
+    assert before > 0 and Orchestrator(cfg, echo=lambda s: None).cost_so_far("demo") == before
 
 
 # ---------- toast ----------

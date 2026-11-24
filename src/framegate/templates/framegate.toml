@@ -17,7 +17,8 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 
 # [env]
 # python = ".venv/Scripts/python.exe"   # python adapter: default = .venv interpreter, else current
-# wsl_distro = "Ubuntu"            # WSL distribution for mutation_runner = "wsl" (default: WSL's default)
+# wsl_distro = "Ubuntu"            # WSL distribution for mutation_runner = "wsl" (default: WSL's default,
+#                                  # else the first other one with python3)
 # refresh = ["python", "-m", "pip", "install", "-e", ".", "--no-deps"]
 #                                  # run by approve-spec before it commits ("python" = the project
 #                                  # interpreter): the environment follows the setup files the spec
@@ -46,6 +47,10 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 # limit_wait_max_hours = 6         # usage limit hit: wait for the reset and run again (no
 #                                  # failed attempt) if it is at most this far away; later
 #                                  # (weekly limit): stop, resume with `framegate run`; 0 = stop
+# limit_probe_minutes = 5          # during that wait: try the refused run again this often and
+#                                  # go on as soon as it gets through (the limit was refilled);
+#                                  # a refused try costs nothing; 0 = no tries. By hand at any
+#                                  # time: framegate wake <feature>
 # step_batch_ids = 15             # consecutive plan steps share one implementer run while their
 #                                  # spec IDs add up to at most this; 0 = one run per step
 
@@ -72,10 +77,21 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 #                                  # the whole suite with coverage (slow on big suites)
 # mutation_scope = "feature"       # tests the mutation run uses: "feature" | "suite"
 # regression_timeout = 3600        # seconds for the uninstrumented whole-suite run
-# regression_baseline = false      # true: approve-spec runs the whole suite once and records
-#                                  # the tests that already fail; the final regression check
-#                                  # then fails only on other failures (a suite that is not
-#                                  # green on this machine, e.g. tests that need services)
+# regression_baseline = true       # approve-spec runs the whole suite once and records the
+#                                  # tests that already fail; the gates leave them out. false:
+#                                  # nothing is run at the approval, every red test counts.
+#                                  # Not set: on for a bug fix (it may start on a red tree),
+#                                  # off for a feature and a refactor (they start on a green one)
+# unrunnable_tests = [             # tests that are red before any task: this machine cannot
+#   { test = "tests/test_db.py", reason = "needs a PostgreSQL server" },   # run them (a
+#   { test = "tests/test_todo.py", reason = "red before any task: placeholders" },  # database,
+# ]                                # another OS), or they are the project's own debt. A
+#                                  # failure of one is left out of every gate, in every mode,
+#                                  # and the final summary names them with the reason. test =
+#                                  # the test file, or file::test (no bare test name).
+#                                  # /framegate:setup finds them (framegate doctor --tree) and
+#                                  # is not ready until each one runs or is listed; you
+#                                  # confirm each one
 # coverage_timeout = 1800          # seconds per coverage run; killed -> "ERROR: test run incomplete"
 # mutation_timeout = 3600          # seconds per mutation run (same)
 # format_fix = true                # the gates format the changed source files (and review
@@ -86,14 +102,9 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 #                                  # over this, is a numbered item at the final gate (split
 #                                  # now / later); 0 = off. Every step gate and the final
 #                                  # gates report the changed files' sizes (not blocking)
-# step_tests = "suite"             # a step gate also runs the whole suite (the everyday
-#                                  # selection: [dotnet] base_filter, [python] pytest_args),
-#                                  # with the tests of this feature's later steps left out;
-#                                  # "feature" = only the tests of the step's IDs (slow suite).
-#                                  # Plan steps only: the runs after the review (review
-#                                  # fixes, structure fixes, final repair) are checked with
-#                                  # the feature's tests + the review tests either way; the
-#                                  # final gates run the whole suite right after
+# step_tests = "feature"           # a step gate runs only the tests of the step's IDs (and
+#                                  # the earlier steps'); the whole suite runs once, at the
+#                                  # final gate. "suite" = every step gate runs it too
 # unreached_assertions = true      # the final gate fails on an assertion of a new test that
 #                                  # never ran in the feature's tests (`if (x) Assert...` on
 #                                  # data without x); false = off
@@ -111,6 +122,9 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 # format_fix = ["python", "-m", "black", "{files}"]   # the formatter the gates apply to the
 #                                  # changed files when `format` is the project's own check
 #                                  # (without it a configured `format` turns the fix off)
+# lint_fix = ["ruff", "check", "--fix", "{files}"]    # the linter's safe fixes on the same
+#                                  # files, before any check. Default: this, when `lint` is
+#                                  # ruff; another linter: its fix command, or [] = off
 
 # [python]                         # python adapter
 # pytest_args = ["-m", "not integration and not slow"]   # added to every pytest run of
@@ -206,6 +220,14 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 [notify]
 # toast = true                     # Windows toast at each gate, DONE and on error (env
 #                                  # FRAMEGATE_TOAST=0 turns it off); no-op on other systems
+
+# [update]
+# check = true                     # the start check of the chat skills compares the plugin, the
+#                                  # command-line tool and the project's workflow tools and
+#                                  # brings them to one version (never while a task is in
+#                                  # progress: the update then waits). false, or env
+#                                  # FRAMEGATE_UPDATE_CHECK=0: nothing is compared or updated
+#                                  # (a pinned setup); `framegate update` still does it
 
 # [roles]
 # extra_dir = ".framegate/roles"   # <phase>.md files appended to the base role prompts

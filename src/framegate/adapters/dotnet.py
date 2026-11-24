@@ -35,6 +35,7 @@ from framegate.adapters.base import (
     diff_hunks,
     incomplete_reason,
     incomplete_result,
+    not_measured,
     parse_junit,
     run_command,
 )
@@ -1220,9 +1221,8 @@ class DotnetAdapter(LanguageAdapter):
             return CheckResult("PASS", "No changed C# source files to mutate.")
         stryker = self.stryker_command()
         if stryker is None:
-            return CheckResult(
-                "SKIPPED",
-                "SKIPPED: Stryker.NET is not installed (dotnet tool install -g dotnet-stryker)",
+            return not_measured(
+                "Stryker.NET is not installed", "dotnet tool install -g dotnet-stryker"
             )
         test_projects = self.detected_test_projects()
         if not test_projects:

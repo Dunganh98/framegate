@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from framegate import __version__, followup, hosts
+from framegate.adapters.base import NOT_MEASURED
 from framegate.config import Config, ConfigError
 from framegate.report import since_spec_approval
 from framegate.specs import feature_ids, feature_mode, plan_steps
@@ -250,16 +251,22 @@ def _changes(
     return found or [f"{s.num}. {s.title}" for s in plan_steps(cfg, feature)]
 
 
-def final_scores(last: dict[str, Any]) -> list[str]:
+def final_scores(last: dict[str, Any], fix: bool = True) -> list[str]:
     """The coverage and mutation results of a `final_gates` event, one text each (the
-    regression run and skipped checks left out): the final brief and the description."""
-    return [
-        f"{name} {_clip(' '.join(str(res).split()), 90)}"
-        for name, res in (last.get("results") or {}).items()
-        if ("coverage" in name or "mutation" in name)
-        and "regression" not in name
-        and not str(res).startswith("SKIPPED")
-    ]
+    regression run and skipped checks left out): the final brief and the description.
+    A check whose tool cannot run on the machine is listed as NOT MEASURED with the reason,
+    so no reader takes the silence for a pass. `fix`: also what to do about it (the brief;
+    the description's reader is not at that machine)."""
+    found = []
+    for name, res in (last.get("results") or {}).items():
+        text = " ".join(str(res).split())
+        if not ("coverage" in name or "mutation" in name) or "regression" in name:
+            continue
+        if text.startswith(NOT_MEASURED):
+            found.append(f"{name} {_clip(text if fix else text.split('. Fix: ')[0], 400)}")
+        elif not text.startswith("SKIPPED"):
+            found.append(f"{name} {_clip(text, 90)}")
+    return found
 
 
 def count_tests(cfg: Config, feature: str) -> int | None:
@@ -289,7 +296,7 @@ def _numbers(cfg: Config, feature: str, tests: int | None) -> list[str]:
         found.append("all final checks passed" if last.get("passed") else f"FAILED: {failed}")
     if tests:
         found.append(f"{tests} test(s)")
-    return [f"{CHECKS} " + "; ".join([*found, *final_scores(last)])]
+    return [f"{CHECKS} " + "; ".join([*found, *final_scores(last, fix=False)])]
 
 
 def _deploy(cfg: Config, feature: str) -> tuple[list[str], bool]:

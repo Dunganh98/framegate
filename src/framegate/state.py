@@ -68,6 +68,14 @@ DIRTY_CHOICES = (
 )
 
 
+def commit_command(lines: list[str], message: str) -> str:
+    """The one git command that commits the files of `lines` (`XY path`, as dirty_lines
+    gives them) as they are, and nothing else. For a refusal: the user can copy it."""
+    paths = [line[3:] for line in lines]
+    quoted = " ".join(f'"{p}"' if " " in p else p for p in paths)
+    return f'git commit -m "{message}" -- {quoted}'
+
+
 def switch_branch(cfg: Config, *args: str) -> None:
     """`git checkout -q <args>` for a branch switch. Uncommitted machine files do not stop
     it: git carries them over. Only when the other branch holds another version of such a

@@ -103,6 +103,8 @@ Coming from agentflow (the old name)? [docs/migrate-from-agentflow.md](docs/migr
 - [docs/plugin.md](docs/plugin.md): the Claude Code plugin
 - [docs/adapters.md](docs/adapters.md): languages (Python, .NET, generic for any other)
 - [docs/AGENTIC_WORKFLOW_SETUP.md](docs/AGENTIC_WORKFLOW_SETUP.md): the design
+- [docs/decisions.md](docs/decisions.md): standing decisions, one line each
+- [docs/replay.md](docs/replay.md): `framegate replay`, real commits as measured tasks
 
 ## Development
 

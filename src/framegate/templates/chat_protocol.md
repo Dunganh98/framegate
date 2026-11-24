@@ -16,13 +16,22 @@ not read specs, gate files or logs. Every message you write to them:
 final_gates.md, tests_gate.md, test_summary.md, the spec files, retro_proposals.md, the pull
 request's description `<specs>/<f>/pr_description.md`), not all of it.
 
+**Notes for the retro.** The retro reads the run's events, not this chat. Record in one line
+each, with `framegate note <f> '<text>'`: a question you asked the user outside a gate brief
+and the reply (`asked: ... -> user: ...`), anything you did by hand (`did: ...`), anything
+you or the user refused (`refused: ...`). Gate answers and approvals are recorded already.
+
 ## A. Start (after "spec OK") and continue (after every gate decision)
 
 1. Only the first time: `framegate approve-spec <f>`. If it lists spec-check problems, fix
    the spec (they are mechanical: add the missing spec ID, copy the code line as it is) and
    approve again; `--force` only when the user says so. It commits the setup files changed in
    the spec phase with the spec (it prints which) and runs `[env] refresh` if the project has
-   one. If it refuses because of other uncommitted protected files (e.g. CLAUDE.md, CI or
+   one. For a bug fix (and where framegate.toml sets `regression_baseline = true`) it
+   then runs the whole suite once (this can take minutes). If it prints "Regression
+   baseline: N test(s) already fail" with N above 0, pass that on to the user in your next
+   status message, in plain words (these tests fail today and are left out). Do not stop
+   for it and do not ask: going on is the default. If it refuses because of other uncommitted protected files (e.g. CLAUDE.md, CI or
    deploy files, `[protected] extra`) or a failed refresh: say which and why in one line and
    ask the user what to do (commit or revert the files; fix the setup); never commit or
    revert them yourself. A deploy / CI change the feature needs is never part of it: it
@@ -50,6 +59,11 @@ fail for no reason. Reading files and git log/diff/status are fine.
   `PARKED`, `ERROR` or `INTERRUPTED`.
 - Monitor deadline notice (30 min) while the run is still active: start the same Monitor again
   (it continues where it stopped; nothing is lost or repeated).
+- A line `usage limit reached; waiting until <when> ...`: the run waits by itself and tries
+  again every few minutes; one line to the user: the Claude usage limit is reached, the run
+  goes on at <when> at the latest, and "say so when you have refilled the limit". When the
+  user says the limit is back (refilled, extra usage bought): run `framegate wake <f>` (the
+  run tries again within seconds; it is not a second run). Never wake it on your own.
 - The run has ended when either the background task's completion notification arrives or a
   `watch ended: ...` line comes. On the first of the two, run `framegate status <f> --brief`
   and act on its first line once (the second signal is then ignored):
@@ -64,6 +78,8 @@ fail for no reason. Reading files and git log/diff/status are fine.
     output file (Read); tell the user in one or two lines what failed, in words, and the one
     decision needed with your default (e.g. "Retry the run? (default: yes, it looks like a
     timeout)"). The lines themselves on request. Do not retry blindly.
+  - The user gives the task up before DONE: offer the retro of what happened (default
+    yes): `framegate retro <f>` (the task's state stays as it is), then D.1.
 
 ## C. At a gate
 
@@ -103,6 +119,9 @@ fail for no reason. Reading files and git log/diff/status are fine.
    - A parked item with a proposed fix: "ok" / "approve <n>" for it is the answer
      `Approved: apply the proposed fix as written.`; the next run sends it to the phase that
      owns the file (spec, tests, code).
+   - A parked item that says "This needs the setup: ...": there is nothing to approve. Offer
+     `/framegate:setup` with the change it names (default), then answer the item with what
+     was done; the step is redone once framegate.toml has changed.
    - The provisional-steps item (code kept, test fixes proposed): "ok" / "yes" / "approve" for
      it, or for the whole gate while it is listed, is the answer `Approved: apply all proposed
      test fixes as written.` (`framegate approve` refuses while it is open). A "no" to one fix
@@ -125,6 +144,8 @@ fail for no reason. Reading files and git log/diff/status are fine.
 
 ## D. DONE: wrap-up and cleanup
 
+0. `framegate status <f> --brief` printed `framegate: the plugin is X, the command-line tool
+   Y`: one line to the user: a framegate update is ready, `/framegate:update` gets it.
 1. If `<out>/<f>/retro_proposals.md` exists: show its `## Brief` (the proposals as a short
    numbered list: problem -> fix, with the retro's recommendation take / skip / fold into N),
    then its `## Project knowledge` facts (K1, ...) as short lines. Ask in one line: "Which

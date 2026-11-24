@@ -3,9 +3,13 @@ finding / final-gate failure, and the coverage check of retro_proposals.md."""
 
 from __future__ import annotations
 
+import json
 import pathlib
 
-from conftest import git, init_git
+import pytest
+
+from conftest import DemoRepo, git, init_git
+from framegate.config import load_config
 from framegate.gates import GateReport, gate_report
 from framegate.retro import (
     add_knowledge,
@@ -17,6 +21,7 @@ from framegate.retro import (
     parse_answer_items,
     split_questions,
 )
+from framegate.state import feature_finished
 from test_checks import adapter_for, write
 
 
@@ -336,3 +341,39 @@ def test_structure_findings_are_items_with_the_cost_of_their_fix() -> None:
     assert missing_ids("S1 cost a fix run", ri.ids) == ["S2", "F1"]
     open_ = build("f", events[:1])
     assert "Fix: (not started)" in open_.text
+
+
+def test_the_chat_notes_reach_the_retro_as_a_bounded_digest() -> None:
+    notes = [{"kind": "chat_note", "ts": "2026-11-17T10:00:00", "text": f"n{i}"} for i in range(42)]
+    ri = build("f", notes)
+    chat = ri.text.split("## Chat")[1].splitlines()[2:]
+    assert chat[0] == "(2 earlier note(s) left out)" and len(chat) == 41
+    assert chat[1] == "- 2026-11-17T10:00 n2" and ri.ids == []
+    assert "## Chat" not in build("f", []).text
+
+
+def test_retro_of_a_run_that_stopped_before_done(
+    demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
+) -> None:
+    r = demo_repo
+    assert r.af("retro", "demo") == 1  # no spec OK yet
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("note", "demo", "asked: keep the old API?", "->", "user: " + "no " * 200) == 0
+    progress = r.root / "out" / "demo" / "progress.json"
+    stopped = {"phase": "IMPLEMENT", "feedback": "fix the test", "attempt": 2}
+    stopped["interrupted"] = {"phase": "IMPLEMENT", "how": "Ctrl+C"}
+    progress.write_text(json.dumps(stopped), encoding="utf-8")
+    assert r.af("retro", "demo") == 0
+    assert {k: r.progress()[k] for k in stopped} == stopped
+    assert not feature_finished(load_config(r.root), "demo")
+    assert (r.root / "out/demo/retro_proposals.md").is_file()
+    ri = (r.root / "out/demo/retro_input.md").read_text(encoding="utf-8")
+    assert "## Run state: stopped before DONE" in ri
+    assert "The run reached IMPLEMENT of " in ri and ": interrupted (Ctrl+C). " in ri
+    [note] = [x for x in ri.splitlines() if "asked: keep the old API? -> user: no no" in x]
+    assert len(note) < 330
+    # past the final gate the run does the retro
+    progress.write_text(json.dumps({"phase": "DONE"}), encoding="utf-8")
+    capsys.readouterr()
+    assert r.af("retro", "demo") == 1
+    assert "passed the final gate" in capsys.readouterr().err

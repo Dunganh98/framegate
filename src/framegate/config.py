@@ -79,6 +79,13 @@ PHASE_ALIASES = {"PR": "SUMMARY"}
 ROLE_ALIASES = {"summary": "pr"}
 
 
+def update_check_off() -> bool:
+    """Env FRAMEGATE_UPDATE_CHECK=0 (false / no / off): no version check on this machine,
+    whatever framegate.toml says, also where there is no framegate.toml."""
+    value = os.environ.get("FRAMEGATE_UPDATE_CHECK", "").strip().lower()
+    return value in ("0", "false", "no", "off")
+
+
 def phase_name(phase: str) -> str:
     """Today's name of a phase (an earlier version's name is mapped, any other kept)."""
     return PHASE_ALIASES.get(phase, phase)
@@ -112,6 +119,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "step_batch_ids": (int,),
         "diagnose_after": (int,),
         "limit_wait_max_hours": (int, float),
+        "limit_probe_minutes": (int, float),
     },
     "gates": {
         "tests": (str,),
@@ -125,6 +133,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "mutation_scope": (str,),
         "regression_timeout": (int,),
         "regression_baseline": (bool,),
+        "unrunnable_tests": (list,),
         "coverage_timeout": (int,),
         "mutation_timeout": (int,),
         "commands": (dict,),
@@ -166,6 +175,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "project_folders": (list,),
     },
     "notify": {"toast": (bool,)},
+    "update": {"check": (bool,)},
     "phases": {},
     # name -> path, or name -> {path, note}: checked in parse_references
     "references": {},
@@ -220,11 +230,11 @@ MARKER_KINDS = ("refs", "tags")
 #: tests the final coverage / mutation runs use: the feature's tests (its spec IDs + the review
 #: tests; the whole suite then runs once more without instrumentation) or the whole suite
 GATE_SCOPES = ("feature", "suite")
-#: [gates] step_tests: "suite" (default) = a step gate also runs the whole suite (the adapter's
-#: everyday selection), with the tests of this feature's later steps left out: a step that
-#: breaks another feature's tests fails at once, not at the final gate. "feature" = only the
-#: tests of the step's and the earlier steps' IDs (a suite too slow to run after every step)
-STEP_TESTS = ("suite", "feature")
+#: [gates] step_tests: "feature" (default) = a step gate runs only the tests of the step's and
+#: the earlier steps' IDs: a gate judges what belongs to the task, and the whole suite runs
+#: once, at the final gate. "suite" = every step gate also runs the whole suite (the adapter's
+#: everyday selection), with the tests of this feature's later steps left out
+STEP_TESTS = ("feature", "suite")
 #: [gates] tests: "defer" (default) = never stop at the tests gate: the test reviewer has checked
 #: the tests against the spec; open questions, objections left and failed test checks go to the
 #: final gate (two human gates: spec and final); "human" = always stop at the tests gate;
@@ -377,6 +387,10 @@ class Config:
     #: reset (e.g. a weekly limit) stops the run like Ctrl+C (resume: framegate run). 0 = never
     #: wait
     limit_wait_max_hours: float = 6.0
+    #: [agents] limit_probe_minutes: during that wait the refused run is tried again this
+    #: often and goes on as soon as it gets through (the limit was refilled, or lifted before
+    #: the time claude named); a refused try costs nothing. 0 = no tries, one wait
+    limit_probe_minutes: float = 5.0
     #: [project] knowledge: the project's knowledge file (architecture rules, things that
     #: must never change, test-harness facts, tools); read by the agents, grown by the retro
     knowledge: str = ".framegate/project.md"
@@ -386,10 +400,22 @@ class Config:
     #: [gates.commands] format_fix: the project's own formatter for that fix, `{files}` = the
     #: changed files (e.g. black where the project checks with black, not ruff format)
     format_fix_command: list[str] = field(default_factory=list)
+    #: [gates.commands] lint_fix: the linter's safe fixes, applied where the format fix runs
+    #: (`{files}` = the changed files). None = `ruff check --fix` when the lint command is
+    #: ruff, else nothing; [] = off (LanguageAdapter.lint_fix_commands)
+    lint_fix_command: list[str] | None = None
     #: [gates] regression_baseline: `approve-spec` runs the whole suite once and records the
-    #: tests that already fail; the final regression check then fails only on other failures
-    #: (for a repository whose suite is not green locally, e.g. tests that need services)
-    regression_baseline: bool = False
+    #: tests that already fail (gates.py); the gates then fail only on other tests. false:
+    #: nothing is run at the approval and every failing test counts. Not set (None): on for
+    #: a bug fix, off for a feature and a refactor (specs.baseline_on)
+    regression_baseline: bool | None = None
+    #: [gates] unrunnable_tests: test -> reason, for tests that are red before any task: this
+    #: machine cannot run them (a database, a service, another operating system), or they are
+    #: the project's own debt ("red before any task: ..."). The setup finds them once, is not
+    #: ready while one is unlisted, and the user confirms each reason. A failure of one is
+    #: left out of every gate in every mode, and the final facts name them with their reason
+    #: each time (unrunnable.py)
+    unrunnable_tests: dict[str, str] = field(default_factory=dict)
     #: [gates.extra] name -> command: project checks run at the final gates and shown at the
     #: final gate, never blocking (e.g. a balance measurement)
     extra_checks: dict[str, list[str]] = field(default_factory=dict)
@@ -397,8 +423,8 @@ class Config:
     #: [gates] max_file_lines: a changed source file longer than this is listed in the final
     #: gate's structure report and asked about at the final gate (never blocking; 0 = off)
     max_file_lines: int = 400
-    #: [gates] step_tests: "suite" | "feature" (see STEP_TESTS)
-    step_tests: str = "suite"
+    #: [gates] step_tests: "feature" | "suite" (see STEP_TESTS)
+    step_tests: str = "feature"
     #: [gates] unreached_assertions: the final gate fails on an assertion of a test the
     #: feature added that the feature's own tests never ran (needs the coverage run)
     unreached_assertions: bool = True
@@ -468,6 +494,12 @@ class Config:
     project_folders: list[str] = field(default_factory=list)
     #: [notify] toast: Windows toast at each gate, DONE and on error (no-op elsewhere / on failure)
     toast: bool = True
+    #: [update] check: the start check of the chat skills (`framegate preflight`) and
+    #: `framegate status` compare the versions of the plugin, the command-line tool and the
+    #: project's workflow tools. False (or env FRAMEGATE_UPDATE_CHECK=0): nothing is compared
+    #: and nothing updated (a pinned setup, a replay of old tasks); `framegate update`, which
+    #: the user asks for, still works
+    update_check: bool = True
     #: [references] name -> folder the agents may read (see Reference)
     references: dict[str, Reference] = field(default_factory=dict)
     #: raw, type-checked adapter sections, e.g. {"dotnet": {"configuration": "Release"}}
@@ -759,6 +791,33 @@ def _str_list(where: str, value: Any) -> list[str]:
     return list(value)
 
 
+def _unrunnable_tests(root: pathlib.Path, value: list[Any]) -> dict[str, str]:
+    """[gates] unrunnable_tests = [{ test = "...", reason = "..." }]: test -> reason. Both are
+    needed: an entry without a reason would hide a red test without saying why. The test
+    names its file (`tests/test_x.py` or `tests/test_x.py::test_connect`): a bare test name
+    would match every test of that name."""
+    where = "[gates] unrunnable_tests"
+    out: dict[str, str] = {}
+    for n, entry in enumerate(value, 1):
+        shape = f'{where}: entry {n} must be {{ test = "...", reason = "..." }}'
+        if not isinstance(entry, dict) or set(entry) != {"test", "reason"}:
+            raise ConfigError(shape)
+        test, reason = entry["test"], entry["reason"]
+        if not isinstance(test, str) or not isinstance(reason, str):
+            raise ConfigError(shape)
+        if not test.strip() or not reason.strip():
+            raise ConfigError(f"{where}: entry {n} needs a test and a reason, neither empty")
+        test = test.strip().replace("\\", "/")
+        file = pathlib.PurePosixPath(test.partition("::")[0])
+        if not file.suffix or not (len(file.parts) > 1 or (root / file).is_file()):
+            raise ConfigError(
+                f'{where}: entry {n} ("{test}") must name the test file: '
+                '"tests/db/test_x.py" or "tests/db/test_x.py::test_connect"'
+            )
+        out[test] = reason.strip()
+    return out
+
+
 def _effort(where: str, value: Any) -> str:
     if value == "" or value in EFFORT_LEVELS:
         return str(value)
@@ -843,6 +902,9 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     cfg.limit_wait_max_hours = float(agents.get("limit_wait_max_hours", cfg.limit_wait_max_hours))
     if cfg.limit_wait_max_hours < 0:
         raise ConfigError("[agents] limit_wait_max_hours must be >= 0 (0 = never wait)")
+    cfg.limit_probe_minutes = float(agents.get("limit_probe_minutes", cfg.limit_probe_minutes))
+    if cfg.limit_probe_minutes < 0:
+        raise ConfigError("[agents] limit_probe_minutes must be >= 0 (0 = no tries)")
 
     gates = data.get("gates", {})
     cfg.tests_gate = gates.get("tests", cfg.tests_gate)
@@ -903,18 +965,20 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
             raise ConfigError(f"[gates] {key} must be >= 1")
         setattr(cfg, key, value)
     cfg.regression_baseline = gates.get("regression_baseline", cfg.regression_baseline)
+    cfg.unrunnable_tests = _unrunnable_tests(root, gates.get("unrunnable_tests", []))
     for key, cmd in gates.get("commands", {}).items():
-        if key == "format_fix":
-            cfg.format_fix_command = _str_list("[gates.commands] format_fix", cmd)
-            if cfg.format_fix_command and "{files}" not in cfg.format_fix_command:
+        if key in ("format_fix", "lint_fix"):
+            fix = _str_list(f"[gates.commands] {key}", cmd)
+            if fix and "{files}" not in fix:
                 raise ConfigError(
-                    '[gates.commands] format_fix needs a "{files}" argument (the changed files)'
+                    f'[gates.commands] {key} needs a "{{files}}" argument (the changed files)'
                 )
+            setattr(cfg, f"{key}_command", fix)
             continue
         if key not in GATE_COMMAND_KEYS:
             raise ConfigError(
                 f"[gates.commands] unknown key '{key}' "
-                f"(allowed: {(*GATE_COMMAND_KEYS, 'format_fix')})"
+                f"(allowed: {(*GATE_COMMAND_KEYS, 'format_fix', 'lint_fix')})"
             )
         cfg.gate_commands[key] = _str_list(f"[gates.commands] {key}", cmd)
     for name, cmd in gates.get("extra", {}).items():
@@ -983,6 +1047,7 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     cfg.project_folders = _project_folders(git_cfg.get("project_folders", []))
     cfg.machine_files = _machine_files(cfg, git_cfg.get("machine_files", []))
     cfg.toast = data.get("notify", {}).get("toast", cfg.toast)
+    cfg.update_check = data.get("update", {}).get("check", cfg.update_check)
     cfg.references = parse_references(data.get("references", {}))
     for section in LANGUAGE_SECTIONS:
         if section in data:
@@ -1031,6 +1096,8 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     env_claude = os.environ.get("FRAMEGATE_CLAUDE")
     if env_claude:
         cfg.claude = env_claude
+    if update_check_off():
+        cfg.update_check = False
     return cfg
 
 

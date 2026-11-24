@@ -114,7 +114,8 @@ class TestScope:
 
 @dataclass
 class CheckResult:
-    """status: PASS | FAIL | SKIPPED. A SKIPPED check never fails the gate but is reported."""
+    """status: PASS | FAIL | SKIPPED | NOT MEASURED. A SKIPPED or NOT MEASURED check never
+    fails the gate but is reported."""
 
     status: str
     output: str = ""
@@ -123,6 +124,18 @@ class CheckResult:
     #: a FAIL because the tool gave no result (it crashed, could not build its own copy, was
     #: cut short): it says nothing about the code or the tests, so no agent is sent to fix it
     tool_failure: bool = False
+
+
+#: status of a check whose tool cannot run on this machine (not_measured)
+NOT_MEASURED = "NOT MEASURED"
+
+
+def not_measured(reason: str, fix: str, log: str = "") -> CheckResult:
+    """The check's tool cannot run on this machine, so nothing was measured. That is not a
+    FAIL (it says nothing about the code or the tests) and not a SKIPPED (nobody chose to
+    leave the check out). The gate passes; the gate report and the brief show the reason and
+    the one-line fix, and the risk is elevated for it (risk.py)."""
+    return CheckResult(NOT_MEASURED, log, summary=f"{reason}. Fix: {fix}")
 
 
 @dataclass
@@ -329,6 +342,24 @@ def changed_lines(cfg: Config, base_ref: str, rel: str) -> set[int] | None:
     return {n for a, b in diff_hunks(diff) for n in range(a, b + 1)}
 
 
+def lines_beyond(before: str, after: str, lines: set[int]) -> int:
+    """How many lines of `before` a formatter rewrote (`after` is its output) outside
+    `lines` (1-based lines of `before`: the ones the task changed). That is formatting
+    debt from before the task, fixed with it."""
+    import difflib
+
+    a, b = before.splitlines(keepends=True), after.splitlines(keepends=True)
+    count = 0
+    for tag, i1, i2, _, _ in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if tag == "equal":
+            continue
+        if i2 > i1:
+            count += sum(1 for k in range(i1 + 1, i2 + 1) if k not in lines)
+        elif i1 not in lines and i1 + 1 not in lines:  # lines put in between two old ones
+            count += 1
+    return count
+
+
 def merge_scoped(before: str, after: str, lines: set[int]) -> str:
     """`after` (a formatter's output for `before`) applied only where it touches `lines` (1-based
     lines of `before`): formatting a changed file must not reformat the code nobody touched."""
@@ -469,6 +500,23 @@ class LanguageAdapter(abc.ABC):
                 checks.append(command_check(GATE_NAMES[key], self.resolve_command(cmd), self.root))
         return checks
 
+    #: the gates count a lint / format / typecheck / imports finding only in a file the task
+    #: changed (gates.lint_checks); the checks themselves run on the whole tree
+    file_scoped_lint: ClassVar[bool] = False
+
+    def changed_since(self, base_ref: str | None) -> set[str] | None:
+        """Files changed since base_ref (incl. untracked); None when that is not known (no
+        ref, no such marker)."""
+        from framegate.checks.frame_diff import changed_files
+        from framegate.state import GitError, tag_exists
+
+        try:
+            if not base_ref or not tag_exists(self.cfg, base_ref):
+                return None
+            return changed_files(self.cfg, base_ref)[0]
+        except GitError:
+            return None
+
     def tool_env(self) -> dict[str, str] | None:
         """Environment for the adapter's tool commands (None = inherit)."""
         return None
@@ -486,6 +534,8 @@ class LanguageAdapter(abc.ABC):
     #: the format / lint checks report only findings on changed lines, and the format fix keeps
     #: only the formatter's changes on changed lines (no churn in code nobody touched)
     line_scoped_format: ClassVar[bool] = False
+    #: set by format_files: file -> lines the formatter rewrote outside the task's own
+    format_beyond: dict[str, int] = {}  # noqa: RUF012 (replaced per call, not changed)
 
     def format_fix_enabled(self) -> bool:
         """[gates] format_fix, with the adapter's own format check or with a configured
@@ -495,22 +545,44 @@ class LanguageAdapter(abc.ABC):
             return False
         return bool(self.cfg.format_fix_command) or "format" not in self.cfg.gate_commands
 
-    def configured_format_fix(self, files: list[str]) -> list[list[str]]:
-        """[gates.commands] format_fix with "{files}" replaced by `files`; [] = not configured."""
-        cmd = self.cfg.format_fix_command
-        if not cmd:
-            return []
+    def _on_files(self, cmd: list[str], files: list[str]) -> list[str]:
+        """A configured fix command with "{files}" replaced by `files`."""
         i = cmd.index("{files}")
         resolved = self.resolve_command([*cmd[:i], *cmd[i + 1 :]])
         k = len(self.resolve_command(cmd[:i])) if i else 0
-        return [[*resolved[:k], *files, *resolved[k:]]]
+        return [*resolved[:k], *files, *resolved[k:]]
+
+    def configured_format_fix(self, files: list[str]) -> list[list[str]]:
+        """[gates.commands] format_fix with "{files}" replaced by `files`; [] = not configured."""
+        cmd = self.cfg.format_fix_command
+        return [self._on_files(cmd, files)] if cmd else []
+
+    def lint_fix_commands(self, files: list[str]) -> list[list[str]]:
+        """The linter's safe fixes on `files`, run where the format fix runs. Seen live: the
+        test writer's file failed lint on import order, the implementer may not edit tests,
+        and the step parked. [gates.commands] lint_fix (`[]` = off), else `ruff check --fix`
+        when the lint command is ruff; [] = off, or the lint tool has no fix mode."""
+        if not self.cfg.format_fix:
+            return []
+        own = self.cfg.lint_fix_command
+        if own is not None:
+            return [self._on_files(own, files)] if own else []
+        lint = self.cfg.gate_commands.get("lint", self.default_gate_commands().get("lint")) or []
+        if "check" not in lint or "ruff" not in [pathlib.PurePath(a).stem.lower() for a in lint]:
+            return []
+        ruff = self.resolve_command(lint[: lint.index("check") + 1])
+        return [[*ruff, "--fix", "--no-unsafe-fixes", "--quiet", *files]]
 
     def format_fix(self, base_ref: str | None) -> str:
         """Before the checks of a gate: format the source files changed since base_ref, so a
         formatting slip costs no implementer attempt, and the changed review tests (the frame
         exceptions: written by the reviewer, which nobody formats otherwise and the implementer
-        may not edit). Frozen tests are never touched. Returns a one-line note ("" = nothing)."""
-        if not self.format_fix_enabled() or not base_ref:
+        may not edit). Frozen tests are never touched. A changed file is formatted whole: old
+        formatting debt in it is fixed with the work (format_beyond counts those lines for
+        the final summary). The linter's safe fixes are applied first (lint_fix_commands).
+        Returns a one-line note ("" = nothing)."""
+        self.format_beyond = {}
+        if not base_ref:
             return ""
         from framegate.checks.frame_diff import changed_files, path_matches
         from framegate.state import GitError, tag_exists
@@ -525,40 +597,63 @@ class LanguageAdapter(abc.ABC):
         files = sorted(f for f in changed if path_matches(f, allowed))
         return self.format_files(files, base_ref)
 
+    def fix_commands(self, files: Sequence[str]) -> tuple[list[list[str]], list[list[str]]]:
+        """(the linter's safe fixes, the formatter) for `files`, as format_files runs them."""
+        if not files:
+            return [], []
+        fmt = (
+            (self.configured_format_fix(list(files)) or self.format_fix_commands(list(files)))
+            if self.format_fix_enabled()
+            else []
+        )
+        return self.lint_fix_commands(list(files)), fmt
+
     def format_files(self, files: Sequence[str], base_ref: str | None = None) -> str:
-        """Format `files` (posix, relative to the root; other suffixes and missing files are
-        left out) with the adapter's formatter. With line_scoped_format and a base_ref, only
-        the formatter's changes on lines changed since base_ref are kept. Returns a note."""
+        """Apply the linter's safe fixes to `files` (lint_fix_commands), then format them
+        with the adapter's formatter (format_fix_enabled). `files`: posix, relative to the
+        root; other suffixes and missing files are left out. With line_scoped_format and a
+        base_ref, only the changes on lines changed since base_ref are kept. Returns a note.
+        Sets format_beyond: file -> lines rewritten that were not changed since base_ref
+        (debt from before the task, fixed with it)."""
+        self.format_beyond = {}
         files = [
             f
             for f in files
             if (self.root / f).is_file()
             and (not self.source_suffixes or f.endswith(self.source_suffixes))
         ]
-        cmds = (
-            (self.configured_format_fix(list(files)) or self.format_fix_commands(list(files)))
-            if files
-            else []
-        )
+        lint, fmt = self.fix_commands(files)
+        cmds = [*lint, *fmt]
         if not cmds:
             return ""
         scoped = self.line_scoped_format and bool(base_ref)
-        before = {f: (self.root / f).read_bytes() for f in files} if scoped else {}
+        before = {f: (self.root / f).read_bytes() for f in files} if base_ref else {}
+        task_lines = {f: changed_lines(self.cfg, str(base_ref), f) for f in before}
         failed = []
         for cmd in cmds:
             code, out = run_command(cmd, self.root, env=self.tool_env(), timeout=900)
-            if code != 0:
+            # a lint fix exits non-zero on what it cannot fix: the lint check reports that
+            if code != 0 and cmd not in lint:
                 failed.append(f"{cmd[0]} exit {code}: {out.strip().splitlines()[-1:] or ''}")
         for f, old in before.items():
             path = self.root / f
             new = path.read_bytes()
-            lines = changed_lines(self.cfg, str(base_ref), f) if new != old else None
-            if lines is not None:
-                merged = merge_scoped(old.decode("utf-8"), new.decode("utf-8"), lines)
-                path.write_bytes(merged.encode("utf-8"))
-        note = f"formatted {len(files)} changed file(s)" + (
+            lines = task_lines[f] if new != old else None
+            if lines is None:
+                continue
+            try:
+                was, now = old.decode("utf-8"), new.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            if scoped:
+                path.write_bytes(merge_scoped(was, now, lines).encode("utf-8"))
+            elif n := lines_beyond(was, now, lines):
+                self.format_beyond = {**self.format_beyond, f: n}
+        note = f"{'formatted' if fmt else 'lint fixes in'} {len(files)} changed file(s)" + (
             " (changed lines only)" if scoped else ""
         )
+        if lint and fmt:
+            note += ", the linter's safe fixes first"
         return note + (f" (formatter problems: {'; '.join(failed)})" if failed else "")
 
     def scope_diagnostics(self, output: str, base_ref: str | None) -> tuple[str, int, int]:
@@ -652,7 +747,14 @@ class LanguageAdapter(abc.ABC):
     ) -> CheckResult:
         """Mutation score on the changed source files (>= cfg.mutation_score), killing mutants
         only with the tests of `scope` (None = the whole suite); write survivors to
-        <out>/<feature>/mutation_survivors.md. SKIPPED with a reason if unavailable."""
+        <out>/<feature>/mutation_survivors.md. SKIPPED with a reason when the config leaves
+        it out; `not_measured(reason, fix)` when the tool cannot run on this machine."""
+
+    def mutation_trial(self) -> CheckResult | None:
+        """`framegate doctor --tree`: a check in seconds, through the final gate's path, that
+        the mutation tool can run here (no mutant runs), so it fails at the setup and not at
+        the first task's final gate. None: this adapter has no trial."""
+        return None
 
     # ---------- frame ----------
     @abc.abstractmethod

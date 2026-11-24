@@ -26,9 +26,10 @@ def test_final_gates_mutation_through_wsl(
     demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
 ) -> None:
     r = demo_repo
-    wsl_root, problem = wsl.probe(r.root, None) if os.name == "nt" else (None, "not Windows")
-    if wsl_root is None:
-        pytest.skip(f"needs Windows with WSL and python3: {problem}")
+    found = wsl.probe(r.root, None) if os.name == "nt" else wsl.Probe(problem="not Windows")
+    if found.root is None:
+        pytest.skip(f"needs Windows with WSL and python3: {found.problem}")
+    wsl_root = found.root
     venv = f"~/.cache/framegate/venvs/{hashlib.sha256(wsl_root.encode()).hexdigest()[:16]}"
     r.set_toml("gates", "mutation_runner", '"wsl"')
     try:
@@ -64,4 +65,5 @@ def test_final_gates_mutation_through_wsl(
             print(f"\n[wsl mutation] cold: run to DONE {flow:.0f} s; {cold}")
             print(f"[wsl mutation] warm: all final gates {gates:.0f} s; {warm}")
     finally:
-        run_command(wsl.wsl_command(["sh", "-c", f"rm -rf {venv}"]), r.root, timeout=120)
+        cleanup = wsl.wsl_command(["sh", "-c", f"rm -rf {venv}"], found.distro)
+        run_command(cleanup, r.root, timeout=120)

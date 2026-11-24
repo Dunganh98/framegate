@@ -9,6 +9,8 @@
      names where the new code goes instead: "New file: <path> (<what goes there>)". Seen live:
      two steps added to files of 1,093 and 835 lines, and the split cost a fix run after the
      review. `framegate spec-brief` lists the files that are over the limit.
+     A Markdown docs file a step names by its path (README.md, CHANGELOG.md, .md under a
+     docs folder) becomes writable for that step when the spec is approved.
      A port (requirements.md, "Ported from"): the steps follow the FILES, not the spec IDs.
      One step per `code` target file, in import order (leaf modules first: a file comes
      after the files it imports); a step's "Covers:" IDs are the ones its file serves, and

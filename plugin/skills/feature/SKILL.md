@@ -33,8 +33,11 @@ at load: a command-line tool older than this plugin does not have it yet):
 It compares this plugin with the command-line tool and with the workflow tools in the
 project's environment, updates what it may and prints the rest. Act on every line, then go on:
 
-- `Start check: ok ...` and `KEPT: ...` lines: without a word (work in progress keeps the
-  versions it was started with; the next new feature, bug fix or refactor brings them in line).
+- `Start check: ok ...`: without a word.
+- `KEPT: ...` lines: an update is waiting. A task in progress (this one or another one, also
+  in another repository) keeps the versions it was started with, so nothing was updated.
+  One line to the user in all: which update waits for which task, and that
+  `/framegate:update` does it now. Never run an install command for a `KEPT:` line.
 - `UPDATED: ...`: one line to the user: what was brought to which version; a `CHANGED
   versions` part as it is (a pinned package moved: the user decides whether to keep it).
 - `RUN: <command>`: the command-line tool is not at this plugin's version and cannot replace
@@ -67,6 +70,11 @@ knowledge. It overrides any default you would otherwise assume.
 !`framegate spec-brief $ARGUMENTS`
 
 ## Part 1: the spec dialogue
+
+If the user gave only a name (`$ARGUMENTS`), it is just the branch and folder name: find out
+in step 1 what it refers to (the code map, the code, the docs) and ask in step 2 only what
+you still cannot decide, the requirement itself included if the code and the docs do not
+tell.
 
 1. Read the requirements the user gives, then decide everything you can yourself first: read
    the docs, the code map, the code the feature touches and the project knowledge above
@@ -166,6 +174,10 @@ knowledge. It overrides any default you would otherwise assume.
    import order (leaf modules first; a file after the files it imports), each step covering
    the IDs its file serves (an ID two files serve goes to the later one). The code lands
    whole files at a time anyway; steps cut by ID end in steps with nothing left to build.
+   Files in a plan step: a step may mention any file. A Markdown docs file it names by its
+   path (`README.md`, `CHANGELOG.md`, `.md` under a docs folder) becomes writable for that
+   step at the approval; everything else outside the source folders stays read-only.
+   `spec-check` prints "Documentation files the plan makes writable".
 4. Create interface stubs in the source paths named above, in the stub style named above: full
    typed signatures, a one-line doc comment per public type and method saying what it is for
    (in words) plus the IDs it serves, bodies that only signal "not implemented". One concept

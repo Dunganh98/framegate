@@ -4,7 +4,9 @@ No agents run. Checks the config and the adapter, git and the base branch, the c
 workflow files (knowledge file, spec templates, .gitignore), the tools the gates use, the
 configured lint / format / typecheck commands (on the whole code), the test selection by spec
 ID, the static test scans, and with --full the whole test suite (how long the final regression
-takes). Exit 0 when nothing FAILs (WARN is fine), else 1.
+takes). With --tree (the setup, once per project) the suite runs too, and plain lines after
+the verdict say what is red on the code as it is (tree_check.py). Exit 0 when nothing FAILs
+(WARN is fine), else 1.
 
 Output ends with a brief: a one-line verdict (ready / not ready), then only the FAILs with their
 fix and the WARNs that need a decision (warnings about findings in the existing code need none).
@@ -20,9 +22,9 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from framegate import publish, references, setup_checks
+from framegate import publish, references, setup_checks, tree_check, unrunnable
 from framegate.adapters import get_adapter
-from framegate.adapters.base import LanguageAdapter
+from framegate.adapters.base import CheckResult, LanguageAdapter
 from framegate.checks import frame_diff, spec_lint
 from framegate.config import CONFIG_FILE, Config, ConfigError
 from framegate.state import GitError, git
@@ -248,8 +250,15 @@ def brief(items: list[Item]) -> list[str]:
 
 
 def run(
-    cfg: Config, echo: Callable[[str], None] = print, full: bool = False, only_brief: bool = False
+    cfg: Config,
+    echo: Callable[[str], None] = print,
+    full: bool = False,
+    only_brief: bool = False,
+    tree: bool = False,
 ) -> int:
+    """`tree`: also say what is red on the code as it is (tree_check.py): the whole suite
+    once, the size of the lint / format debt, a mutation tool that cannot run here. The
+    setup runs it once per project; its lines come after the verdict."""
     items: list[Item] = []
 
     def add(item: Item) -> None:
@@ -438,9 +447,12 @@ def run(
         )
     )
 
-    for name, found, detail in adapter.tool_report():
+    tools = list(adapter.tool_report())
+    for name, found, detail in tools:
         add(Item("OK" if found else "WARN", f"tool: {name}", detail))
 
+    #: the checks that fail on the code as it is (for --tree: their size, one proposal)
+    lint_red: list[tuple[str, CheckResult]] = []
     for check in adapter.lint_checks(None):
         t0 = time.monotonic()
         res = check.run()
@@ -451,6 +463,8 @@ def run(
         elif missing_tool:
             add(Item("FAIL", f"gate command: {check.name}", _tail(res.output), secs))
         else:
+            if res.status == "FAIL" and not res.tool_failure:
+                lint_red.append((check.name, res))
             add(
                 Item(
                     "WARN",
@@ -499,9 +513,35 @@ def run(
     except Exception as e:
         add(Item("FAIL", "test scan: smells", f"{type(e).__name__}: {e}"))
 
-    if full:
+    tree_lines: list[str] = []
+    if tree:
+        # the setup's one look at the tree as it is: the suite runs once, here
+        t0 = time.monotonic()
+        seen = tree_check.run(adapter, lint_red, tools)
+        secs = time.monotonic() - t0
+        tree_lines = seen.lines
+        add(Item(seen.status, "tree: whole test suite on the code as it is", seen.detail, secs))
+        if not any(x.startswith("MUTATION:") for x in tree_lines):
+            # the mutation tool is there: can it run? (seconds; found here, not at a final gate)
+            t0 = time.monotonic()
+            trial = adapter.mutation_trial()
+            if trial is not None:
+                ok = trial.status == "PASS"
+                add(
+                    Item(
+                        "OK" if ok else "FAIL",
+                        "mutation trial",
+                        trial.summary or trial.output,
+                        time.monotonic() - t0,
+                    )
+                )
+                if not ok:
+                    tree_lines.insert(-1, tree_check.mutation_failed(trial))
+    elif full:
         t0 = time.monotonic()
         suite = adapter.run_tests(junit=cfg.out_dir / "doctor" / "whole_suite.xml")
+        # a test this machine cannot run ([gates] unrunnable_tests) does not fail the setup
+        suite, _ = unrunnable.leave_out(cfg, suite)
         secs = time.monotonic() - t0
         status = {"passed": "OK", "no_tests": "WARN"}.get(suite.status, "FAIL")
         detail = {"OK": f"{len(suite.cases or [])} test(s)", "WARN": "no tests yet"}.get(
@@ -509,12 +549,22 @@ def run(
         )
         add(Item(status, "whole test suite (the final gate's regression run)", detail, secs))
     else:
-        add(Item("SKIP", "whole test suite", "run `framegate doctor --full` to time it"))
+        add(
+            Item(
+                "SKIP",
+                "whole test suite",
+                "run `framegate doctor --full` to time it, `--tree` to see what is red in it",
+            )
+        )
 
     fails = sum(1 for i in items if i.status == "FAIL")
     if not only_brief:
         warns = sum(1 for i in items if i.status == "WARN")
         echo(f"\n{'FAILED' if fails else 'OK'}: {fails} failure(s), {warns} warning(s)\n")
     for line in brief(items):
+        echo(line)
+    if tree_lines:
+        echo("")
+    for line in tree_lines:
         echo(line)
     return 1 if fails else 0

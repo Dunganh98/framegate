@@ -20,7 +20,7 @@ imported lazily). An adapter instance gets the loaded `Config` (`self.cfg`, `sel
 | `TestRun` | `status`, `returncode`, `output`, `cases`, `incomplete` | `status`: `passed` / `failed` / `no_tests` / `error` (collection, build or usage problem). `cases`: per-test outcomes when a JUnit report was requested, else `None`. `incomplete`: why the run was cut short (timeout, crashed host, killed, missing report / coverage file), `""` if it ran to the end |
 | `TestScope` | `req_ids`, `paths` | The tests a final coverage / mutation run uses: tagged with any of `req_ids` OR under `paths` (review tests); both empty = whole suite. `describe()` gives the text for the report header |
 | `TestCase` | `name`, `outcome`, `message` | `outcome`: `passed` / `failed` / `error` / `skipped`; `message`: failure/error text ("" if none) |
-| `CheckResult` | `status`, `output`, `summary`, `tool_failure` | `tool_failure`: set by the mutation check for a FAIL whose summary does not start with "Mutation score" (the tool gave no result): reported as a tool failure, never sent to a repair run. `status`: `PASS` / `FAIL` / `SKIPPED`. SKIPPED never fails a gate but is printed and lands in `final_gates.md` (the PR role must report it). `summary` (optional): one line shown under a `[PASS]` line, e.g. the mutation score |
+| `CheckResult` | `status`, `output`, `summary`, `tool_failure` | `tool_failure`: set by the mutation check for a FAIL whose summary does not start with "Mutation score" (the tool gave no result): the gates show it as NOT MEASURED with a tool-failure note, never as FAIL, and send it to no repair run. `status`: `PASS` / `FAIL` / `SKIPPED`. SKIPPED never fails a gate but is printed and lands in `final_gates.md` (the PR role must report it). `summary` (optional): one line shown under a `[PASS]` line, e.g. the mutation score |
 | `Check` | `name`, `run()`, `needs_green` | A named, lazily-run check for the gate runner. `needs_green` (the mutation check): not started, SKIPPED with the reason, when the typecheck, the regression or the coverage run failed before it |
 
 Helpers: `run_command(cmd, cwd, env=None, timeout=None)` (missing tool -> code 127, "Tool not
@@ -47,7 +47,7 @@ pytest `--junitxml` and the .NET `JunitXml.TestLogger`), `tool_path(name, near)`
 | `stub_failure_problem(case)` | default | For a case that failed against the stubs: a reason why the failure doesn't count (e.g. not caused by the stub), else `None` (default: every failure counts). Listed as `FAILS FOR ANOTHER REASON THAN THE STUB` and fails the TESTS gate |
 | `default_gate_commands()` | abstract | `{"lint"|"format"|"typecheck"|"imports": [argv]}`; omit a key to skip it. `[gates.commands]` overrides per key (`[]` disables) |
 | `resolve_command(cmd)` | default | Expands `{src}`, `{tests}`, `{out}` in configured commands; an argument that is exactly `{src}` becomes one argument per source folder (`[paths] src` as a list), inside a longer argument it is the first (python also maps a leading `python` to the project interpreter) |
-| `lint_checks(base_ref=None)` | default | Builds the `Check`s from the merged commands. The gate runner passes `base_ref` (= `tests-approved/<f>`) so an adapter can limit checks to the files changed since then (the .NET adapter does) |
+| `lint_checks(base_ref=None)` | default | Builds the `Check`s from the merged commands. The gate runner passes `base_ref` (= `tests-approved/<f>`) so an adapter can limit checks to the files changed since then (the .NET adapter does). `file_scoped_lint = True` (Python): the checks run on the whole tree and the gate runner counts a finding only in a file the task changed |
 | `regression_check()` | abstract | Final scope with feature-scoped coverage: the whole suite (the adapter's final selection) once, without coverage, `cfg.regression_timeout`. Check name `regression: whole suite, no coverage` |
 | `coverage_checks(base_ref, scope=None, cover_tests=())` | abstract | Final scope: the tests of `scope` (`None` = whole suite) with coverage (`cfg.coverage_timeout`), then diff coverage against `base_ref` (= `tests-approved/<f>`) `>= cfg.diff_coverage`, with `diff_coverage_summary` as `summary`. Names: `coverage run (feature tests)` / `diff coverage >= N% (feature tests)`, or `full test suite + coverage` / `diff coverage >= N%` for the whole suite. SKIPPED (with reason) when a coverage tool is missing, but the tests must still run. A cut-short coverage run fails both checks with `ERROR: ... incomplete` (no 0 %) `cover_tests`: test files whose own lines the run records too (kept out of diff coverage), where the adapter can |
 | `test_line_hits()` | `({}, note)` | `{test file: {line: hits}}` from the last coverage run of the final gates, for the unreached-assertions check (`base.cobertura_hits` reads Cobertura reports); a note when there is none: the check is SKIPPED |
@@ -69,6 +69,7 @@ pytest `--junitxml` and the .NET `JunitXml.TestLogger`), `tool_path(name, near)`
 | `install_tools(dry_run, echo, update=False)` | default | `framegate install-tools`: install what the workflow needs into the project's environment; `update` also brings framegate's own part there to this version. Default: nothing to install |
 | `guess_layout(root)` (classmethod) / `interpreter()` / `env_facts()` / `test_runner()` / `detected_tools()` | defaults: `(["src"], "tests")` / `None` / `{}` / `[]` / `{}` | `framegate probe` (instant facts for `/framegate:setup`; nothing is run on the code): the source and test folders of a repository without a framegate.toml; the interpreter or toolchain executable every run uses and where it comes from (python: the same code the `python` property reads); one question to that environment (`version`, `editable` packages of the project, the `refresh` command); the command whose `--version` shows the test runner; per role (`test`, a `[gates.commands]` key, `format_fix`) the command the project's own config files point to and the file that says so (python: `adapters/python_probe.py`, e.g. black from `[tool.black]`). dotnet names its SDK and test runner; generic only its test runner |
 | `format_fix_commands(files)` | default | Commands that format `files` in place for the gates' format fix. `[gates.commands] format_fix` (with `{files}`) replaces them and keeps the fix on when `[gates.commands] format` is the project's own check (e.g. black) |
+| `lint_fix_commands(files)` | default | The linter's safe fixes on the same files, run before the formatter: `[gates.commands] lint_fix` (with `{files}`; `[]` = off), else `ruff check --fix --no-unsafe-fixes` when the lint command is ruff, else nothing |
 | `gitignore_entries()` | default | Extra `.gitignore` lines `init` adds: build outputs the orchestrator must never commit (it stages whole source and test folders) |
 | `init_note()` | default | Setup advice printed at the end of `init` |
 
@@ -114,7 +115,7 @@ locations are `file:line`. A project can start here and get a dedicated adapter 
 | Traceability / smells | AST scan of `tests/**/test_*.py` and `*_test.py` (the guide's code) |
 | Gates | `ruff check`, `ruff format --check`, `mypy src` via `python -m`; `lint-imports` only if `.importlinter` exists |
 | Coverage | Feature scope: `pytest --req <IDs> --req-paths <review_tests> --cov=src --cov-branch --cov-report=xml:out/coverage.xml` (`--req-paths` keeps the tests under these paths, tagged or not), then `diff-cover out/coverage.xml --compare-branch=tests-approved/<f> --fail-under=90`; regression = plain `pytest -q`. `[python] pytest_args` (e.g. `["-m", "not integration"]`) is added to every pytest run and to the test command the agents get. Incomplete: exit 124 / 2 (interrupted) / 3 (internal error), or no `coverage.xml` |
-| Mutation | mutmut >= 3 via the standalone runner `mutmut_runner.py` (copied to `out/.mutmut/`): `mutmut run <module>.x*` for the changed modules, `mutmut results --all true`, `mutmut show` for up to 50 survivors (diffs go into `mutation_survivors.md`); `mutants/` is deleted before and after the run (and gitignored by `init`). Feature scope: the runner sets `PYTEST_ADDOPTS="--req <IDs> --req-paths <review_tests>"` for mutmut's pytest runs (spec key `pytest_addopts`; needs the framegate pytest plugin with `--req-paths` in the mutmut env, which is why `MUTMUT_ENV_VERSION` is 2). Score = (killed + timeout + caught by type check + segfault) / (those + survived + no tests + suspicious); skipped / not checked are left out. Where it runs: `[gates] mutation_runner` (see below). SKIPPED when mutmut can't run there |
+| Mutation | mutmut >= 3 via the standalone runner `mutmut_runner.py` (copied to `out/.mutmut/`): `mutmut run <module>.x*` for the changed modules, `mutmut results --all true`, `mutmut show` for up to 50 survivors (diffs go into `mutation_survivors.md`); `mutants/` is deleted before and after the run (and gitignored by `init`). Feature scope: the runner sets `PYTEST_ADDOPTS="--req <IDs> --req-paths <review_tests>"` for mutmut's pytest runs (spec key `pytest_addopts`; needs the framegate pytest plugin with `--req-paths` in the mutmut env, which is why `MUTMUT_ENV_VERSION` is 2). Score = (killed + timeout + caught by type check + segfault) / (those + survived + no tests + suspicious); skipped / not checked are left out. Where it runs: `[gates] mutation_runner` (see below). NOT MEASURED, with the reason and the fix, when mutmut can't run there |
 | Forbidden | `type: ignore`, `noqa`, `pragma: no cover`, `pytest.skip`, `xfail` |
 | Protected | `pyproject.toml`, `setup.cfg`, `setup.py`, `requirements*`, `uv.lock`, `poetry.lock`, `Pipfile`, `.importlinter`, `mypy.ini`, `ruff.toml`, `.ruff.toml`, `pytest.ini`, `tox.ini`, root `conftest.py` |
 | Tools | `Bash(python -m pytest *)`, `Bash(pytest *)`, and from the effective gate commands; by default `Bash(python -m ruff check *)`, `Bash(python -m ruff format *)`, `Bash(python -m mypy *)` and the short forms `Bash(ruff check *)`, `Bash(ruff format *)`, `Bash(mypy *)` |
@@ -126,25 +127,39 @@ mutmut needs `fork`, so it can't run on native Windows. `[gates] mutation_runner
 | Value | Meaning |
 |---|---|
 | `"auto"` (default) | `wsl` on Windows, `native` elsewhere |
-| `"native"` | The project interpreter (`[env] python` / `.venv`) runs mutmut, which must be installed there. On native Windows: SKIPPED with a pointer to `"wsl"` |
+| `"native"` | The project interpreter (`[env] python` / `.venv`) runs mutmut, which must be installed there (else NOT MEASURED). On native Windows: NOT MEASURED with a pointer to `"auto"` |
 | `"wsl"` | `wsl.exe [-d <[env] wsl_distro>] -e python3 <runner> <spec>` |
 
 WSL flow (`adapters/wsl.py`, `adapters/mutmut_runner.py`):
 
 1. Probe: `wsl.exe -e wslpath -a <repo>` (repo path, e.g. `/mnt/d/...`) and `python3 --version`.
-   Either failing -> SKIPPED with the reason (no wsl.exe, distro won't start, no python3).
+   With `[env] wsl_distro` only that distribution is tried. Without it the default
+   distribution comes first; when it can't (with Docker Desktop the default is often
+   `docker-desktop`, which has no Python), the other distributions of `wsl.exe -l -v` are
+   tried in that order (`docker-desktop*` left out) and the first with `python3` is used; the
+   score line then says `WSL <name>`. None -> NOT MEASURED with the reason and the one-line
+   fix (no wsl.exe: `wsl --install -d Ubuntu`; a distribution without python3: `sudo apt
+   install python3 python3-venv` in it; a configured name WSL does not know: `[env]
+   wsl_distro`). The probe only reads; nothing is installed. `framegate doctor` runs the same
+   probe (`tool: mutmut (mutation)`).
 2. Venv: `~/.cache/framegate/venvs/<sha256(WSL repo path)[:16]>` on the Linux filesystem (not
    on `/mnt/<drive>`: slow and visible to Windows). Contents: the project's dependencies
    (`[project] dependencies`, every optional extra, every `[dependency-groups]` group,
    `[tool.uv] dev-dependencies`, `requirements*.txt`; the project itself is not installed because
    mutmut puts its mutated copy on `sys.path`), `mutmut>=3`, `pytest`, and framegate (its pytest
    plugin) from this source tree when framegate runs from one (a project's own `framegate`
-   requirement is then dropped). Windows paths in requirements are translated.
+   requirement is then dropped). Windows paths in requirements are translated. An installed
+   framegate that the project does not name is not in the venv: its pytest plugin (`--req`)
+   then goes along as a file (`out/.mutmut/framegate_req_plugin.py`, on `PYTHONPATH`). Seen
+   live: without it pytest refused `--req` and the run gave no result.
+   Before the run the tracked files outside the source folders are copied into `mutants/`
+   (up to 5 MB each): mutmut copies only the sources, `tests/` and the packaging files, and
+   a test that reads `docs/x.md` would fail there.
 3. The venv is rebuilt when its stamp changes: sha256 of the requirement list, `pyproject.toml`,
    `uv.lock`, `poetry.lock`, `Pipfile.lock`, `pdm.lock`, the requirements files, the framegate
    version and `MUTMUT_ENV_VERSION`. Built with `uv` (PATH, `~/.local/bin`, `~/.cargo/bin`;
    `uv venv --python python3` + `uv pip install`), else `python3 -m venv` + pip. If neither
-   works: SKIPPED with the setup log and the one-time hint (`curl -LsSf
+   works: NOT MEASURED with the setup log and the one-time hint (`curl -LsSf
    https://astral.sh/uv/install.sh | sh`, or `sudo apt install python3-venv`; Ubuntu's python3
    has no `ensurepip` by default).
 4. mutmut runs in the repo through `/mnt/<drive>/...`; the runner writes

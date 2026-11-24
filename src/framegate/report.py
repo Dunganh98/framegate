@@ -211,10 +211,12 @@ def final_facts(
     mode: str = "feature",
     causes: list[tuple[str, str]] | None = None,
     followup: list[str] | None = None,
+    unrunnable: list[str] | None = None,
 ) -> str:
     """{out}/{f}/final_facts.md: what the summary agent must report, from the run's records.
     `followup`: the pipeline / reference follow-up sections with their note
-    (followup.facts_lines), if there are any."""
+    (followup.facts_lines), if there are any. `unrunnable`: the tests this machine cannot
+    run, with their reason (unrunnable.facts_lines): named every time, in every mode."""
     ev = since_spec_approval(events)
     parked = prog.get("parked") or []
     parked_steps = {
@@ -285,6 +287,26 @@ def final_facts(
     if fixed:
         out.append(f"- valid findings fixed: {', '.join(fixed[-1].get('tests') or [])}")
 
+    debt: dict[str, int] = {}
+    for e in ev:
+        if e.get("kind") == "format_debt":
+            for name, n in (e.get("files") or {}).items():
+                debt[str(name)] = debt.get(str(name), 0) + int(n)
+    if debt:
+        out += ["", f"## Formatted beyond the task's lines: {len(debt)} file(s)", ""]
+        out.append(
+            "These files were not formatted before the task. The format fix formatted them "
+            "whole, so the diff holds lines the task did not change in substance. Say so in "
+            "one line of the summary:"
+        )
+        out += [f"- {name}: {n} line(s)" for name, n in sorted(debt.items())]
+
+    config = [c for e in ev if e.get("kind") == "config_update" for c in e.get("changes") or []]
+    if config:
+        out += ["", "## framegate.toml changed during the task", ""]
+        out.append("Applied by framegate from an approved diagnosis. Name each in the summary:")
+        out += [f"- {c}" for c in config]
+
     out += ["", f"## Parked items: {len(parked)}", ""]
     for p in parked:
         out.append(f"- {p.get('label')} ({p.get('kind')}): {p.get('reason')}")
@@ -324,6 +346,8 @@ def final_facts(
         ]
         out.append("Name them under Struggles in the brief (one line).")
 
+    if unrunnable:
+        out += ["", *unrunnable]
     if followup:
         out += ["", *followup]
     out += ["", "## Final gates (final_gates.md)", "", "~~~", final_gates.strip(), "~~~"]

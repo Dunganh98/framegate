@@ -33,13 +33,21 @@ commands:
   run <feature>           advance to the next human gate (tests, final) or DONE; no other stops
   status [<feature>] [--brief]   progress and which gate is waiting; no feature: all
                           features; --brief: short state + last progress lines (for the chat)
+  status --all            every open task on this machine (any repository): mode, phase,
+                          last activity; stale = none for 14 days
   watch <feature>         live view: print new progress lines until the run ends
+  wake <feature>          a run that waits for the usage limit tries again now (the limit
+                          was refilled, or lifted before the time claude named)
   gate-summary <feature>  chat-friendly digest of the waiting gate (questions numbered)
   approve <feature>       approve the waiting gate (tests -> implement; final -> retro)
   reject <feature> --reason TEXT   reject the tests gate; writer + reviewer re-run with it
   answer <feature>        after writing out/<f>/answers.md: tests gate -> writer + reviewer
                           re-run; final gate -> the next run redoes the parked items
   finish <feature> --no-retro      final gate -> DONE without the retro
+  retro <feature>         the retro of a run that stopped before DONE (abandoned, a cap, an
+                          error): any phase after "spec OK"; the task's state stays as it is
+  note <feature> TEXT     one line of what happened in the chat (a question to the user and
+                          the reply, something done by hand, a refusal), for the retro
   learn <feature> K1 [K3 ...|all]  add the retro's project-knowledge proposals you accept to
                           the knowledge file ([project] knowledge), committed
   keep <feature> 1 3 [...|take|all|none]  record which retro proposals you accept in the
@@ -70,11 +78,19 @@ commands:
   preflight [<feature>] [--plugin-version X] [--check]   the start step of the chat
                           skills: the command-line tool at the plugin's version, the
                           project environment's workflow tools at the tool's version
-                          (updated unless the feature's spec is approved or --check), a
-                          short setup check; prints what it did and what is left to do
-  doctor [--full] [--brief]  check the setup without agents: config, git, claude CLI,
-                          tools, gate commands, test selection by spec ID; --full: the whole
-                          suite; --brief: only the verdict and what needs action
+                          (updated unless a task is in progress or --check: an update
+                          then waits), a short setup check; prints what it did and what
+                          is left to do; off: [update] check, FRAMEGATE_UPDATE_CHECK=0
+  doctor [--full] [--tree] [--brief]  check the setup without agents: config, git,
+                          claude CLI, tools, gate commands, test selection by spec ID;
+                          --full: the whole suite; --tree (the setup, once per project):
+                          the whole suite, and what is red on the code as it is (failing
+                          tests, lint / format debt with its size, a mutation tool that
+                          cannot run here); --brief: only the verdict and what needs action
+  commit-setup [--dry-run] [PATH ...]   the files the setup wrote (framegate.toml, the
+                          knowledge file, the code map, spec templates, .gitignore, changed
+                          packaging / test config; PATH: one more, e.g. a tag helper) in
+                          one commit of their own; --dry-run: only list them
   cleanup <feature> [--tags] [--force]   delete out/<feature>/ and its run logs (DONE only);
                           --tags: also the feature's tags (spec-approved, tests-approved,
                           spec-update, tests-update, knowledge-update)
@@ -104,7 +120,10 @@ commands:
                           closed as `(not needed: <reason>)`)
   pipeline-approve <name> after the user's OK: check, tick the items, commit, end the phase
   unlock [--force]        clear a stale phase lock (.phase/.reqs) left by a killed run
-  protocol                the chat run protocol the plugin skills follow (printed)
+  replay <candidates.md>  measure framegate: real commits as tasks, each delivered in a
+                          sandbox cut before the commit and scored with the commit's own
+                          tests (docs/replay.md; --template prints an empty file)
+  protocol               the chat run protocol the plugin skills follow (printed)
   hook pre-tool-use|stop  Claude Code hooks (stdin = hook JSON; exit 2 = block)
 
 exit codes: 0 ok, 1 error, 10 human gate (tests or final), 130 interrupted (Ctrl+C /
@@ -130,8 +149,20 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["python", "dotnet", "generic"],
         help="default: detected (generic: any other language, configured in framegate.toml)",
     )
-    for name in ("spec-check", "run", "approve", "spec-brief", "watch", "gate-summary"):
+    for name in (
+        "spec-check",
+        "run",
+        "approve",
+        "spec-brief",
+        "watch",
+        "gate-summary",
+        "wake",
+        "retro",
+    ):
         sub.add_parser(name).add_argument("feature")
+    p = sub.add_parser("note", help="one line of what happened in the chat, for the retro")
+    p.add_argument("feature")
+    p.add_argument("text", nargs=argparse.REMAINDER)  # the rest as it is, also `-> ...`
     p = sub.add_parser("spec")
     p.add_argument("feature")
     p.add_argument(
@@ -148,6 +179,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("status")
     p.add_argument("feature", nargs="?")
     p.add_argument("--brief", action="store_true", help="short state for the chat")
+    p.add_argument("--all", action="store_true", help="every open task on this machine")
     p = sub.add_parser("cleanup", help="delete out/<feature>/ and its run logs (DONE only)")
     p.add_argument("feature")
     p.add_argument("--tags", action="store_true", help="also delete the feature's tags")
@@ -200,6 +232,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("doctor", help="check the project setup (no agents)")
     p.add_argument("--full", action="store_true", help="also run the whole test suite")
     p.add_argument("--brief", action="store_true", help="only the verdict and what needs action")
+    p.add_argument(
+        "--tree",
+        action="store_true",
+        help="also run the whole suite and say what is red on the code as it is (the setup)",
+    )
+    p = sub.add_parser("commit-setup", help="the setup's files in one commit of their own")
+    p.add_argument("paths", nargs="*", help="one more file the setup wrote (a tag helper)")
+    p.add_argument("--dry-run", action="store_true", help="only list the files")
     p = sub.add_parser("publish", help="state branch + product branch of a finished feature")
     p.add_argument("feature")
     p.add_argument("--dry-run", action="store_true", help="only say what would go where")
@@ -224,6 +264,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("unlock", help="clear a stale phase lock left by a killed run")
     p.add_argument("--force", action="store_true", help="even if a run looks active")
     sub.add_parser("protocol", help="print the chat run protocol (used by the plugin skills)")
+    from framegate.replay import add_parser as add_replay
+
+    add_replay(sub)
     p = sub.add_parser("hook")
     p.add_argument("event", choices=["pre-tool-use", "stop"])
     return ap
@@ -254,6 +297,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         print(package_text("templates", "chat_protocol.md").rstrip())
         return 0
+    if args.command == "replay":  # works outside a project
+        from framegate.replay import run as replay
+
+        return replay.main(args)
 
     from framegate import publish
     from framegate.config import ConfigError, find_root, load_config
@@ -282,6 +329,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             target = args.plugin_version or preflight.installed_plugin_version() or ""
             return preflight.run(None, target, update=True)
+        if args.command == "status" and args.all:
+            from framegate import preflight
+
+            return preflight.status_all()
         root = find_root()
         if root is not None:
             cfg = load_config(root)
@@ -329,7 +380,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "doctor":
             from framegate import doctor
 
-            return doctor.run(cfg, full=args.full, only_brief=args.brief)
+            return doctor.run(cfg, full=args.full, only_brief=args.brief, tree=args.tree)
+        if args.command == "commit-setup":
+            from framegate.scaffold import commit_setup
+
+            return commit_setup(cfg, args.paths, dry_run=args.dry_run)
         if args.command == "spec-brief":
             from framegate.scaffold import spec_brief
 
@@ -341,7 +396,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return stats.run(cfg, args.feature, as_json=args.json)
         if args.command == "spec-check":
             from framegate.adapters import get_adapter
-            from framegate.checks import frame_diff, spec_lint
+            from framegate.checks import frame_diff, plan_files, spec_lint
             from framegate.orchestrator import stray_files_text
 
             adapter = get_adapter(cfg)
@@ -353,6 +408,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"- {stray_files_text(stray)}")
             # for the spec brief: the user approves these with the spec
             print("Setup files changed (committed with the spec): " + (", ".join(setup) or "none"))
+            # also for the brief: what the implementer may write beyond its source folders
+            print(plan_files.docs_line(adapter, args.feature))
             n = len(found) + (1 if stray else 0)
             print(f"Spec check: {n} problem(s)" if n else "Spec check: OK")
             return 1 if n else 0
@@ -387,17 +444,40 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "spec":
             return orch.spec(f, args.mode)
         if args.command == "approve-spec":
-            return orch.approve_spec(f, force=args.force)
+            from framegate import preflight
+
+            code = orch.approve_spec(f, force=args.force)
+            if code == 0:  # the task starts: it keeps this version until it is DONE
+                preflight.record_start(orch.cfg, f, restart=True)
+            return code
         if args.command == "run":
-            return orch.run(f)
+            from framegate import preflight
+
+            preflight.record_start(orch.cfg, f)  # a task approved by an older version
+            code = orch.run(f)
+            note = preflight.version_note(cfg) if code == 0 else ""
+            if note:  # DONE: the update that waited for this task
+                print(note)
+            return code
+        if args.command == "retro":
+            return orch.retro(f)
+        if args.command == "note":
+            from framegate.retro import chat_note
+
+            return chat_note(cfg, f, " ".join(args.text))
+        if args.command == "wake":
+            from framegate.orchestrator import wake
+
+            return wake(cfg, f)
         if args.command in ("status", "watch", "gate-summary", "cleanup"):
             from framegate import chat
 
             if args.command == "status":
                 from framegate import preflight
 
-                if (f is None or args.brief) and preflight.version_note():
-                    print(preflight.version_note())
+                note = preflight.version_note(cfg) if f is None or args.brief else ""
+                if note:
+                    print(note)
                 if f is None:
                     return chat.overview(orch)
                 return chat.brief(orch, f) if args.brief else orch.status(f)

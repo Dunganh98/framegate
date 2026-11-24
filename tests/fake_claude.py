@@ -6,6 +6,9 @@ scenario file, and prints the result: `--output-format stream-json` -> one JSON 
 (system init, one assistant message per API turn, the result last), else the single result object
 of `--output-format json`.
 
+An IMPLEMENT run appends one line to every file in FRAMEGATE_STEP_DOCS (the documentation
+files the approved plan names for its step), whatever the scenario says.
+
 Scenario keys:
   questions_in: list of phases that ask one question in their first run (TESTS, TEST_REVIEW,
     ...: questions.md, then the normal work; IMPLEMENT: questions.md only = a park request)
@@ -69,6 +72,9 @@ Scenario keys:
     DEMO-E-001 row with the answer reference), "new_id" (edit + a new row DEMO-E-002, added to
     plan.md Covers; TESTS then writes a test for it), "renumber" (DEMO-E-001 -> DEMO-E-009),
     "stray" (edit + writes specs/other/requirements.md and specs/demo/notes.md), "none"
+  config_update: text SPEC_UPDATE appends to a copy of framegate.toml, written to
+    out/demo/config_update.toml when its task asks for that file (an approved diagnosis with
+    `Fix owner: config`); "bad" -> a file that is no valid TOML
 """
 
 import json
@@ -315,6 +321,7 @@ def main() -> int:
         call = {
             "phase": phase,
             "agent_env": os.environ.get("FRAMEGATE_AGENT"),
+            "step_docs": os.environ.get("FRAMEGATE_STEP_DOCS"),
             # what an agent's shell would see (framegate.agent_env)
             "env": {
                 "python": shutil.which("python"),
@@ -412,6 +419,10 @@ def main() -> int:
         if mode != "none":
             req.write_text(text, encoding="utf-8")
         write("out/demo/spec_update.md", f"- DEMO-E-001: {mode}{tag}\n")
+        change = scen.get("config_update")
+        if change and "config_update.toml" in prompt:
+            toml = pathlib.Path("framegate.toml").read_text(encoding="utf-8")
+            write("out/demo/config_update.toml", "[gates\n" if change == "bad" else toml + change)
     if phase == "TESTS":
         rel, text = lang["tests"]
         if two:
@@ -446,6 +457,10 @@ def main() -> int:
             body = "Verdict: OK\n\n## Objections\nNone.\n"
         write("out/demo/test_review.md", body)
     elif phase == "IMPLEMENT":
+        # the documentation files the approved plan names for this step: one line each
+        for doc in json.loads(os.environ.get("FRAMEGATE_STEP_DOCS") or "[]"):
+            old = pathlib.Path(doc).read_text(encoding="utf-8") if os.path.isfile(doc) else ""
+            write(doc, old + f"written in IMPLEMENT run {runs[phase]}\n")
         path = pathlib.Path(lang["impl"])
         cur = path.read_text(encoding="utf-8") if path.is_file() else ""
         # one step ("plan step 2") or a batch ("plan steps 1, 2 in one go"): the last one counts

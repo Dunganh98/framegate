@@ -1,7 +1,7 @@
 """Gate runner: run the frame checks for a feature.
 
-scope step   fast checks after each implementation step (tests of current + earlier steps,
-             then the whole everyday suite: [gates] step_tests)
+scope step   fast checks after each implementation step (tests of current + earlier steps;
+             with [gates] step_tests = "suite" the whole everyday suite too)
 scope fix    the same checks for a run after the review (review fixes, structure fixes, final
              repair) with the feature's tests and the review tests only: the final gates run
              the whole suite right after
@@ -25,20 +25,23 @@ failures, and skips coverage, diff coverage and mutation until the redo.
 
 from __future__ import annotations
 
+import functools
 import json
 import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from framegate import references
+from framegate import red_tree, references, task_base, unrunnable
 from framegate.adapters.base import (
+    NOT_MEASURED,
     Check,
     CheckResult,
     LanguageAdapter,
     TestCase,
     TestRun,
     TestScope,
+    changed_lines,
     incomplete_result,
     run_command,
 )
@@ -53,8 +56,8 @@ from framegate.checks import (
 from framegate.config import Config
 from framegate.failure_filter import filter_failure_output
 from framegate.report import short_name
-from framegate.specs import feature_ids, plan_steps
-from framegate.state import load_progress, read_contested, read_reqs
+from framegate.specs import baseline_on, feature_ids, plan_steps
+from framegate.state import load_progress, log_event, read_contested, read_reqs, tag_exists
 
 #: most lines of a failing check's output in the gate report (and so in the fix prompt)
 OUTPUT_LINES = 40
@@ -148,13 +151,18 @@ def record_regression_baseline(adapter: LanguageAdapter, feature: str) -> tuple[
     """[gates] regression_baseline: run the whole suite once (as the final regression check
     does) and record the tests that fail today. Returns (number recorded, problem); with a
     problem ("" = fine) nothing is recorded and the final check stays strict."""
-    run = adapter.regression_run()
+    # a test this machine cannot run is left out by its own list, in every mode
+    run, _ = unrunnable.leave_out(adapter.cfg, adapter.regression_run())
     if run.incomplete:
         return 0, f"the suite run was cut short ({run.incomplete})"
     if run.status == "passed":
         failing: list[str] = []
     elif run.status == "failed" and run.cases is not None:
         failing = sorted({c.name for c in run.cases if c.outcome in ("failed", "error")})
+        # never the feature's own tests (a record taken after they were written: they are
+        # red by design then, and the regression check would skip one that breaks later)
+        own = later_step_tests(adapter, feature, []) if failing else []
+        failing = [n for n in failing if not is_test_at(n, own)]
     else:
         return 0, f"the suite run gave no per-test results ({run.status})"
     path = adapter.cfg.feature_out(feature) / BASELINE_FILE
@@ -163,10 +171,19 @@ def record_regression_baseline(adapter: LanguageAdapter, feature: str) -> tuple[
     return len(failing), ""
 
 
+def baseline_recorded(cfg: Config, feature: str) -> bool:
+    """Is there a record of the tests that failed when the spec was approved?"""
+    return bool(
+        feature
+        and baseline_on(cfg, feature)
+        and (cfg.feature_out(feature) / BASELINE_FILE).is_file()
+    )
+
+
 def regression_baseline(cfg: Config, feature: str) -> set[str]:
     """Names of the tests that already failed when the spec was approved (empty: none
     recorded, or [gates] regression_baseline is off)."""
-    if not cfg.regression_baseline or not feature:
+    if not feature or not baseline_on(cfg, feature):
         return set()
     path = cfg.feature_out(feature) / BASELINE_FILE
     if not path.is_file():
@@ -260,10 +277,11 @@ def regression_expecting(
     adapter: LanguageAdapter, exp: ExpectedRed, known: set[str] | frozenset[str] = frozenset()
 ) -> CheckResult:
     """The whole suite with parked steps / contested tests / tests that already failed when
-    the spec was approved: their failures are expected (counted, not failing); any other
-    failure fails the check."""
+    the spec was approved / tests this machine cannot run ([gates] unrunnable_tests): their
+    failures are expected (counted, not failing); any other failure fails the check."""
     names, problem = parked_test_names(adapter, exp)
-    res = tests_expecting(adapter.regression_run(), exp, names, known)
+    run, off = unrunnable.leave_out(adapter.cfg, adapter.regression_run())
+    res = unrunnable.noted(tests_expecting(run, exp, names, known), off)
     if problem and res.status == "FAIL":
         res.output += f"\n({problem})"
     return res
@@ -273,7 +291,7 @@ def _skipped(reason: str) -> Callable[[], CheckResult]:
     return lambda: CheckResult("SKIPPED", reason)
 
 
-#: step scope: the whole suite beside the step's own tests ([gates] step_tests = "suite")
+#: step scope, only with [gates] step_tests = "suite": the whole suite beside the step's tests
 STEP_SUITE = "other tests (whole suite; this feature's later steps left out)"
 
 
@@ -312,16 +330,16 @@ def is_test_at(case_name: str, places: list[str]) -> bool:
 
 
 def step_suite(adapter: LanguageAdapter, feature: str, covered: list[str]) -> CheckResult:
-    """The whole suite (the adapter's everyday selection) at a step gate. Seen live: a step
-    made helpers public and broke another feature's frozen public-surface test; both step
-    gates passed (they ran only this feature's tests) and the break showed in a later fix
-    run. Failures of this feature's later steps, of contested tests and of tests that
-    already failed when the spec was approved are left out."""
+    """The whole suite (the adapter's everyday selection) at a step gate, only with [gates]
+    step_tests = "suite". Off by default: a gate judges what belongs to the task, and seen
+    live this check failed every step on tests that were red before the task. Failures of
+    this feature's later steps, of contested tests, of tests that already failed when the
+    spec was approved and of listed tests ([gates] unrunnable_tests) are left out."""
     cfg = adapter.cfg
     later = later_step_tests(adapter, feature, covered)
-    run = adapter.run_tests(junit=cfg.out_dir / "step_suite.xml")
+    run, off = unrunnable.leave_out(cfg, adapter.run_tests(junit=cfg.out_dir / "step_suite.xml"))
     if run.status == "passed":
-        return CheckResult("PASS", run.output)
+        return unrunnable.noted(CheckResult("PASS", run.output), off)
     if run.status != "failed" or run.cases is None:
         if run.status == "failed" and later:
             return CheckResult(
@@ -342,12 +360,22 @@ def step_suite(adapter: LanguageAdapter, feature: str, covered: list[str]) -> Ch
         else:
             other.append(c.name)
     note = f"left out (later steps, contested, failing before the feature): {left_out}"
+    if off:
+        note = f"{unrunnable.LEFT_OUT}: {len(off)}; {note}"
     if other:
+        blame = (
+            "they passed when the spec was approved. Your change broke them: fix the code, "
+            "not the tests."
+            if baseline_recorded(cfg, feature)
+            else "the tests that failed before this feature were not recorded ([gates] "
+            "regression_baseline is off, or its run gave no result), so they cannot be told "
+            "apart from tests your change broke. Fix what your change broke; a test that "
+            "fails for another reason is not yours to fix: say so in your step note."
+        )
         return CheckResult(
             "FAIL",
             run.output
-            + f"\n\nTests outside this step fail ({len(other)}); they passed before it. Your "
-            f"change broke them: fix the code, not the tests.\n{_listed(other)}",
+            + f"\n\nTests outside this step fail ({len(other)}); {blame}\n{_listed(other)}",
             note,
         )
     return CheckResult("PASS", run.output, note + "; no other failure")
@@ -367,8 +395,8 @@ REVIEW_TESTS = "review tests"
 #: ported two whole files, step 4 "needed no code change", and its gate ran the whole suite
 #: again (4.5 min) on the code the gate before it had just checked.
 IDLE_NOTE = (
-    "Nothing changed since the last green step gate (same commit, clean tree): lint, the "
-    "frame check and the whole suite are that gate's results; only this step's tests ran."
+    "Nothing changed since the last green step gate (same commit, clean tree): lint and the "
+    "frame check are that gate's results; only this step's tests ran."
 )
 
 
@@ -383,8 +411,9 @@ def review_tests_checked(adapter: LanguageAdapter, feature: str) -> bool:
 
 
 def review_tests(adapter: LanguageAdapter, feature: str, contested: list[str]) -> CheckResult:
-    """Every test in the review tests folder (contested tests and tests that already failed
-    when the spec was approved are left out, as in the suite)."""
+    """Every test in the review tests folder (contested tests, tests that already failed
+    when the spec was approved and tests this machine cannot run are left out, as in the
+    suite)."""
     cfg = adapter.cfg
     run = adapter.run_tests(
         paths=[cfg.paths.review_tests], junit=cfg.out_dir / "step_review_tests.xml"
@@ -392,7 +421,55 @@ def review_tests(adapter: LanguageAdapter, feature: str, contested: list[str]) -
     if run.status == "no_tests":
         return CheckResult("PASS", run.output, "no review tests")
     known = regression_baseline(cfg, feature)
-    return tests_expecting(run, ExpectedRed(contested=contested), set(), known)
+    run, off = unrunnable.leave_out(cfg, run)
+    return unrunnable.noted(
+        tests_expecting(run, ExpectedRed(contested=contested), set(), known), off
+    )
+
+
+def task_files(adapter: LanguageAdapter, feature: str) -> set[str] | None:
+    """The files the task changed: since the tests approval, and since the spec approval
+    (the tests it wrote before that tag). None before both: nothing is known."""
+    tags = (frame_diff.approved_tag(feature), f"spec-approved/{feature}") if feature else ()
+    found = [s for tag in tags if (s := adapter.changed_since(tag)) is not None]
+    return set().union(*found) if found else None
+
+
+def task_lines(adapter: LanguageAdapter, feature: str) -> Callable[[str], set[int] | None]:
+    """file -> the lines the task wrote in it (None = all of it): changed since the spec
+    approval (else the tests approval), old lines the formatter rewrote left out
+    (task_base.py)."""
+    cfg = adapter.cfg
+    tags = (f"spec-approved/{feature}", frame_diff.approved_tag(feature)) if feature else ()
+    found: dict[str, set[int] | None] = {}
+    base: list[str | None] = []
+
+    def lines(rel: str) -> set[int] | None:
+        if not base:
+            marker = next((t for t in tags if tag_exists(cfg, t)), None)
+            base.append(task_base.task_base(adapter, marker))
+        if rel not in found:
+            found[rel] = changed_lines(cfg, base[0], rel) if base[0] else None
+        return found[rel]
+
+    return lines
+
+
+def lint_checks(adapter: LanguageAdapter, feature: str) -> list[Check]:
+    """The lint / format / typecheck / imports checks. With `file_scoped_lint` they run on the
+    whole tree (mypy needs it) and a finding counts only on a line the task wrote."""
+    found = adapter.lint_checks(frame_diff.approved_tag(feature))
+    if not adapter.file_scoped_lint:
+        return found
+
+    def scoped(check: Check) -> CheckResult:
+        res = check.run()
+        changed = task_files(adapter, feature)
+        if changed is None:
+            return res
+        return red_tree.in_changed(adapter, changed, res, task_lines(adapter, feature))
+
+    return [Check(k.name, functools.partial(scoped, k), k.needs_green) for k in found]
 
 
 def checks(
@@ -404,9 +481,9 @@ def checks(
 ) -> list[Check]:
     tag = frame_diff.approved_tag(feature)
     # an idle step (scope "idle"): the code is the one the last green gate checked, so only
-    # the step's own tests are new; lint, the frame check and the whole suite are its results
+    # the step's own tests are new; lint and the frame check are its results
     idle = scope == "idle"
-    c = [] if idle else list(adapter.lint_checks(tag))
+    c = [] if idle else lint_checks(adapter, feature)
     if not idle:
         c.append(Check(frame_diff.CHECK_NAME, lambda: frame_diff.check(adapter, feature)))
     if scope in ("step", "fix", "idle"):
@@ -414,11 +491,14 @@ def checks(
         contested = read_contested(adapter.cfg)
 
         def step_tests() -> CheckResult:
-            if not contested:
+            cfg = adapter.cfg
+            if not contested and not cfg.unrunnable_tests:
                 run = adapter.run_tests(req_ids=reqs)
                 return CheckResult("PASS" if run.status == "passed" else "FAIL", run.output)
-            run = adapter.run_tests(req_ids=reqs, junit=adapter.cfg.out_dir / "step_tests.xml")
-            return tests_expecting(run, ExpectedRed(contested=contested), set())
+            run = adapter.run_tests(req_ids=reqs, junit=cfg.out_dir / "step_tests.xml")
+            run, off = unrunnable.leave_out(cfg, run)
+            res = tests_expecting(run, ExpectedRed(contested=contested), set())
+            return unrunnable.noted(res, off)
 
         fix = scope == "fix" and bool(reqs)  # without IDs the check runs everything
         c.append(Check(FIX_TESTS if fix else "tests (current + earlier steps)", step_tests))
@@ -450,7 +530,7 @@ def checks(
                 for k in adapter.coverage_checks(tag, cov, cover_tests)
             ]
         else:
-            if cov is not None and known:
+            if cov is not None and (known or adapter.cfg.unrunnable_tests):
                 c.append(
                     Check(
                         "regression: whole suite, no coverage",
@@ -459,7 +539,8 @@ def checks(
                 )
             elif cov is not None:
                 c.append(adapter.regression_check())
-            c += adapter.coverage_checks(tag, cov, cover_tests)
+            # diff coverage counts the task's own lines, not the ones the formatter rewrote
+            c += adapter.coverage_checks(task_base.task_base(adapter, tag) or tag, cov, cover_tests)
         c.append(Check("traceability", lambda: traceability.check(adapter, feature)))
         c.append(Check("test smells", lambda: test_smells.check(adapter, feature)))
         if cover_tests:
@@ -476,7 +557,7 @@ def checks(
     return c
 
 
-#: under a failed check whose tool gave no result
+#: under a check whose tool gave no result (it crashed, was cut short): NOT MEASURED, not FAIL
 TOOL_FAILURE_NOTE = (
     "TOOL FAILURE: the tool gave no result; this says nothing about the code or the tests"
 )
@@ -507,14 +588,19 @@ class GateReport:
     durations: dict[str, float] = field(default_factory=dict)
     #: [gates.extra] check name -> exit code (reported at the final gate, never blocking)
     extra: dict[str, int] = field(default_factory=dict)
-    #: check name -> "PASS" / "FAIL" / "SKIPPED" plus its one-line result (score, coverage)
+    #: check name -> "PASS" / "FAIL" / "SKIPPED" / "NOT MEASURED" plus its one-line result
+    #: (score, coverage; for NOT MEASURED the reason and the fix)
     results: dict[str, str] = field(default_factory=dict)
     #: final scope: the structure report (file sizes, longest methods; structure.Structure)
     structure: dict[str, object] = field(default_factory=dict)
-    #: failed checks whose tool gave no result (CheckResult.tool_failure): no agent can fix them
+    #: checks whose tool gave no result (CheckResult.tool_failure): shown as NOT MEASURED (also
+    #: in `not_measured`), never in `failed`; the final gate asks whether to run them again
     tool_failures: list[str] = field(default_factory=list)
     #: final scope, a port: each target file against its reference file (references.fidelity)
     fidelity: dict[str, object] = field(default_factory=dict)
+    #: checks whose tool cannot run on this machine (base.not_measured): passed over, never
+    #: counted as passed; `results` has the reason and the fix
+    not_measured: list[str] = field(default_factory=list)
 
     def excerpt(self, lines_per_check: int = 12, limit: int = 2000) -> str:
         """A trimmed excerpt of the failing checks' output (for events and the retro)."""
@@ -561,6 +647,7 @@ def gate_report(
     durations: dict[str, float] = {}
     results: dict[str, str] = {}
     tool_failures: list[str] = []
+    not_measured: list[str] = []
     exp = expected_red(adapter.cfg, feature) if scope == "final" else ExpectedRed()
     if scope == "final":
         for line in scope_lines(adapter, feature, skip_mutation):
@@ -572,6 +659,14 @@ def gate_report(
             if exp.contested:
                 emit(f"- contested tests, left out: {', '.join(exp.contested)}")
             emit("- coverage, diff coverage and mutation: skipped until the redo")
+        if adapter.cfg.unrunnable_tests:
+            # said at every final gate: a green result says nothing about these tests
+            emit(
+                "Listed tests ([gates] unrunnable_tests: this machine cannot run them, or "
+                "they were red before any task; a failure of one is left out):"
+            )
+            for line in unrunnable.listed_lines(adapter.cfg):
+                emit(line)
         emit("")
     if scope == "idle":
         emit(IDLE_NOTE)
@@ -581,6 +676,8 @@ def gate_report(
         note = f"skipped ({type(e).__name__}: {e})"
     if note:
         emit(f"Format fix: {note}")
+    if scope != "idle" and getattr(adapter, "format_beyond", None):
+        log_event(adapter.cfg, feature, "format_debt", files=adapter.format_beyond)
     for check in checks(adapter, feature, scope, skip_mutation, exp):
         t0 = time.monotonic()
         blockers = red_blockers(failed) if check.needs_green else []
@@ -597,17 +694,19 @@ def gate_report(
         except Exception as e:  # a crashing check must fail the gate, not the runner
             res = CheckResult("FAIL", f"check crashed: {type(e).__name__}: {e}")
         durations[check.name] = round(time.monotonic() - t0, 1)
+        if res.status == "FAIL" and res.tool_failure:
+            # no result is no verdict: NOT MEASURED, and the final gate asks about it
+            tool_failures.append(check.name)
+            text = res.output.strip()
+            long = len(text.splitlines()) > OUTPUT_LINES
+            log = save_full_output(adapter, feature, check.name, text) if long else ""
+            parts = (TOOL_FAILURE_NOTE, res.summary, f"full output: {log}" if log else "")
+            res = CheckResult(NOT_MEASURED, res.output, "; ".join(x for x in parts if x))
         results[check.name] = res.status + (f": {res.summary}" if res.summary else "")
         emit(f"[{res.status}] {check.name}")
         out = res.output.strip()
         if res.status == "FAIL":
             failed.append(check.name)
-            if res.tool_failure:
-                tool_failures.append(check.name)
-                results[check.name] = "FAIL: tool failure" + (
-                    f": {res.summary}" if res.summary else ""
-                )
-                emit(f"  {TOOL_FAILURE_NOTE}")
             if res.summary:
                 emit(f"  {res.summary}")
             full_outputs[check.name] = out
@@ -621,6 +720,11 @@ def gate_report(
         elif res.status == "SKIPPED":
             skipped.append(check.name)
             emit(f"  {out.splitlines()[-1] if out else 'SKIPPED'}")
+        elif res.status == NOT_MEASURED:
+            not_measured.append(check.name)
+            emit(f"  {res.summary}")
+            for line in out.splitlines()[-OUTPUT_LINES:]:  # e.g. the tool's setup log
+                emit(f"  {line}")
         elif res.summary:
             emit(f"  {res.summary}")
         elif "SKIPPED" in out:
@@ -628,6 +732,8 @@ def gate_report(
     summary = "ALL GATES PASSED" if not failed else "FAILED: " + ", ".join(failed)
     if skipped:
         summary += f" (SKIPPED: {', '.join(skipped)})"
+    if not_measured:
+        summary += f" (NOT MEASURED, the tool cannot run here: {', '.join(not_measured)})"
     emit(f"\n{summary}")
     shape: dict[str, object] = {}
     if scope == "final" or (feature and adapter.cfg.max_file_lines):
@@ -663,6 +769,7 @@ def gate_report(
         shape,
         tool_failures,
         fidelity,
+        not_measured,
     )
 
 

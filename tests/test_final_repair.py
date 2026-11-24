@@ -12,7 +12,7 @@ from framegate.adapters.base import Check, CheckResult, LanguageAdapter, TestSco
 from framegate.checks import mutation
 from framegate.config import load_config
 from framegate.gates import red_blockers
-from framegate.orchestrator import EXIT_GATE, Orchestrator
+from framegate.orchestrator import EXIT_GATE, Orchestrator, wants_rerun
 
 FAST = "[gates.commands]\nlint = []\nformat = []\ntypecheck = []\n"
 LEGACY = """\
@@ -104,8 +104,6 @@ def test_a_broken_existing_test_goes_to_the_implementer(demo_repo: DemoRepo) -> 
     """The feature's own tests pass, but the whole-suite regression finds an older test the
     new code breaks: the implementer fixes the code, the gates run again and pass."""
     r = demo_repo
-    # (the step gate's own whole-suite check would catch it first: test_checks.py)
-    r.set_toml("gates", "step_tests", '"feature"')
     (r.root / "tests/test_legacy.py").write_text(LEGACY, encoding="utf-8")
     git(r.root, "add", "-A")
     git(r.root, "commit", "-q", "-m", "legacy test")
@@ -159,16 +157,18 @@ def test_a_tool_failure_is_asked_not_repaired(
     monkeypatch.setattr(gates.mutation, "check", fake)
     to_final_gate(r)
     run = final_gates(r)[-1]
-    assert run["passed"] is False and len(run["failed"]) == 1
-    name = run["failed"][0]
-    assert name.startswith("mutation score") and run["tool_failures"] == [name]
-    assert run["results"][name] == "FAIL: tool failure"
+    # no result is no verdict: NOT MEASURED, never FAIL
+    assert run["passed"] is True and run["failed"] == []
+    (name,) = run["tool_failures"]
+    assert name.startswith("mutation score") and run["not_measured"] == [name]
+    assert run["results"][name].startswith("NOT MEASURED: TOOL FAILURE: the tool gave no result")
     assert repairs(r) == []
     assert [c["phase"] for c in r.calls()].count("TESTS") == 1  # no strengthening run
     report = (r.root / "out/demo/final_gates.md").read_text(encoding="utf-8")
-    assert f"[FAIL] {name}\n  TOOL FAILURE: the tool gave no result" in report
+    assert f"[NOT MEASURED] {name}\n  TOOL FAILURE: the tool gave no result" in report
+    assert "Stryker failed twice (exit 1)" in report
     log = (r.root / "out/demo/progress.log").read_text(encoding="utf-8")
-    assert f"final gates: FAILED ({name} [tool failure])" in log
+    assert f"final gates: PASSED; not measured: {name} [tool failure]" in log
 
     cfg = load_config(r.root)
     orch = Orchestrator(cfg, get_adapter(cfg), echo=lambda s: None)
@@ -177,11 +177,24 @@ def test_a_tool_failure_is_asked_not_repaired(
     assert len(asked) == 1 and "Default: yes, run them again." in items[asked[0] - 1]
     assert orch.must_ask("demo", r.progress()) == set(asked)  # the brief cannot leave it out
 
+    def run_again() -> list[str]:
+        (r.root / "out/demo/answers.md").write_text(
+            f"{asked[0]}. Yes, run them again.\n", encoding="utf-8"
+        )
+        assert r.af("answer", "demo") == 0
+        assert r.af("run", "demo") == EXIT_GATE
+        return orch.final_items("demo", r.progress())
+
+    # seen live: "run again" was the default a second time, with the same result
+    items = run_again()
+    asked = [i for i, x in enumerate(items, 1) if f"{name}: the tool gave no result again" in x]
+    assert len(asked) == 1 and "Default: finish without this check." in items[asked[0] - 1]
+    assert "/framegate:setup" in items[asked[0] - 1]
+    again = items[asked[0] - 1]
+    assert not wants_rerun([{"asked": again, "a": "Default"}])  # finish without it
+    assert not wants_rerun([{"asked": again, "a": "finish without the check"}])
+
     broken["now"] = False
-    (r.root / "out/demo/answers.md").write_text(
-        f"{asked[0]}. Yes, run them again.\n", encoding="utf-8"
-    )
-    assert r.af("answer", "demo") == 0
-    assert r.af("run", "demo") == EXIT_GATE
+    run_again()
     assert final_gates(r)[-1]["passed"] is True and final_gates(r)[-1]["tool_failures"] == []
     assert not orch.open_questions("demo")

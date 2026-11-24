@@ -1,5 +1,5 @@
 """Python adapter mutation testing: mutmut result parsing (real mutmut 3.8 output), survivors,
-the WSL venv requirements, runner selection and SKIPPED paths, and the standalone runner script
+the WSL venv requirements, runner selection and NOT MEASURED paths, and the standalone runner script
 driven by a fake `mutmut` module (no fork needed, so it runs on Windows too). The real mutmut
 through WSL is in test_python_mutation_e2e.py (slow)."""
 
@@ -12,8 +12,9 @@ import sys
 
 import pytest
 
+from conftest import git
 from framegate.adapters import mutmut_runner, wsl
-from framegate.adapters.base import TestScope
+from framegate.adapters.base import NOT_MEASURED, TestScope
 from framegate.adapters.python import (
     PythonAdapter,
     collect_requirements,
@@ -146,7 +147,7 @@ def test_wsl_requirements_and_stamp(tmp_path: pathlib.Path) -> None:
     assert a._wsl_requirements(lambda p: wsl.fallback_path(p))[2] != stamp  # lock change
 
 
-# ---------- runner selection / SKIPPED ----------
+# ---------- runner selection / NOT MEASURED ----------
 def test_mutation_runner_config(tmp_path: pathlib.Path) -> None:
     assert adapter(tmp_path).mutation_runner() == ("wsl" if os.name == "nt" else "native")
     for value in ("native", "wsl"):
@@ -158,22 +159,38 @@ def test_mutation_runner_config(tmp_path: pathlib.Path) -> None:
     assert "mutants/" in adapter(tmp_path).gitignore_entries()
 
 
-def test_wsl_unavailable_is_skipped(
+def test_wsl_unavailable_is_not_measured(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(wsl, "wsl_exe", lambda: None)
     a = adapter(tmp_path, {"gates": {"mutation_runner": "wsl"}})
     res = a.mutation_check("f", "t", ["src/demo/__init__.py"])
-    assert res.status == "SKIPPED"
-    assert "via WSL is unavailable: wsl.exe not found" in res.output
+    assert res.status == NOT_MEASURED
+    assert "via WSL is unavailable: wsl.exe not found" in res.summary
+    assert "Fix: install WSL with a distribution that has Python" in res.summary
     assert a.mutation_check("f", "t", ["README.md"]).status == "PASS"  # nothing to mutate
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native Windows only")
-def test_native_windows_is_skipped(tmp_path: pathlib.Path) -> None:
+def test_native_windows_is_not_measured(tmp_path: pathlib.Path) -> None:
     a = adapter(tmp_path, {"gates": {"mutation_runner": "native"}})
     res = a.mutation_check("f", "t", ["src/demo/__init__.py"])
-    assert res.status == "SKIPPED" and 'mutation_runner = "wsl"' in res.output
+    assert res.status == NOT_MEASURED
+    assert res.summary == (
+        "mutmut does not run on native Windows. Fix: set [gates] mutation_runner = "
+        '"auto" (it then runs through WSL)'
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="on Windows the native runner stops earlier")
+def test_missing_mutmut_is_not_measured(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    a = adapter(tmp_path, {"gates": {"mutation_runner": "native"}})
+    monkeypatch.setattr(a, "_has_module", lambda module: False)
+    res = a.mutation_check("f", "t", ["src/demo/__init__.py"])
+    assert res.status == NOT_MEASURED and res.summary.startswith("mutmut is not installed for ")
+    assert "Fix: add mutmut to the project's dev dependencies" in res.summary
 
 
 # ---------- runner script with a fake mutmut ----------
@@ -186,6 +203,9 @@ if cmd == "run":
         fh.write(" ".join(sys.argv[2:]))
     with open("addopts.txt", "w") as fh:
         fh.write(os.environ.get("PYTEST_ADDOPTS", ""))
+    if os.path.exists("setup.cfg"):
+        with open("setup.cfg") as src, open("setup_seen.txt", "w") as fh:
+            fh.write(src.read())
     print("\\r⠋ 0/7\\r⠼ 7/7  🎉 6 🙁 1\\n108.40 mutations/second")
     sys.exit(int(os.environ.get("FAKE_MUTMUT_RC", "0")))
 elif cmd == "results":
@@ -240,6 +260,33 @@ def test_runner_script_flow(fake_mutmut: pathlib.Path) -> None:
     assert run_fake(a, ["other"])[1] == "No mutants generated for the changed files."
 
 
+def test_mutmut_is_told_the_source_folders(fake_mutmut: pathlib.Path) -> None:
+    """Seen live: packages at the root (no src/), and mutmut found nothing to mutate."""
+    own = "[flake8]\nx = 1\n"
+    (fake_mutmut / "setup.cfg").write_text(own, encoding="utf-8")
+    a = adapter(fake_mutmut, {"paths": {"src": ["orchestrator", "platform"]}})
+    mods = a._mutmut_modules(["orchestrator/a/b.py", "src/demo/x.py"])
+    assert mods == ["demo.x", "orchestrator.a.b"]  # as mutmut names them
+    run_fake(a, ["orchestrator.a.b"])
+    seen = (fake_mutmut / "setup_seen.txt").read_text(encoding="utf-8")
+    assert "[mutmut]\nsource_paths =\n    orchestrator\n    platform\n" in seen
+    assert (fake_mutmut / "setup.cfg").read_text(encoding="utf-8") == own  # put back
+
+
+def test_the_tests_find_the_repository_files_they_read(fake_mutmut: pathlib.Path) -> None:
+    """Seen live: a test read docs/x.md, and mutmut's folder holds only the sources and tests."""
+    root = fake_mutmut
+    for rel in ("docs/x.md", "src/demo.py", "tests/test_demo.py"):
+        (root / rel).parent.mkdir(exist_ok=True)
+        (root / rel).write_text("x", encoding="utf-8")
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    assert adapter(root)._mutmut_also_copy() == ["docs/x.md"]  # mutmut copies the others
+    spec = {"project": str(root), "also_copy": ["docs/x.md"], "keep_mutants": True}
+    mutmut_runner.run_mutmut(spec, sys.executable)
+    assert (root / "mutants/docs/x.md").is_file()
+
+
 def test_runner_script_failures(fake_mutmut: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
     a = adapter(fake_mutmut)
     monkeypatch.setenv("FAKE_MUTMUT_RC", "1")
@@ -250,7 +297,7 @@ def test_runner_script_failures(fake_mutmut: pathlib.Path, monkeypatch: pytest.M
     assert res.status == "FAIL" and "mutmut runner (WSL) failed (exit 3)" in res.output
 
 
-def test_runner_setup_failure_is_skipped(fake_mutmut: pathlib.Path) -> None:
+def test_runner_setup_failure_is_not_measured(fake_mutmut: pathlib.Path) -> None:
     a = adapter(fake_mutmut)
     result = fake_mutmut / "out/.mutmut/result.json"
     data = {
@@ -262,8 +309,8 @@ def test_runner_setup_failure_is_skipped(fake_mutmut: pathlib.Path) -> None:
     code = f"open({str(result)!r}, 'w').write({json.dumps(json.dumps(data))})"
     a._mutmut_dir()
     res = a._mutmut_finish("f", ["demo"], [sys.executable, "-c", code], "WSL")
-    assert res.status == "SKIPPED"
-    assert "could not create the mutmut venv (WSL); HINT" in res.output
+    assert res.status == NOT_MEASURED and res.output == "x"  # the setup log
+    assert res.summary == "could not create the mutmut venv (WSL). Fix: HINT"
 
 
 def test_runner_reuses_stamped_venv(tmp_path: pathlib.Path) -> None:

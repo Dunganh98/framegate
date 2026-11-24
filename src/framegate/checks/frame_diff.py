@@ -48,16 +48,22 @@ def knowledge_tag(feature: str) -> str:
     return f"knowledge-update/{feature}"
 
 
+def config_update_tag(feature: str) -> str:
+    return f"config-update/{feature}"
+
+
 def allowed_spec_changes(cfg: Config, feature: str, untracked: set[str]) -> set[str]:
     """Spec files of the feature changed by the tagged SPEC_UPDATE commit and test files
     changed by the tagged test update, and the knowledge file changed by `framegate learn`
-    (since the tests were approved), still identical to the tagged commit."""
+    (since the tests were approved), still identical to the tagged commit. The same for
+    framegate.toml changed by an approved diagnosis (`Fix owner: config`; redo.py)."""
     return (
         _tagged(cfg, feature, spec_update_tag(feature), f"{cfg.paths.specs}/{feature}/", untracked)
         | _tagged(
             cfg, feature, tests_update_tag(feature), cfg.paths.tests.rstrip("/") + "/", untracked
         )
         | _tagged(cfg, feature, knowledge_tag(feature), cfg.knowledge, untracked)
+        | _tagged(cfg, feature, config_update_tag(feature), CONFIG_FILE, untracked)
     )
 
 
@@ -285,6 +291,44 @@ def changed_src_files(adapter: LanguageAdapter, ref: str) -> list[str]:
     return sorted(f for f in changed if cfg.in_src(f) and (cfg.root / f).is_file())
 
 
+def new_suppressions(diff: str, rx: re.Pattern[str]) -> list[str]:
+    """The added lines of a `git diff -U0` that hold a suppression the file did not have
+    before. A suppression counts by its text (what the pattern matches), per file: a line
+    that was re-wrapped, moved or had its comment shortened removes one and adds the same
+    one, which is no new suppression. Seen live: the formatter split two existing `noqa`
+    lines of a file the feature touched, and the frame check failed every attempt on
+    "SUPPRESSION ADDED". More of the same suppression than before are still reported."""
+    found: list[str] = []
+    removed: dict[str, int] = {}
+    added: list[tuple[str, str]] = []
+
+    def close() -> None:
+        for key, line in added:
+            if removed.get(key, 0) > 0:
+                removed[key] -= 1
+            else:
+                found.append(line)
+        removed.clear()
+        added.clear()
+
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            close()
+        elif line.startswith(("+++", "---")):
+            continue
+        elif line.startswith(("+", "-")):
+            m = rx.search(line[1:])
+            if not m:
+                continue
+            key = " ".join(m.group(0).split())
+            if line[0] == "+":
+                added.append((key, line[1:]))
+            else:
+                removed[key] = removed.get(key, 0) + 1
+    close()
+    return found
+
+
 #: the check's name in the gate reports
 CHECK_NAME = "frame diff"
 PROTECTED_CHANGED = "PROTECTED PATH CHANGED: "
@@ -315,17 +359,14 @@ def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
         and f not in spec_ok
         and f not in MACHINE_FILES
     ]
-    added = [
-        line[1:]
-        for line in diff.splitlines()
-        if line.startswith("+") and not line.startswith("+++")
-    ]
-    for f in sorted(untracked):
-        if cfg.in_src(f) and f.endswith(adapter.source_suffixes):
-            path = cfg.root / f
-            if path.is_file():
-                added += path.read_text(encoding="utf-8", errors="replace").splitlines()
     rx = forbidden_regex(adapter)
     if rx is not None:
-        problems += [f"SUPPRESSION ADDED: {line.strip()}" for line in added if rx.search(line)]
+        added = new_suppressions(diff, rx)
+        for f in sorted(untracked):
+            if cfg.in_src(f) and f.endswith(adapter.source_suffixes):
+                path = cfg.root / f
+                if path.is_file():
+                    text = path.read_text(encoding="utf-8", errors="replace")
+                    added += [line for line in text.splitlines() if rx.search(line)]
+        problems += [f"SUPPRESSION ADDED: {line.strip()}" for line in added]
     return CheckResult("FAIL" if problems else "PASS", "\n".join(problems) or "Frame intact.")

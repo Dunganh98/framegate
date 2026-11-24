@@ -36,10 +36,13 @@ from framegate import (
     notify,
     ported,
     procs,
+    red_tree,
     references,
     risk,
+    unrunnable,
 )
 from framegate import brief as briefs
+from framegate import redo as redos
 from framegate.adapters import get_adapter
 from framegate.adapters.base import GATE_NAMES, CheckResult, LanguageAdapter, run_command
 from framegate.api_error import detect_api_error
@@ -47,6 +50,7 @@ from framegate.checks import (
     baseline,
     check_signature,
     existing_members,
+    plan_files,
     scope_coverage,
     spec_lint,
     test_smells,
@@ -57,6 +61,7 @@ from framegate.checks.frame_diff import CHECK_NAME as FRAME_CHECK
 from framegate.checks.frame_diff import (
     PROTECTED_CHANGED,
     approved_tag,
+    config_update_tag,
     knowledge_tag,
     path_matches,
     setup_state,
@@ -97,6 +102,7 @@ from framegate.retro import build as build_retro_input
 from framegate.specs import (
     MODES,
     PlanStep,
+    baseline_on,
     feature_ids,
     feature_mode,
     plan_steps,
@@ -109,6 +115,7 @@ from framegate.state import (
     clear_phase,
     clear_reqs,
     commit,
+    commit_command,
     commit_paths,
     delete_marker,
     dirty_lines,
@@ -243,7 +250,9 @@ FINAL_SRC_CHECKS = (*GATE_NAMES.values(), "regression", "coverage run", "full te
 FINAL_TESTS_CHECKS = ("diff coverage", "mutation score", "unreached assertions")
 #: final checks that run the whole suite: their repair run is checked with the suite too
 WHOLE_SUITE_CHECKS = ("regression", "full test suite")
-FIX_OWNER_RE = re.compile(r"^\W*Fix owner\W*:\W*(src|tests|spec)\b", re.I | re.M)
+FIX_OWNER_RE = re.compile(r"^\W*Fix owner\W*:\W*(src|tests|spec|config|setup)\b", re.I | re.M)
+#: fix owners no implementer attempt can serve: the work parks, the proposal is its question
+PARKING_OWNERS = ("tests", "spec", "config", "setup")
 #: a park request (or diagnosis) saying only the frozen tests are wrong, and which ones
 TESTS_WRONG_RE = re.compile(r"^\W*Park kind\W*:\W*tests[ -]wrong\b", re.I | re.M)
 CONTESTED_RE = re.compile(r"^\W*Contested tests\W*:\s*(.+)$", re.I | re.M)
@@ -257,6 +266,24 @@ NO_CHANGE_RE = re.compile(
 SAME_AS_RE = re.compile(r"^\W*same as item \d+\s*:\s*(.*)$", re.I | re.S)
 #: an answer to a file-size question that leaves the file as it is
 LEAVE_RE = re.compile(r"^\W*(?:default\W+)?(?:leave|keep)\b", re.I)
+
+
+def wants_rerun(items: list[dict[str, Any]]) -> bool:
+    """Does an answer to a final gates question (a tool that gave no result) ask to run the
+    final checks again? The default does for the first question ("Default: yes, run them
+    again"), not for the second one ("...gave no result again", default: finish without).
+    Seen live: "run them again" was taken, nothing ran, the same gate came back."""
+    for it in items:
+        asked, text = str(it.get("asked") or ""), str(it.get("a") or "")
+        if not asked.startswith(f"[{GATES_WHO}] "):
+            continue
+        if re.search(r"\b(finish|without|no)\b", text, re.I):
+            continue
+        if re.search(r"\b(run|again|yes)\b", text, re.I):
+            return True
+        if NO_CHANGE_RE.match(text) and "gave no result again" not in asked:
+            return True
+    return False
 
 
 def take_defaults(items: list[dict[str, Any]]) -> bool:
@@ -344,6 +371,16 @@ REDO_NOTE = (
     "An answer that approves a diagnosis' proposed fix means: apply that proposal as written."
 )
 
+#: added to the spec updater's task when a parked diagnosis proposes a framegate.toml change
+CONFIG_FIX_NOTE = (
+    "\n\nOne of the parked questions is a diagnosis whose fix is a change to {config} (Fix "
+    "owner: config). Only if the answer approves it: write the whole new file to "
+    "{out}/{f}/{file}, a copy of {config} with the approved change and nothing else (keep "
+    "every other line and comment as it is). You cannot write {config} itself: framegate "
+    "checks your file and puts it in place. Not approved, or answered otherwise: do not "
+    "write that file. Say which in {out}/{f}/spec_update.md."
+)
+
 #: the failed "check" of a refactor step that left the source as it was
 IDLE_STEP = "refactor step changed nothing"
 #: a plan step of a feature whose run changed nothing (gates.py, scope "idle")
@@ -409,8 +446,8 @@ TASKS = {
     "Check with: {check}\n" + NO_STOP,
     "DIAGNOSIS": "Feature '{f}': '{label}' failed the same checks ({failed}) in {n} implementer "
     "attempts in a row. Find the root cause; do not fix anything. Write {out}/{f}/diagnosis.md "
-    "(Root cause / Fix owner: src | tests | spec / Proposed fix / Evidence). The implementer's "
-    "check command: {check}\nThe last gate output:\n{report}",
+    "(Root cause / Fix owner: src | tests | spec | config | setup / Proposed fix / Evidence). The "
+    "implementer's check command: {check}\nThe last gate output:\n{report}",
     "FIX": "Feature '{f}': make all currently failing tests pass without editing tests. "
     "Check with: {check}\n" + NO_STOP,
     "FIX_FINAL": "Feature '{f}': the final gates failed these checks: {failed}. Make them pass "
@@ -457,7 +494,9 @@ TASKS = {
     "final-gate failure, "
     "permission denial, assumption and parked item, "
     "with item IDs. Address every ID in {out}/{f}/retro_proposals.md (a proposal, or the "
-    "'Not acted on' list with a one-line reason). More detail: {out}/events.jsonl (feature={f}), "
+    "'Not acted on' list with a one-line reason). Its sections 'Run state' (a run that stopped "
+    "before DONE) and 'Chat' (what the chat asked the user, was told, did by hand, refused) "
+    "have no IDs: use them as evidence. More detail: {out}/events.jsonl (feature={f}), "
     "{out}/{f}/, {out}/runs/*{f}*.json.",
 }
 
@@ -526,19 +565,44 @@ TURN_CAP_RETRIES = 1
 LIMIT_DEFAULT_WAIT_S = 15 * 60
 LIMIT_MARGIN_S = 60
 LIMIT_MAX_WAITS = 4
+#: {out}/{f}/LIMIT_WAIT_FILE exists while a run waits for the usage limit (what it waits
+#: for, as JSON). Deleting it wakes the run: `framegate wake <f>` does that
+LIMIT_WAIT_FILE = "limit_wait.json"
+#: how often a waiting run looks whether it was woken
+WAKE_POLL_S = 5.0
 
 
 def now_utc() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
 
 
-def sleep_until(until: datetime.datetime) -> None:
-    """Sleep until `until` (aware), in short slices so Ctrl+C / SIGTERM stop it at once."""
+def sleep_until(until: datetime.datetime, wake: pathlib.Path | None = None) -> bool:
+    """Sleep until `until` (aware), in short slices so Ctrl+C / SIGTERM stop it at once.
+    With `wake`: also return, with True, as soon as that file is gone (the usage-limit wait:
+    `framegate wake` deletes it)."""
     while True:
+        if wake is not None and not wake.is_file():
+            return True
         left = (until - now_utc()).total_seconds()
         if left <= 0:
-            return
-        time.sleep(min(left, 30.0))
+            return False
+        time.sleep(min(left, 30.0 if wake is None else WAKE_POLL_S))
+
+
+def wake(cfg: Config, feature: str, echo: Callable[[str], None] = print) -> int:
+    """`framegate wake <f>`: a run that waits for the usage limit tries again now (the user
+    refilled the limit, or it lifted before the time claude named). Seen live: a run slept
+    1 h 40 min after the limit was refilled."""
+    path = cfg.feature_out(feature) / LIMIT_WAIT_FILE
+    lock = procs.read_lock(cfg.out_dir)
+    waiting = procs.lock_alive(lock) and (lock or {}).get("feature") == feature
+    if not path.is_file() or not waiting:
+        path.unlink(missing_ok=True)  # left by a killed run
+        echo(f"{feature} is not waiting for the usage limit: nothing to wake.")
+        return EXIT_ERROR
+    path.unlink(missing_ok=True)
+    echo(f"Woke {feature}: the run tries again within {WAKE_POLL_S:g} seconds.")
+    return EXIT_OK
 
 
 #: `usage` fields of a `claude -p` result -> the agent_run event's token columns
@@ -667,6 +731,9 @@ class Orchestrator:
         self.adapter = adapter or get_adapter(cfg)
         self.echo = echo
         self._claude: list[str] | None = None
+        #: the documentation files the approved plan names for the step(s) being implemented
+        #: (checks/plan_files.py): writable for that run, committed and parked with its code
+        self.step_docs: list[str] = []
 
     # ---------- helpers ----------
     def fdir(self, feature: str) -> pathlib.Path:
@@ -827,11 +894,22 @@ class Orchestrator:
         API could not be reached runs again after a short wait (neither is a failed attempt:
         the caller sees only a run that worked)."""
         waits = retries = 0
+
+        def once(probe: bool = False) -> tuple[dict[str, Any], UsageLimit | None]:
+            return self.run_agent_once(
+                phase, feature, task, feedback, role, step, attempt, probe=probe
+            )
+
+        early: tuple[dict[str, Any], UsageLimit | None] | None = None
         while True:
-            res, limit = self.run_agent_once(phase, feature, task, feedback, role, step, attempt)
+            # (a try during the usage-limit wait that got through is this run's result)
+            res, limit = early or once()
+            early = None
             if limit is not None:
                 waits += 1
-                self.wait_for_usage_limit(feature, phase, step, limit, waits)
+                early = self.wait_for_usage_limit(
+                    feature, phase, step, limit, waits, lambda: once(probe=True)
+                )
                 continue
             problem = detect_api_error(res)
             if problem is None:
@@ -876,11 +954,25 @@ class Orchestrator:
         sleep_until(now_utc() + datetime.timedelta(seconds=wait))
 
     def wait_for_usage_limit(
-        self, feature: str, phase: str, step: str | None, limit: UsageLimit, waits: int
-    ) -> None:
-        """Sleep until the limit lifts (plus a margin). A reset further away than
+        self,
+        feature: str,
+        phase: str,
+        step: str | None,
+        limit: UsageLimit,
+        waits: int,
+        probe: Callable[[], tuple[dict[str, Any], UsageLimit | None]] | None = None,
+    ) -> tuple[dict[str, Any], UsageLimit | None] | None:
+        """Wait until the limit lifts (plus a margin). A reset further away than
         [agents] limit_wait_max_hours, or a limit that is still there after LIMIT_MAX_WAITS
-        waits, stops the run like Ctrl+C: the state is kept, `framegate run` resumes it."""
+        waits, stops the run like Ctrl+C: the state is kept, `framegate run` resumes it.
+
+        The time claude names is the latest end, not the only one (seen live: a run slept
+        1 h 40 min after the user had refilled the limit). So the wait ends early when
+        - a try gets through: every [agents] limit_probe_minutes `probe` starts the refused
+          run again. A refused run costs nothing and leaves no record (run_agent_once); the
+          one that gets through is the run itself and is returned;
+        - the user wakes it: `framegate wake <f>` deletes {out}/{f}/limit_wait.json.
+        None = the caller starts the same run again."""
         now = now_utc()
         reset = limit.reset_at if limit.reset_at and limit.reset_at > now else None
         until = (reset or now + datetime.timedelta(seconds=LIMIT_DEFAULT_WAIT_S)) + (
@@ -908,16 +1000,57 @@ class Orchestrator:
                 f"Resets {local}. Then: framegate run {feature}",
             )
             raise procs.Interrupted(f"usage limit, resets {local} ({why})")
+        every = self.cfg.limit_probe_minutes * 60 if probe is not None else 0
+        tries = f", a try every {self.cfg.limit_probe_minutes:g} min" if every else ""
         self.progress(
             feature,
-            f"[{label}] usage limit reached ({limit.message[:80]}); waiting until {local}, then "
-            "the same run again (not a failed attempt).",
+            # (what matters first: a progress line is cut at PROGRESS_WIDTH)
+            f"[{label}] usage limit reached; waiting until {local}{tries} (not a failed "
+            f"attempt). Refilled earlier: framegate wake {feature} ({limit.message[:60]})",
         )
         self.notify(
-            f"framegate: {feature} waits for the usage limit", f"Continues by itself at {local}."
+            f"framegate: {feature} waits for the usage limit",
+            f"Continues by itself at {local}, or now with: framegate wake {feature}",
         )
-        sleep_until(until)
-        self.progress(feature, f"[{label}] usage limit wait over; running again.")
+        marker = self.fdir(feature) / LIMIT_WAIT_FILE
+        marker.write_text(
+            json.dumps({"phase": phase, "step": step, "until": until.isoformat()}),
+            encoding="utf-8",
+        )
+        t0 = time.time()
+        probes = 0
+        how, early = "reset", None
+        try:
+            at = now
+            while how == "reset" and at < until:
+                # (by the planned times, not the clock: a test's sleep takes no time)
+                at = min(until, at + datetime.timedelta(seconds=every)) if every else until
+                if sleep_until(at, marker):
+                    how = "wake"
+                elif at < until and probe is not None:
+                    probes += 1
+                    res, still = probe()
+                    if still is None or res.get("total_cost_usd"):
+                        how, early = "probe", (res, still)
+        finally:
+            marker.unlink(missing_ok=True)
+        log_event(
+            self.cfg,
+            feature,
+            "usage_limit_over",
+            phase=phase,
+            step=step,
+            how=how,
+            waited_s=round(time.time() - t0),
+            probes=probes,
+        )
+        why = {
+            "reset": "wait over; running again",
+            "wake": "woken (framegate wake); running again",
+            "probe": f"lifted before {local} (try {probes} got through); the run goes on",
+        }[how]
+        self.progress(feature, f"[{label}] usage limit {why}.")
+        return early
 
     def run_agent_once(
         self,
@@ -928,8 +1061,12 @@ class Orchestrator:
         role: str | None = None,
         step: str | None = None,
         attempt: int | None = None,
+        probe: bool = False,
     ) -> tuple[dict[str, Any], UsageLimit | None]:
-        """One `claude -p` run: its result, and the usage limit that refused it (or None)."""
+        """One `claude -p` run: its result, and the usage limit that refused it (or None).
+        `probe`: a try during the usage-limit wait. Refused again, it did no work and cost
+        nothing, so it leaves no run files and no `agent_run` event (a wait of some hours
+        would fill the log with them); any other outcome is recorded like every run."""
         cmd = self.claude_cmd()
         set_phase(self.cfg, phase)
         role_name = (role or phase).lower()
@@ -966,18 +1103,22 @@ class Orchestrator:
         runs = self.cfg.out_dir / "runs"
         runs.mkdir(parents=True, exist_ok=True)
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        (runs / f"{stamp}-{feature}-{phase}.prompt.md").write_text(prompt, encoding="utf-8")
+        prompt_file = runs / f"{stamp}-{feature}-{phase}.prompt.md"
+        prompt_file.write_text(prompt, encoding="utf-8")
         t0 = time.time()
         try:
             # own process group + kill-on-close job: Ctrl+C / SIGTERM / a killed framegate
             # take the whole agent tree (claude, node, shells, dotnet) down with it
             # FRAMEGATE_AGENT, the project's tools first on PATH, no chat memory (agent_env.py)
-            env = agent_env.build(self.adapter, role_name)
+            env = agent_env.build(self.adapter, role_name, docs=self.step_docs)
             _, stdout, stderr = procs.run(args, input=prompt, cwd=self.cfg.root, job=True, env=env)
         except OSError as e:
             stdout, stderr = "", f"could not start claude: {e}"
         res = parse_result(stdout, stderr)
         limit = detect_usage_limit(stdout, res)
+        if probe and limit is not None and not res.get("total_cost_usd"):
+            prompt_file.unlink(missing_ok=True)
+            return res, limit
         # the result object (read by the retro), and the whole message stream for debugging
         (runs / f"{stamp}-{feature}-{phase}.json").write_text(
             json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8"
@@ -1104,8 +1245,9 @@ class Orchestrator:
 
     # ---------- live view: one short line per milestone ----------
     def cost_so_far(self, feature: str) -> float:
-        """USD of all agent runs of the current spec version."""
-        ev = since_spec_approval(read_events(self.cfg, feature))
+        """USD of all agent runs of the task (it does not start over when the spec is
+        approved again)."""
+        ev = read_events(self.cfg, feature)
         return sum(float(e.get("cost") or 0) for e in ev if e.get("kind") == "agent_run")
 
     def progress(self, feature: str, text: str) -> None:
@@ -1368,7 +1510,7 @@ class Orchestrator:
                 **({"fidelity": rep.fidelity} if rep.fidelity else {}),
             )
             if rep.ok:
-                done = commit(self.cfg, f"{feature}: {label}")
+                done = commit(self.cfg, f"{feature}: {label}", extra=self.step_docs)
                 drift = references.differing(rep.fidelity)
                 self.progress(
                     feature,
@@ -1392,7 +1534,7 @@ class Orchestrator:
                 self.park(
                     feature,
                     prog,
-                    item,
+                    self.not_the_implementers(feature, item),
                     f"unfixable in IMPLEMENT: {unfixable}",
                     attempts=attempt,
                     failed=rep.failed,
@@ -1423,11 +1565,11 @@ class Orchestrator:
                     feature, prog, item, reqs, contested, diagnosis["question"], attempt
                 ):
                     return True
-                if diagnosis.get("owner") in ("tests", "spec"):
+                if diagnosis.get("owner") in PARKING_OWNERS:
                     self.park(
                         feature,
                         prog,
-                        item,
+                        self.not_the_implementers(feature, item, diagnosis["owner"]),
                         f"diagnosis: the fix needs a {diagnosis['owner']} change",
                         attempts=attempt,
                         question=diagnosis["question"],
@@ -1523,10 +1665,27 @@ class Orchestrator:
             failed=rep.failed,
             file=self.rel(kept),
         )
+        weaker = redos.needs_setup(self.cfg, text) if owner == "config" else []
+        if weaker:
+            # framegate would refuse this change after the approval: never offered
+            owner = "setup"
         self.progress(feature, f"[{label}] diagnosis ({owner}): {root}")
+        if owner == "setup":
+            what = "; ".join(weaker) or "see the proposed fix"
+            question = (
+                redos.NEEDS_SETUP.format(what=what, why=f"diagnosis: {self.rel(kept)}")
+                + f"\nRoot cause: {root}\nProposed fix (setup): {fix}"
+            )
+            return {"owner": owner, "text": text, "question": question}
+        applies = (
+            f" (approved: framegate changes {CONFIG_FILE} as proposed and redoes the step; "
+            "not a change that weakens a check, that belongs to /framegate:setup)"
+            if owner == "config"
+            else ""
+        )
         question = (
-            f"Diagnosis ({self.rel(kept)}): approve the proposed fix, or answer otherwise.\n"
-            f"Root cause: {root}\nProposed fix ({owner}): {fix}"
+            f"Diagnosis ({self.rel(kept)}): approve the proposed fix{applies}, or answer "
+            f"otherwise.\nRoot cause: {root}\nProposed fix ({owner}): {fix}"
         )
         return {"owner": owner, "text": text, "question": question}
 
@@ -1563,23 +1722,29 @@ class Orchestrator:
 
     def failure_paths(self, text: str) -> set[str]:
         """Repository files (posix, relative) named in a check's output."""
-        sfx = "|".join(re.escape(s.lstrip(".")) for s in self.adapter.source_suffixes) or r"\w+"
-        root = self.cfg.root.resolve()
-        found = set()
-        for m in re.finditer(rf"(?:[A-Za-z]:)?[\w.\-/\\]+\.(?:{sfx})\b", text):
-            path = pathlib.Path(m.group(0).replace("\\", "/"))
-            try:
-                rel = (path if path.is_absolute() else root / path).resolve().relative_to(root)
-            except (ValueError, OSError):
-                continue
-            if (root / rel).is_file():
-                found.add(rel.as_posix())
-        return found
+        return set(red_tree.file_counts(self.adapter, text))
+
+    def not_the_implementers(
+        self, feature: str, item: dict[str, Any], owner: str = ""
+    ) -> dict[str, Any]:
+        """The park record of work no implementer run can finish (a check that fails only in
+        files it may not edit; a diagnosis whose fix is a tests, spec or config change): it
+        keeps the gate inputs as they are now (redo.gate_inputs), so a redo on the same
+        inputs is not run (redo_pointless)."""
+        rec = dict(item, inputs=redos.gate_inputs(self.cfg, feature))
+        if owner:
+            rec["owner"] = owner
+        return rec
 
     def revert_src(self, feature: str, label: str) -> str:
         """Save the parked work's uncommitted source changes as a diff and restore the sources
-        to the last commit, so later steps start from code that passed its gates."""
+        to the last commit, so later steps start from code that passed its gates. The step's
+        documentation files (self.step_docs) go the same way."""
         src = [r for r in self.cfg.src_roots if (self.cfg.root / r).exists()]
+        # only the changed ones: git refuses a path it does not know or that is ignored
+        src += [
+            f for f in self.step_docs if git(self.cfg, "status", "--porcelain", "--", f).strip()
+        ]
         if not src:
             return ""
         git(self.cfg, "add", "-A", "--", *src)
@@ -1675,7 +1840,11 @@ class Orchestrator:
             )
             return False
         names = ", ".join(contested)
-        commit(self.cfg, f"{feature}: {label} (PROVISIONAL: tests contested: {names})")
+        commit(
+            self.cfg,
+            f"{feature}: {label} (PROVISIONAL: tests contested: {names})",
+            extra=self.step_docs,
+        )
         sha = git(self.cfg, "rev-parse", "HEAD").strip()
         rec = dict(item, contested=contested, question=question, commit=sha, attempts=attempts)
         prog["provisional"] = [*(prog.get("provisional") or []), rec]
@@ -1813,12 +1982,13 @@ class Orchestrator:
         return sorted(f for f in changed if (self.cfg.root / f).is_file())
 
     def format_written_tests(self, feature: str) -> None:
-        """Format the test writer's files ([gates] format_fix): the implementer may not edit
-        tests, so a formatting slip in them would fail every later gate."""
-        if not self.adapter.format_fix_enabled():
-            return
+        """Format the test writer's files and apply the linter's safe fixes to them ([gates]
+        format_fix): the implementer may not edit tests, so a slip in them would fail every
+        later gate."""
         try:
             note = self.adapter.format_files(self.changed_tests(), "HEAD")
+            if self.adapter.format_beyond:
+                log_event(self.cfg, feature, "format_debt", files=self.adapter.format_beyond)
         except Exception as e:  # the format check still reports it
             note = f"skipped ({type(e).__name__}: {e})"
         if note:
@@ -2425,6 +2595,11 @@ class Orchestrator:
                 if one
                 else "steps " + ", ".join(map(str, nums))
             )
+            head: dict[str, Any] = {"kind": "step", "step": nums[0], "label": label}
+            if not one:
+                head["steps"] = nums
+            if self.redo_pointless(feature, prog, redo, head):
+                continue
             self.progress(
                 feature,
                 f"[{label}] {'redo' if redo else 'start'} ({len(steps)} steps; {', '.join(reqs)})",
@@ -2458,6 +2633,9 @@ class Orchestrator:
                 )
             task += self.parked_context(prog, steps) + self.provisional_context(prog)
             task += self.size_context(feature) + self.port_context(feature, prog)
+            # documentation files the approved plan names for these steps: writable now only
+            self.step_docs = plan_files.approved_docs(self.adapter, feature, nums)
+            task += plan_files.task_note(self.step_docs)
             if redo:
                 task += REDO_NOTE.format(**self.placeholders(feature))
             for r in redo:
@@ -2476,7 +2654,10 @@ class Orchestrator:
             item: dict[str, Any] = {"kind": "step", "step": nums[0], "label": label}
             if not one:
                 item["steps"] = nums
-            ok = self.implement_loop(feature, prog, task, covered, item)
+            try:
+                ok = self.implement_loop(feature, prog, task, covered, item)
+            finally:
+                self.step_docs = []
             if ok:
                 prog["completed_steps"] += nums
             if redo:
@@ -2761,13 +2942,17 @@ class Orchestrator:
             structure=rep.structure,
             tool_failures=rep.tool_failures,
             **({"fidelity": rep.fidelity} if rep.fidelity else {}),
+            **({"not_measured": rep.not_measured} if rep.not_measured else {}),
         )
-        names = [n + (" [tool failure]" if n in rep.tool_failures else "") for n in rep.failed]
+        blind = [
+            n + (" [tool failure]" if n in rep.tool_failures else "") for n in rep.not_measured
+        ]
         self.progress(
             feature,
             f"[REVIEW] final gates: {'PASSED' if rep.ok else 'FAILED'}"
-            + (f" ({', '.join(names)})" if names else "")
+            + (f" ({', '.join(rep.failed)})" if rep.failed else "")
             + (f"; skipped: {', '.join(rep.skipped)}" if rep.skipped else "")
+            + (f"; not measured: {', '.join(blind)}" if blind else "")
             + (
                 "; project checks (not blocking): "
                 + ", ".join(f"{n} {'OK' if c == 0 else f'exit {c}'}" for n, c in rep.extra.items())
@@ -2974,19 +3159,33 @@ class Orchestrator:
     def tool_failure_questions(self, feature: str) -> None:
         """A question at the final gate (always asked) for every final check whose tool gave
         no result in the last run: run the final gates again (any answer does), or approve
-        without that check."""
+        without that check. After a run again with the same result, running again is no
+        longer the default: the tool needs the setup."""
         last = [e for e in read_events(self.cfg, feature) if e.get("kind") == "final_gates"]
         names = (last[-1].get("tool_failures") if last else None) or []
         asked = "\n".join(self.open_questions(feature))
         out = self.cfg.paths.out
-        lines = [
-            f"{name}: the tool gave no result, so this check says nothing about the code or "
-            f"the tests (its output: {out}/{feature}/final_gates.md). Run the final checks "
-            "again? Options: yes, run them again; no, finish without this check (approve as "
-            "is). Default: yes, run them again."
-            for name in names
-            if f"] {name}: the tool gave no result" not in asked
-        ]
+        lines = []
+        for name in names:
+            again = len(last) > 1 and name in (last[-2].get("tool_failures") or [])
+            head = f"{name}: the tool gave no result" + (" again" if again else "")
+            if f"] {head}," in asked:
+                continue
+            what = f"{head}, so this check says nothing about the code or the tests (its " + (
+                f"output: {out}/{feature}/final_gates.md). "
+            )
+            if again:
+                what += (
+                    "Options: finish without this check (approve as is); repair the tool with "
+                    "/framegate:setup, then run the final checks again. Default: finish "
+                    "without this check."
+                )
+            else:
+                what += (
+                    "Run the final checks again? Options: yes, run them again; no, finish "
+                    "without this check (approve as is). Default: yes, run them again."
+                )
+            lines.append(what)
         if not lines:
             return
         with open(self.fdir(feature) / "open_questions.md", "a", encoding="utf-8") as fh:
@@ -3069,6 +3268,7 @@ class Orchestrator:
             feature_mode(self.cfg, feature),
             parse_causes(steps.read_text(encoding="utf-8") if steps.is_file() else ""),
             followup.facts_lines(self.cfg, feature),
+            unrunnable.facts_lines(self.cfg),
         )
         (d / "final_facts.md").write_text(facts, encoding="utf-8")
 
@@ -3210,10 +3410,12 @@ class Orchestrator:
         if self.spec_diff(feature):
             state += "; spec changed from your answers (diff in final_summary.md)"
         rating = self.assess_risk(feature, prog)
-        if rating.low and self.cfg.final_gate == "auto":
+        if rating.auto and self.cfg.final_gate == "auto":
             self.auto_approve_final(feature, prog)
             return
         state += f"; risk {rating.level}"
+        if rating.not_measured:
+            state += f"; not measured (the tool cannot run here): {', '.join(rating.not_measured)}"
         d = self.fdir(feature)
         self.pause(
             feature,
@@ -3373,7 +3575,13 @@ class Orchestrator:
 
     def drop_spec_update_tag(self, feature: str) -> None:
         """A new spec approval restarts from the tests: the answer tags of the old one go."""
-        for tag in (f"spec-update/{feature}", tests_update_tag(feature), knowledge_tag(feature)):
+        tags = (
+            f"spec-update/{feature}",
+            tests_update_tag(feature),
+            knowledge_tag(feature),
+            config_update_tag(feature),
+        )
+        for tag in tags:
             if tag_exists(self.cfg, tag):
                 delete_marker(self.cfg, tag)
 
@@ -3390,8 +3598,19 @@ class Orchestrator:
         (d / "spec_update.md").unlink(missing_ok=True)
         before = self.defined_ids(feature)
         task = self.task_text("SPEC_UPDATE", feature, ref=ref, gate=gate)
+        # a parked diagnosis whose fix is a framegate.toml change: the updater proposes the
+        # new file, framegate puts it in place (redo.apply_config_update)
+        config_fix = any(r.get("owner") == "config" for r in prog.get("redo") or [])
+        proposal = d / redos.CONFIG_UPDATE_FILE
+        proposal.unlink(missing_ok=True)
+        if config_fix:
+            task += CONFIG_FIX_NOTE.format(
+                **self.placeholders(feature), config=CONFIG_FILE, file=redos.CONFIG_UPDATE_FILE
+            )
         self.agent("SPEC_UPDATE", feature, prog, task, role="spec_update")
         self.collect_questions(feature, "SPEC_UPDATE", "spec updater")
+        config_notes = self.apply_config_fix(feature, prog, ref) if config_fix else []
+        proposal.unlink(missing_ok=True)  # written without an approved config fix: not used
         stray = self.revert_spec_strays(allowed)
         after = self.defined_ids(feature)
         lost = sorted(before - after)
@@ -3442,6 +3661,7 @@ class Orchestrator:
             notes.append(f"{ref}: the changes are not marked with '{ref}'")
         if gate == "final" and new_ids:
             notes.append(f"{ref}: new IDs get their tests from the test writer next")
+        notes += config_notes
         prog["spec_update_notes"] = [*(prog.get("spec_update_notes") or []), *notes]
         log_event(
             self.cfg,
@@ -3477,8 +3697,77 @@ class Orchestrator:
         )
         save_progress(self.cfg, feature, prog)
 
+    def apply_config_fix(self, feature: str, prog: dict[str, Any], ref: str) -> list[str]:
+        """An approved diagnosis with `Fix owner: config`: the spec updater's proposed
+        framegate.toml is checked and put in place (redo.apply_config_update), and the run
+        goes on with the new config. Refused because it weakens a check: its work is not
+        redone (redo_pointless parks it again as setup work), unless the answer said more
+        than "approved". Returns the notes for the next gate."""
+        fresh, notes, changes = redos.apply_config_update(self.cfg, feature, ref)
+        done = fresh is not None
+        log_event(
+            self.cfg,
+            feature,
+            "config_update",
+            ref=ref,
+            applied=done,
+            changes=changes if done else [],
+            refused=[] if done else changes,
+        )
+        if fresh is not None:
+            self.cfg = fresh
+            self.adapter = get_adapter(fresh)
+            self._claude = None
+            return notes
+        for r in prog.get("redo") or []:
+            if changes and r.get("owner") == "config" and not r.get("force_redo"):
+                r.update(owner="setup", refused="; ".join(changes))
+        return notes
+
+    def redo_pointless(
+        self, feature: str, prog: dict[str, Any], redo: list[dict[str, Any]], item: dict[str, Any]
+    ) -> bool:
+        """A redo of work no implementer run can finish, with a bare approval as the answer,
+        while nothing the approved fix could have changed is different (redo.gate_inputs),
+        or after framegate refused the approved config change: the same checks would fail
+        the same way. It parks again at once, with what is
+        missing as its question, and costs no agent run. Seen live: three such redos, each a
+        full cycle of failed attempts and a second diagnosis that found the same thing."""
+        if not redo or any(r.get("force_redo") for r in redo):
+            return False
+        now = redos.gate_inputs(self.cfg, feature)
+        # an approved config fix that framegate refused: nothing changed, whatever git says
+        refused = next((str(r["refused"]) for r in redo if r.get("refused")), "")
+        if not refused and (not now or any(r.get("inputs") != now for r in redo)):
+            return False
+        first = redo[0]
+        asked = str(first.get("asked") or first.get("question") or first.get("reason") or "")
+        if refused:  # what the diagnosis found stays, the offer to approve its fix goes
+            found = asked.partition("\n")[2]
+            asked = redos.NEEDS_SETUP.format(why="framegate refused the change", what=refused)
+            asked += f"\n{found}" if found else ""
+        rec = dict(item, inputs=now, asked=asked)
+        if first.get("owner"):
+            rec["owner"] = first["owner"]
+        setup = first.get("owner") == "setup"  # its question already says what is missing
+        self.park(
+            feature,
+            prog,
+            rec,
+            "not redone: " + ("it needs the setup" if setup else "nothing changed since it parked"),
+            attempts=0,
+            question=asked if setup else redos.UNCHANGED.format(config=CONFIG_FILE, question=asked),
+            failed=list(first.get("failed") or []),
+        )
+        log_event(
+            self.cfg, feature, "redo_result", label=item["label"], passed=False, unchanged=True
+        )
+        prog["redo"] = [r for r in prog.get("redo") or [] if r not in redo]
+        save_progress(self.cfg, feature, prog)
+        return True
+
     # ---------- RETRO ----------
-    def write_retro_input(self, feature: str) -> list[str]:
+    def write_retro_input(self, feature: str, stopped: str = "") -> list[str]:
         """{out}/{f}/retro_input.md; returns the item IDs the proposals must address."""
         d = self.fdir(feature)
         review = d / "review.md"
@@ -3490,6 +3779,7 @@ class Orchestrator:
             notes,
             self.assumptions(feature),
             archive.read_text(encoding="utf-8") if archive.is_file() else "",
+            stopped,
         )
         # what earlier retros proposed: the retro names a problem it sees again
         earlier = backlog.retro_section(self.cfg)
@@ -3501,8 +3791,56 @@ class Orchestrator:
         f = self.fdir(feature) / "retro_proposals.md"
         return missing_ids(f.read_text(encoding="utf-8") if f.is_file() else "", ids)
 
-    def phase_retro(self, feature: str, prog: dict[str, Any]) -> None:
-        ids = self.write_retro_input(feature)
+    def stopped_text(self, feature: str, prog: dict[str, Any]) -> str:
+        """Where a run that did not reach DONE stands and why, for the retro."""
+        w, i = prog.get("waiting") or {}, prog.get("interrupted") or {}
+        why = (
+            f"it waits at the {w.get('gate')} gate, not decided"
+            if w.get("kind") == "gate"
+            else f"interrupted ({i.get('how')})"
+            if i
+            else "no run is active; the last progress lines say what ended it"
+        )
+        where = " / ".join(str(x) for x in (prog.get("phase"), prog.get("sub")) if x)
+        log = self.fdir(feature) / PROGRESS_LOG
+        text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
+        last = text.splitlines()[-8:]
+        return (
+            f"The run reached {where} of {' -> '.join(PHASES)}: {why}. "
+            f"Steps done: {len(prog.get('completed_steps') or [])}; parked items: "
+            f"{len(prog.get('parked') or [])}. Say in the proposals what stopped it and what "
+            "would have let it finish.\n\nLast progress lines:\n"
+            + ("\n".join(f"    {x}" for x in last) or "    (none)")
+        )
+
+    def retro(self, feature: str) -> int:
+        """`framegate retro`: the retro of a run that stopped before DONE (abandoned, a cap,
+        an error). Only retro_input.md and retro_proposals.md are written: no metrics row, no
+        commit, and progress.json is put back as it was."""
+        if not tag_exists(self.cfg, f"spec-approved/{feature}"):
+            raise WorkflowError(f"Spec not approved: nothing to look back on in {feature}.")
+        if load_progress(self.cfg, feature)["phase"] in ("RETRO", "DONE"):
+            raise WorkflowError(
+                f"{feature} passed the final gate: `framegate run {feature}` does the retro "
+                f"(after finish --no-retro: `framegate approve {feature}` first)."
+            )
+        self.take_run_lock(feature)
+        prog = load_progress(self.cfg, feature)  # after the lock: a stale one is recorded there
+        try:
+            with procs.stop_signals():
+                work = {**prog, "feedback": "", "attempt": 0}
+                self.retro_agent(feature, work, self.stopped_text(feature, prog))
+        except KeyboardInterrupt:
+            return EXIT_INTERRUPTED
+        finally:
+            save_progress(self.cfg, feature, prog)
+            clear_phase(self.cfg)
+            procs.remove_lock(self.cfg.out_dir)
+        self.echo(f"Retro proposals: {self.cfg.paths.out}/{feature}/retro_proposals.md")
+        return EXIT_OK
+
+    def retro_agent(self, feature: str, prog: dict[str, Any], stopped: str = "") -> None:
+        ids = self.write_retro_input(feature, stopped)
         self.agent("RETRO", feature, prog, self.task_text("RETRO", feature))
         missing = self.retro_missing(feature, ids)
         first = list(missing)
@@ -3533,6 +3871,9 @@ class Orchestrator:
                 f"WARNING: retro_proposals.md still doesn't address {', '.join(missing)} "
                 f"(see {self.cfg.paths.out}/{feature}/retro_input.md).",
             )
+
+    def phase_retro(self, feature: str, prog: dict[str, Any]) -> None:
+        self.retro_agent(feature, prog)
         prop = self.fdir(feature) / "retro_proposals.md"
         again = backlog.note_repeats(
             self.cfg, feature, prop.read_text(encoding="utf-8") if prop.is_file() else ""
@@ -3633,12 +3974,18 @@ class Orchestrator:
                 "Rename or delete that branch, or choose another feature name."
             )
         # machine files (tool state: .serena/, .vscode/, ...) are left out: git carries them
-        dirty = "\n".join(dirty_lines(self.cfg))
-        if dirty:
+        changed = dirty_lines(self.cfg)
+        if changed:
+            dirty = "\n".join(changed)
+            # seen in three of three replay runs: the setup left files uncommitted and the
+            # first `framegate spec` was refused without saying what to run
             raise WorkflowError(
                 f"Uncommitted changes to tracked files on {current}, before framegate "
                 f"switches to {name} (untracked files are fine). {DIRTY_CHOICES}\n"
-                f"{dirty[:1500]}"
+                f"{dirty[:1500]}\n"
+                "To commit them as they are, in one commit: "
+                + commit_command(changed, f"Changes before {feature}")
+                + f"\nThen run the command again: framegate spec {feature}"
             )
         if exists:
             switch_branch(self.cfg, name)
@@ -3853,21 +4200,22 @@ class Orchestrator:
         """[gates] regression_baseline: the tests that fail today, recorded once per feature
         (a second approve-spec keeps the first record: by then the feature's own work may be
         what fails)."""
-        path = self.cfg.feature_out(feature) / BASELINE_FILE
-        if not self.cfg.regression_baseline or path.is_file():
+        if not baseline_on(self.cfg, feature):
+            return
+        if (self.cfg.feature_out(feature) / BASELINE_FILE).is_file():
             return
         self.echo("Regression baseline: running the whole suite once (what fails today)...")
         count, problem = record_regression_baseline(self.adapter, feature)
         log_event(self.cfg, feature, "regression_baseline", failing=count, problem=problem)
         if problem:
             self.echo(
-                f"WARNING: no regression baseline recorded: {problem}. The final regression "
-                "check will fail on every red test; fix the run and approve the spec again."
+                f"WARNING: no regression baseline recorded: {problem}. The gates fail on "
+                "every red test; fix the run and approve the spec again."
             )
         else:
             self.echo(
-                f"Regression baseline: {count} test(s) already fail; the final regression check "
-                "fails only on other failures."
+                f"Regression baseline: {count} test(s) already fail; the step gates and "
+                "the final regression check fail only on other failures."
             )
 
     def status(self, feature: str) -> int:
@@ -4248,9 +4596,10 @@ class Orchestrator:
                         "gate": "final",
                         "ref": ref,
                         "then": {"phase": "REVIEW", "sub": "agent"},
-                        # a file-size answer needs the structure run even without a spec change
+                        # a file-size answer needs the structure run even without a spec
+                        # change, and "run them again" the final checks
                         "unchanged": {"phase": "REVIEW", "sub": "final"}
-                        if prog.get("structure_findings")
+                        if prog.get("structure_findings") or wants_rerun(items)
                         else {"phase": "SUMMARY", "sub": None},
                         "feedback": "",
                         "amend": True,
@@ -4284,6 +4633,13 @@ class Orchestrator:
                 parked=[p["label"] for p in parked],
                 **logged,
             )
+            # work no implementer run can finish (it kept the gate inputs when it parked): an
+            # answer that says more than "approved" is new information, its redo always runs;
+            # a bare approval is redone only when the approved change was made (redo_pointless)
+            by_n = {it["n"]: str(it.get("a") or "") for it in items}
+            for n, p in enumerate(parked, start=1):
+                if p.get("inputs") and redos.forces_redo(p, by_n.get(n, "")):
+                    p["force_redo"] = True
             steps = [p for p in parked if p.get("kind") == "step"]
             # provisional steps: IMPLEMENT settles them first (contested tests pass now, or the
             # provisional code is reverted and the step redone)

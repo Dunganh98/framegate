@@ -1,13 +1,14 @@
 ---
 name: setup
-description: Set up framegate in this repository - probe the project (interpreter, test / lint / format / type commands, folders, branch, remote), show one table of these facts for the user to confirm, write framegate.toml, the project knowledge file and the code map, check with framegate doctor, offer a smoke run. Run only when the user invokes it.
+description: Set up framegate in this repository - probe the project (interpreter, test / lint / format / type commands, folders, branch, remote), show one table of these facts for the user to confirm, write framegate.toml, the project knowledge file and the code map, check with framegate doctor, look once at what is red on the code as it is (failing tests, lint / format debt), commit the setup's files, offer a smoke run. Run only when the user invokes it.
 disable-model-invocation: true
 allowed-tools: Bash(framegate *) PowerShell(framegate *) Bash(uv tool install *) PowerShell(uv tool install *) Read Write Edit Glob Grep
 ---
 You set up framegate for this repository, once per project. The user is the manager: they
 confirm one table; you probe, read, write the files and run the `framegate` commands. Plain
-words, the decision first, details only on request. The whole setup takes a few minutes: do
-not run the project's tests or linters yourself, and do not study the code in depth. You never
+words, the decision first, details only on request. The whole setup takes a few minutes plus
+one run of the project's tests: do not run the project's tests or linters yourself (step 5's
+`framegate doctor --tree` runs them once), and do not study the code in depth. You never
 change the project's source or tests (one exception, step 3: a tagging helper the user
 approved).
 
@@ -22,8 +23,14 @@ then `framegate --version` again. If `uv` is missing or the install fails (no ac
 repository, no git), show the error and the two ways out, then stop: install uv
 (https://docs.astral.sh/uv/) and run the setup again, or clone the repository and run
 `uv tool install --editable <clone>`. An installed CLI of another version than 0.12.5 (this
-plugin's): run the same command with `--force` (the tool follows the plugin's version), then
-`framegate --version` again; say nothing when it worked, one line when it failed, and go on.
+plugin's): do not install over it yourself. The tool is one per machine, and a task in
+progress here or in another repository keeps the version it was started with. Run
+`framegate preflight --plugin-version 0.12.5` and act on its lines: `RUN: <command>`: run it
+(the tool follows the plugin's version), then `framegate --version` again; say nothing when
+it worked, one line when it failed, and go on. `KEPT: ...`: a task is in progress, the update
+waits until it is DONE; say so in one line and go on with the installed version. If the
+command fails with `invalid choice: 'preflight'` (a tool too old to have it), run the install
+command above with `--force`.
 
 Automatic updates (ask at most once per machine): read `~/.claude/plugins/known_marketplaces.json`.
 If its `framegate` entry has no `"autoUpdate": true`, ask in one line: "Keep framegate up to
@@ -213,19 +220,80 @@ files a spec phase may change.
 Row 11, `[env] refresh`: every spec approval runs it, so a package or source folder a feature
 adds in its spec phase imports in the run without a step by hand.
 
-## 5. Check: `framegate doctor --brief`
+## 5. Check: `framegate doctor --tree --brief`
 
 First `framegate install-tools` once more: with framegate.toml written it also installs the
 lint / format / type tools the gate commands name (ruff, mypy, black), which step 0 could not
-know yet. Then run `framegate doctor --brief`: a one-line verdict (ready / not ready), then
-only the failures and the warnings that need a decision. Fix every FAIL that is a config problem yourself and run
-it again until it says ready. Show the user the verdict line and, per remaining warning, one line
-with the decision and your default ("mutmut is not installed: mutation testing off until it is?
-Default: yes"). The full output (`framegate doctor`) on request; `framegate doctor --full` also
-times the whole test suite (the final regression run), offer it in one line.
+know yet. Then tell the user in one line that the whole test suite runs once now ("Checking
+the setup and running all tests once; on a large suite this takes a few minutes") and run
+`framegate doctor --tree --brief`: a one-line verdict (ready / not ready), then only the
+failures and the warnings that need a decision, then the lines of the tree check (below).
+Fix every FAIL that is a config problem yourself and run it again until it says ready. Show
+the user the verdict line and, per remaining warning, one line with the decision and your
+default. The
+full output (`framegate doctor --tree`) on request.
+
+### The tree as it is (once per project)
+
+A feature or a refactor starts on a green tree: what is red before any task is found and
+handled here, not blamed on the first task. The command ran the whole suite and the lint /
+format / type checks once; you run nothing yourself. Go by the prefix of its lines:
+
+- `PROBLEM: N test(s) fail on the untouched tree and are not listed:` and one line per test
+  (name | first line of the failure). The verdict is "not ready" while one is left: every
+  red test ends as made to run, or listed with a reason after the user's OK. Sort them,
+  from those lines and what you read in step 1 (a failure you cannot place: read the test
+  file, do not run it): **only lacks a package** (install it: a workflow tool, `framegate
+  install-tools` did that; a dependency of the project, name the command for the user),
+  **cannot run on this machine** (a database, a service, a network address, a licence,
+  another operating system) and **red before any task** (the machine runs it and it
+  fails: a placeholder, a known bug; the project's own debt). Show them in one message and
+  ask once:
+
+      **3 tests fail on the code as it is**
+      I would list them; every check then leaves them out, and every final summary names
+      them with the reason:
+      1. tests/test_db.py (2 tests): needs a PostgreSQL server (connection refused, localhost:5432)
+      2. tests/test_price.py::test_rounding: red before any task: AssertionError: 10.01 != 10.0
+      Reply "ok", or the number and the change ("2: I fix it first").
+
+  After the answer write the confirmed entries to framegate.toml. `test` names the file:
+  `tests/db/test_x.py::test_connect`, or the whole file when all its tests fail for the same
+  reason (a bare test name is refused). The reason of a debt entry starts with "red before
+  any task:":
+
+      [gates]
+      unrunnable_tests = [
+        { test = "tests/test_db.py", reason = "needs a PostgreSQL server" },
+        { test = "tests/test_price.py::test_rounding", reason = "red before any task: rounding bug" },
+      ]
+
+  Never write an entry the user did not confirm; a test the user wants fixed first stays
+  unlisted, and the setup stays not ready until it is green. Then run `framegate doctor
+  --tree --brief` again: the entries show as `LISTED:` lines.
+- `LISTED:` lines: name the listed tests once in your summary. Under them, a `->` line
+  counts the debt entries: suggest one task for them, with a name ("2 tests were red
+  before any task; fix them when you like: `/framegate:bugfix rounding`").
+- `PROBLEM: the whole suite did not run to the end` or `gave no per-test results`: nothing
+  is known about the tests. Fix the test command (row 3) or `[gates] regression_timeout`
+  and run the check again.
+- `DEBT:` lines (a lint / format / type / imports check fails on the code as it is): report
+  the size in one line and propose ONE clean-up task, to accept or skip: "Lint: 353 lines
+  in 41 files, format: 12 files. Clean this up in one task after the setup:
+  `/framegate:refactor cleanup-lint`? You can skip it: a task formats the files it touches
+  anyway, the other files stay as they are." No question per file, no list of files.
+- `MUTATION:` (the mutation tool cannot run here: doctor's tool check, or its trial of a few
+  seconds failed, e.g. the tests import the code under other names than mutmut gives it):
+  decide it here. The setup is not ready before. Make it run (the fix the line names; WSL: the default distribution is
+  tried first, then the others), or ask once: "Mutation testing cannot run here: <reason>.
+  Switch it off for this project?" On yes write `mutation_tool = "none"` under `[gates]` in
+  framegate.toml: off on purpose is no risk and no stop at the final gate.
+- `Tree: green.`: say so in one line.
+
+### The state branch (after the tree is settled)
 
 With `[git] state_branch` set, doctor warns that the state branch is missing until this
-last step, done once every other point is settled (a later edit of these files in this
+last step, done once every other point is settled, the `unrunnable_tests` entries included (a later edit of these files in this
 checkout would no longer match the branch): run `framegate state init`. It creates the
 state branch from framegate's files in this checkout and pushes nothing. Its result in one
 line. From here on the files are changed on a feature branch only.
@@ -247,11 +315,23 @@ base branch and delete the branch `feat/smoke` (with a state branch: the branch 
 
 ## 7. Finish
 
-With `[git] state_branch` set, say in two or three lines: framegate's files are on the state
-branch (step 5) and nothing of them is to be committed on the base; the first `framegate
-publish` (offered at the end of a feature) pushes that branch; and the allow rules below.
-Else, in two or three lines: what to commit (framegate.toml, `.framegate/project.md`, the code map,
-`specs/_template/`, `.gitignore`, a tag helper if added) and that the chat skills need the CLI
-allowed: `"Bash(framegate *)"` and `"PowerShell(framegate *)"` in `permissions.allow` of
-`.claude/settings.local.json` (`framegate doctor` warns while they are missing; offer to add
-them, and write the file only on a yes). Do not commit or push yourself.
+The chat skills need the CLI allowed: `"Bash(framegate *)"` and `"PowerShell(framegate *)"`
+in `permissions.allow` of `.claude/settings.local.json` (`framegate doctor` warns while they
+are missing; offer to add them, and write the file only on a yes).
+
+Then the setup's own commit, so the first task does not start on uncommitted files (`framegate
+spec` refuses those). Run `framegate commit-setup --dry-run` (with the path of a tag helper
+if you added one: `framegate commit-setup --dry-run tests/tagging.py`). It lists what the
+setup wrote and nobody committed: framegate.toml, `.framegate/project.md`, the code map,
+`specs/_template/`, `.gitignore`, a changed packaging or test config file (the `req` marker
+line). "Setup files: nothing to commit.": go on without a word. Else show the list in one
+line and ask: "Commit these setup files now, in one commit of their own? (default: yes)".
+On yes run `framegate commit-setup` with the same paths and report its result in one line;
+it commits only these files, on the current branch, and pushes nothing. On no: say in one
+line that `framegate spec` will refuse while a tracked one of them is uncommitted, and that
+the refusal prints the command to run. Never run git yourself, and do not push.
+
+With `[git] state_branch` set, framegate's own files are on the state branch (step 5) and
+are never committed on the base: `commit-setup` then lists only the product-side files (the
+`req` marker line), if any. Say in one line that the first `framegate publish` (offered at
+the end of a feature) pushes the state branch.
