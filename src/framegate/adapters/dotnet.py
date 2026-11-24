@@ -38,6 +38,7 @@ from framegate.adapters.base import (
     not_measured,
     parse_junit,
     run_command,
+    without_moved,
 )
 from framegate.config import GATE_COMMAND_KEYS, ConfigError
 
@@ -963,7 +964,7 @@ class DotnetAdapter(LanguageAdapter):
             parts.append(class_filter(classes))
         return combine_filters("|".join(parts), base)
 
-    def regression_run(self) -> TestRun:
+    def regression_run(self, skip: Sequence[str] = ()) -> TestRun:
         return self._dotnet_test(
             self.settings.final_filter, "regression", timeout=self.cfg.regression_timeout
         )
@@ -1117,18 +1118,19 @@ class DotnetAdapter(LanguageAdapter):
                 if cover_tests:  # diff coverage is about the source files only
                     tests = self.cfg.paths.tests.rstrip("/") + "/"
                     cobertura_without(dst, dst, self.root, tests)
-                normalized.append(str(dst))
+                normalized.append(dst)
+            normalized, moved = without_moved(self.cfg, base_ref, normalized, cov_dir)
             code, out = run_command(
                 [
                     *tool,
-                    *normalized,
+                    *map(str, normalized),
                     f"--compare-branch={base_ref}",
                     f"--fail-under={self.cfg.diff_coverage}",
                 ],
                 self.root,
                 timeout=self.settings.build_timeout,
             )
-            summary = diff_coverage_summary(out, self.cfg.diff_coverage)
+            summary = diff_coverage_summary(out, self.cfg.diff_coverage, moved)
             return CheckResult("PASS" if code == 0 else "FAIL", out, summary=summary)
 
         return [

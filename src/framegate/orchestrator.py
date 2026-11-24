@@ -53,6 +53,7 @@ from framegate.checks import (
     plan_files,
     scope_coverage,
     spec_lint,
+    test_lint,
     test_smells,
     traceability,
 )
@@ -244,6 +245,11 @@ KNOWLEDGE_ROLES = {
     "retro",
 }
 KNOWLEDGE_MAX_LINES = 300
+EVIDENCE_RULE = (
+    "# Evidence\n\nThe code (and the build and test files) is the truth; the spec and the docs "
+    "say what is intended. A comment or docstring is no evidence of what the code does: read "
+    "the code. Write as few comments as possible.\n"
+)
 #: failed final checks one automatic repair may fix before the human sees them (by the start
 #: of the check's name): the implementer owns the first group, the test writer the second
 FINAL_SRC_CHECKS = (*GATE_NAMES.values(), "regression", "coverage run", "full test suite")
@@ -253,6 +259,15 @@ WHOLE_SUITE_CHECKS = ("regression", "full test suite")
 FIX_OWNER_RE = re.compile(r"^\W*Fix owner\W*:\W*(src|tests|spec|config|setup)\b", re.I | re.M)
 #: fix owners no implementer attempt can serve: the work parks, the proposal is its question
 PARKING_OWNERS = ("tests", "spec", "config", "setup")
+SPLIT_RE = re.compile(
+    r"\b(split|move|extract|break (it )?up|into (two|three|separate)|one file (each|per))\b", re.I
+)
+#: the gate question of a step parked on checks only another role can fix (seen live: the
+#: default "ok" redid the step unchanged, and it parked again)
+UNFIXABLE_QUESTION = {
+    "tests": "Default: the test writer fixes the failing checks in its test files (named "
+    "above), then the step is redone. Never 'ok' without saying who fixes them.",
+}
 #: a park request (or diagnosis) saying only the frozen tests are wrong, and which ones
 TESTS_WRONG_RE = re.compile(r"^\W*Park kind\W*:\W*tests[ -]wrong\b", re.I | re.M)
 CONTESTED_RE = re.compile(r"^\W*Contested tests\W*:\s*(.+)$", re.I | re.M)
@@ -766,7 +781,7 @@ class Orchestrator:
         return text
 
     def role_text(self, role: str, feature: str) -> str:
-        text = package_text("roles", f"{role}.md")
+        text = package_text("roles", f"{role}.md").rstrip() + "\n\n" + EVIDENCE_RULE
         if self.cfg.roles_extra_dir:
             folder = self.cfg.root / self.cfg.roles_extra_dir
             extra = folder / f"{role}.md"
@@ -1531,12 +1546,14 @@ class Orchestrator:
                 return True
             unfixable = self.unfixable(rep)
             if unfixable:
+                owner = self.unfixable_owner(rep)
                 self.park(
                     feature,
                     prog,
-                    self.not_the_implementers(feature, item),
+                    self.not_the_implementers(feature, item, owner),
                     f"unfixable in IMPLEMENT: {unfixable}",
                     attempts=attempt,
+                    question=UNFIXABLE_QUESTION.get(owner, ""),
                     failed=rep.failed,
                     excerpt=rep.excerpt(),
                 )
@@ -1719,6 +1736,17 @@ class Orchestrator:
                 else f"{name} fails only in files it may not edit: {', '.join(sorted(paths))}"
             )
         return "; ".join(parts)
+
+    def unfixable_owner(self, rep: Any) -> str:
+        """ "tests" when every file the failing checks name is a test file."""
+        paths = set().union(
+            *(
+                self.failure_paths(rep.full_outputs.get(n) or rep.outputs.get(n, ""))
+                for n in rep.failed
+            )
+        )
+        folders = [f.rstrip("/") + "/" for f in (self.cfg.paths.tests, self.cfg.paths.review_tests)]
+        return "tests" if paths and all(path_matches(p, folders) for p in paths) else ""
 
     def failure_paths(self, text: str) -> set[str]:
         """Repository files (posix, relative) named in a check's output."""
@@ -2181,6 +2209,7 @@ class Orchestrator:
             (baseline.name(mode), baseline),
             ("Traceability", traceability),
             ("Test smells", test_smells),
+            ("Lint (the tests' own lines)", test_lint),
         ]:
             res = mod.check(self.adapter, feature)
             status[name] = res.status
@@ -3074,10 +3103,53 @@ class Orchestrator:
         text = review.read_text(encoding="utf-8") if review.is_file() else ""
         pending = list(prog.get("structure_findings") or [])
         found = [x for x in section_bullets(text, "Structure findings") if x not in pending]
+        later = {x: big for x in found if (big := self.oversized_before(feature, x))}
+        if later:
+            self.ask_split_later(feature, later)
+            found = [x for x in found if x not in later]
         if found:  # (a resumed review run must not add the same findings twice)
             prog["structure_findings"] = [*pending, *found]
             log_event(self.cfg, feature, "structure_findings", findings=found)
             save_progress(self.cfg, feature, prog)
+
+    def oversized_before(self, feature: str, finding: str) -> tuple[str, int] | None:
+        """A finding that splits or moves code out of a source file that was over [gates]
+        max_file_lines before this feature: (that file, its lines then). Seen live: a one-line
+        bug fix split a 598-line file at review; the moved code then failed diff coverage."""
+        if not SPLIT_RE.search(finding):
+            return None
+        limit = self.cfg.max_file_lines
+        for rel in plan_files.named_files(finding):
+            if not self.cfg.in_src(rel):
+                continue
+            try:
+                old = git(self.cfg, "show", f"spec-approved/{feature}:{rel}")
+            except GitError:
+                continue
+            n = len(old.splitlines())
+            if n > limit:
+                return rel, n
+        return None
+
+    def ask_split_later(self, feature: str, later: dict[str, tuple[str, int]]) -> None:
+        """The final-gate question for each such finding, with the default "later"."""
+        lines = [
+            f"{rel} had {n} lines before this feature (limit {self.cfg.max_file_lines}); the "
+            f"reviewer proposes: {finding.strip()} Split it now? Default: leave it for a later "
+            "cleanup (this task does not split a file that was already too big)."
+            for finding, (rel, n) in later.items()
+        ]
+        with open(self.fdir(feature) / "open_questions.md", "a", encoding="utf-8") as fh:
+            for q in lines:
+                fh.write(f"- [{STRUCTURE_WHO}] {q}\n")
+        log_event(
+            self.cfg,
+            feature,
+            "questions",
+            phase="REVIEW",
+            who=STRUCTURE_WHO,
+            questions="\n".join(lines),
+        )
 
     def fix_structure(self, feature: str, prog: dict[str, Any]) -> None:
         """One implementer item (with attempts) that restructures the code as the pending

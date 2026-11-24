@@ -147,8 +147,9 @@ def test_probe_before_the_config_exists(fake_tools: FakeTools) -> None:
         "Types: python -m mypy orchestrator runner [MISSING] "
         "(framegate's default: the project's files do not name it)"
     ) in out
-    assert "Source folders: orchestrator, runner (guessed from the folders)" in out
-    assert "Test folder: tests (guessed from the folders)" in out
+    guessed = "(guessed from the folders: run `framegate survey`)"
+    assert f"Source folders: orchestrator, runner {guessed}" in out
+    assert f"Test folder: tests {guessed}" in out
     assert "Base branch: main (a branch of that name; origin/HEAD is not set)" in out
     assert "Remote: origin on Azure DevOps, https://dev.azure.com/org/proj/_git/argos; 1 " in out
     assert "State branch: off; suggested: no (a remote, one author address)" in out

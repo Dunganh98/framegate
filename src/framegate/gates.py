@@ -32,7 +32,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from framegate import red_tree, references, task_base, unrunnable
+from framegate import red_tree, references, suite_run, task_base, unrunnable
 from framegate.adapters.base import (
     NOT_MEASURED,
     Check,
@@ -151,8 +151,7 @@ def record_regression_baseline(adapter: LanguageAdapter, feature: str) -> tuple[
     """[gates] regression_baseline: run the whole suite once (as the final regression check
     does) and record the tests that fail today. Returns (number recorded, problem); with a
     problem ("" = fine) nothing is recorded and the final check stays strict."""
-    # a test this machine cannot run is left out by its own list, in every mode
-    run, _ = unrunnable.leave_out(adapter.cfg, adapter.regression_run())
+    run, _ = unrunnable.leave_out(adapter.cfg, suite_run.whole_suite(adapter))
     if run.incomplete:
         return 0, f"the suite run was cut short ({run.incomplete})"
     if run.status == "passed":
@@ -280,7 +279,7 @@ def regression_expecting(
     the spec was approved / tests this machine cannot run ([gates] unrunnable_tests): their
     failures are expected (counted, not failing); any other failure fails the check."""
     names, problem = parked_test_names(adapter, exp)
-    run, off = unrunnable.leave_out(adapter.cfg, adapter.regression_run())
+    run, off = unrunnable.leave_out(adapter.cfg, suite_run.whole_suite(adapter))
     res = unrunnable.noted(tests_expecting(run, exp, names, known), off)
     if problem and res.status == "FAIL":
         res.output += f"\n({problem})"

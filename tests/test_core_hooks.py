@@ -35,6 +35,8 @@ def test_parse_junit_messages(tmp_path: pathlib.Path) -> None:
         '<testcase classname="A" name="bad"><failure message="boom">trace</failure></testcase>'
         '<testcase classname="A" name="err"><error message="E"/></testcase>'
         '<testcase name="sk"><skipped message="why"/></testcase>'
+        '<testcase classname="" name="tests.test_spark">'
+        '<skipped message="collection skipped">windows</skipped></testcase>'
         "</testsuite></testsuites>",
         encoding="utf-8",
     )

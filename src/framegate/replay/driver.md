@@ -50,9 +50,11 @@ your folder:
 
 ## The stages
 
-1. **Setup.** Message: `{{setup}}` (exactly this text). Then answer by the policy until the setup says it is
-   done (framegate.toml, `.framegate/project.md`, the code map, doctor verdict). When it says
-   so, run `framegate commit-setup --dry-run`:
+1. **Setup.** Send `setup.txt` (`--file setup.txt`, the first message of the session). Then
+   answer by the policy until the setup says it is done (framegate.toml,
+   `.framegate/project.md`, the code map, doctor verdict). The setup itself asks whether to
+   commit its files: yes (and no to the smoke run, if asked in the same turn). After that
+   answer, run `framegate commit-setup --dry-run`:
    - `Setup files: nothing to commit.`: the tree counts as clean. Go on.
    - it lists files: log them (a finding), tell the chat `Commit the setup files now.` and
      check again.

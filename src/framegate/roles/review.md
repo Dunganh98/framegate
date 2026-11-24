@@ -29,8 +29,9 @@ the source files this feature changed (the whole file, not only the diff) agains
   (e.g. a model and the calculators that review its results), is a finding;
 - names from the domain (the spec's words), not technical filler (`Helper`, `Manager`, `Util`,
   `Data2`);
-- every public type and method has a one-line doc comment that says what it is for (in words,
-  not only spec IDs);
+- comments: few; a comment or docstring that restates the code, or says something the code
+  does not do, is a finding (the code is the truth, a comment is no evidence of behavior);
+  a missing doc comment is never a finding;
 - no single-use interfaces or abstractions for a future that the spec does not name;
 - no dead defensive branches (checks for states the code cannot reach);
 - not fragmented either: no one-method helper classes, no splitting that makes the reader jump

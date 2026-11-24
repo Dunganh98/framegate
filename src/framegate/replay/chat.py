@@ -26,26 +26,10 @@ from typing import Any
 
 from framegate import procs
 
-#: what the chat may do without asking (the plugin's skills call framegate, git and python;
-#: the setup collects tests and filters output). Never push, gh or az: sandbox.BLOCKED.
-ALLOWED = [
-    *(
-        f"{tool}({cmd} *)"
-        for cmd in ("framegate", "git", "python", "uv", "pytest", "*python* -m pytest")
-        for tool in ("Bash", "PowerShell")
-    ),
-    "Bash(.venv/Scripts/python* *)",
-    "Bash(.venv/bin/python* *)",
-    "PowerShell(.venv\\Scripts\\python* *)",
-    "PowerShell(.\\.venv\\Scripts\\python* *)",
-    "PowerShell(& *python* *)",
-    *(f"PowerShell({cmd} *)" for cmd in ("Select-Object", "Select-String", "Measure-Object")),
-    *("Read", "Write", "Edit", "Glob", "Grep", "Monitor"),
-    # no prompts: nobody answers them in a replay. What keeps the chat in the sandbox is the
-    # sandbox's settings: deny rules and the guard hook (sandbox.write_deny, guard.py)
-    "Bash",
-    "PowerShell",
-]
+#: what the chat may do without asking: everything, since nobody answers a prompt in a
+#: replay. What keeps the chat in the sandbox is the sandbox's settings: deny rules and the
+#: guard hook (sandbox.write_deny, guard.py)
+ALLOWED = ["Bash", "PowerShell", "Read", "Write", "Edit", "Glob", "Grep", "Monitor"]
 #: `--wait` without a number: under the 10 minutes a tool call of the driver may take
 WAIT_SECONDS = 540.0
 STILL_RUNNING = 3
@@ -65,7 +49,8 @@ def command(
     """The call and its stdin. A slash command must be the argument; any other text goes
     through stdin, which keeps many lines and quotes whole on every platform."""
     cmd = [exe, "-p", "--output-format", "json", "--permission-mode", "acceptEdits"]
-    cmd += ["--allowedTools", ",".join([*ALLOWED, *allow])]
+    # no MCP servers of the user's config: they start with every call and the chat may not use them
+    cmd += ["--strict-mcp-config", "--allowedTools", ",".join([*ALLOWED, *allow])]
     if resume:
         cmd += ["--resume", resume]
     if plugin := os.environ.get("FRAMEGATE_REPLAY_PLUGIN"):  # a plugin folder under test

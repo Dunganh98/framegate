@@ -242,3 +242,17 @@ def test_code_map_lists_missing_public_types(demo_repo: DemoRepo) -> None:
     to_final_gate(r)
     assert r.progress()["code_map"] == {"exists": True, "updated": True, "missing": ["Shot"]}
     assert "demo: code map" in git(r.root, "log", "--format=%s", "-5")
+
+
+def test_a_split_of_a_file_that_was_too_big_before_is_asked_not_done(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    r.add_toml(FAST)
+    r.set_toml("gates", "max_file_lines", "2")
+    r.scenario(structure=True)
+    to_final_gate(r)
+    prompts = [c["prompt"] for c in r.calls()]
+    assert not [p for p in prompts if "restructure the code without changing its behavior" in p]
+    oq = (r.root / "out/demo/open_questions.md").read_text(encoding="utf-8")
+    assert "- [structure report] src/demo/__init__.py had " in oq
+    assert "lines before this feature (limit 2); the reviewer proposes: " in oq
+    assert "Default: leave it for a later cleanup" in oq

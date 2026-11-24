@@ -7,7 +7,7 @@ import pathlib
 import pytest
 
 from conftest import DemoRepo, git
-from framegate import doctor, gates, scaffold, tree_check, unrunnable
+from framegate import doctor, gates, known_red, scaffold, suite_run, tree_check, unrunnable
 from framegate.adapters import get_adapter
 from framegate.adapters.base import CheckResult, TestCase, TestRun
 from framegate.config import ConfigError, load_config, parse_config
@@ -206,6 +206,28 @@ def test_setup_says_what_is_red_on_the_untouched_tree(demo_repo: DemoRepo) -> No
     assert not any(x.startswith("DEBT:") for x in tree)
 
 
+def test_listed_tests_red_here_are_not_run_again_and_a_suite_result_is_reused(
+    demo_repo: DemoRepo,
+) -> None:
+    r = demo_repo
+    (r.root / "tests" / "test_db.py").write_text(DB_TESTS, encoding="utf-8")
+    r.set_toml("gates", "unrunnable_tests", LISTED)
+    doctor_tree(r)
+    adapter = get_adapter(load_config(r.root))
+    assert known_red.entries(adapter.cfg) == ["tests/test_db.py"]
+
+    def names(run: TestRun) -> str:
+        return " ".join(c.name for c in run.cases or [])
+
+    same = suite_run.whole_suite(adapter)
+    assert same.output.startswith("(the result of an earlier run") and "test_db" not in names(same)
+    (r.root / "tests" / "test_new.py").write_text("def test_new() -> None:\n    assert 1\n")
+    fresh = suite_run.whole_suite(adapter)
+    assert "earlier run" not in fresh.output and fresh.status == "passed"
+    assert "test_new" in names(fresh) and "test_db" not in names(fresh)
+    assert "test_db" in names(suite_run.whole_suite(adapter, skip_known_red=False))
+
+
 def test_the_tree_lines_for_a_suite_without_a_result_and_a_stale_entry(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -233,10 +255,13 @@ def test_the_tree_lines_for_a_suite_without_a_result_and_a_stale_entry(
     assert seen.status == "FAIL" and "gave no per-test results" in seen.lines[0]
     seen = tree_check.suite(adapter, TestRun("no_tests", 5, "", []))
     assert (seen.status, seen.lines[0]) == ("WARN", "TESTS: none yet.")
-    # more failing tests than fit: the rest is counted
+    # more failing tests than fit: all of them in a file
     many = _run(*[(f"tests.test_x::test_{n}", "failed") for n in range(40)])
     lines = tree_check.suite(adapter, many).lines
-    assert "  ... and 10 more" in lines and "  tests.test_x::test_0 | boom" in lines
+    assert "  ... and 10 more: all 40 in out/doctor/red_tests.txt" in lines
+    assert "  tests.test_x::test_0 | boom" in lines
+    listed = (cfg.out_dir / "doctor" / "red_tests.txt").read_text("utf-8").splitlines()
+    assert len(listed) == 40 and listed[-1] == "tests.test_x::test_39 | boom"
 
 
 def test_a_mutation_tool_that_cannot_run_here_is_one_line() -> None:

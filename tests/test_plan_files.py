@@ -53,6 +53,19 @@ def test_what_counts_as_a_documentation_file(demo_repo: DemoRepo) -> None:
     assert [rel for rel in DOCS + NOT_DOCS if plan_files.is_doc_file(adapter, rel)] == list(DOCS)
 
 
+def test_a_step_that_changes_code_outside_the_source_folders_is_refused(
+    demo_repo: DemoRepo,
+) -> None:
+    r = demo_repo
+    (r.root / "tools").mkdir()
+    (r.root / "tools" / "ingest.py").write_text("X = 1\n", encoding="utf-8")
+    adapter = get_adapter(load_config(r.root))
+    plan = PLAN2 + "Read naive timestamps in `tools/ingest.py`; tests in tests/test_calc.py.\n"
+    (found,) = plan_files.outside_problems(adapter, plan)
+    assert found.startswith("plan.md step 2 changes tools/ingest.py") and "Add tools" in found
+    assert plan_files.outside_problems(adapter, PLAN2 + "Also docs/guide.md.\n") == []
+
+
 def test_only_the_docs_a_step_names_become_writable_and_the_approval_freezes_them(
     demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -26,3 +26,6 @@ Standing decisions of the user, one line each. Details: docs/AGENTIC_WORKFLOW_SE
 22. Replay: the user writes the candidates file; caps 25 USD and 3 hours per candidate; chat and driver on Sonnet (2026-11-17).
 23. A replay never affects anything outside its run folder: deny rules and a guard hook, no prompts (2026-11-17).
 24. Setup settles mutation with a trial of seconds: it runs, or the user switches it off (2026-11-17).
+25. Code is the truth, docs are the plan, comments are no evidence; agents write few comments (2026-11-18).
+26. Setup maps the folders with an agent (`framegate survey`), checked mechanically: every code file accounted for (2026-11-18).
+27. A listed test that fails on this machine is not run here again; the summary offers a follow-up task, default skip (2026-11-18).

@@ -28,7 +28,8 @@ You are the IMPLEMENTER for one or more plan steps (or for the review fixes).
   signatures stay as design.md says.
 - Write code a human can follow at the level of classes: one concept per file (a file over
   ~{max_file_lines} lines or mixing two concepts gets split), names from the spec's domain
-  words, a one-line doc comment on every public type and method saying what it is for, no
+  words, as few comments as possible (the names and the structure say what the code does; a
+  comment only where the code cannot, one short line, never a restatement), no
   single-use interfaces or abstractions the spec does not need, no defensive branches for states
   the code cannot reach, and no needless fragmentation (no one-method helper classes). The code
   map ({code_map}) says where things live; follow it.

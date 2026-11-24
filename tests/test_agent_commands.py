@@ -110,6 +110,24 @@ def test_python_defaults(tmp_path: pathlib.Path) -> None:
     assert "\n\n" not in brief and len(brief.encode()) < 1500
 
 
+def test_pytest_through_the_project_interpreter_is_allowed(tmp_path: pathlib.Path) -> None:
+    a = adapter(tmp_path, {"env": {"python": ".venv/Scripts/python.exe"}})
+    tools = a.allowed_tools("TESTS")
+    for typed in (
+        ".venv\\Scripts\\python.exe -m pytest tests/test_x.py",
+        ".\\.venv\\Scripts\\python.exe -m pytest -q",
+        "./.venv/Scripts/python.exe -m pytest",
+        "python -m pytest -q",
+    ):
+        assert rule_allows(tools, typed), typed
+    assert "PowerShell(.venv\\Scripts\\python.exe -m pytest *)" in tools
+    assert not rule_allows(tools, ".venv\\Scripts\\python.exe -c 1")
+    assert adapter(tmp_path, {"env": {"python": "python"}}).test_tools() == [
+        "Bash(python -m pytest *)",
+        "Bash(pytest *)",
+    ]
+
+
 def test_the_projects_own_commands_are_named_and_allowed(tmp_path: pathlib.Path) -> None:
     """black where the project formats with black, every source folder, no disabled command;
     nothing of the adapter's defaults is left in the brief or in the rules."""
@@ -267,4 +285,5 @@ def test_doctor_names_a_command_the_rules_deny_and_renamed_names(demo_repo: Demo
     assert "- WARN config: renamed names (still read): [phases.PR] is now" in out
     # the role file under its old name still reaches the summary agent
     orch = Orchestrator(cfg, get_adapter(cfg), echo=lambda s: None)
-    assert "Mention the ticket." in orch.role_text("summary", "demo")
+    text = orch.role_text("summary", "demo")
+    assert "Mention the ticket." in text and "A comment or docstring is no evidence" in text

@@ -100,7 +100,6 @@ def instructions(lay: Layout, c: Candidate, caps: Caps, src: pathlib.Path) -> st
         "forbidden": "\n".join(f"  - `{p}`" for p in (lay.answer.parent, lay.sources, src)),
         "max_usd": f"{caps.usd:g}",
         "max_hours": f"{caps.hours:g}",
-        "setup": f"/framegate:setup {c.setup}".strip(),
     }
     for key, value in values.items():
         text = text.replace("{{" + key + "}}", value)
@@ -151,7 +150,7 @@ def claude_driver(lay: Layout, c: Candidate, caps: Caps, src: pathlib.Path) -> d
     cmd = [claude_exe(), "-p", "--output-format", "json", "--permission-mode", "acceptEdits"]
     # the driver only follows rules: a small model does (FRAMEGATE_REPLAY_DRIVER_MODEL)
     cmd += ["--model", os.environ.get("FRAMEGATE_REPLAY_DRIVER_MODEL") or "sonnet"]
-    cmd += ["--allowedTools", DRIVER_TOOLS]
+    cmd += ["--strict-mcp-config", "--allowedTools", DRIVER_TOOLS]  # no MCP servers
 
     def spend() -> tuple[float, float]:
         numbers = scoring.engine(lay.sandbox, lay.name)
