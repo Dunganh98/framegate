@@ -204,14 +204,14 @@ def test_a_configured_check_that_measured_nothing_raises_the_risk(
     low = rate("FAIL: Mutation score 40.0% (2/5 killed), threshold 60%")
     assert not low.low and low.reasons == ["mutation score was not measured"]
     measured = rate("PASS: Mutation score 90.0%")
-    assert measured.auto and "coverage and mutation measured" in measured.line(auto=True)
-    # [gates] mutation_tool = "none": the setup's decision, no reason and no stop
+    assert measured.low and "coverage and mutation measured" in measured.line(auto=True)
+    # [gates] mutation_tool = "none": a skipped check, never low ([risk] allow_skipped_checks)
     demo_repo.set_toml("gates", "mutation_tool", '"none"')
     adapter = Orchestrator(load_config(demo_repo.root)).adapter
     event = gates_event("SKIPPED: mutation testing disabled ([gates] mutation_tool)")
     off = risk.assess(adapter, "demo", {}, [event], 0, 0)
-    assert off.auto and off.reasons == []
-    assert "coverage measured, mutation off by config" in off.line(auto=True)
+    assert not off.low
+    assert off.reasons == ["final check(s) skipped: mutation score (feature tests)"]
 
 
 # ---------- the facts line, the description, the statistics ----------

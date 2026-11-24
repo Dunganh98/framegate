@@ -4,8 +4,10 @@
      every spec ID. Later steps need no "Covers:" line: in a refactor every step is checked
      with ALL the characterization tests, and each step runs on its own. Keep the steps small:
      one move, split or rename each; the code builds and every test passes after each.
-     A Markdown docs file a step names by its path (README.md, CHANGELOG.md, .md under a
-     docs folder) becomes writable for that step when the spec is approved. -->
+     No step changes a documentation file: what a doc should say afterwards goes under
+     "Proposed doc updates" in requirements.md.
+     A docstring or comment the step's change makes wrong, in a file the step changes: name
+     its lines in the step ("Reword: <file>:<lines>"); the step rewords them. -->
 
 ## Step 1: <short title>
 Covers: XXX-R-001, XXX-I-001

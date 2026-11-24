@@ -594,6 +594,25 @@ def test_red_check_accepts_exactly_the_listed_tests(demo_repo: DemoRepo) -> None
     ) in res.output
 
 
+def test_a_spec_id_in_the_green_list_stands_for_its_tagged_tests(demo_repo: DemoRepo) -> None:
+    """Seen live: "lists RLF-I-002, which is not among the feature's tests"."""
+    r = demo_repo
+    adapter = get_adapter(load_config(r.root))
+    keep = '\n\n@pytest.mark.req("DEMO-I-001")\nclass TestKept:\n    def test_name(self) -> None:\n'
+    keep += '        assert add.__name__ == "add"\n'
+    tests = r.root / "tests" / "test_demo.py"
+    tests.write_text(TESTS.split('@pytest.mark.req("DEMO-R-001")\ndef test_ref')[0] + keep, "utf-8")
+    use(r, "\n## Must not change\n| DEMO-I-001 | the name |\n\n## Green against stubs\n")
+    assert "PASSES AGAINST STUB (weak or wrong test): " in red_stubs.check(adapter, "demo").output
+    use(r, "\n## Green against stubs\n- DEMO-I-001: holds today\n- DEMO-I-009: no test\n")
+    res = red_stubs.check(adapter, "demo")
+    assert res.status == "PASS", res.output
+    assert "passes by design" in res.output and "TestKept" in res.output
+    assert "ONLY TESTS THAT PASS BY DESIGN" not in res.output
+    assert "lists DEMO-I-009, which is not among the feature's tests" in res.output
+    assert "lists DEMO-I-001" not in res.output
+
+
 # ---------- 7. which reference tests were carried over ----------
 def test_carried_tests_report(demo_repo: DemoRepo) -> None:
     r = demo_repo

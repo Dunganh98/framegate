@@ -30,6 +30,7 @@ from framegate.adapters.base import (
     CheckResult,
     LanguageAdapter,
     TestAssertions,
+    TestCase,
     TestRun,
     TestScope,
     changed_lines,
@@ -67,6 +68,9 @@ ENV_STAMP = (
     "import importlib.metadata as m; "
     "print(sorted(f\"{d.metadata['Name']}=={d.version}\" for d in m.distributions()))"
 )
+
+
+_IMPORTORSKIP = re.compile(r"""importorskip\(\s*["']([\w.]+)["']""")
 
 
 def deselect_args(entries: Sequence[str]) -> list[str]:
@@ -161,6 +165,15 @@ def _always_fails(node: ast.Assert) -> bool:
     return isinstance(node.test, ast.Constant) and not node.test.value
 
 
+#: a stack trace entry of pytest (`path.py:12: ...`) or of Python (`File "path.py", line 12`)
+_FRAME = re.compile(
+    r'^((?:[A-Za-z]:)?[^\s:"][^:\n"]*\.py):(\d+):(?: |$)|^\s*File "([^"\n]+\.py)", line (\d+)',
+    re.M,
+)
+#: the first line of a failed assertion (`assert`, a `pytest.raises` without a raise, `fail`)
+_ASSERTION = re.compile(r"^(?:assert\b|(?:[\w.]+\.)?(?:AssertionError|Failed)\b)")
+
+
 def assertion_lines(fn: ast.AST) -> list[int]:
     """The lines of a test's assertions: `assert ...`, `pytest.raises` / `warns` and
     `assert_*` helper calls. Not `pytest.fail` and `assert False` (guards meant not to run)."""
@@ -195,6 +208,9 @@ class PythonAdapter(LanguageAdapter):
     name = "python"
     source_suffixes = (".py",)
     file_scoped_lint = True
+    line_suppression = r"#\s*(?:noqa|type:\s*ignore|pragma:\s*no\s*cover)\b"
+    #: the runner's `line_scopes` of the mutation run under way (mutation_check sets it)
+    mutmut_scopes: Mapping[str, Any] = {}
 
     @classmethod
     def detect(cls, root: pathlib.Path) -> bool:
@@ -250,6 +266,34 @@ class PythonAdapter(LanguageAdapter):
             pip = ["python", "-m", "pip"] if data.get("pip") else ["uv", "pip"]
             facts["refresh"] = [*pip, "install", "-e", ".", "--no-deps"]
         return facts
+
+    def missing_frameworks(self) -> dict[str, str] | None:
+        declared = python_probe.declared(self.root)
+        guarded: dict[str, str] = {}
+        for p in self._test_files():
+            text = p.read_text(encoding="utf-8", errors="replace")
+            for mod in _IMPORTORSKIP.findall(text):
+                guarded.setdefault(mod, f"importorskip in {self.rel(p)}")
+        if not declared and not guarded:
+            return {}
+        args = [json.dumps(list(declared)), json.dumps(list(guarded))]
+        code, out = run_command(
+            [self.python, "-c", python_probe.MISSING_SCRIPT, *args],
+            self.root,
+            timeout=PROBE_TIMEOUT,
+        )
+        found = [x for x in out.splitlines() if x.startswith("MISSING ")]
+        if code != 0 or not found:
+            return None
+        reqs, mods = json.loads(found[-1].removeprefix("MISSING "))
+        gaps: dict[str, str] = {}
+        for text in reqs:
+            name = re.split(r"[\s<>=!~;\[(]", text, maxsplit=1)[0]
+            gaps.setdefault(name.lower().replace("_", "-"), declared[text])
+        for mod in mods:
+            if mod.split(".")[0].lower().replace("_", "-") not in gaps:
+                gaps.setdefault(mod, guarded[mod])
+        return gaps
 
     def test_runner(self) -> list[str]:
         return [self.python, "-m", "pytest"]
@@ -422,9 +466,10 @@ class PythonAdapter(LanguageAdapter):
         paths: Sequence[str] | None = None,
         fail_fast: bool = False,
         junit: pathlib.Path | None = None,
+        extra: Sequence[str] = (),
     ) -> TestRun:
         cmd = [self.python, "-m", "pytest", "-q", "--no-header", "-p", "no:cacheprovider"]
-        cmd += self.pytest_args
+        cmd += [*self.pytest_args, *extra]
         ids = [i for i in (req_ids or []) if i]
         if ids:
             cmd += ["--req", ",".join(ids)]
@@ -479,8 +524,74 @@ class PythonAdapter(LanguageAdapter):
         found = [x for x in out.splitlines() if x.startswith("FOUND")]
         return set(found[-1].split()[1:]) if code == 0 and found else None
 
+    def red_stub_run(self, req_ids: Sequence[str], report: pathlib.Path) -> TestRun:
+        # a test file that cannot load must not stop the run: the check judges the others
+        return self.run_tests(
+            req_ids=req_ids, junit=report, extra=["--continue-on-collection-errors"]
+        )
+
+    def failure_frames(self, case: TestCase) -> list[tuple[str, int]]:
+        out = []
+        for m in _FRAME.finditer(case.message):
+            name, line = m.group(1) or m.group(3), int(m.group(2) or m.group(4))
+            path = pathlib.Path(name)
+            try:
+                path = path if path.is_absolute() else self.root / path
+                out.append((path.resolve().relative_to(self.root.resolve()).as_posix(), line))
+            except (OSError, ValueError):
+                out.append((name.replace("\\", "/"), line))
+        return out
+
+    def stub_failure_problem(self, case: TestCase) -> str | None:
+        """A red test fails on the stub (not implemented), on an assertion, or inside the
+        code under test. One that stops on another error outside the source folders (in the
+        test itself, a fixture, a helper) never got to what it checks."""
+        first = (case.message.strip().splitlines() or [""])[0]
+        if "NotImplementedError" in case.message or _ASSERTION.match(first):
+            return None
+        frames = self.failure_frames(case)
+        if not frames or any(self.cfg.in_src(f) for f, _ in frames):
+            return None  # no stack trace to tell by, or it failed inside the code under test
+        file, line = frames[-1]
+        return (
+            f"stops on `{first[:160]}` at {file}:{line}, before the code under test and not on "
+            "an assertion"
+        )
+
+    def broken_at(self, tree: pathlib.Path, names: Sequence[str]) -> set[str] | None:
+        files = {n.split("::")[0].replace(".", "/") + ".py": n for n in names}
+        files = {rel: n for rel, n in files.items() if (tree / rel).is_file()}
+        if not files:
+            return set()
+        # the tree's own sources, not an editable install of the working tree
+        roots = [*(str(tree / r) for r in self.cfg.src_roots), str(tree)]
+        env = {**os.environ, "PYTHONPATH": os.pathsep.join(roots)}
+        cmd = [self.python, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"]
+        code, out = run_command([*cmd, *self.pytest_args, *files], tree, env=env, timeout=600)
+        if code == 0:
+            return set()
+        bad = {m.replace("\\", "/") for m in re.findall(r"^ERROR\s+(\S+)", out, re.M)}
+        return {n for rel, n in files.items() if rel in bad}
+
     def test_names(self, source: bytes) -> list[str] | None:
         return python_port.test_names(source)
+
+    def test_lines(self, source: str, names: Sequence[str]) -> set[int] | None:
+        try:
+            body = ast.parse(source).body
+        except SyntaxError:
+            return None
+        node = None
+        for name in names:
+            kinds = (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+            node = next((n for n in body if isinstance(n, kinds) and n.name == name), None)
+            if node is None:
+                return set()
+            body = node.body
+        if node is None:
+            return set()
+        first = min([node.lineno, *(d.lineno for d in node.decorator_list)])
+        return set(range(first, (node.end_lineno or node.lineno) + 1))
 
     def collect_req_tags(self) -> dict[str, list[str]]:
         found: dict[str, list[str]] = {}
@@ -610,6 +721,53 @@ class PythonAdapter(LanguageAdapter):
         hits = {f: v for f, v in cobertura_hits([xml], self.root).items() if f.startswith(tests)}
         return hits, "" if hits else "the coverage run did not record the test files"
 
+    def changed_symbols(self, rel: str, lines: set[int] | None) -> list[str]:
+        try:
+            tree = ast.parse((self.root / rel).read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, ValueError):
+            return []
+        found = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                span = range(node.lineno, (node.end_lineno or node.lineno) + 1)
+                if lines is None or any(n in lines for n in span):
+                    found.add(node.name)
+        return sorted(n for n in found if not n.startswith("__"))
+
+    def function_body_lines(self, rel: str, name: str) -> set[int]:
+        try:
+            tree = ast.parse((self.root / rel).read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, ValueError):
+            return set()
+        out: set[int] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name != name:
+                continue
+            body = node.body[1:] if ast.get_docstring(node) is not None else node.body
+            if body:
+                out |= set(range(body[0].lineno, (node.end_lineno or body[0].lineno) + 1))
+        return out
+
+    def test_line_run(
+        self, req_ids: Sequence[str], junit: pathlib.Path
+    ) -> tuple[dict[str, dict[int, int]], list[TestCase] | None, str]:
+        if not self._has_module("pytest_cov"):
+            return {}, None, "pytest-cov is not installed in the project environment"
+        xml = self.root / self.cfg.paths.out / "tests_coverage.xml"
+        xml.parent.mkdir(parents=True, exist_ok=True)
+        for old in (xml, junit):
+            old.unlink(missing_ok=True)
+        cmd = [self.python, "-m", "pytest", "-q", "-p", "no:cacheprovider", *self.pytest_args]
+        ids = [i for i in req_ids if i]
+        cmd += ["--req", ",".join(ids)] if ids else []
+        cmd += [f"--cov={self.cfg.paths.tests}", f"--cov-report=xml:{xml}", f"--junitxml={junit}"]
+        timeout = self.cfg.coverage_timeout
+        code, out = run_command(cmd, self.root, env=self._coverage_env(), timeout=timeout)
+        reason = incomplete_reason(code, out, timeout) or PYTEST_INCOMPLETE.get(code, "")
+        if reason or not xml.is_file() or not junit.is_file():
+            return {}, None, f"the run was incomplete ({reason or 'no report'})"
+        return cobertura_hits([xml], self.root), parse_junit(junit), ""
+
     def test_assertions(self, rel: str) -> list[TestAssertions]:
         try:
             tree = ast.parse((self.root / rel).read_text(encoding="utf-8"))
@@ -733,10 +891,28 @@ class PythonAdapter(LanguageAdapter):
         changed = [f for f in changed_src if f.endswith(".py")]
         if not changed:
             return CheckResult("PASS", "No changed Python source files to mutate.")
-        modules, functions = self._mutmut_targets(base_ref, changed)
+        # the task's own lines: against the base formatted as the gates format (task_base.py)
+        from framegate import task_base
+
+        base = task_base.task_base(self, base_ref) or base_ref
+        modules, functions = self._mutmut_targets(base, changed)
         if not modules and not functions:
             return CheckResult("PASS", "No changed functions to mutate.")
+        self.mutmut_scopes = self._mutmut_line_scopes(base, changed)
         return self._mutmut(feature, modules, scope, functions=functions)
+
+    def _mutmut_line_scopes(self, base_ref: str, changed: Sequence[str]) -> dict[str, Any]:
+        """Spec `line_scopes` of the runner: per changed file, which lines of its functions
+        count (the task's lines, without the logging calls)."""
+        out: dict[str, Any] = {}
+        for f in changed:
+            try:
+                text = (self.root / f).read_text(encoding="utf-8")
+                scopes = mutmut_line_scopes(text, changed_lines(self.cfg, base_ref, f))
+            except (OSError, ValueError, SyntaxError):
+                continue
+            out[self._mutmut_module(f)] = {"file": f, "functions": scopes}
+        return out
 
     def mutation_trial(self) -> CheckResult | None:
         """The setup's trial (doctor --tree): mutmut finds the code and pytest loads
@@ -831,6 +1007,7 @@ class PythonAdapter(LanguageAdapter):
             # mutmut guesses its folder (src/ or one named like the project); seen live: a
             # project with packages at the root, and mutmut found nothing to mutate
             "source_paths": [r.rstrip("/") for r in self.cfg.src_roots],
+            "line_scopes": self.mutmut_scopes,
         }
 
     def _mutmut_also_copy(self) -> list[str]:
@@ -952,12 +1129,19 @@ class PythonAdapter(LanguageAdapter):
             if "nothing matches" in output:  # no mutants in the changed modules
                 return CheckResult("PASS", "No mutants generated for the changed files.")
             return CheckResult("FAIL", f"mutmut run failed ({where}):\n{output}")
-        tally = tally_mutmut(str(res.get("results", "")), modules, functions)
+        left = res.get("left_out") or {}
+        tally = tally_mutmut(str(res.get("results", "")), modules, functions, left)
         write_survivors(
             self.root / self.cfg.paths.out / feature / "mutation_survivors.md",
             tally,
             res.get("shows") or {},
         )
+        if tally.total == 0 and (tally.unchanged or tally.logging):
+            return CheckResult(
+                "PASS",
+                f"No mutants on the lines this task changed ({tally.unchanged} on other lines "
+                f"and {tally.logging} in logging calls left out).",
+            )
         if tally.total == 0:
             return CheckResult("PASS", "No mutants generated for the changed files.")
         timing = f"{where}, {res.get('seconds')} s" + (
@@ -967,9 +1151,16 @@ class PythonAdapter(LanguageAdapter):
         scope = [f"the {n} function{'s' * (n != 1)} this task changed"] if n else []
         if modules:
             scope.append(f"module{'s' * (len(modules) != 1)} {', '.join(modules)}")
+        where_ = " and ".join(scope)
+        if "left_out" in res and self.mutmut_scopes:
+            where_ = f"the lines this task changed in {where_}" if n else where_
+            where_ += (
+                f" ({tally.unchanged} mutant(s) on other lines and {tally.logging} in logging "
+                "calls left out)"
+            )
         msg = (
             f"Mutation score {tally.score:.1f}% ({tally.detected}/{tally.total} killed) in "
-            f"{' and '.join(scope)}, threshold {self.cfg.mutation_score:g}% ({timing})."
+            f"{where_}, threshold {self.cfg.mutation_score:g}% ({timing})."
         )
         return CheckResult(
             "PASS" if tally.score >= self.cfg.mutation_score else "FAIL", msg, summary=msg
@@ -978,6 +1169,22 @@ class PythonAdapter(LanguageAdapter):
     # ---------- frame ----------
     def default_forbidden_patterns(self) -> list[str]:
         return [r"type:\s*ignore", r"noqa", r"pragma:\s*no cover", r"pytest\.skip", r"xfail"]
+
+    def definition_pattern(self, name: str) -> str:
+        n = re.escape(name)
+        return (
+            rf"^\s*(?:async\s+)?(?:def|class)\s+{n}\b"
+            rf"|^\s*(?:\w+\.)*{n}\s*(?::[^=]+)?=(?!=)"
+        )
+
+    def guard_patterns(self) -> dict[str, str]:
+        return {
+            "# noqa": r"#\s*noqa\b(?::\s*[A-Z]+\d*(?:\s*,\s*[A-Z]+\d*)*)?",
+            "# type: ignore": r"#\s*type:\s*ignore\b(?:\[[^\]]*\])?",
+            "pragma: no cover": r"#\s*pragma:\s*no\s*cover\b",
+            "except Exception": r"^\s*except\s+\(?\s*(?:Base)?Exception\b",
+            "bare except": r"^\s*except\s*:",
+        }
 
     def default_protected_paths(self) -> list[str]:
         return [
@@ -1070,6 +1277,9 @@ class MutmutTally:
     survivors: list[tuple[str, str]] = field(default_factory=list)
     #: skipped / not checked mutants (excluded from the score)
     unchecked: int = 0
+    #: left out of the score: on lines the task did not change / inside a logging call
+    unchanged: int = 0
+    logging: int = 0
 
     @property
     def score(self) -> float:
@@ -1097,11 +1307,65 @@ def mutmut_functions(module: str, source: str, lines: set[int]) -> list[str]:
     return found
 
 
+#: a call that only logs: `logger.info(...)`, `self.log.debug(...)`, `print(...)`. A mutant
+#: inside one says nothing about the tests (seen live: most survivors of a 77.6% run).
+LOG_OBJECTS = {"logger", "log", "logging"}
+LOG_METHODS = {"debug", "info", "warning", "warn", "error", "exception", "critical", "log"}
+
+
+def is_logging_call(node: ast.Call) -> bool:
+    parts: list[str] = []
+    func: ast.expr = node.func
+    while isinstance(func, ast.Attribute):
+        parts.append(func.attr)
+        func = func.value
+    if not isinstance(func, ast.Name):
+        return False
+    parts.append(func.id)
+    if parts == ["print"]:
+        return True
+    owners = {p.lower().strip("_") for p in parts[1:]}
+    return parts[0] in LOG_METHODS and bool(owners & LOG_OBJECTS)
+
+
+def mutmut_line_scopes(source: str, lines: set[int] | None) -> dict[str, dict[str, Any]]:
+    """Per function mutmut mutates (`x_f`, `xǁClsǁm`): the lines `lines` touch (None = all)
+    and the lines inside logging calls, both counted from its `def` line (0)."""
+    out: dict[str, dict[str, Any]] = {}
+
+    def scope(name: str, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        first, last = node.lineno, node.end_lineno or node.lineno
+        logs = {
+            n - first
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call) and is_logging_call(call)
+            for n in range(call.lineno, (call.end_lineno or call.lineno) + 1)
+        }
+        changed = (
+            None if lines is None else [n - first for n in range(first, last + 1) if n in lines]
+        )
+        out[name] = {"changed": changed, "logging": sorted(logs)}
+
+    functions = (ast.FunctionDef, ast.AsyncFunctionDef)
+    for node in ast.parse(source).body:
+        if isinstance(node, functions):
+            scope(f"x_{node.name}", node)
+        elif isinstance(node, ast.ClassDef):
+            for item in node.body:
+                if isinstance(item, functions):
+                    scope(f"xǁ{node.name}ǁ{item.name}", item)
+    return out
+
+
 def tally_mutmut(
-    results: str, modules: Sequence[str], functions: Sequence[str] = ()
+    results: str,
+    modules: Sequence[str],
+    functions: Sequence[str] = (),
+    left_out: Mapping[str, str] | None = None,
 ) -> MutmutTally:
     """Count `mutmut results --all true` lines (`    pkg.mod.x_func__mutmut_3: killed`) of the
-    given modules (everything before the last dot: mangled names have none) or functions."""
+    given modules (everything before the last dot: mangled names have none) or functions.
+    `left_out`: mutants not scored (the runner's `left_out`: "logging" / "unchanged")."""
     wanted, funcs = set(modules), set(functions)
     t = MutmutTally()
     for line in results.splitlines():
@@ -1110,6 +1374,11 @@ def tally_mutmut(
             continue
         name = m.group(1)
         if name.rsplit(".", 1)[0] not in wanted and name.rsplit("__mutmut_", 1)[0] not in funcs:
+            continue
+        why = (left_out or {}).get(name)
+        if why:
+            t.logging += why == "logging"
+            t.unchanged += why != "logging"
             continue
         status = m.group(2)
         if status in DETECTED:

@@ -25,9 +25,12 @@ PHASE_ORDER = [
     "TEST_REVIEW",
     "IMPLEMENT",
     "DIAGNOSIS",
+    "SIMPLIFY",
     "REVIEW",
     "TRIAGE",
     "SUMMARY",
+    "DOC_CHECK",
+    "DOCS",
     "RETRO",
 ]
 
@@ -112,12 +115,19 @@ def section_bullets(text: str, heading: str) -> list[str]:
     return [i for i in items if i.strip().lower().rstrip(".") not in ("none", "")]
 
 
+def _says_none(text: str) -> bool:
+    """Is the first line under `## Objections` "None."?"""
+    m = re.search(r"^##\s+Objections\b.*\n(?:[ \t]*\n)*(.*)$", text, re.M | re.I)
+    return bool(m and re.fullmatch(r"\W*none\W*", m.group(1), re.I))
+
+
 def parse_test_review(text: str | None) -> TestReview:
     if text is None or not text.strip():
         return TestReview("MISSING", ["The test reviewer wrote no verdict (test_review.md)."])
     m = VERDICT_RE.search(text)
     verdict = m.group(1).upper() if m else "MISSING"
-    objections = section_bullets(text, "Objections")
+    # the verdict line decides: under OK, bullets below "## Objections" are resolved items
+    objections = [] if verdict == "OK" or _says_none(text) else section_bullets(text, "Objections")
     if verdict not in ("OK", "OBJECTIONS"):
         objections = objections or [f"Unreadable verdict in test_review.md ({verdict})."]
         verdict = "OBJECTIONS"
@@ -212,6 +222,7 @@ def final_facts(
     causes: list[tuple[str, str]] | None = None,
     followup: list[str] | None = None,
     unrunnable: list[str] | None = None,
+    doc_updates: list[str] | None = None,
 ) -> str:
     """{out}/{f}/final_facts.md: what the summary agent must report, from the run's records.
     `followup`: the pipeline / reference follow-up sections with their note
@@ -350,6 +361,8 @@ def final_facts(
         out += ["", *unrunnable]
     if followup:
         out += ["", *followup]
+    if doc_updates:
+        out += ["", *doc_updates]
     out += ["", "## Final gates (final_gates.md)", "", "~~~", final_gates.strip(), "~~~"]
     out += ["", "## Open questions", "", open_questions.strip() or "None."]
     items = items or []

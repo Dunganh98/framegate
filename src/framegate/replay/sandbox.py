@@ -1,13 +1,15 @@
 """The run folder of one candidate.
 
   <out>/runs/<name>/sandbox/   clone cut at the parent commit, no remote, its own .venv
-  <out>/runs/<name>/driver/    the driver agent's files (task.md, turns, log, report)
+  <out>/runs/<name>/driver/    the driver agent's files (task.md, facts.md, turns, log, report)
   <out>/answers/<name>/        the hidden answer: the commit's tests, patch and message, and
                                which tests prove the task. No agent may read it.
 
 The mechanical check: the commit's tests run on the parent and on the commit. A test that
 fails on the parent (or cannot be collected there) and passes on the commit proves the task.
-A candidate without such a test is dropped.
+A candidate without such a test is dropped. Its probes (tests of the candidate's author, in
+probes/<name>/ next to the candidates file) must pass on both; its extra tests
+(extra/<name>/) must fail on the parent and pass on the commit.
 """
 
 from __future__ import annotations
@@ -35,6 +37,20 @@ SKIP = shutil.ignore_patterns(
     ".venv", ".git", "out", "__pycache__", ".pytest_cache", ".ruff_cache", ".hypothesis"
 )
 TEST_TIMEOUT = 1800
+#: what a scored run can do without (prune): a tool builds it again, nobody reads it
+VENVS = (".venv", "venv")
+CACHES = (
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    ".hypothesis",
+    "__pycache__",
+    "mutants",
+    "node_modules",
+    ".tox",
+)
+#: the sandbox's evidence: never searched
+KEPT = (".git", "out", "specs", ".framegate", "metrics", "knowledge")
 
 
 class ReplayError(Exception):
@@ -108,9 +124,44 @@ def rmtree(path: pathlib.Path) -> None:
         func(target)
 
     if path.exists():
-        # a .venv holds paths over Windows' 260 characters (tensorflow headers): \\?\ form
-        target = "\\\\?\\" + str(path.resolve()) if os.name == "nt" else path
-        shutil.rmtree(target, onerror=writable)
+        shutil.rmtree(_long(path), onerror=writable)
+
+
+def _long(path: pathlib.Path) -> str:
+    # a .venv holds paths over Windows' 260 characters (tensorflow headers): \\?\ form
+    return "\\\\?\\" + str(path.resolve()) if os.name == "nt" else str(path)
+
+
+def tree_size(path: pathlib.Path) -> int:
+    total = 0
+    for root, _dirs, files in os.walk(_long(path)):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def prune(lay: Layout) -> int:
+    """Delete what a scored run can rebuild: the sandbox's environments and tool caches, and
+    the scored copy of the result. The driver's files, the score, the sandbox's code, git
+    history and framegate files stay. Returns the bytes freed."""
+    doomed = [lay.run / "score" / "result"]
+    for root, dirs, _files in os.walk(lay.sandbox):
+        here = pathlib.Path(root)
+        gone = [
+            d for d in dirs if d in CACHES or (d in VENVS and (here / d / "pyvenv.cfg").is_file())
+        ]
+        doomed += [here / d for d in gone]
+        kept = KEPT if here == lay.sandbox else (".git",)
+        dirs[:] = [d for d in dirs if d not in gone and d not in kept]
+    freed = 0
+    for path in doomed:
+        if path.is_dir() and not path.is_symlink():
+            freed += tree_size(path)
+            rmtree(path)
+    return freed
 
 
 def source(repo: str, base: pathlib.Path, cache: pathlib.Path) -> pathlib.Path:
@@ -160,15 +211,27 @@ def rule_path(path: pathlib.Path) -> str:
     return "//" + text.lstrip("/")
 
 
-def deny_rules(hidden: Sequence[str]) -> list[str]:
-    """`hidden`: folders as rule paths (rule_path)."""
-    rules = [f"Read({p}/**)" for p in hidden] + ["WebFetch", "WebSearch"]
+def deny_rules(hidden: Sequence[str], files: Sequence[str] = ()) -> list[str]:
+    """`hidden`: folders as rule paths (rule_path); `files`: single files."""
+    rules = [f"Read({p}/**)" for p in hidden] + [f"Read({p})" for p in files]
+    rules += ["WebFetch", "WebSearch"]
     return rules + [f"{tool}({cmd} *)" for tool in ("Bash", "PowerShell") for cmd in BLOCKED]
 
 
 #: what the setup would add to the settings on a yes. The chat may not edit that file in a
 #: headless session, so it is there from the start.
 CHAT_RULES = ["Bash(framegate *)", "PowerShell(framegate *)"]
+
+
+def author_paths(
+    base: pathlib.Path, file: pathlib.Path | None, out: pathlib.Path
+) -> list[pathlib.Path]:
+    """What no agent of a run may read of the candidates file's folder: all of it, or, when
+    the runs (or Claude Code's own files) are inside it, the file, probes/ and extra/."""
+    needed = (out, pathlib.Path.home() / ".claude")
+    if not any(p.resolve().is_relative_to(base.resolve()) for p in needed):
+        return [base]
+    return [*([file] if file else []), base / "probes", base / "extra"]
 
 
 def guard_hook(up: int) -> dict[str, Any]:
@@ -281,6 +344,7 @@ def run_tests(
     xml: pathlib.Path,
 ) -> tuple[dict[str, str], str]:
     """pytest on `files` in `tree`: {test: pass | fail | skip} and the last output line.
+    Empty: the tests did not run (no junit file, or a cut-off one).
     The tree's own code is imported first, not what the environment has installed."""
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     env["PYTHONPATH"] = os.pathsep.join(str(tree / r) for r in roots)
@@ -297,19 +361,22 @@ def run_tests(
             errors="replace",
             timeout=TEST_TIMEOUT,
         )
-        output = r.stdout + "\n" + r.stderr
+        output, code = r.stdout + "\n" + r.stderr, r.returncode
     except subprocess.TimeoutExpired:
-        output = f"timeout after {TEST_TIMEOUT} s"
+        output, code = f"timeout after {TEST_TIMEOUT} s", -1
     xml.with_suffix(".log").write_text(output, encoding="utf-8")
     out: dict[str, str] = {}
-    if xml.is_file():
-        for tc in ET.parse(xml).getroot().iter("testcase"):
-            kinds = {child.tag for child in tc}
-            bad = kinds & {"failure", "error"}
-            out[f"{tc.get('classname')}::{tc.get('name')}"] = (
-                "fail" if bad else "skip" if "skipped" in kinds else "pass"
-            )
-    return out, (output.strip().splitlines() or ["(no output)"])[-1]
+    try:
+        cases = list(ET.parse(xml).getroot().iter("testcase")) if xml.is_file() else []
+    except ET.ParseError:  # cut off: the run died while writing it
+        cases = []
+    for tc in cases:
+        kinds = {child.tag for child in tc}
+        bad = kinds & {"failure", "error"}
+        out[f"{tc.get('classname')}::{tc.get('name')}"] = (
+            "fail" if bad else "skip" if "skipped" in kinds else "pass"
+        )
+    return out, (output.strip().splitlines() or [f"no output (exit {code})"])[-1]
 
 
 def build(
@@ -317,9 +384,13 @@ def build(
     lay: Layout,
     src: pathlib.Path,
     env: Callable[[Candidate, pathlib.Path], pathlib.Path] = make_env,
+    probes: pathlib.Path | None = None,
+    extra: pathlib.Path | None = None,
+    hide: Sequence[pathlib.Path] = (),
 ) -> None:
-    """Build and check the run folder. Raises ReplayError with the reason to drop the
-    candidate."""
+    """Build and check the run folder. `probes`, `extra`: the folders of the candidate's
+    probe and extra test files; `hide`: more that no agent may read (author_paths).
+    Raises ReplayError with the reason to drop the candidate."""
 
     def git(*args: str) -> str:
         return sh(["git", "-C", src, *args])
@@ -343,6 +414,12 @@ def build(
     files = [t for t in tests if runnable(t)]
     if not files:
         raise ReplayError("the commit changes no test file (name them with `- tests:`)")
+    lost = [t for t in c.probes if not (probes and (probes / t).is_file())]
+    if lost:
+        raise ReplayError(f"probe file {lost[0]} is not in {probes}")
+    lost = [t for t in c.extra if not (extra and (extra / t).is_file())]
+    if lost:
+        raise ReplayError(f"extra test file {lost[0]} is not in {extra}")
     hidden = lay.answer / "hidden"
     for t in tests:
         shown = subprocess.run(["git", "-C", str(src), "show", f"{full}:{t}"], capture_output=True)
@@ -355,18 +432,24 @@ def build(
     (lay.answer / "commit.patch").write_text(git("diff", parent, full), encoding="utf-8")
     lay.driver.mkdir(parents=True)
     (lay.driver / "task.md").write_text((c.task or message) + "\n", encoding="utf-8")
+    if c.facts:
+        text = "\n".join(f.line() for f in c.facts) + "\n"
+        (lay.driver / "facts.md").write_text(text, encoding="utf-8")
     # a file, not a shell argument: the shells mangle quotes in the candidate's setup text
     setup = f"/framegate:setup {c.setup}".strip()
     (lay.driver / "setup.txt").write_text(setup + "\n", encoding="utf-8")
 
     with open(lay.sandbox / ".git" / "info" / "exclude", "a", encoding="utf-8") as f:
         f.write("\n.venv/\n.claude/settings.local.json\n")
-    secret = [rule_path(p) for p in (lay.answer.parent, lay.sources, src)]
-    write_deny(
-        lay.sandbox, deny_rules([*secret, rule_path(lay.out / "runs") + "/*/driver"]), CHAT_RULES
-    )
+    folders = [lay.answer.parent, lay.sources, src, *(p for p in hide if not p.is_file())]
+    folders += [probes.parent] if probes and c.probes else []
+    folders += [extra.parent] if extra and c.extra else []
+    secret = list(dict.fromkeys(rule_path(p) for p in folders))
+    single = [rule_path(p) for p in hide if p.is_file()]
+    drivers = rule_path(lay.out / "runs") + "/*/driver"
+    write_deny(lay.sandbox, deny_rules([*secret, drivers], single), CHAT_RULES)
     # the driver works in its folder and talks to the sandbox: both are under the run folder
-    write_deny(lay.driver, deny_rules(secret), up=1)
+    write_deny(lay.driver, deny_rules(secret, single), up=1)
 
     py = env(c, lay.sandbox)
     check_guard(py, lay)
@@ -376,9 +459,32 @@ def build(
     cut_clone(src, full, check / "commit")
     found: dict[str, dict[str, str]] = {}
     tails: dict[str, str] = {}
+    pins: dict[str, dict[str, str]] = {}
+    after: dict[str, dict[str, str]] = {}
+    after_tail = ""
     for name in ("base", "commit"):
         found[name], tails[name] = run_tests(py, check / name, roots, files, check / f"{name}.xml")
+        if probes and c.probes:
+            shutil.copytree(probes, check / name, dirs_exist_ok=True)
+            xml = check / f"{name}-probes.xml"
+            pins[name], tail = run_tests(py, check / name, roots, c.probes, xml)
+            broken = sorted(n for n, v in pins[name].items() if v != "pass")
+            if broken or not pins[name]:
+                where = "the parent" if name == "base" else "the commit"
+                raise ReplayError(f"a probe does not pass on {where}: {broken[:3] or tail}")
+        if extra and c.extra:
+            shutil.copytree(extra, check / name, dirs_exist_ok=True)
+            xml = check / f"{name}-extra.xml"
+            after[name], after_tail = run_tests(py, check / name, roots, c.extra, xml)
         rmtree(check / name)
+    if extra and c.extra:
+        broken = sorted(n for n, v in after["commit"].items() if v != "pass")
+        if broken or not after["commit"]:
+            why = broken[:3] or after_tail
+            raise ReplayError(f"an extra test does not pass on the commit: {why}")
+        green = sorted(n for n in after["commit"] if after["base"].get(n, "fail") != "fail")
+        if green:
+            raise ReplayError(f"an extra test does not fail on the parent: {green[:3]}")
     proving = sorted(
         n
         for n, v in found["commit"].items()
@@ -399,6 +505,8 @@ def build(
             "pythonpath": roots,
             "proving": proving,
             "base_pass": sorted(n for n, v in found["base"].items() if v == "pass"),
+            "probes": sorted(pins.get("commit", {})),
+            "extra": sorted(after.get("commit", {})),
         },
     )
     write_json(lay.run / "run.json", {"state": "prepared", "python": str(py)})

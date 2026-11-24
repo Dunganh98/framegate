@@ -11,7 +11,7 @@ import subprocess
 import time
 from typing import Any
 
-from framegate.config import Config, is_machine_file, phase_name
+from framegate.config import DEFERRED_FILE, Config, is_machine_file, phase_name
 
 
 class GitError(Exception):
@@ -138,11 +138,12 @@ def delete_marker(cfg: Config, name: str) -> None:
 
 def commit_paths(cfg: Config) -> list[str]:
     """What a workflow commit may contain: the source and test folders, the specs, the metrics
-    folder, the knowledge file and the code map. Anything else in the working tree (the
-    user's notes, scratch files, unrelated edits) is never swept into a commit."""
+    folder, the knowledge file, the deferred-work list and the code map. Anything else in the
+    working tree (the user's notes, scratch files, unrelated edits) is never swept into a
+    commit."""
     p = cfg.paths
     wanted = [*cfg.src_roots, p.tests, p.review_tests, p.specs, p.metrics, cfg.knowledge]
-    wanted.append(cfg.code_map)
+    wanted += [DEFERRED_FILE, cfg.code_map]
     out: list[str] = []
     for rel in wanted:
         if rel and rel not in out:
@@ -213,6 +214,31 @@ def read_reqs(cfg: Config) -> list[str]:
 
 def clear_reqs(cfg: Config) -> None:
     cfg.reqs_path.unlink(missing_ok=True)
+    set_later_tests(cfg, [])
+
+
+def later_tests_path(cfg: Config) -> pathlib.Path:
+    """Tests of the current step's IDs that also need a later plan step (one `file::name`
+    per line). Under {out}/, as contested_tests.txt."""
+    return cfg.out_dir / "later_tests.txt"
+
+
+def set_later_tests(cfg: Config, places: list[str]) -> None:
+    """The tests the step gates and the Stop hook leave out because a later plan step
+    builds part of what they check; [] removes the file."""
+    p = later_tests_path(cfg)
+    if not places:
+        p.unlink(missing_ok=True)
+        return
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("".join(f"{n}\n" for n in dict.fromkeys(places)), encoding="utf-8")
+
+
+def read_later_tests(cfg: Config) -> list[str]:
+    p = later_tests_path(cfg)
+    if not p.is_file():
+        return []
+    return [x.strip() for x in p.read_text(encoding="utf-8").splitlines() if x.strip()]
 
 
 def contested_path(cfg: Config) -> pathlib.Path:

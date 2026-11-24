@@ -6,16 +6,23 @@ scenario file, and prints the result: `--output-format stream-json` -> one JSON 
 (system init, one assistant message per API turn, the result last), else the single result object
 of `--output-format json`.
 
-An IMPLEMENT run appends one line to every file in FRAMEGATE_STEP_DOCS (the documentation
-files the approved plan names for its step), whatever the scenario says.
-
 Scenario keys:
   questions_in: list of phases that ask one question in their first run (TESTS, TEST_REVIEW,
     ...: questions.md, then the normal work; IMPLEMENT: questions.md only = a park request)
   test_review_objections: number of TEST_REVIEW runs that object (Verdict: OBJECTIONS)
   implement_fail: number of IMPLEMENT runs that write a wrong implementation
   park_steps: plan step numbers whose first IMPLEMENT run writes park.md (and half-done code)
+    park_text: the text of that park.md (default: a question that names DEMO-R-002)
   assume: true -> the first successful IMPLEMENT run logs one assumption in steps.md
+  doc_proposals: true -> the first IMPLEMENT run adds two lines to out/demo/doc_proposals.md
+    (CHANGELOG.md, docs/design.md) and the REVIEW run one (docs/plan.md). The DOCS run
+    appends its task's update lines to the files they name; docs_bad: true -> it also
+    changes a source file
+  spanning: true -> with two plan steps, TESTS also writes test_add_then_neg, tagged with an
+    ID of each step
+  doc_check: the bullet(s) the DOC_CHECK run writes to out/demo/doc_check.md (a corrected doc
+    proposal); doc_text_check: what the code does, written against item 1 of the owner's
+    texts (out/demo/doc_text_check.md). Without the key the run writes "None."
   followup: true -> every IMPLEMENT step note has one pipeline follow-up line (the
     Dockerfile), and REVIEW writes one of its own (the CI file) into review.md
   ref_followup: true -> every IMPLEMENT step note, the REVIEW run's review.md and the TRIAGE
@@ -26,7 +33,13 @@ Scenario keys:
     marks it VALID
   review_invalid: true -> the reviewer also writes an invalid finding (negative ints rejected);
     TRIAGE deletes it and marks it INVALID
+  repair_objection: text -> the follow-up review of a final repair objects with it
+  repair_met: true -> the implementer changes the repair when the reviewer objects, and the
+    second review is OK ("stays": it objects again)
   structure: true -> the first REVIEW run lists one structure finding in review.md
+  simplify: what the SIMPLIFY run does: "smaller" (with `uncovered`: removes the branch no
+    test reaches), "break" (a wrong add()), "outside" (smaller, and a line in the test file),
+    "ask" (questions.md and park.md, no code change). Without the key it changes nothing
   brief: true -> SUMMARY also writes out/demo/final_brief.md (plain-words sections, gate item 1
     asked as question 1); "filtered" -> asks item 2 first, then item 1, one untagged decision,
     item 3 left out as the same as item 2 (use with park_steps=[2],
@@ -132,6 +145,14 @@ TESTS_STEP2 = """
 @pytest.mark.req("DEMO-R-002")
 def test_neg_negates() -> None:
     assert neg(4) == -4
+"""
+
+#: tagged with an ID of each plan step: it can pass only once step 2 is built
+TESTS_SPAN = """
+
+@pytest.mark.req("DEMO-R-001", "DEMO-R-002")
+def test_add_then_neg() -> None:
+    assert neg(add(1, 2)) == -3
 """
 
 REVIEW_INVALID = """\
@@ -303,6 +324,11 @@ DOTNET = {
 }
 
 
+def propose(line: str) -> None:
+    with open("out/demo/doc_proposals.md", "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
+
 def write(rel: str, text: str) -> None:
     p = pathlib.Path(rel)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -321,7 +347,6 @@ def main() -> int:
         call = {
             "phase": phase,
             "agent_env": os.environ.get("FRAMEGATE_AGENT"),
-            "step_docs": os.environ.get("FRAMEGATE_STEP_DOCS"),
             # what an agent's shell would see (framegate.agent_env)
             "env": {
                 "python": shutil.which("python"),
@@ -427,6 +452,7 @@ def main() -> int:
         rel, text = lang["tests"]
         if two:
             text = text.replace("from demo import add", "from demo import add, neg") + TESTS_STEP2
+            text += TESTS_SPAN if scen.get("spanning") else ""
         if req.is_file() and "DEMO-E-002" in req.read_text(encoding="utf-8"):
             text += TESTS_E2
         amend = "answered questions at the final gate" in prompt
@@ -457,10 +483,9 @@ def main() -> int:
             body = "Verdict: OK\n\n## Objections\nNone.\n"
         write("out/demo/test_review.md", body)
     elif phase == "IMPLEMENT":
-        # the documentation files the approved plan names for this step: one line each
-        for doc in json.loads(os.environ.get("FRAMEGATE_STEP_DOCS") or "[]"):
-            old = pathlib.Path(doc).read_text(encoding="utf-8") if os.path.isfile(doc) else ""
-            write(doc, old + f"written in IMPLEMENT run {runs[phase]}\n")
+        if scen.get("doc_proposals") and runs[phase] == 1:
+            propose("- CHANGELOG.md: add() refuses bools")
+            propose("- docs/design.md, Calc: today: 'any number' -> proposed: 'ints only' (built)")
         path = pathlib.Path(lang["impl"])
         cur = path.read_text(encoding="utf-8") if path.is_file() else ""
         # one step ("plan step 2") or a batch ("plan steps 1, 2 in one go"): the last one counts
@@ -476,6 +501,7 @@ def main() -> int:
         strict = strict or "did not approve changing its contested tests" in prompt
         # the final-gate repair: an existing test the loose code broke
         strict = strict or "the final gates failed these checks" in prompt
+        strict = strict or "existing test file(s) mention what the task changed" in prompt
         loose = UNCOVERED if scen.get("uncovered") and lang is PYTHON else lang["loose"]
         fails = state.get("implement_failed", 0)
         park = [n for n in nums if n in scen.get("park_steps", []) and n not in parked]
@@ -498,7 +524,8 @@ def main() -> int:
             step = park[0]
             parked.append(step)
             write(lang["impl"], (lang["strict"] if strict else lang["loose"]) + NEG_PARTIAL)
-            write("out/demo/park.md", f"- [DEMO-R-002] Step {step}: should neg(0) be 0 or -0?\n")
+            asks = f"- [DEMO-R-002] Step {step}: should neg(0) be 0 or -0?\n"
+            write("out/demo/park.md", scen.get("park_text") or asks)
         elif fails < scen.get("implement_fail", 0):
             state["implement_failed"] = fails + 1
             write(lang["impl"], lang["wrong"] + neg)
@@ -506,6 +533,8 @@ def main() -> int:
             write(lang["impl"], lang["strict"] + neg)
         else:
             write(lang["impl"], (lang["strict"] if strict else loose) + neg)
+        if scen.get("repair_met") and "The reviewer objects to the repair" in prompt:
+            write(lang["impl"], lang["strict"] + neg + "\n\n# repair: objection met\n")
         if not out.joinpath("park.md").exists():
             note = "Assumptions: none\n"
             if scen.get("assume") and not state.get("assumed"):
@@ -532,6 +561,28 @@ def main() -> int:
             target.parent.mkdir(parents=True, exist_ok=True)
             with open(target, "a", encoding="utf-8") as f:
                 f.write(f"## Step {step or 'fix'} — add\nBuilt add().\n{note}")
+    elif phase == "SIMPLIFY":
+        how = scen.get("simplify")
+        if how in ("smaller", "outside"):  # the branch no test reaches goes
+            write(lang["impl"], LOOSE)
+        if how == "outside":
+            with open("tests/test_demo.py", "a", encoding="utf-8") as f:
+                f.write("\n# simplified\n")
+        if how == "break":
+            write(lang["impl"], WRONG)
+        if how == "ask":
+            write("out/demo/questions.md", "- [SIMPLIFY] May I drop the type check?\n")
+            write("out/demo/park.md", "May I drop the type check?\n")
+    elif phase == "REVIEW" and "follow-up review of a final repair" in prompt:
+        objection = scen.get("repair_objection")
+        if scen.get("repair_met") is True and "objection met" in prompt:
+            objection = None
+        write(
+            "out/demo/repair_review.md",
+            f"Verdict: OBJECTIONS\n\n## Objections\n- {objection}\n"
+            if objection
+            else "Verdict: OK\n\n## Objections\nNone.\n",
+        )
     elif phase == "REVIEW":
         lines = ""
         if scen.get("review_finding"):
@@ -555,6 +606,8 @@ def main() -> int:
                 "- REFERENCE FOLLOW-UP [demo/__init__.py]: add() has no check for None "
                 "(the reference crashes the same way)\n"
             )
+        if scen.get("doc_proposals"):
+            propose("- docs/plan.md, Step 2: today: a method -> proposed: a function (it failed)")
         write("out/demo/review.md", lines or "No findings.\n")
     elif phase == "TRIAGE":
         lines = ""
@@ -578,6 +631,22 @@ def main() -> int:
                 f"Fix owner: {owner}\n"
                 "Proposed fix: return a + b.\nEvidence:\n- ran the step tests\n",
             )
+    elif phase == "DOC_CHECK":
+        # the result file the task names: `doc_check` lines, or `doc_text_check` (the code
+        # now, for item 1); "None." without the scenario key
+        name = re.search(r"out/demo/(doc\w*_check)\.md", prompt).group(1)
+        found = scen.get(name)
+        if name == "doc_text_check" and found:
+            found = f"- 1: code now: {found}"
+        write(f"out/demo/{name}.md", (found or "None.") + "\n")
+    elif phase == "DOCS":
+        for line in re.findall(r"^- (.+)$", prompt.split("change nothing else:")[1], re.M):
+            doc = re.match(r"[\w./-]+\.md", line)
+            if doc:
+                old = pathlib.Path(doc.group(0))
+                write(doc.group(0), (old.read_text("utf-8") if old.is_file() else "") + line + "\n")
+        if scen.get("docs_bad"):
+            write(lang["impl"], pathlib.Path(lang["impl"]).read_text("utf-8") + "# docs\n")
     elif phase == "SUMMARY":
         write("out/demo/final_summary.md", "# Final summary\nSummary.\n")
         mode = scen.get("brief")

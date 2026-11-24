@@ -25,12 +25,13 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from types import FrameType
 from typing import Any
 
 LOCK_FILE = ".run.lock"
 SLICE = 0.25  # seconds between signal checks while waiting for a child
+HEARTBEAT = 60.0  # seconds between the progress lines of a long check
 
 
 class Interrupted(KeyboardInterrupt):
@@ -147,6 +148,18 @@ def popen(cmd: Sequence[str], job: bool = False, **kw: Any) -> subprocess.Popen[
         proc.kill()
         raise OSError(f"could not start {cmd[0]} inside the framegate job object")
     return proc
+
+
+def detach(cmd: Sequence[str], out: Any = subprocess.DEVNULL, **kw: Any) -> subprocess.Popen[Any]:
+    """Start `cmd` outside the caller's process group, without a window or the caller's pipes;
+    stdout and stderr go to `out`."""
+    err = out if out is subprocess.DEVNULL else subprocess.STDOUT
+    kw.update(stdin=subprocess.DEVNULL, stdout=out, stderr=err)
+    if sys.platform == "win32":
+        kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+    else:
+        kw["start_new_session"] = True
+    return subprocess.Popen(list(cmd), **kw)
 
 
 def kill_tree(proc: subprocess.Popen[Any]) -> None:
@@ -288,13 +301,20 @@ def pid_alive(pid: int) -> bool:
 
 # ---------- signals ----------
 @contextlib.contextmanager
-def stop_signals() -> Iterator[None]:
-    """SIGTERM (and SIGBREAK = Ctrl+Break on Windows) raise Interrupted like Ctrl+C does."""
+def stop_signals(on_stop: Callable[[str], None] | None = None) -> Iterator[None]:
+    """SIGTERM (and SIGBREAK = Ctrl+Break on Windows) raise Interrupted like Ctrl+C does.
+    `on_stop(signal name)` is called first, for SIGINT too."""
     names = ["SIGTERM"] + (["SIGBREAK"] if sys.platform == "win32" else [])
+    if on_stop:
+        names.append("SIGINT")
     old: dict[int, Any] = {}
 
     def handler(signum: int, frame: FrameType | None) -> None:
-        raise Interrupted(signal.Signals(signum).name)
+        name = signal.Signals(signum).name
+        if on_stop:
+            with contextlib.suppress(Exception):
+                on_stop(name)
+        raise Interrupted(name)
 
     for name in names:
         sig = getattr(signal, name, None)
@@ -310,6 +330,37 @@ def stop_signals() -> Iterator[None]:
         for sig, h in old.items():
             with contextlib.suppress(ValueError, OSError):
                 signal.signal(sig, h)
+
+
+@contextlib.contextmanager
+def heartbeat(say: Callable[[int], None] | None, every: float = 0) -> Iterator[None]:
+    """While the block runs: say(seconds so far) every `every` s (0: HEARTBEAT), never after
+    it ended."""
+    every = every or HEARTBEAT
+    if say is None:
+        yield
+        return
+    stop = threading.Event()
+    lock = threading.Lock()
+    t0 = time.monotonic()
+
+    def beat() -> None:
+        while not stop.wait(every):
+            with lock:
+                if stop.is_set():
+                    return
+                try:
+                    say(int(time.monotonic() - t0))
+                except Exception:
+                    return
+
+    thread = threading.Thread(target=beat, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        with lock:  # waits for a line being written
+            stop.set()
 
 
 # ---------- run lock ----------

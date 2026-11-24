@@ -20,13 +20,17 @@ from __future__ import annotations
 
 import collections
 import csv
+import datetime
+import pathlib
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from framegate import task_base
 from framegate.adapters.base import NOT_MEASURED, LanguageAdapter
 from framegate.checks.existing_members import base_ref
 from framegate.checks.frame_diff import path_matches
-from framegate.config import drop_machine_files
+from framegate.config import Config, drop_machine_files
 from framegate.specs import feature_mode
 from framegate.state import GitError, git
 
@@ -43,6 +47,63 @@ RUN_EVENTS = {
 }
 
 
+#: [risk] never_auto when the project sets none, by kind of path: schema and migration
+#: files, then documentation (the deploy / CI paths come from the configuration)
+SCHEMA_PATHS = ("**/*.sql", "**/*.prisma", "*migrations/*", "*alembic/*")
+DOC_PATHS = ("docs/", "doc/", "**/README*", "**/CHANGELOG*")
+
+
+def never_auto(cfg: Config) -> list[str]:
+    """The paths whose change is never low risk: `[risk] never_auto`, else the general
+    defaults (the built-in deploy / CI paths, `[protected] extra`, SCHEMA_PATHS, DOC_PATHS)."""
+    if cfg.risk.never_auto is not None:
+        return list(cfg.risk.never_auto)
+    return [*cfg.deploy_ci_paths(), *cfg.protected_extra, *SCHEMA_PATHS, *DOC_PATHS]
+
+
+def never_auto_hits(cfg: Config, paths: Sequence[str]) -> list[str]:
+    """The changed paths that match never_auto. With the defaults framegate's own files
+    (the code map under docs/, the specs) do not count: every task changes them."""
+    from framegate import publish
+
+    entries = never_auto(cfg)
+    own = cfg.risk.never_auto is None
+    return sorted(
+        p for p in paths if path_matches(p, entries) and not (own and publish.is_workflow(cfg, p))
+    )
+
+
+def never_auto_words(cfg: Config) -> str:
+    """The list in one line, for the setup table."""
+    if cfg.risk.never_auto is not None:
+        return ", ".join(cfg.risk.never_auto) or "none"
+    extra = f", {', '.join(cfg.protected_extra)}" if cfg.protected_extra else ""
+    return (
+        f"deploy / CI files (built in{extra}), schema / migration files "
+        f"({', '.join(SCHEMA_PATHS)}), docs ({', '.join(DOC_PATHS)})"
+    )
+
+
+def mark_unattended(
+    feature: str, files: Sequence[pathlib.Path], facts: pathlib.Path
+) -> list[pathlib.Path]:
+    """An automatically approved final gate: each of `files` (the final brief, the final
+    summary) gets a first line that says no person approved; a missing one is written with
+    a pointer to `facts`. Returns the files."""
+    today = datetime.date.today().isoformat()
+    note = (
+        f"> APPROVED AUTOMATICALLY on {today}: no person approved this final gate. framegate "
+        'rated the task low risk ([gates] final = "auto").'
+    )
+    for path in files:
+        text = path.read_text(encoding="utf-8") if path.is_file() else ""
+        if not text.strip():
+            text = f"# {feature}\n\nNo text was written; the facts: {facts.name}.\n"
+        if not text.startswith("> APPROVED AUTOMATICALLY"):
+            path.write_text(f"{note}\n\n{text}", encoding="utf-8")
+    return list(files)
+
+
 @dataclass
 class Assessment:
     level: str
@@ -52,6 +113,9 @@ class Assessment:
     facts: dict[str, Any] = field(default_factory=dict)
     #: check -> reason and fix, for configured checks that measured nothing (also a reason)
     not_measured: dict[str, str] = field(default_factory=dict)
+    #: why no gate of this project passes without a person yet (track_blockers): the
+    #: project's track record, which never changes the rating itself
+    blocked: list[str] = field(default_factory=list)
 
     @property
     def low(self) -> bool:
@@ -60,11 +124,13 @@ class Assessment:
     @property
     def auto(self) -> bool:
         """May `[gates] final = "auto"` pass the final gate without a stop? Only a low-risk
-        feature with every check measured."""
-        return self.low and not self.not_measured
+        feature with every check measured, in a project whose track record allows it."""
+        return self.low and not self.not_measured and not self.blocked
 
     def as_dict(self) -> dict[str, Any]:
         out = {"level": self.level, "reasons": self.reasons, "facts": self.facts}
+        if self.blocked:
+            out["blocked"] = self.blocked
         return {**out, "not_measured": self.not_measured} if self.not_measured else out
 
     def line(self, auto: bool) -> str:
@@ -76,7 +142,10 @@ class Assessment:
             if self.facts.get("mutation_off")
             else "coverage and mutation measured"
         )
-        return f"Risk: low (clean run, small change, {proven})" + (
+        text = f"Risk: low (clean run, small change, {proven})"
+        if self.blocked:
+            return text + "; never automatic yet: " + "; ".join(self.blocked)
+        return text + (
             "" if auto else '; with [gates] final = "auto" this gate would not have stopped'
         )
 
@@ -116,9 +185,11 @@ def change_stats(adapter: LanguageAdapter, feature: str) -> dict[str, Any] | Non
     if ref is None:
         return None
     try:
+        names = drop_machine_files(cfg, git(cfg, "diff", "--name-only", ref).split())
+        # the lines: against the start formatted as the gates format (a rewrap is no change)
+        ref = task_base.formatted(adapter, ref, f"start/{feature}") if feature else ref
         numstat = git(cfg, "diff", "--numstat", ref, "--", *cfg.src_roots)
         modified = git(cfg, "diff", "--numstat", "--diff-filter=M", ref, "--", *cfg.src_roots)
-        names = drop_machine_files(cfg, git(cfg, "diff", "--name-only", ref).split())
     except GitError:
         return None
 
@@ -208,6 +279,7 @@ def assess(
         reasons.append(f"{items} open item(s) to decide")
     kinds = {e.get("kind") for e in events}
     reasons += [text for kind, text in RUN_EVENTS.items() if kind in kinds]
+    reasons += strict_reasons(cfg, feature, events, results)
     if any(e.get("kind") == "human_gate" and not e.get("approved") for e in events):
         reasons.append("the human rejected a gate in this run")
     if limits.max_assumptions and assumptions > limits.max_assumptions:
@@ -232,7 +304,7 @@ def assess(
             limit = getattr(limits, f"max_{key}")
             if limit and stats[key] > limit:
                 reasons.append(f"{stats[key]} {what} (more than {limit}{moved})")
-        marked = sorted(p for p in paths if path_matches(p, limits.never_auto))
+        marked = never_auto_hits(cfg, paths)
         if marked:
             more = f" (+{len(marked) - 3} more)" if len(marked) > 3 else ""
             reasons.append("touches paths marked never automatic: " + ", ".join(marked[:3]) + more)
@@ -251,4 +323,65 @@ def assess(
         reasons.append(
             f"{done} finished feature(s) in this repository (low risk needs {limits.min_features})"
         )
-    return Assessment(ELEVATED if reasons else LOW, reasons, facts, not_measured)
+    blocked = [] if reasons else track_blockers(cfg, feature)
+    return Assessment(ELEVATED if reasons else LOW, reasons, facts, not_measured, blocked)
+
+
+def strict_reasons(
+    cfg: Config, feature: str, events: list[dict[str, Any]], results: dict[str, str]
+) -> list[str]:
+    """The reasons a project can allow one by one (`[risk] allow_*`): a skipped final
+    check, a final-gate repair, a review finding judged valid, a proposed doc update."""
+    from framegate import doc_proposals
+
+    limits, out = cfg.risk, []
+    skipped = sorted(n for n, res in results.items() if res.startswith("SKIPPED"))
+    if skipped and not limits.allow_skipped_checks:
+        out.append("final check(s) skipped: " + ", ".join(skipped[:3]))
+    if not limits.allow_repair and any(e.get("kind") == "final_repair" for e in events):
+        out.append("the final gates needed a repair run")
+    valid = [
+        f
+        for e in events
+        if e.get("kind") == "triage"
+        for f in e.get("findings") or []
+        if str(f.get("verdict") or "").upper() == "VALID"
+    ]
+    if valid and not limits.allow_valid_findings:
+        out.append(f"{len(valid)} review finding(s) judged valid")
+    if not limits.allow_doc_proposals:
+        try:
+            docs = len(doc_proposals.proposals(cfg, feature))
+        except OSError:
+            docs = 0
+        if docs:
+            out.append(f"{docs} proposed doc update(s)")
+    return out
+
+
+def track_blockers(cfg: Config, feature: str) -> list[str]:
+    """Why `[gates] final = "auto"` passes no gate of this project yet, from the compared
+    past decisions (risk_review) and the escaped defects (defects.py) of other tasks: too
+    few gates rated low that a person approved as they stood, a gate rated low that a
+    person answered with changes, an escaped defect on a task rated low."""
+    from framegate import defects, risk_review
+    from framegate.state import read_events
+
+    limits = cfg.risk
+    rows = [d for d in risk_review.decisions(read_events(cfg)) if d.feature != feature]
+    low = [d for d in rows if d.level == LOW and d.decision != risk_review.ENGINE]
+    agreed = sum(1 for d in low if d.decision == risk_review.AS_IT_STOOD)
+    out = []
+    if limits.min_agreed and agreed < limits.min_agreed:
+        out.append(
+            f"{agreed} past final gate(s) rated low that you approved as they stood "
+            f"(needs {limits.min_agreed})"
+        )
+    overruled = len(low) - agreed
+    if limits.max_low_overruled >= 0 and overruled > limits.max_low_overruled:
+        out.append(f"{overruled} past gate(s) rated low that you answered with changes")
+    rated_low = {d.feature for d in rows if d.level == LOW}
+    escaped = sum(len(v) for task, v in defects.per_task(cfg).items() if task in rated_low)
+    if limits.max_low_defects >= 0 and escaped > limits.max_low_defects:
+        out.append(f"{escaped} escaped defect(s) on task(s) rated low")
+    return out

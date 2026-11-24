@@ -1,7 +1,8 @@
 # Replay candidates: commits from history as exercises for framegate
 
-_Written 2026-11-16. Status: candidate list, plus the mechanical check of 17 commits (see
-"Check results"). No replay was run._
+Why replay exists and the rules for building a candidate. How the command works and the
+format of the candidates file: [replay.md](replay.md). The commit lists from "How the list was
+made" on are the screening of 2026-11-16, kept as a dated note.
 
 ## Purpose
 
@@ -16,33 +17,54 @@ by kind of task, for two uses:
    before the first real feature, and the difference between the agent's result and the
    team's commit proposes lines for `.framegate/project.md`.
 
-Precondition (user, 2026-11-16): one feature runs completely through every step first.
-A benchmark of a half-working cycle measures only the broken half.
+Precondition: one task runs completely through every step first. A benchmark of a
+half-working cycle measures only the broken half.
 
 ## Rules agreed for building an exercise
 
-- **The spec does not come from the diff.** The task text comes from the commit message, the
-  ticket, and the doc lines the commit itself changed. A spec written from the diff contains
+- **The task text does not come from the diff.** It comes from the commit message, the
+  ticket, and the doc lines the commit itself changed. A task written from the diff contains
   the answer.
-- **Only the public signatures come from the real commit,** as stubs (framegate commits stubs
-  at spec time anyway). Without them the hidden tests cannot run against the agent's code.
+- **The task text is short, like a ticket.** What is wanted, as a user would report it: no
+  function, file or test names.
+- **What the user knows beyond the ticket is a hidden fact.** A detail the hidden tests
+  depend on (a public name, a signature, an error message, a rule for an edge case) goes
+  under `### Facts`, one per line with its topic words. The driver gives a fact only when the
+  chat asks a question that the fact answers, verbatim, and never volunteers one. The results
+  show how many facts were asked for.
 - **Ground truth is the commit's tests, not its diff.** The agent's code may differ and be
   right. The real commit's tests run against the agent's result as hidden tests.
+- **Extra tests where the commit's tests are thin.** Tests of the candidate's author that
+  fail on the parent and pass on the commit (`- extra:`). They count like hidden tests.
+- **Probes for what must not change.** Tests of the candidate's author that pass on the
+  parent and on the commit (`- probes:`). A result that passes the hidden tests and fails a
+  probe "broke a rule".
 - **Check every candidate mechanically first:** the commit's tests fail on the parent and pass
-  on the commit. A candidate that does not show this is dropped.
+  on the commit; the probes pass on both; the extra tests fail on the parent and pass on the
+  commit. A candidate that does not show this is dropped.
 - **Hide the future:** run in a clone cut at the parent commit, so no later commit is
   reachable with `git show` or `git log --all`.
+- **Hide the candidate.** The candidates file, the probes, the extra tests and the hidden
+  answer cannot be read by the chat, framegate's agents or the driver.
 - **A skipped hidden test is "not proven", not a pass.**
+- **A set that was tuned against is no longer a fresh measure.** Once a candidate set has
+  been run and framegate was changed because of what it showed, a good result on that set
+  proves little. Keep held-out sets that no change was tuned on, and measure on those.
 - **Split the history for the setup loop:** some commits for learning, others never used for
   learning. Measure on the held-back ones before and after.
 - **The human picks what is learned.** The loop proposes project knowledge; nothing goes into
   `project.md` unchecked.
 - **No settings tuned from a few runs.** Three to five runs show that something is broken, not
   that a threshold or a model choice is better.
-- **What a replay does not measure:** the spec dialogue and the human's time at the gates.
-  Those are still measured on real features.
+- **What a replay does not measure:** the spec dialogue with a real user and the human's time
+  at the gates. Those are still measured on real tasks.
 
 ## How the list was made
+
+_This section and the ones after it are the screening of 2026-11-16, before `framegate replay`
+existed. They are history: the lists are not kept up to date, they predate facts, probes and
+extra tests, and `framegate replay` runs Python projects only, so the FCSim rows cannot be
+replayed with it._
 
 Static screening: the diffs and the test files were read. The "fails on the parent, passes on
 the commit" check was run afterwards for the 17 rows in "Check results"; it is still open for
@@ -212,12 +234,8 @@ Eight exercises: four bug fixes and four features, both languages, 4 to 394 chan
 | da-otto | 1c52d52 | feature |
 | framegate | 82610f7 | bugfix |
 
-## Next steps
+## Open
 
-1. For each first-round commit: check out the parent, add the commit's test files, confirm
-   they fail; check out the commit, confirm they pass. Drop what does not show both.
-2. Per exercise: a branch (or clone) cut at the parent; the task text from the commit message
-   and ticket; the hidden spec and the commit's tests kept outside what the agents can read.
-3. Do one replay by hand, end to end, before automating anything. If it teaches something,
-   automate the commit filter first (deterministic, no agent).
-4. Decide per project which commits are for learning and which are held back.
+- Decide per project which commits are for learning and which are held back.
+- The commit filter of "How the list was made" is not automated: a candidates file is written
+  by hand.

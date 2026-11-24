@@ -22,6 +22,11 @@ phase:
 
 !`framegate spec $ARGUMENTS --mode bugfix`
 
+If the output above has `declared but not installed: <name>` lines (also in
+out/$ARGUMENTS/env_facts.md): before you write a requirement or a test that needs that
+framework, ask the user: drop those tests/requirements, allow installing it, or another
+way. Write the answer into requirements.md.
+
 If the output above says the spec is **already approved**, do not start the dialogue: run
 `framegate status $ARGUMENTS --brief`, tell the user in one line where it stands and ask:
 continue it (default; then the run protocol below, by state as in its section B), or change the
@@ -79,6 +84,39 @@ If the user gave only a name (`$ARGUMENTS`), it is just the branch and folder na
 in step 1 what it refers to (the code map, the code, the docs) and ask in step 2 only what
 you still cannot decide, the requirement itself included if the code and the docs do not
 tell.
+A task text the user gave earlier in this conversation is the requirement: read it before
+you ask anything.
+
+Sources, by rank:
+- The code is the current state. Where docs and code disagree, the code says what exists.
+- The user's task is the requirement. Where docs and the task disagree, the task wins.
+- Docs say where the project is heading: context only. A doc can suggest a requirement; it
+  is one only when the user says so.
+- A comment or docstring is no source.
+Deferred work: read the entries `framegate deferred --file <path>` prints for the files the
+task touches; when the task does one, write `Resolves: D<n>` in requirements.md.
+When a requirement changes what an input may be (None, another type or unit, a wider
+range): run `framegate uses <name>` for that function or variable, check every use site it
+lists and name in design.md each one that must change.
+Requirements come from the task only: a spec never requires text in a docstring, a comment
+or a doc, and neither you nor an agent of the run edits a documentation file. What a doc
+should say afterwards (the work makes it out of date, or the task goes another way than the
+documented plan) is one bullet under `## Proposed doc updates` of requirements.md. A file
+under docs/ (plan, design, architecture, reference): the file, where in it, what it says
+today, the proposed text, why; the user answers it at the final gate (default: later).
+Where the task's code now contradicts the doc: `today: <...> -> code now: <...>`; the user
+then approves the code (the doc updated now or later) or rejects it with a solution. A
+README, CHANGELOG or handover note: one brief line of what changes; no question. After the
+final gate is approved, one docs step applies the brief ones and the approved ones.
+A docstring or comment in a source file that the task's code will contradict is code text,
+not a doc: the plan step that changes the file rewords it (name the lines in that step); in
+a file no step changes, one bullet `- code text: <source file>:<lines>: today: <quoted> ->
+code now: <what the code does>`, which the final summary lists (no question, no docs step).
+Each proposed text states what this task builds, nothing more: before the final gate it is
+checked against the code and corrected to it.
+Program output (an error message, a log line) is behaviour, not documentation: write every
+error message out in full for one concrete input, with one notation for placeholders in the
+whole spec (repr, str, or str in literal quotes); the tests match the whole message.
 
 1. Read what the user reports, then find out everything you can yourself: read the code map,
    the code on the path from the input to the wrong result, and the project knowledge above
@@ -87,12 +125,18 @@ tell.
    - Reproduce it: run today's code with the reported input (the project's run / scan command,
      or the smallest existing test) and copy the wrong result. If you cannot reproduce it, say
      so and ask for the exact input; do not write a report from a guess.
-   - Expected result: where it follows from (an earlier spec, a rule, the docs). If nothing
-     says what is right, that is a question for the user.
+   - Expected result: where it follows from (the user's words, an approved spec, a rule in
+     the code). A doc alone does not say what is right: then it is a question for the user.
    - Must not change: the cases next to the bug that are right today and that a fix could
-     break (other inputs, other callers of the same code, saved data, hashes, goldens).
-   - Suspected causes: at least two, each with where to look (file: method). You only list
-     them; the implementer confirms one and rules out the others.
+     break (other inputs, other callers of the same code, saved data, hashes, goldens), and
+     every case green before the fix by design (an accepted input, an existing error or
+     behaviour that wins, a must-stay-true case): I rows, never R rows.
+   - Suspected causes: at least two, each with where to look (file: method) and the suspect
+     expression in backticks. Each ends with the reproduction row whose test runs through
+     that code (`-> <ID>`) or with `-> ruled out: <evidence>`; a cause that no row's input
+     reaches (the code returns before it, a fake cuts it off) gets a row of its own.
+     `spec-check` fails a cause with neither. You only list them; the implementer confirms
+     one and rules out the others.
    - Existing data: every field the report names resolved to its exact member, with the line
      that assigns it copied into the spec.
    - references: when the task builds on another project listed under "References" in the
@@ -100,17 +144,34 @@ tell.
      used in requirements.md, "References" (name, files / folders, what for): only those are
      given to the agents, read-only, pinned at their commit at "spec OK". Name them in the
      spec brief, so the user approves them.
-2. Ask only what those sources cannot decide (the right result, how far the fix may go).
-   Numbered, plain words, each "A: ... (default) / B: ..." on one line. A point with one
-   sensible answer is a decision you make and list, not a question.
+2. Ask the user: one compact round, numbered, plain words, about 8 points at most, the most
+   consequential first, each "A: ... (default) / B: ..." on one line, A being the answer you
+   recommend, so the user can say "ok" to all. What those sources cannot decide: the right
+   result, how far the fix may go.
+   Always a question, never your decision, unless the task text, the code or the docs
+   already state it:
+   - the design of the fix, when it has more than one (the options, yours first);
+   - every new or changed public name, signature, parameter type, default value, error
+     type or message, stored or wire format (an existing pattern in the code that it
+     follows states it: name the pattern);
+   - what must not change;
+   - where the tests go, when existing test files cover the area;
+   - which docs the task may edit (as proposed doc updates);
+   Only a point with no observable effect on callers or stored data is a decision you make
+   and list.
+   A reply that describes the task (a ticket, the requirement in the user's words) and does
+   not answer your questions is not "ok" and takes no default: it is the requirement. Do
+   step 1 again with it, drop the questions it settles, and ask the ones it leaves open
+   again, with the new ones it raises.
+   design.md, "Public interfaces": one row per new or changed public member with where its
+   shape comes from (`task`, `code: <pattern>`, `docs: <file>`, `asked` = the user
+   answered); `spec-check` fails a member without one.
 3. Write requirements.md (the bug report), design.md and plan.md following the templates
    exactly: reproduction rows are R IDs (each gets a test that fails today and passes once
    fixed), must-not-change rows are I IDs (each gets a test that passes today and after).
    Usually one plan step that covers every ID. Do not write tests and do not fix anything.
-   Files in a plan step: a step may mention any file. A Markdown docs file it names by its
-   path (`README.md`, `CHANGELOG.md`, `.md` under a docs folder) becomes writable for that
-   step at the approval; everything else outside the source folders stays read-only.
-   `spec-check` prints "Documentation files the plan makes writable".
+   Files in a plan step: a step may mention any file; everything outside the source folders
+   stays read-only, the docs included (see "Sources" above).
    Then run `framegate spec-check $ARGUMENTS` and fix what it lists.
    Setup files: if the task needs a new package or source folder, a dependency or a tool
    setting, change those files now, in the spec phase: `framegate.toml` and the project's
@@ -144,7 +205,8 @@ tell.
        **Plan** — how it gets fixed, the steps numbered as in plan.md, one line each, ending with the main file it builds or changes
        **How it is proven** — the tests that fail today and pass after; what stays as it is
        **Not proven** — what to check by using it
-       **Decisions I made for you** — one line each, with what it rules out
+       **Decisions I made for you** — one line each; only points with no observable effect
+         on callers or stored data ("None.")
        **Setup files changed** — one line: the files `spec-check` lists, each with why
          ("None." when it lists none); they are approved with the spec
        **Pipeline follow-up** — deploy / CI changes this task makes necessary, one line each

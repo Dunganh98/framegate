@@ -80,6 +80,14 @@ def test_full_flow_human_mode(demo_repo: DemoRepo, capsys: pytest.CaptureFixture
     assert "also check the message" in r.calls()[2]["prompt"]
     assert "TEST REVIEWER" in r.calls()[1]["role"]
     assert "round 1 of at most 3" in r.calls()[1]["prompt"]
+    # round 2: a new agent with the objections and the diff, not a full review
+    again = r.calls()[3]
+    assert "--resume" not in again["argv"]
+    assert "follow-up test review (round 2 of at most 3" in again["prompt"]
+    assert "## The objections of round 1\n- DEMO-E-001 test_add_rejects_non_int" in again["prompt"]
+    assert "test_review_round1.md" in again["prompt"] and "## Conventions" not in again["prompt"]
+    assert "```diff\n" in again["prompt"] and "Red against stubs PASS" in again["prompt"]
+    assert "TEST REVIEWER" in again["role"]
     tg = read(r, "out/demo/tests_gate.md")
     assert "## Open questions: 1" in tg and "1. [test writer] [TESTS] Should add()" in tg
     assert "## Test reviewer: OK, no objections" in tg
@@ -93,6 +101,7 @@ def test_full_flow_human_mode(demo_repo: DemoRepo, capsys: pytest.CaptureFixture
         (1, "OBJECTIONS", True),
         (2, "OK", False),
     ]
+    assert [e.get("follow_up") for e in reviews] == [None, True]
     capsys.readouterr()
     assert r.af("status", "demo") == EXIT_GATE
     assert "=== TESTS GATE (demo) ===" in capsys.readouterr().out
@@ -105,6 +114,7 @@ def test_full_flow_human_mode(demo_repo: DemoRepo, capsys: pytest.CaptureFixture
     assert "Check the error message text too" in r.calls()[4]["prompt"]
     assert "The human's note at the tests gate" in r.calls()[5]["prompt"]
     assert "Check the error message text too" in r.calls()[5]["prompt"]
+    assert "follow-up test review" not in r.calls()[5]["prompt"]  # a new gate cycle: in full
     assert "## Open questions: 1" in read(r, "out/demo/tests_gate.md")
 
     # answer: the answers go into the spec (SPEC_UPDATE), then writer + reviewer re-run; the
@@ -489,6 +499,20 @@ def test_tests_gate_auto_stops_when_not_clean(
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
 
 
+def test_follow_up_review_gets_the_test_diff(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    cfg = load_config(r.root)
+    orch = Orchestrator(cfg, get_adapter(cfg), echo=lambda s: None)
+    (r.root / "tests/test_demo.py").write_text("A = 1\n", encoding="utf-8")
+    orch.keep_reviewed_tests("demo")
+    assert orch.tests_diff("demo") == "(no test file changed)"
+    (r.root / "tests/test_demo.py").write_text("A = 2\n", encoding="utf-8")
+    (r.root / "tests/test_more.py").write_text("B = 1\n", encoding="utf-8")
+    diff = orch.tests_diff("demo")
+    assert "--- a/tests/test_demo.py" in diff and "-A = 1\n+A = 2" in diff
+    assert "+++ b/tests/test_more.py" in diff and "+B = 1" in diff
+
+
 def test_tests_gate_deferred_two_human_gates(
     demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -596,12 +620,14 @@ def test_small_plan_in_one_implementer_run(demo_repo: DemoRepo) -> None:
 
 
 def test_a_parked_batch_is_redone_as_one(demo_repo: DemoRepo) -> None:
+    """A question that names no step's spec ID can be about any step of the run: the batch
+    parks as a whole (one that names a step: tests/test_step_tests.py)."""
     r = demo_repo
     r.two_steps()
     r.add_toml(FAST)
     r.defer_tests_gate()
     r.set_toml("agents", "step_batch_ids", "15")
-    r.scenario(park_steps=[2])
+    r.scenario(park_steps=[2], park_text="- Which sign has a negated zero?\n")
     assert r.af("approve-spec", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
     parked = r.progress()["parked"]

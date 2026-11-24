@@ -17,7 +17,9 @@ import ast
 import re
 from collections.abc import Collection
 from dataclasses import dataclass, field
+from typing import Any
 
+from framegate import task_base
 from framegate.adapters.base import LanguageAdapter
 from framegate.checks.existing_members import base_ref
 from framegate.checks.frame_diff import changed_src_files
@@ -198,12 +200,14 @@ def report(adapter: LanguageAdapter, feature: str) -> Structure:
         return Structure(limit=cfg.max_file_lines, note=f"git failed: {e}")
     suffixes = tuple(adapter.source_suffixes)
     sizes = []
+    # sizes before: the start formatted as the gates format (a rewrap is no growth)
+    start = task_base.formatted(adapter, ref, f"start/{feature}") if files and feature else ref
     for path in files:
         if suffixes and not path.endswith(suffixes):
             continue
         text = (cfg.root / path).read_text(encoding="utf-8", errors="replace")
         try:
-            before: int | None = len(git(cfg, "show", f"{ref}:{path}").splitlines())
+            before: int | None = len(git(cfg, "show", f"{start}:{path}").splitlines())
         except GitError:
             before = None  # a new file
         sizes.append(
@@ -250,6 +254,56 @@ def oversized(
     return found[:most], len(found)
 
 
+def plan_over_limit(adapter: LanguageAdapter, feature: str) -> list[tuple[str, int]]:
+    """The source files plan.md names that are over [gates] max_file_lines today, as
+    (path, lines). Not a port's target files: they keep the reference's layout."""
+    from framegate import references
+    from framegate.checks import plan_files
+
+    cfg = adapter.cfg
+    path = cfg.spec_dir(feature) / "plan.md"
+    if not cfg.max_file_lines or not path.is_file():
+        return []
+    ported = references.port_targets(cfg, feature)
+    suffixes = tuple(adapter.source_suffixes)
+    found = []
+    for rel in plan_files.named_files(plan_files._COMMENT.sub("", path.read_text("utf-8"))):
+        file = cfg.root / rel
+        if not rel.endswith(suffixes) or not cfg.in_src(rel) or rel in ported or not file.is_file():
+            continue
+        n = len(file.read_text(encoding="utf-8", errors="replace").splitlines())
+        if n > cfg.max_file_lines:
+            found.append((rel, n))
+    return found
+
+
+def crossed_lines(events: list[dict[str, Any]]) -> list[str]:
+    """For the final facts: one line per file this task took over the size limit (under
+    it or new before, over it at the last final gate), with the step whose gate saw it."""
+    last = [e for e in events if e.get("kind") == "final_gates"]
+    shape = (last[-1].get("structure") if last else None) or {}
+    limit, before = int(shape.get("limit") or 0), shape.get("before") or {}
+    out = []
+    for path in shape.get("grown") or []:
+        was, now = before.get(path), (shape.get("files") or {}).get(path)
+        if not limit or (was is not None and was > limit):
+            continue
+        step = next(
+            (
+                str(e.get("step"))
+                for e in events
+                if e.get("kind") == "gate" and e.get("passed") and path in (e.get("grown") or [])
+            ),
+            "",
+        )
+        size = f"new, {now} lines" if was is None else f"{was} -> {now} lines"
+        out.append(
+            f"- {path}: this task took it over the size limit ({size}, limit {limit})"
+            + (f", in {step}" if step else "")
+        )
+    return [f"## Files taken over the size limit: {len(out)}", "", *out] if out else []
+
+
 def new_public_types(adapter: LanguageAdapter, feature: str) -> list[str]:
     """Public types the feature added to the sources (from the diff against its base)."""
     cfg = adapter.cfg
@@ -277,3 +331,26 @@ def missing_from_code_map(adapter: LanguageAdapter, feature: str) -> tuple[bool,
         return False, types
     text = path.read_text(encoding="utf-8", errors="replace")
     return True, [t for t in types if not re.search(rf"\b{re.escape(t)}\b", text)]
+
+
+def over_limit_lines(events: list[dict[str, Any]]) -> list[str]:
+    """For the final facts: crossed_lines, then the files that were over the limit before
+    and that this task made longer. Notes for the summary, never gate questions; each
+    file's split is on the deferred list."""
+    last = [e for e in events if e.get("kind") == "final_gates"]
+    shape = (last[-1].get("structure") if last else None) or {}
+    limit, before = int(shape.get("limit") or 0), shape.get("before") or {}
+    files = shape.get("files") or {}
+    longer = [
+        f"- {p}: over the size limit before this task, now longer "
+        f"({before[p]} -> {files.get(p)} lines, limit {limit})"
+        for p in shape.get("grown") or []
+        if limit and before.get(p) is not None and before[p] > limit
+    ]
+    out = crossed_lines(events)
+    if longer:
+        out += [*([""] if out else []), f"## Files over the size limit made longer: {len(longer)}"]
+        out += ["", *longer]
+    if out:
+        out += ["", "No question: say each in one line of the summary; its split is deferred."]
+    return out

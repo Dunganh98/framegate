@@ -339,11 +339,12 @@ def build(
     assumptions: list[Any] | None = None,
     archive: str = "",
     stopped: str = "",
+    repair_review: str = "",
 ) -> RetroInput:
     """Render retro_input.md from the feature's events (in order), the implementer's
     assumptions (report.Assumption: where, spec_id, text) and questions_archive.md (every
     answer round, for the question -> answer lookup). `stopped`: the run did not reach DONE;
-    where it stands and why."""
+    where it stands and why. `repair_review`: what the reviewer wrote about the final repair."""
     sections: dict[str, list[str]] = {k: [] for k in ID_PREFIXES}
     answer_rounds = archive_rounds(archive)
     ids: list[str] = []
@@ -553,13 +554,45 @@ def build(
     for prefix, title in ID_PREFIXES.items():
         out += ["", f"## {title}", ""]
         out += ["\n\n".join(sections[prefix]) if sections[prefix] else "None."]
+    out += run_health(events)
     chat = chat_digest(events)
     if chat:
         out += ["", "## Chat (the chat's own notes: questions, replies, hand work, refusals)", ""]
         out += chat
     if review_notes.strip():
         out += ["", "## Review notes (review.md, for context)", "", _block(review_notes, 2000)]
+    if repair_review.strip():
+        out += ["", "## Repair review (the reviewer on the final repair)", ""]
+        out += [_block(repair_review, 3000)]
     return RetroInput("\n".join(out).rstrip() + "\n", ids, counts)
+
+
+def run_health(events: list[dict[str, Any]], top: int = 5) -> list[str]:
+    """The slowest check runs (`check` events) and why the orchestrator stopped
+    (`orchestrator_exit`, and the `interrupted` records of a run found gone)."""
+    checks = sorted(
+        (e for e in events if e.get("kind") == "check"),
+        key=lambda e: -float(e.get("seconds") or 0),
+    )[:top]
+    out: list[str] = []
+    if checks:
+        out += ["", f"## Slowest checks (top {top}, context)", ""]
+        out += [
+            f"- {e.get('name')} ({e.get('phase')}): {float(e.get('seconds') or 0):.0f} s, "
+            f"{e.get('status')}"
+            for e in checks
+        ]
+    exits = [
+        f"- {e.get('ts')} {e.get('phase') or '?'}"
+        + (f"/{e['sub']}" if e.get("sub") else "")
+        + f": {e.get('reason') or e.get('how')}"
+        for e in events
+        if e.get("kind") == "orchestrator_exit"
+        or (e.get("kind") == "interrupted" and "gone" in str(e.get("how")))
+    ]
+    if exits:
+        out += ["", "## Orchestrator exits (context)", "", *exits]
+    return out
 
 
 KNOWLEDGE_ITEM = re.compile(r"^\s*[-*]\s*K(\d+)\s*\[([^\]]+)\]\s*:?\s*(.+?)\s*$")

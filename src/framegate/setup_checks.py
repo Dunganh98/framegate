@@ -8,7 +8,15 @@ from framegate.agent_commands import rule_allows
 from framegate.config import ROLE_ALIASES, Config
 
 #: the phases whose task carries the conventions brief (orchestrator.BRIEF_PHASES, by phase)
-BRIEF_RUN_PHASES = ("TESTS", "TEST_REVIEW", "IMPLEMENT", "REVIEW", "TRIAGE", "DIAGNOSIS")
+BRIEF_RUN_PHASES = (
+    "TESTS",
+    "TEST_REVIEW",
+    "IMPLEMENT",
+    "SIMPLIFY",
+    "REVIEW",
+    "TRIAGE",
+    "DIAGNOSIS",
+)
 
 
 def renamed_names(cfg: Config) -> list[str]:

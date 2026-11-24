@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import Any
 
-from framegate import hosts, survey
+from framegate import env_gaps, hosts, survey
 from framegate.adapters import detect_language, get_adapter
 from framegate.adapters.base import GATE_NAMES, TIMEOUT_CODE, LanguageAdapter, run_command
 from framegate.agent_commands import command_text
@@ -443,6 +443,7 @@ def collect(start: pathlib.Path | None = None) -> dict[str, Any]:
                     "version": facts.get("version", ""),
                 }
             data["tools"] = tool_rows(adapter)
+            data["env_gaps"] = env_gaps.lines(adapter) if named else []
         except ConfigError as e:
             data["tools_error"] = str(e)
     data["src"] = [{"path": p, "exists": (root / p).is_dir()} for p in cfg.src_roots]
@@ -598,6 +599,7 @@ def render(data: dict[str, Any]) -> list[str]:
         )
     else:
         out.append("Reinstall ([env] refresh): none (the project is not installed editable)")
+    out += [f"Environment: {line}" for line in data.get("env_gaps") or []]
     out.append(f"References: {', '.join(data['references']) or 'none'}")
     out.append(
         "Files: "

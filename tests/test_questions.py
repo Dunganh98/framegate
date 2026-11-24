@@ -4,11 +4,13 @@ question as it was asked (the chat rewords it). Both from the M5-moment-scan ret
 from __future__ import annotations
 
 from conftest import DemoRepo
+from framegate import answered
 from framegate.adapters import get_adapter
-from framegate.checks import check_signature
+from framegate.checks import baseline, check_signature
 from framegate.config import load_config
 from framegate.orchestrator import EXIT_GATE, Orchestrator
 from framegate.retro import match_answer, same_question
+from framegate.state import log_event
 
 FAST = "[gates.commands]\nlint = []\nformat = []\ntypecheck = []\n"
 
@@ -79,9 +81,9 @@ def test_a_reworded_question_about_the_same_test_is_the_same() -> None:
 def test_an_unwinnable_round_is_not_repeated(demo_repo: DemoRepo) -> None:
     """Seen live: "Red against stubs" failed on a test the writer may not change (carried
     over, green by design); the reviewer said OK twice, and the writer was still sent back
-    twice and asked its question twice. Now: one round for the failure; when it fails the
-    same way again and the reviewer has no objections, it goes to the gate, and the
-    reworded question is collected once."""
+    twice and asked its question twice. Now: one round for the failure, before the reviewer
+    runs; when it fails the same way again and the reviewer has no objections, it goes to
+    the gate, and the reworded question is collected once."""
     r = demo_repo
     r.add_toml(FAST)
     r.defer_tests_gate()
@@ -89,21 +91,41 @@ def test_an_unwinnable_round_is_not_repeated(demo_repo: DemoRepo) -> None:
     assert r.af("approve-spec", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE
     phases = [c["phase"] for c in r.calls()]
-    assert phases[:4] == ["TESTS", "TEST_REVIEW", "TESTS", "TEST_REVIEW"]
-    assert phases[4] == "IMPLEMENT"  # no third writer round (before: two rounds back)
+    # the failed check goes back once without a review; the same failure again: one review
+    assert phases[:4] == ["TESTS", "TESTS", "TEST_REVIEW", "IMPLEMENT"]
+    back = [e for e in r.events() if e["kind"] == "test_checks"]
+    assert [(e["round"], e["failed_checks"], e["sent_back"]) for e in back] == [
+        (1, ["Red against stubs"], True)
+    ]
+    again = r.calls()[1]["prompt"]
+    assert "These mechanical checks failed" in again and "### Red against stubs" in again
+    assert "PASSES AGAINST STUB (weak or wrong test): " in again
     reviews = [e for e in r.events() if e["kind"] == "test_review"]
-    assert [(e["round"], e["sent_back"]) for e in reviews] == [(1, True), (2, False)]
-    assert "unchanged_checks" not in reviews[0]
-    assert reviews[1]["unchanged_checks"] == ["Red against stubs"]
+    assert [(e["round"], e["sent_back"]) for e in reviews] == [(1, False)]
+    assert reviews[0]["unchanged_checks"] == ["Red against stubs"]
     log = (r.root / "out/demo/progress.log").read_text(encoding="utf-8")
-    assert "back to the test writer (round 1 of 2)" in log and "(round 2 of 2)" not in log
+    assert "before the test reviewer runs (check round 1 of 2): Red against stubs" in log
+    assert "back to the test writer (round 1 of 2)" not in log
     assert "failed exactly as in the round before" in log
-    assert "1 repeated question(s) dropped" in log
+    assert "1 question(s) took the place of an open one" in log
     asked = [e for e in r.events() if e["kind"] == "questions" and e["who"] == "test writer"]
     assert len(asked) == 1 and asked[0]["questions"].startswith("- RUN-R-004: `test_runner")
     # today's end state: the failed check is an item for the final gate
     deferred = [e for e in r.events() if e["kind"] == "tests_gate_deferred"]
     assert "failed checks: Red against stubs" in deferred[0]["reasons"]
+
+
+def test_without_check_rounds_the_reviewer_sees_the_failed_check(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    r.add_toml(FAST)
+    r.defer_tests_gate()
+    r.set_toml("agents", "test_check_rounds", "0")
+    r.scenario(green_test=True)
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE
+    phases = [c["phase"] for c in r.calls()]
+    assert phases[:5] == ["TESTS", "TEST_REVIEW", "TESTS", "TEST_REVIEW", "IMPLEMENT"]
+    assert not [e for e in r.events() if e["kind"] == "test_checks"]
 
 
 def test_a_changed_failure_or_an_objection_still_gets_its_round(demo_repo: DemoRepo) -> None:
@@ -118,6 +140,7 @@ def test_a_changed_failure_or_an_objection_still_gets_its_round(demo_repo: DemoR
     new = {**same, "round": 1, "check_failures": {"A": "x1", "B": "y"}}
     assert not orch.same_check_failures(new, ["A", "B"])  # a check that passed before
     assert not orch.same_check_failures({"round": 1}, ["A"])
+    assert orch.same_check_failures({**same, "check_rounds": 1}, ["A"])  # sent back by the checks
     # the digest: the problem lines, not the count line, the order or the timings
     one = "3 tests for feature f.\nPASSES AGAINST STUB: t::a\nERROR: t::b in 0.12s"
     two = "4 tests for feature f.\nERROR: t::b in 1.5 s\nPASSES AGAINST STUB: t::a"
@@ -145,7 +168,9 @@ def test_a_repeated_question_is_collected_once(demo_repo: DemoRepo) -> None:
     # the next round: the same question again, a new one, and the new one twice
     qfile.write_text(f"- {Q1_AGAIN}\n- {Q2}\n- {Q2}\n", encoding="utf-8")
     assert orch.collect_questions("demo", "TESTS", "test writer") == 1
-    assert any("2 repeated question(s) dropped" in x for x in lines)
+    assert any("1 repeated question(s) dropped" in x for x in lines)
+    # the same asker about the same spec IDs: the new wording takes the old one's place
+    assert any("1 question(s) took the place of an open one" in x for x in lines)
     # another asker may ask the same thing (its view differs); its own tag is not doubled
     qfile.write_text(f"- [test reviewer] {Q1}\n", encoding="utf-8")
     assert orch.collect_questions("demo", "TEST_REVIEW", "test reviewer") == 1
@@ -154,7 +179,7 @@ def test_a_repeated_question_is_collected_once(demo_repo: DemoRepo) -> None:
 
     kept = orch.open_questions("demo")
     assert [q[:22] for q in kept] == [
-        "[test writer] Q1: MSC-",
+        "[test writer] Q1 (repe",
         "[test writer] Q2: MSC-",
         "[test reviewer] Q1: MS",
     ]
@@ -163,6 +188,47 @@ def test_a_repeated_question_is_collected_once(demo_repo: DemoRepo) -> None:
     assert (
         events[1]["questions"].startswith("- Q2: MSC-R-006") and "Q1" not in events[1]["questions"]
     )
+    over = [e for e in r.events() if e["kind"] == "question_superseded"]
+    assert [(e["who"], e["about"], e["repeats"]) for e in over] == [
+        ("test writer", "about test writer: R-001 R-005", 1)
+    ]
+    assert over[0]["superseded"].startswith("[test writer] Q1: MSC-")
+
+
+def test_a_question_is_its_asker_and_its_spec_ids() -> None:
+    about = answered.identity(f"[test writer] {GREEN}")
+    assert about == "about test writer: R-004"
+    assert answered.identity(f"[test writer] {GREEN_OTHER}") == about  # other words, same IDs
+    assert answered.identity(f"[test reviewer] {GREEN}") != about
+    assert answered.identity("[test writer] Are floats fine?") == ""
+    assert answered.identity("[structure report] src/a.py: split it (R-001)") == ""
+    # only among open questions: after an answer, the same IDs in other words are asked
+    events = [{"kind": "answer", "items": [{"asked": f"[test writer] {GREEN}", "a": "keep it"}]}]
+    known = answered.answers(events)
+    assert about not in known and answered.key(f"[test writer] {GREEN_OTHER}") not in known
+    assert known[answered.key(f"[test writer] {GREEN}")] == "keep it"
+
+
+def test_a_question_about_a_check_that_passes_now_is_closed(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    cfg = load_config(r.root)
+    lines: list[str] = []
+    orch = Orchestrator(cfg, get_adapter(cfg), echo=lines.append)
+    (r.root / "out/demo").mkdir(parents=True, exist_ok=True)
+    orch.write_open_questions(
+        "demo", [f"[test writer] {GREEN_ASKED}", "[test writer] Are floats fine as input?"]
+    )
+    prog: dict = {}
+    red = {"Red against stubs": "FAIL", "Traceability": "PASS"}
+    orch.close_resolved("demo", prog, red)
+    assert len(orch.open_questions("demo")) == 2 and prog["checks_failed"] == ["Red against stubs"]
+    orch.close_resolved("demo", prog, {**red, "Red against stubs": "PASS"})
+    assert orch.open_questions("demo") == ["[test writer] Are floats fine as input?"]
+    (done,) = [e for e in r.events() if e["kind"] == "question_resolved"]
+    assert done["how"] == "resolved by the writer" and done["check"] == "Red against stubs"
+    archive = (r.root / "out/demo/questions_archive.md").read_text(encoding="utf-8")
+    assert "resolved by the writer: Red against stubs passes" in archive
+    assert any("1 open question(s) closed, resolved by the writer" in x for x in lines)
 
 
 def test_an_answer_is_found_by_the_question_as_asked() -> None:
@@ -206,4 +272,78 @@ def test_answer_items_keep_the_question_as_asked(demo_repo: DemoRepo) -> None:
     assert item["asked"] == "[test writer] [TESTS] Should add() accept floats?"
     assert match_answer("[TESTS] Should add() accept floats?", answer["items"]) == (
         "No, whole numbers only."
+    )
+
+
+SPLIT = "Split src/demo/state.py by concept."
+
+
+def test_an_answered_question_is_not_asked_again(demo_repo: DemoRepo) -> None:
+    """Seen live: the owner answered "split state.py: later" at the first final gate; the
+    reviewer proposed the split again and it was asked at the second."""
+    r = demo_repo
+    cfg = load_config(r.root)
+    orch = Orchestrator(cfg, get_adapter(cfg), echo=lambda s: None)
+    orch.ask_split_later("demo", {SPLIT: ("src/demo/state.py", 500)})
+    orch.ask_split_later(
+        "demo", {"Move the parser out of src/demo/state.py.": ("src/demo/state.py", 500)}
+    )
+    (asked,) = orch.open_questions("demo")
+    log_event(cfg, "demo", "answer", items=[{"n": 1, "asked": asked, "a": "Same as item 2: later"}])
+    log_event(cfg, "demo", "answer", items=[{"n": 1, "asked": f"[test writer] {Q2}", "a": "A"}])
+    (r.root / "out/demo/open_questions.md").unlink()
+
+    orch.ask_split_later("demo", {SPLIT: ("src/demo/state.py", 510)})
+    (r.root / "out/demo/questions.md").write_text(f"- {Q2}\n- {Q1}\n", encoding="utf-8")
+    assert orch.collect_questions("demo", "REVIEW", "adversarial reviewer") == 1
+    assert [q[:26] for q in orch.open_questions("demo")] == ["[adversarial reviewer] Q1:"]
+    events = r.events()
+    assert [e["who"] for e in events if e["kind"] == "asked_again"] == [
+        "the reviewer",
+        "adversarial reviewer",
+    ]
+    lines = answered.lines(events)
+    assert lines[0].startswith("- src/demo/state.py had 510 lines") and lines[0].endswith(
+        ": proposed again by the reviewer; your answer 'later' stands"
+    )
+    assert lines[1].endswith("proposed again by adversarial reviewer; your answer 'A' stands")
+    assert answered.section(events)[0] == "## Answered before: 2"
+    log_event(cfg, "demo", "answer", items=[])
+    assert answered.section(r.events()) == []  # shown at the gate they were asked again for
+
+
+GREEN_ASKED = (
+    "test_reference_constant passes against the stubs: the existing code already accepts the "
+    "input. List it under Green against stubs (default) or drop it?"
+)
+
+
+def test_a_green_test_the_writer_asked_about_is_not_sent_back(demo_repo: DemoRepo) -> None:
+    """Seen live: an accepted input and an existing error that wins pass against the stubs;
+    only the owner can decide, and the writer was sent back twice and asked twice."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.defer_tests_gate()
+    r.scenario(green_test=True, test_question=[GREEN_ASKED])
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE
+    assert [c["phase"] for c in r.calls()][:3] == ["TESTS", "TEST_REVIEW", "IMPLEMENT"]
+    assert not [e for e in r.events() if e["kind"] == "test_checks"]
+    reviews = [e for e in r.events() if e["kind"] == "test_review"]
+    assert [(e["sent_back"], e["failed_checks"]) for e in reviews] == [(False, [])]
+    log = (r.root / "out/demo/progress.log").read_text(encoding="utf-8")
+    assert "Red against stubs: every test that passes before the code is a question" in log
+    deferred = [e for e in r.events() if e["kind"] == "tests_gate_deferred"]
+    assert "failed checks: Red against stubs" in deferred[0]["reasons"]
+
+
+def test_green_only() -> None:
+    head = "3 tests for feature f.\npasses by design (listed): t::x — scan\nNOTE: the spec lists y"
+    assert baseline.green_only(f"{head}\nPASSES AGAINST STUB (weak or wrong test): t.py::C::a[1]")
+    assert baseline.green_only("PASSES TODAY (does not show the bug): tests.t.b") == ["b"]
+    assert baseline.green_only(f"{head}\nPASSES AGAINST STUB (weak): t::a\nERROR (x): t::b") == []
+    assert baseline.green_only("No reproduction test ran.") == []
+    assert (
+        baseline.green_only("PASSES TODAY: t::a\nThe must-not-change tests produced no report")
+        == []
     )

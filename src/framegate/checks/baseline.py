@@ -37,9 +37,14 @@ def _first_line(case: TestCase) -> str:
 
 def _run(
     adapter: LanguageAdapter, feature: str, ids: list[str], report: str
-) -> tuple[list[TestCase] | None, str]:
-    run = adapter.run_tests(req_ids=ids, junit=adapter.cfg.feature_out(feature) / report)
-    return run.cases, "\n".join(run.output.splitlines()[-20:])
+) -> tuple[list[TestCase] | None, str, list[str]]:
+    """(the cases the verdict covers, the output's tail, notes: red_stubs.own_cases)."""
+    run = adapter.red_stub_run(ids, adapter.cfg.feature_out(feature) / report)
+    tail = "\n".join(run.output.splitlines()[-20:])
+    if run.cases is None:
+        return None, tail, []
+    kept, notes = red_stubs.own_cases(adapter, feature, run.cases)
+    return kept, tail, notes
 
 
 def _must_pass(cases: list[TestCase], why: str) -> list[str]:
@@ -62,12 +67,12 @@ def bugfix(adapter: LanguageAdapter, feature: str, ids: list[str]) -> CheckResul
         return CheckResult(
             "FAIL", "The bug report has no reproduction ID (an R row): nothing shows the bug."
         )
-    cases, tail = _run(adapter, feature, red_ids, "red_stubs.xml")
+    cases, tail, notes = _run(adapter, feature, red_ids, "red_stubs.xml")
     if cases is None:
         return CheckResult("FAIL", f"Test run produced no report (collection crashed?)\n{tail}")
     fixtures = [c for c in cases if red_stubs.is_fixture_check(c.name)]
     repro = [c for c in cases if not red_stubs.is_fixture_check(c.name)]
-    lines = [f"{len(repro)} reproduction test(s) for {', '.join(red_ids)}."]
+    lines = [f"{len(repro)} reproduction test(s) for {', '.join(red_ids)}.", *notes]
     problems = [
         f"PASSES TODAY (does not show the bug): {c.name}" for c in repro if c.outcome == "passed"
     ]
@@ -83,7 +88,7 @@ def bugfix(adapter: LanguageAdapter, feature: str, ids: list[str]) -> CheckResul
         problems.append("No reproduction test ran.")
     kept: list[TestCase] = []
     if keep_ids:
-        kept_cases, keep_tail = _run(adapter, feature, keep_ids, "keep_tests.xml")
+        kept_cases, keep_tail, _ = _run(adapter, feature, keep_ids, "keep_tests.xml")
         if kept_cases is None:
             problems.append(f"The must-not-change tests produced no report\n{keep_tail}")
         else:
@@ -147,7 +152,7 @@ def existing_tests(adapter: LanguageAdapter, feature: str, ids: list[str]) -> li
 
 
 def refactor(adapter: LanguageAdapter, feature: str, ids: list[str]) -> CheckResult:
-    cases, tail = _run(adapter, feature, ids, "red_stubs.xml")
+    cases, tail, left_out = _run(adapter, feature, ids, "red_stubs.xml")
     if cases is None:
         return CheckResult("FAIL", f"Test run produced no report (collection crashed?)\n{tail}")
     problems = _must_pass(cases, "a characterization test must describe what the code does now")
@@ -157,7 +162,7 @@ def refactor(adapter: LanguageAdapter, feature: str, ids: list[str]) -> CheckRes
         f"{len(cases)} characterization test(s) for feature {feature}; all must pass on "
         "today's code."
     )
-    notes = existing_tests(adapter, feature, ids)
+    notes = [*left_out, *existing_tests(adapter, feature, ids)]
     return CheckResult("FAIL" if problems else "PASS", "\n".join([head, *notes, *problems]))
 
 
@@ -170,3 +175,21 @@ def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
     if not ids:
         return CheckResult("FAIL", f"No spec IDs found in {cfg.paths.specs}/{feature}/")
     return bugfix(adapter, feature, ids) if mode == "bugfix" else refactor(adapter, feature, ids)
+
+
+#: a test that passes before the code: green by design, or a weak test (only the owner can say)
+_PASSES = re.compile(r"^(?:PASSES AGAINST STUB|PASSES TODAY)\b[^:]*:\s+(\S+)")
+#: any other problem line of the check (ERROR, SKIPPED, FAILS ..., LISTED ..., no report)
+_OTHER = re.compile(r"^(?!NOTE\b)[A-Z]{4,}\b|produced no report|^No \w+ test ran")
+
+
+def green_only(output: str) -> list[str]:
+    """The function names of the tests this check failed for passing before the code, when
+    nothing else failed it; [] otherwise."""
+    names: list[str] = []
+    for line in output.splitlines():
+        if m := _PASSES.match(line):
+            names.append(red_stubs._parts(m.group(1))[-1])
+        elif _OTHER.search(line):
+            return []
+    return names

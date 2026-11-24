@@ -17,9 +17,8 @@ its memory folder and scratch files in every phase. A `[references]` folder is r
 both. A machine file (config.is_machine_file: tool state of this machine, `.serena/`,
 `.vscode/`, `.venv/`, `[git] machine_files`) is never written in any phase: it is outside
 every task.
-The implementer of a plan step may also write the documentation files the approved plan
-names for that step (step_doc; checks/plan_files.py has the rule), and nothing else outside
-its source folders.
+A documentation file (doc_proposals.is_doc) is written in one phase only, DOCS (the docs
+step after the final gate); in every other phase the block says where the proposal goes.
 
 The pipeline task (`.phase` = `PIPELINE <name>`, set by `framegate pipeline <name>`) is the
 chat's too, and the reverse of every other phase: only deploy / CI files that its list names
@@ -28,12 +27,11 @@ may be written, plus the list and its brief (pipeline.write_problem).
 
 from __future__ import annotations
 
-import os
 import pathlib
 from typing import Any
 
 from framegate.config import CONFIG_FILE
-from framegate.hooks import DOCS_ENV, find_root_fast, in_agent_run, parse_input
+from framegate.hooks import find_root_fast, in_agent_run, parse_input
 from framegate.hooks.shell_form import SHELL_TOOLS, form_problem, message
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
@@ -74,22 +72,6 @@ def deploy_locked(cfg: Any, rel: str) -> bool:
         return is_pipeline_file(get_adapter(cfg), rel)
     except ConfigError:
         return True
-
-
-def step_doc(cfg: Any, rel: str) -> bool:
-    """IMPLEMENT phase, beyond cfg.write_paths: a documentation file the approved plan names
-    for the step this agent runs (checks/plan_files.py; the orchestrator put the step's list
-    into the agent's environment). A chat session has no such list."""
-    if not in_agent_run() or not os.environ.get(DOCS_ENV, "").strip():
-        return False
-    from framegate.adapters import get_adapter
-    from framegate.checks.plan_files import step_may_write
-    from framegate.config import ConfigError
-
-    try:
-        return step_may_write(get_adapter(cfg), rel)
-    except ConfigError:
-        return False
 
 
 def in_reference(cfg: Any, path: pathlib.Path) -> str | None:
@@ -200,11 +182,15 @@ def evaluate(stdin_text: str) -> tuple[int, str]:
         )
     if any(rel == a.rstrip("/") or rel.startswith(a) for a in allowed):
         return 0, ""
-    if phase == "IMPLEMENT" and step_doc(cfg, rel):
+    if phase == "SPEC" and spec_extra_allowed(cfg, rel):
         return 0, ""
-    if phase == "SPEC":
-        if spec_extra_allowed(cfg, rel):
+    from framegate import doc_proposals
+
+    if doc_proposals.is_doc(cfg, rel):
+        if phase == doc_proposals.PHASE:  # the docs step after the final gate
             return 0, ""
+        return 2, doc_proposals.write_denied(cfg, phase, rel)
+    if phase == "SPEC":
         return 2, (
             f"[SPEC] Blocked write to {rel}. Allowed in the spec phase: {allowed}, the setup "
             f"files ({CONFIG_FILE}, packaging / test / tool-config files) and "

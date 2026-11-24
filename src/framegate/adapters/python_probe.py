@@ -90,6 +90,65 @@ def dependency_names(root: pathlib.Path, data: dict[str, Any]) -> dict[str, str]
     return out
 
 
+def declared(root: pathlib.Path) -> dict[str, str]:
+    """Every requirement string the project's files declare -> where: pyproject.toml
+    (dependencies, each optional extra, dependency groups) and requirements*.txt."""
+    data = _pyproject(root)
+    project = data.get("project", {}) if isinstance(data.get("project"), dict) else {}
+    groups: list[tuple[str, Any]] = [("pyproject.toml dependencies", project.get("dependencies"))]
+    for name, items in (project.get("optional-dependencies") or {}).items():
+        groups.append((f"pyproject.toml extra '{name}'", items))
+    for name, items in (data.get("dependency-groups") or {}).items():
+        groups.append((f"pyproject.toml group '{name}'", items))
+    files = sorted(root.glob("requirements*.txt")) + sorted(root.glob("requirements/*.txt"))
+    for path in files:
+        groups.append((path.relative_to(root).as_posix(), _text(path).splitlines()))
+    out: dict[str, str] = {}
+    for where, items in groups:
+        for item in items if isinstance(items, list) else []:
+            text = item.split("#", 1)[0].strip() if isinstance(item, str) else ""
+            if text and re.match(r"[A-Za-z0-9]", text) and "://" not in text:
+                out.setdefault(text, where)
+    return out
+
+
+#: asked of the project interpreter: which of the requirement strings (argv[1], JSON) have
+#: no installed distribution (a marker that does not hold here is left out), and which of
+#: the modules (argv[2]) cannot be found
+MISSING_SCRIPT = """\
+import importlib.metadata as m, importlib.util as u, json, re, sys
+try:
+    from packaging.requirements import Requirement
+except Exception:
+    try:
+        from pip._vendor.packaging.requirements import Requirement
+    except Exception:
+        Requirement = None
+reqs, mods = json.loads(sys.argv[1]), json.loads(sys.argv[2])
+gone = []
+for text in reqs:
+    name = re.match(r"[A-Za-z0-9][\\w.-]*", text).group(0)
+    try:
+        req = Requirement(text) if Requirement else None
+    except Exception:
+        req = None
+    if req is not None and req.marker is not None and not req.marker.evaluate():
+        continue
+    if req is None and ";" in text:
+        continue
+    try:
+        m.distribution(name)
+    except m.PackageNotFoundError:
+        gone.append(text)
+def lost(mod):
+    try:
+        return u.find_spec(mod) is None
+    except Exception:
+        return True
+print("MISSING " + json.dumps([gone, [x for x in mods if lost(x)]]))
+"""
+
+
 def _section(root: pathlib.Path, name: str, header: str) -> str:
     """`<file> [<header>]` when the ini file has that section, else ""."""
     return f"{name} [{header}]" if f"[{header}]" in _text(root / name) else ""

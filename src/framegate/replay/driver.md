@@ -10,6 +10,9 @@ solve the task, you do not judge the result.
 - Task name (the framegate feature name): `{{slug}}`. Kind: `{{kind}}`.
 - Sandbox (the repository; its own environment, no git remote): `{{sandbox}}`
 - Your folder, and your working directory: `{{driver}}`. The task text is `task.md` there.
+  If `facts.md` is there too, it holds what the user knows beyond the task text, one fact per
+  line: `- F1 [topic words]: the fact`. The chat must never see the file, only single facts,
+  by the answer policy.
 - `python` and `framegate` on your PATH are the sandbox's. Check once with
   `python -c "import sys; print(sys.executable)"` and log the answer.
 - Every `framegate` and `git` command of yours runs in the sandbox, not in your folder.
@@ -33,6 +36,7 @@ your folder:
 
     python -m framegate.replay.chat "<message>" [--resume <session id>]
     python -m framegate.replay.chat --file task.md --resume <session id>
+    python -m framegate.replay.chat "<a line of your own>" --file task.md
     python -m framegate.replay.chat --wait
 
 - The first call starts the chat as a process of its own and returns at once. The chat goes on
@@ -62,11 +66,14 @@ your folder:
    What else `git status --short` shows (tool state such as `.serena/`, which framegate
    ignores) is logged once as a note. It never stops the run, and you do not ask the chat
    about it.
-2. **Start the task.** New session. Message: `/framegate:{{kind}} {{slug}}` and nothing else
-   (the skill takes the name only). Your next message is `task.md`, unchanged
-   (`--file task.md`), whatever the first answer says: the chat may ask for the requirement,
-   or present its own reading of the name with questions. Both are right, neither is a
-   finding. Answer no question before the task text is sent.
+2. **Start the task.** New session, two messages, as a user with the task text at hand:
+   - first the task text, with one line of yours in front (no `--resume`):
+     `python -m framegate.replay.chat "My task, which I start with my next message. Do nothing yet; reply only: ok" --file task.md`
+   - then, in that session, `/framegate:{{kind}} {{slug}}` and nothing else (the skill takes
+     the name only).
+
+   The chat then has the task text before it asks anything. If it did more than reply to the
+   first message, log it as a finding and go on.
 3. **Spec dialogue.** Answer by the policy. At the spec brief: `Spec OK`.
 4. **The run and its gates.** The chat starts `framegate run` in the background. The turn may
    end while the run goes on, or the run may end with the turn. After each turn check
@@ -92,15 +99,24 @@ your folder:
 
 | The chat asks | You answer |
 |---|---|
+| a question that a fact in `facts.md` answers (any stage, any wording; this row goes first) | that fact's text, verbatim, and nothing else about it. If the question has options and the fact decides between them, put the option's number or letter in front. Log `fact F1 given for: <question, short>` and add the id to `facts_used.json` |
 | a plain confirmation (yes or no, one way forward) | `ok` |
-| options, one of them marked as recommended or default | that option, by its number or letter plus its words: `1: approve the proposed fix` (never a bare `ok`: at a gate it can mean another option) |
+| options, one of them marked as recommended or default | that option (one marked default and another recommended: the default), by its number or letter plus its words: `1: A: leave it for later` (never a bare `ok`: at a gate it can mean another option) |
 | options, and the chat says the recommended one will repeat a failure that already happened | the option the chat names as ending the repeat; log it as an assisted answer |
 | several numbered questions with defaults | one answer per number: `1: ok. 2: ok. 3: no.` The default for each, `no` for anything on the never-list. Never `ok, take every default`: the list may hold the smoke run or a pull request |
+| a gate item that says `No default: choose.` | a reviewer objects to a repair: the option that changes the code as the reviewer says; parked work with nothing built: the option that redoes it, `B: approved`. Letter first: `2: B`. Log `forced choice <number>: B` |
 | a question with no recommendation and no default | `No answer to <number or topic>: skip it. Decide what the code and the docs support, and record it as an assumption.` |
-| for the report / the requirement / more detail on the task | `task.md`; if it was sent already: `Everything I know is in the report.` |
+| for the report / the requirement / more detail on the task, and no fact answers it | `Everything I know is in the task text I sent.` |
 | whether to fix a `PROBLEM:` first or go on | `ok` (the default) |
 | anything about a pull request, publish, push, cleanup, or the smoke run | `no` |
 
+A fact answers a question when the question asks for what the fact says; the topic words
+help to find it. A question about something else, or a general "anything more?", gets no fact.
+In a message with several questions each one is answered by itself: a fact where one fits, the
+other rows for the rest. A fact asked for again is given again.
+
+Never volunteer a fact that was not asked for, never give a fact in other words or in part,
+and never send `facts.md` or tell how many facts there are.
 Never add knowledge of your own: no hints, no opinions about the code, no corrections.
 
 ## When it fails
@@ -124,5 +140,8 @@ Never add knowledge of your own: no hints, no opinions about the code, no correc
   what you did), and what in these instructions did not fit what really happened.
 - `outcome.txt`: one line for the results table: `DONE`, or the stage where the run ended
   and why (`Setup: the chat could not install pytest`).
+- `facts_used.json`, only if there is a `facts.md`: the ids of the facts you gave, as a JSON
+  list (`["F1", "F3"]`). Write `[]` before the first message and write it again after every
+  fact you give: the run can be stopped at any time.
 
 Your last message is the content of `report.md`, in short: the outcome first.

@@ -20,7 +20,9 @@ Sections:
 6. Final gate results: every check from final_gates.md, including SKIPPED and ERROR — say so explicitly
 7. Parked items: each with its question or failing checks, and the later steps that depend on it ("None" if nothing is parked)
 8. Mutation survivors (file:line, what the mutant changed)
-9. Structure: the changed files' sizes and longest methods (final_gates.md), the structure fixes made
+9. Structure: the changed files' sizes and longest methods (final_gates.md), the structure
+   fixes made; every line of "## Files taken over the size limit" from final_facts.md
+   (a file this task took over the size limit of {max_file_lines} lines)
 10. Where the human should look first: interfaces, data handling, anything high-risk, ranked
 11. Open questions
 
@@ -30,12 +32,21 @@ step; with its own section for items outside the repository, done by hand) and "
 follow-up" (what a reference project should change because of this
 feature) in final_facts.md: framegate appends them to the summary and shows them on the brief.
 They are no gate items: never a question, a decision or a "Left out" line, and do not repeat
-them.
+them. "Stale docstrings and comments in source files" (code text the task left as it is):
+one short line under what is left, as low risk; never a question. "Proposed doc updates"
+likewise, except the gate items tagged `[doc update]` (a doc
+under docs/ should say something else; no doc was changed): ask each one in the brief, with
+what the doc says today and the proposed text in plain words, "A: apply it after the task
+(the docs step) / B: later (default)", these letters. One whose item says what the code now does (the task's code
+contradicts the doc): what the doc says, what the code does, and the item's options "A:
+approve the code; the docs step updates the doc / B: approve the code; leave the doc (later)
+(default) / C: reject the code: write your solution". Never decide one yourself. "Answered
+before" (questions the owner answered earlier in the task, proposed again): no gate item.
 
 ## 2. {out}/{feature}/final_brief.md (what the human reads; ~20 lines when nothing went wrong)
 
 Plain words. No spec IDs and no test names unless their meaning is next to them in words ("the
-'no shot without a free-kick' rule", not "FK-R-004"). No numbers framegate already shows (gates,
+'an empty name is refused' rule", not "ABC-E-004"). No numbers framegate already shows (gates,
 coverage, mutation, cost, time): it adds them. When a gate failed, quote its reason as
 final_gates.md states it; never paraphrase or guess a cause (a project listed as "not mutated"
 is not a failure). One line per bullet; no sentence that repeats a heading or another section;
@@ -66,7 +77,7 @@ a section where nothing happened is one line. Exactly these sections:
 
     ## Questions
     1. [<gate item>] <the problem in one line>
-       A: <option> (default) / B: <option>
+       A: <the option that changes nothing> (default) / B: <option>
     2. [<gate item>] ...
 
     ## Left out
@@ -77,16 +88,24 @@ says, for a bug fix, the cause in plain words and what was ruled out (from the f
 implementer named no cause, say so); for a refactor, what moved where, each structure target
 (met or not) and that the behavior is unchanged as far as the tests show.
 
-Every gate item in final_facts.md (and every question you add to questions.md: numbered after
-them) goes into exactly one of Questions / Decisions I made / Left out, named by its number in
+Every gate item in final_facts.md (and every question you add to
+{out}/{feature}/questions.md, a file that may not exist yet: create it; numbered after them) goes into exactly one of Questions / Decisions I made / Left out, named by its number in
 brackets. A gate item is a question only when it is a real decision: two or more reasonable
 options with different outcomes, and the spec, the code, .framegate/project.md and earlier
 answers (answers.md, questions_archive.md) don't settle it. Otherwise it is not a question:
 - only one sensible option: decide it, one line under "Decisions I made";
 - already answered, already resolved (e.g. by a scan), or a note: "Left out" with the reason;
 - the same question from two agents: ask it once, the other under "Left out" as `same as [N]`.
-Parked work and the proposed test fixes (provisional steps) are always questions: they block
-the run; give your recommendation as the default. No limit on the number of questions; order
+The default (A) of every question is the option that changes nothing: the code, the tests and
+the spec as they are, the change left for later. Answers that take every default approve the
+task as it stands, with no further run; anything else starts one. A change you recommend is B,
+marked "(recommended)". A decision never needs work: an item that needs a change of code,
+tests or spec is a question. Parked work and the proposed test fixes (provisional steps) are
+always questions: "A: leave it (parked work stays parked; the provisional code stays, its
+contested tests red; both go to the deferred list) (default) / B: <the fix> (recommended)".
+Doc questions keep their own letters (above). An item that says "No default: choose." (a
+`[repair review]` objection; parked work when nothing of the task is built) is always a
+question, with its own letters and no "(default)": the owner must choose. No limit on the number of questions; order
 them by impact (what changes most if answered differently first). framegate numbers them 1, 2,
 ... for the human and maps the answers back to the gate items; a decided item gets its decision
 as the answer, a repeated one the answer of the item it repeats.
@@ -106,9 +125,9 @@ where to look. One source per line, the most useful one.
 
 "Not proven" starts from the spec brief's
 list where it still holds, plus what the run showed. An assumption from steps.md that changes
-what the user sees: a decision ("Decisions I made"), or a question in questions.md when two
-answers are reasonable. A review finding that was dismissed but looks like a real gap: a
-question in questions.md. framegate checks the brief (duplicates, closed items or notes asked
+what the user sees: a decision ("Decisions I made"), or a question in
+{out}/{feature}/questions.md when two answers are reasonable. A review finding that was
+dismissed but looks like a real gap: a question there too. framegate checks the brief (duplicates, closed items or notes asked
 as questions, questions with one option, gate items placed nowhere) and sends it back to you
 once to rewrite.
 

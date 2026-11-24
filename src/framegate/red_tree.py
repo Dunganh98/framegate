@@ -59,6 +59,28 @@ def file_counts(adapter: LanguageAdapter, text: str) -> dict[str, int]:
     return dict(counts)
 
 
+def without_files(
+    adapter: LanguageAdapter, res: CheckResult, files: set[str], why: str
+) -> CheckResult:
+    """A failing check without the output lines that name only `files`; PASS when no other
+    line names a file."""
+    if res.status != "FAIL" or res.tool_failure or not files:
+        return res
+    kept: list[str] = []
+    named = dropped = 0
+    for line in res.output.splitlines():
+        refs = line_files(adapter, line)
+        if refs and refs <= files:
+            dropped += 1
+            continue
+        named += bool(refs)
+        kept.append(line)
+    if not dropped:
+        return res
+    note = f"{why}: {dropped} file(s)"
+    return CheckResult("FAIL", "\n".join(kept), note) if named else CheckResult("PASS", "", note)
+
+
 def in_changed(
     adapter: LanguageAdapter,
     changed: set[str],

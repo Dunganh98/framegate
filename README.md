@@ -34,22 +34,25 @@ Release: one version for the CLI and the plugin (`pyproject.toml`, `src/framegat
 
 ## Use
 
-1. **Set up the repo (once):** in Claude Code run `/framegate:setup`: it first installs the
-   tools the workflow needs into the project's environment, then shows one table of what it
-   found (interpreter, test / lint / format commands, folders, branch) for you to confirm
-   with "ok" or a correction; a few minutes. Commit the files it lists.
+1. **Set up the repo (once):** in Claude Code run `/framegate:setup`. It runs two
+   commands: `framegate setup --plan` installs the tools the workflow needs and prints one
+   table of what it found (interpreter, test / lint / format commands, folders, branch,
+   project rule checks, mutation testing) for you to confirm with "ok" or a correction;
+   `framegate setup --apply` writes the config and runs all tests once to check the setup.
+   The chat then writes the project facts and the code map. A few minutes. Commit the files
+   it lists.
 2. **Start a feature:** `/framegate:feature <name>`, describe what you want, answer the few
-   questions (each has a default), check the spec brief (above all "Decisions I made for
-   you"), then say **"spec OK"**.
+   questions (each has a default), check the spec brief, then say **"spec OK"**.
 3. **Wait:** the agents run in the background; the chat shows progress and cost. If a step
    fails the same way twice, a diagnosis agent finds the cause: a code fix is retried at
    once, a test or spec fix waits for you at the final gate. If only a step's tests are
-   wrong, its code is kept as provisional and later steps build on it; you approve the
-   proposed test fixes at the final gate in one reply.
+   wrong, its code is kept as provisional and later steps build on it; you decide about
+   the proposed test fixes at the final gate in one reply.
 4. **Final gate:** read the brief (~20 lines: the steps and how each went, struggles, numbers, what is
    proven and what to check by hand, the decisions made for you, and only the real decisions as
-   questions), then reply **"ok"** (takes every default of the numbered questions, or approves
-   when there are none), **"no retro"**, or answer questions by number (only the affected work
+   questions), then reply **"ok"** (takes every default of the numbered questions, which changes
+   nothing and approves the result as it stands; an item marked "No default: choose." needs
+   your choice), **"no retro"**, or answer questions by number (only the affected work
    is redone).
 5. **Done:** pick the retro proposals and facts by number (the proposals go to the retro
    backlog, `framegate backlog`, so none is lost and repeats are counted), create the PR if
@@ -79,8 +82,9 @@ In a terminal (the chat runs these for you):
 
 | Command | Does |
 |---|---|
-| `framegate install-tools` | install what the workflow needs into the project's environment (setup does this first) |
-| `framegate probe` | the project facts in seconds: interpreter, test / lint / format commands and whether each tool answers (setup shows them for your "ok") |
+| `framegate setup --plan` / `--apply` | the setup as two commands: the confirmation table, then the config and the setup check |
+| `framegate install-tools` | install what the workflow needs into the project's environment (`setup --plan` does this first) |
+| `framegate probe` | the project facts in seconds: interpreter, test / lint / format commands and whether each tool answers (the setup table is built from them) |
 | `framegate doctor` | check the setup (no agents, no cost) |
 | `framegate update` / `/framegate:update` | bring the command-line tool and the project's workflow tools to the installed plugin's version, at any time |
 | `framegate preflight <name>` | the start check every feature begins with: plugin, CLI and the project's workflow tools at one version |
@@ -90,7 +94,8 @@ In a terminal (the chat runs these for you):
 | `framegate answer <name>` | apply your answers from `out/<name>/answers.md` |
 | `framegate publish <name>` | a repository a team shares (`[git] state_branch`): push a branch with the product only for the pull request, and framegate's own files to their state branch |
 | `framegate cleanup <name>` | delete the run files after DONE |
-| `framegate stats [name]` | what the features cost: money, agent and check time, final-gate runs |
+| `framegate stats [name]` | what the features cost: money, agent and check time, final-gate runs, escaped defects; `--risk`: the risk rating next to your final-gate decisions |
+| `framegate defect <name> --what "..."` | log a bug found after a task was accepted, against that task |
 | `framegate backlog` | the retro proposals you accepted and what became of them |
 
 All commands and options: `framegate --help` and [docs/reference.md](docs/reference.md).
@@ -102,7 +107,7 @@ Coming from agentflow (the old name)? [docs/migrate-from-agentflow.md](docs/migr
 - [docs/reference.md](docs/reference.md): phases, gates, every command, config, retro, hooks
 - [docs/plugin.md](docs/plugin.md): the Claude Code plugin
 - [docs/adapters.md](docs/adapters.md): languages (Python, .NET, generic for any other)
-- [docs/AGENTIC_WORKFLOW_SETUP.md](docs/AGENTIC_WORKFLOW_SETUP.md): the design
+- [docs/plan.md](docs/plan.md): the plan (purpose, principles, status, roadmap)
 - [docs/decisions.md](docs/decisions.md): standing decisions, one line each
 - [docs/replay.md](docs/replay.md): `framegate replay`, real commits as measured tasks
 

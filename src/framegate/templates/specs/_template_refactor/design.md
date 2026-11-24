@@ -7,6 +7,14 @@
 ## Public interfaces
 <the signatures callers and tests use: unchanged, or moved / renamed (old -> new); a renamed
  public member needs every caller listed>
+<!-- One row per NEW or CHANGED public member: its name, signature, parameter types, default
+     values, error type / message, stored or wire format. Shape from: `task`, `code: <the
+     existing pattern it follows>`, `docs: <file>` or `asked` (the user answered).
+     `framegate spec-check` fails a row without one, and a public name of the stubs without
+     a row. -->
+| New / changed member | Shape from (task / code: <pattern> / docs: <file> / asked) |
+|---|---|
+| | |
 
 ## Data flow
 <!-- Existing golden / hash / snapshot / save-file tests that touch the code in scope: they

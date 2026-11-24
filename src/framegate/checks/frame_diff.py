@@ -113,6 +113,7 @@ MACHINE_FILES = (".claude/settings.local.json",)
 GENERATED_SPEC_FILES = (
     "pipeline_followup.md",
     "reference_followup.md",
+    "doc_proposals.md",
     "pr_description.md",
     "pipeline_pr_description.md",
 )

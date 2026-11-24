@@ -18,6 +18,10 @@ from an older template) is not checked.
   source file that holds one of the frame check's forbidden patterns (suppressions, skips).
   Seen live (runner-skeleton): a suppression comment written into a stub during the spec
   dialogue surfaced only at a step gate, where nobody could fix it.
+- "Shape from" column (design.md: Public interfaces): every new or changed public member
+  says where its shape comes from; see interface_source_problems.
+- "Suspected causes" (a bug report): every cause names the row whose test reaches it, or why
+  it is ruled out; see checks/suspected_causes.py.
 """
 
 from __future__ import annotations
@@ -264,6 +268,111 @@ def edge_case_fixture_problems(cfg: Config, feature: str) -> list[str]:
     ]
 
 
+#: the tables of requirements.md whose rows are requirements (all three templates)
+_REQUIREMENT_SECTIONS = (
+    "requirements",
+    "edge case",
+    "invariant",
+    "reproduction",
+    "must not change",
+    "behavior to preserve",
+)
+#: quoted text (an error message, a log line) is behaviour: left out before the search
+_QUOTED = re.compile(r"`[^`]*`|\"[^\"]*\"|(?<!\w)'[^']*'(?!\w)")
+_DOC_TEXT = re.compile(
+    r"\bdoc[ -]?strings?\b|\bdoc[ -]?comments?\b|\bxml[ -]?doc\b|\b(?:java|js)doc\b|\bdocblocks?\b"
+    r"|\b(?:code|source|inline)[ -]comments?\b"
+    r"|\bcomments?\s+(?:in|of|on|above)\s+(?:the\s+|its\s+|each\s+|every\s+|a\s+)?"
+    r"(?:code|source|function|method|class|module|constant|field|definition|implementation)\b",
+    re.I,
+)
+
+
+def doc_text_problems(cfg: Config, feature: str) -> list[str]:
+    """Requirement rows whose subject is docstring or comment text: comments are no source, so
+    no requirement, test or finding rests on one. Seen live: the test writer refused to test
+    such a row, it went to the final gate, and traceability failed on it."""
+    problems = []
+    for table in tables(_read(cfg.spec_dir(feature) / "requirements.md")):
+        id_col = table.column("id")
+        if id_col is None or not table.section.lower().startswith(_REQUIREMENT_SECTIONS):
+            continue
+        for row in table.rows:
+            text = " ".join(c for i, c in enumerate(row) if i != id_col)
+            if '"""' in text or "'''" in text or _DOC_TEXT.search(_QUOTED.sub(" ", text)):
+                problems.append(
+                    f"requirements.md, {table.section}, {_cell(row, id_col) or _clip(text, 40)}: "
+                    "a requirement on docstring or comment text: not a requirement (comments "
+                    "are no source). Drop it, or put a doc file change under ## Proposed doc "
+                    "updates"
+                )
+    return problems
+
+
+#: CI files that may list test files by path
+_CI_GLOBS = (
+    ".github/workflows/*.y*ml",
+    ".circleci/*.y*ml",
+    ".azure-pipelines/**/*.y*ml",
+    ".gitlab/**/*.y*ml",
+    ".gitlab-ci*.yml",
+    "azure-pipelines*.yml",
+    "bitbucket-pipelines.yml",
+    ".travis.yml",
+    "Jenkinsfile",
+)
+_TEST_NAME = re.compile(r"(?i)^test|tests?\.[^.]+$|\.test\.")
+
+
+def _section(text: str, title: str) -> str:
+    """The text under `## <title>...` up to the next `## ` heading, without comments."""
+    m = re.search(
+        rf"^##[ \t]+{re.escape(title)}[^\n]*\n?(.*?)(?=^##\s|\Z)", text, re.M | re.S | re.I
+    )
+    return _COMMENT.sub("", m.group(1)) if m else ""
+
+
+def _test_paths(cfg: Config, text: str) -> set[str]:
+    """Test file paths under the tests folder that `text` names (a node ID's file too)."""
+    rx = rf"(?<![\w./-])(?:\./)?({re.escape(cfg.paths.tests.strip('/'))}/[\w./-]*\w\.\w+)"
+    found = re.findall(rx, text.replace("\\", "/"))
+    return {p for p in found if _TEST_NAME.search(p.rsplit("/", 1)[-1])}
+
+
+def ci_test_file_warnings(cfg: Config, feature: str) -> list[str]:
+    """A new test file while the CI lists test files by path and the spec names no pipeline
+    follow-up. Seen live: a new test file that CI would never have run."""
+    folder = cfg.spec_dir(feature)
+    text = _read(folder / "requirements.md")
+    if _section(text, "Pipeline follow-up").strip().rstrip(".").lower() not in ("", "none"):
+        return []
+    named = _test_paths(cfg, _read(folder / "plan.md") + _section(text, "Test data"))
+    new = sorted(p for p in named if not (cfg.root / p).exists())
+    if not new:
+        return []
+    ci = sorted(
+        {p for g in _CI_GLOBS for p in cfg.root.glob(g) if p.is_file()},
+        key=lambda p: p.as_posix(),
+    )
+    listing = [
+        p.relative_to(cfg.root).as_posix()
+        for p in ci
+        if any((cfg.root / t).is_file() for t in _test_paths(cfg, _read(p)))
+    ]
+    if not listing:
+        return []
+    return [
+        f"requirements.md, Pipeline follow-up: the spec adds {', '.join(new)}, and the CI runs "
+        f"only the test files it lists ({', '.join(listing)}). Add the new one under "
+        "## Pipeline follow-up"
+    ]
+
+
+def warnings(cfg: Config, feature: str) -> list[str]:
+    """What the spec check reports without failing."""
+    return ci_test_file_warnings(cfg, feature)
+
+
 _HUNK = re.compile(r"^@@ -\S+ \+(\d+)")
 
 
@@ -318,19 +427,93 @@ def stub_marker_problems(adapter: LanguageAdapter) -> list[str]:
     ]
 
 
+#: a "Shape from" cell: the task, an existing pattern in the code, a doc, or the user's answer
+_SHAPE_SOURCE = re.compile(r"^[`*\s]*(?:(task|asked)\b|(?:code|docs)\b[`*\s]*:\s*\S)", re.I)
+_NONE_ROW = re.compile(r"^[`*\s]*none\b", re.I)
+#: a public definition in a stub line (name in group 1 or 2); `_name` is not public
+_PUBLIC_DEF = re.compile(
+    r"^\s*(?:(?:export|public|static|sealed|abstract|partial|async)\s+)*"
+    r"(?:def|class|function|interface|struct|record|enum)\s+([A-Za-z]\w*)"
+    r"|^\s*public\s+[^=;(]*?\b([A-Za-z]\w*)\s*[({]"
+)
+
+
+def interface_source_problems(
+    cfg: Config, feature: str, adapter: LanguageAdapter | None = None
+) -> list[str]:
+    """design.md, "Public interfaces": a new or changed public member whose "Shape from" cell
+    is not `task`, `code: <pattern>`, `docs: <file>` or `asked`, and (with the adapter) a
+    public name the stubs add that no row names. Seen live: a spec dialogue chose a default
+    value and a signature itself where the owner had decided another; nobody was asked."""
+    table = next(
+        (
+            t
+            for t in tables(_read(cfg.spec_dir(feature) / "design.md"))
+            if t.section.lower().startswith("public interfaces")
+            and t.column("shape from") is not None
+        ),
+        None,
+    )
+    if table is None:
+        return []  # written from an older template
+    col = table.column("shape from")
+    how = (
+        "Write `task`, `code: <the existing pattern it follows>`, `docs: <file>` or `asked` "
+        "(the user answered); a shape none of them gives is a question to the user first"
+    )
+    problems, named = [], ""
+    for row in table.rows:
+        member = next((c for i, c in enumerate(row) if i != col and c), "")
+        if not member or _NONE_ROW.match(member):
+            continue
+        named += " " + member
+        cell = _cell(row, col)
+        if not _SHAPE_SOURCE.match(cell):
+            problems.append(
+                f'design.md, Public interfaces, "{_clip(member)}": no source for its shape '
+                f'("{_clip(cell, 30)}"). {how}'
+            )
+    if adapter is None:
+        return problems
+    from framegate import references
+
+    if references.feature_port(cfg, feature) is not None:
+        return problems  # the stubs are the reference's own text
+    try:
+        lines = added_source_lines(adapter)
+    except GitError:
+        return problems
+    words = set(re.findall(r"\w+", named))
+    missing: dict[str, str] = {}
+    for path, num, text in lines:
+        m = _PUBLIC_DEF.match(text)
+        name = (m.group(1) or m.group(2)) if m else None
+        if name and name not in words:
+            missing.setdefault(name, f"{path}:{num}")
+    return problems + [
+        f"design.md, Public interfaces: the stubs add `{name}` ({where}) and no row names it. "
+        f"Add a row with where its shape comes from. {how}"
+        for name, where in missing.items()
+    ]
+
+
 def problems(cfg: Config, feature: str, adapter: LanguageAdapter | None = None) -> list[str]:
     """Everything the spec check finds; [] = fine. With the adapter also the forbidden
     markers in the stubs."""
-    from framegate import references  # it reads the spec tables with this module
-    from framegate.checks import plan_files, red_stubs
+    from framegate import deferred, references  # they read the spec with this module
+    from framegate.checks import plan_files, red_stubs, suspected_causes
 
     plan = _read(cfg.spec_dir(feature) / "plan.md")
     return [
         *references.spec_problems(cfg, feature),
+        *deferred.spec_problems(cfg, feature),
         *red_stubs.green_problems(_read(cfg.spec_dir(feature) / "requirements.md")),
         *spec_id_problems(cfg, feature),
         *assigned_as_problems(cfg, feature),
         *edge_case_fixture_problems(cfg, feature),
+        *doc_text_problems(cfg, feature),
+        *suspected_causes.spec_problems(cfg, feature),
+        *interface_source_problems(cfg, feature, adapter),
         *(stub_marker_problems(adapter) if adapter is not None else []),
         *(plan_files.outside_problems(adapter, plan) if adapter is not None else []),
     ]

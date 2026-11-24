@@ -20,6 +20,7 @@ from typing import Any
 
 from framegate import procs
 from framegate.config import ConfigError, load_config
+from framegate.detached import ENV as DETACH_ENV
 from framegate.replay import MAX_HOURS, MAX_USD
 from framegate.replay import score as scoring
 from framegate.replay.candidates import TEMPLATE, Candidate, CandidatesError, parse
@@ -27,8 +28,10 @@ from framegate.replay.chat import claude_exe, read_pid
 from framegate.replay.sandbox import (
     Layout,
     ReplayError,
+    author_paths,
     build,
     make_env,
+    prune,
     read_json,
     source,
     write_json,
@@ -82,8 +85,10 @@ def watch(
 
 
 def run_env(lay: Layout) -> dict[str, str]:
-    """The sandbox's python and framegate first on PATH, no update check, no chat memory."""
+    """The sandbox's python and framegate first on PATH, no update check, no chat memory, and
+    `framegate run` detached: the chat's next turn kills the background tasks of the last."""
     env = dict(os.environ, FRAMEGATE_UPDATE_CHECK="0", CLAUDE_CODE_DISABLE_AUTO_MEMORY="1")
+    env[DETACH_ENV] = "1"
     env.pop("FRAMEGATE_AGENT", None)
     bin_dir = pathlib.Path(read_json(lay.run / "run.json")["python"]).parent
     env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
@@ -207,10 +212,17 @@ class Options:
     prepare_only: bool = False
     score_only: bool = False
     force: bool = False
+    prune: bool = False
     driver: Callable[[Layout, Candidate, Caps, pathlib.Path], dict[str, Any]] = claude_driver
     retro: Callable[[Layout], str] = retro
     env: Callable[[Candidate, pathlib.Path], pathlib.Path] = make_env
     echo: Callable[[str], None] = field(default=lambda line: print(line, flush=True))
+    #: the candidates file: no agent of a run may read it
+    file: pathlib.Path | None = None
+
+
+def _prune(lay: Layout, opts: Options) -> None:
+    opts.echo(f"[{lay.name}] pruned: {prune(lay) / 2**20:.0f} MB freed")
 
 
 def run_one(c: Candidate, opts: Options, src: pathlib.Path) -> dict[str, Any]:
@@ -218,22 +230,39 @@ def run_one(c: Candidate, opts: Options, src: pathlib.Path) -> dict[str, Any]:
     lay = Layout(opts.out, c.name)
     row: dict[str, Any] = {"name": c.name, "kind": c.kind}
     run_json, score_json = lay.run / "run.json", lay.run / "score.json"
-    state = read_json(run_json)
-    if opts.score_only:
+    state, earlier = read_json(run_json), read_json(score_json)
+    probes, extra = opts.base / "probes" / c.name, opts.base / "extra" / c.name
+    # a score that failed is no score: scored again, the run is not repeated
+    retry = earlier.get("verdict") == scoring.FAILED and not (opts.force or opts.prepare_only)
+    if opts.score_only or retry:
         if state.get("state") not in ("finished", "stopped"):
             return {
                 **row,
                 "status": state.get("state", "not built"),
                 "note": state.get("reason", ""),
             }
+        if not pathlib.Path(state.get("python") or "-").is_file():
+            note = "the sandbox's environment is gone (pruned): --force runs the candidate again"
+            opts.echo(f"[{c.name}] cannot be scored again: {note}")
+            if not earlier:
+                return {**row, "status": "not scorable", "note": note}
+            # the verdict stays; what the events, the driver's files and git say is read again
+            earlier.update(scoring.scorecard(lay))
+            write_json(score_json, earlier)
+            return earlier
+        if retry:
+            opts.echo(f"[{c.name}] the score failed last time: scoring again")
     else:
-        if score_json.is_file() and not opts.force:
+        if earlier and not opts.force:
             opts.echo(f"[{c.name}] has a score: skipped (--force runs it again)")
-            return read_json(score_json)
+            if opts.prune:
+                _prune(lay, opts)
+            return earlier
         if state.get("state") != "prepared" or opts.force:
             opts.echo(f"[{c.name}] building the sandbox")
             try:
-                build(c, lay, src, opts.env)
+                hide = author_paths(opts.base, opts.file, opts.out)
+                build(c, lay, src, opts.env, probes, extra, hide)
             except ReplayError as e:
                 write_json(run_json, {"state": "dropped", "reason": str(e)})
                 opts.echo(f"[{c.name}] dropped: {e}")
@@ -256,17 +285,28 @@ def run_one(c: Candidate, opts: Options, src: pathlib.Path) -> dict[str, Any]:
         opts.echo(f"[{c.name}] ended at {stage}: retro")
         state["retro"] = opts.retro(lay)
         write_json(run_json, state)
-    row.update(scoring.score(lay), status="scored")
+    row.update(scoring.score(lay, c.probes, probes, c.extra, extra), status="scored")
     row.update({k: state[k] for k in ("stopped", "wall_s", "driver_usd", "retro") if k in state})
-    notes = [state.get("stopped") or ("" if stage == "DONE" else f"ended at {stage}")]
+    failed = row["verdict"] == scoring.FAILED
+    why = f"score failed ({str(row.get('result_tail', ''))[:200]}): run --score-only again"
+    notes = [why] if failed else []
+    broken = row.get("probes_failed") or []
+    notes += [f"probes failed: {', '.join(broken)}"[:200]] if broken else []
+    late = row.get("extra_failed") or []
+    notes += [f"extra tests failed: {', '.join(late)}"[:200]] if late else []
+    notes += [state.get("stopped") or ("" if stage == "DONE" else f"ended at {stage}")]
     notes += [outcome(lay.driver)] if stage != "DONE" else []
     notes += [f"retro {state['retro']}"] if "retro" in state else []
     row["note"] = "; ".join(n for n in notes if n)
     write_json(score_json, row)
-    if row["verdict"] == "not run":
+    if failed:
+        opts.echo(f"[{c.name}] {row['note']}")
+    elif row["verdict"] == "not run":
         opts.echo(f"[{c.name}] not run: {row['note']}")
     else:
         opts.echo(f"[{c.name}] {row['verdict']}: {row['passed']}/{row['hidden']} hidden tests")
+    if opts.prune and not failed:  # scoring again needs the sandbox's environment
+        _prune(lay, opts)
     return row
 
 
@@ -330,6 +370,8 @@ def main(args: argparse.Namespace) -> int:
         args.prepare_only,
         args.score_only,
         args.force,
+        args.prune,
+        file=path,
     )
     chosen = [c for c in cands if not args.only or c.name in args.only]
     rows = {row["name"]: row for row in run_all(chosen, opts)}
@@ -339,6 +381,7 @@ def main(args: argparse.Namespace) -> int:
             rows[c.name] = earlier
     ordered = [rows[c.name] for c in cands if c.name in rows]
     scoring.write_results(out, ordered)
-    print("\n" + scoring.table(ordered))
+    print("\n" + scoring.table(ordered) + "\n" + scoring.details(ordered))
     print(f"Results: {out / 'results.md'}")
-    return 1 if any(r["status"] == "error" for r in ordered) else 0
+    bad = any(r["status"] == "error" or r.get("verdict") == scoring.FAILED for r in ordered)
+    return 1 if bad else 0

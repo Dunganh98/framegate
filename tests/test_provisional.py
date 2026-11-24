@@ -73,7 +73,7 @@ def test_a_step_whose_tests_are_wrong_keeps_its_code(
     capsys.readouterr()
     assert r.af("gate-summary", "demo") == 0
     out = capsys.readouterr().out
-    assert "the provisional-steps item must be answered before the gate can be approved" in out
+    assert "the provisional-steps item's default keeps its code with the contested tests" in out
     assert "\n  1. [provisional] Proposed test fixes (the code of these steps" in out
     asked = out[out.index("Questions (answer by number") :]
     assert "\n  2. " not in asked  # one item for all provisional steps, no open question
@@ -116,7 +116,7 @@ def test_a_contested_test_the_human_keeps_reverts_the_provisional_code(
     r = demo_repo
     contested_run_to_final_gate(r, accept=False)
     (r.root / "out/demo/answers.md").write_text(
-        "1. Q: Proposed test fixes\n   A: No: bools must be rejected, the test is right.\n",
+        "1. Q: Proposed test fixes\n   A: C: bools must be rejected, the test is right.\n",
         "utf-8",
     )
     assert r.af("answer", "demo") == 0

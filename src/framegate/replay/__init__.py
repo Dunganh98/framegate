@@ -3,7 +3,7 @@ the commit, scored with the commit's own tests (docs/replay.md).
 
 candidates.py  the candidates file
 sandbox.py     the run folder: cut clone, hidden answer, environment, the mechanical check
-score.py       hidden tests against the result, the engine's numbers, the results table
+score.py       hidden tests and probes against the result, the scorecard, the results tables
 run.py         the driver agent, the caps, the scheduler, the command
 chat.py        one chat message of the driver (`python -m framegate.replay.chat`)
 driver.md      the driver's instructions
@@ -30,3 +30,8 @@ def add_parser(sub: Any) -> None:
     p.add_argument("--prepare-only", action="store_true", help="build and check the sandboxes")
     p.add_argument("--score-only", action="store_true", help="score the existing runs again")
     p.add_argument("--force", action="store_true", help="also candidates that have a score")
+    p.add_argument(
+        "--prune",
+        action="store_true",
+        help="after the score delete what can be rebuilt: environments, caches, the scored copy",
+    )

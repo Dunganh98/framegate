@@ -18,10 +18,18 @@ never edit `progress.json`, tags or anything under the out folder by hand (the e
 
 !`framegate spec $ARGUMENTS`
 
+If the output above has `declared but not installed: <name>` lines (also in
+out/$ARGUMENTS/env_facts.md): before you write a requirement or a test that needs that
+framework, ask the user: drop those tests/requirements, allow installing it, or another
+way. Write the answer into requirements.md.
+
 If the output above says the spec is **already approved**, do not start the dialogue: run
 `framegate status $ARGUMENTS --brief`, tell the user in one line where the feature stands and
 ask: continue it (default; then the run protocol below, by state as in its section B), or change
 the spec (that needs `framegate approve-spec` again and restarts from the tests).
+
+The spec keeps the kind the task was started with (here: a feature, no `Mode:` line), also when
+the task turns out to be a bug; `framegate approve-spec` refuses another kind.
 
 ## Start check (your first step)
 
@@ -75,13 +83,45 @@ If the user gave only a name (`$ARGUMENTS`), it is just the branch and folder na
 in step 1 what it refers to (the code map, the code, the docs) and ask in step 2 only what
 you still cannot decide, the requirement itself included if the code and the docs do not
 tell.
+A task text the user gave earlier in this conversation is the requirement: read it before
+you ask anything.
+
+Sources, by rank:
+- The code is the current state. Where docs and code disagree, the code says what exists.
+- The user's task is the requirement. Where docs and the task disagree, the task wins.
+- Docs say where the project is heading: context only. A doc can suggest a requirement; it
+  is one only when the user says so.
+- A comment or docstring is no source.
+Deferred work: read the entries `framegate deferred --file <path>` prints for the files the
+task touches; when the task does one, write `Resolves: D<n>` in requirements.md.
+When a requirement changes what an input may be (None, another type or unit, a wider
+range): run `framegate uses <name>` for that function or variable, check every use site it
+lists and name in design.md each one that must change.
+Requirements come from the task only: a spec never requires text in a docstring, a comment
+or a doc, and neither you nor an agent of the run edits a documentation file. What a doc
+should say afterwards (the work makes it out of date, or the task goes another way than the
+documented plan) is one bullet under `## Proposed doc updates` of requirements.md. A file
+under docs/ (plan, design, architecture, reference): the file, where in it, what it says
+today, the proposed text, why; the user answers it at the final gate (default: later).
+Where the task's code now contradicts the doc: `today: <...> -> code now: <...>`; the user
+then approves the code (the doc updated now or later) or rejects it with a solution. A
+README, CHANGELOG or handover note: one brief line of what changes; no question. After the
+final gate is approved, one docs step applies the brief ones and the approved ones.
+A docstring or comment in a source file that the task's code will contradict is code text,
+not a doc: the plan step that changes the file rewords it (name the lines in that step); in
+a file no step changes, one bullet `- code text: <source file>:<lines>: today: <quoted> ->
+code now: <what the code does>`, which the final summary lists (no question, no docs step).
+Each proposed text states what this task builds, nothing more: before the final gate it is
+checked against the code and corrected to it.
+Program output (an error message, a log line) is behaviour, not documentation: write every
+error message out in full for one concrete input, with one notation for placeholders in the
+whole spec (repr, str, or str in literal quotes); the tests match the whole message.
 
 1. Read the requirements the user gives, then decide everything you can yourself first: read
    the docs, the code map, the code the feature touches and the project knowledge above
    (dot folders of tools such as `.serena/`, `.vscode/`, `.venv/` are machine files, not
    project context: do not read through them, and no spec names one). Work
-   through this checklist and settle each point from those sources (each gap cost a live run
-   questions, assumptions or a parked step):
+   through this checklist and settle each point from those sources:
    - requirements and acceptance criteria; edge cases (empty, NaN, missing, out-of-range,
      units, timing, ordering); failure behavior; non-goals;
    - overlaps: which requirements can apply to the same input, and which one wins; which stored
@@ -90,7 +130,7 @@ tell.
      situation), how a test sees from outside that the situation happened, and whether a check
      over picked cases may pass with zero cases;
    - edge cases against the pinned data: for each edge case, and each outcome a rule names in
-     words ("saved", "blocked", "no result"), does the pinned data hold it? Scan for data that
+     words, does the pinned data hold it? Scan for data that
      does (the project's scan command), or decide now that a test builds the case itself
      (`unit-only: <why>` in the fixture table). `framegate spec-check` refuses an edge case
      without a fixture row; undecided, the test writer and the test reviewer each ask about it;
@@ -101,8 +141,8 @@ tell.
      null, undefined enum values) and what a copy / clone shares;
    - serialized data: which existing golden / hash / snapshot / save tests serialize a type
      this feature changes, and is the new member in or out of them;
-   - existing data: every existing concept a requirement names in words ("the moment's goal
-     event", "his rating") resolved to one exact member and where it is set (read the code),
+   - existing data: every existing concept a requirement names in words resolved to
+     one exact member and where it is set (read the code),
      with the line that assigns it copied into the spec (an id or an index? raw or clamped?);
    - rejected input: which existing method decides each rejected case and when it is checked;
      for a parser the accepted forms (sign, largest value, overflow); for a command, each
@@ -128,42 +168,56 @@ tell.
      reference's tests and copy its files instead of writing their own, and every step gate
      and the final gate show how far each file is from its source. Also for a port:
      - "Kept quirks" (in "Ported from"): read the reference for behaviours a stricter reading
-       of your spec would forbid (a regex `$` that also accepts a trailing newline,
-       `json.dumps` writing NaN / Infinity, a loose parse). Each one is a decision: kept on
+       of your spec would forbid (a loose parse, a value written in a non-standard form).
+       Each one is a decision: kept on
        purpose -> one bullet under "Kept quirks" (the reviewer then writes no finding about
        it); to be fixed here -> a requirement or edge case of the spec, and one bullet under
        "Reference follow-up" (the reference has it too). Ask the user only where neither is
        clearly right;
      - carried tests that cannot fail before the implementation: look through the reference's
-       test files for scans and negative checks ("no analytic name appears in the code", "X
-       is not imported"). List each under "Green against stubs" with its reason, and make
+       test files for scans and negative checks ("X is not imported"). List each under "Green against stubs" with its reason, and make
        sure every ID such a test serves has another test that does fail against the stubs;
      - a reference test file that will be carried over only in part (it tests code that is
        not ported): say so in "What may differ", so the test reviewer can tell a test left
        out on purpose from a missing one (the run lists every reference test not carried);
    - tests green by design (any feature): a test that cannot fail before the implementation
-     (a scan, a negative check, a structure test) is listed under "Green against stubs" in
-     requirements.md (`- <test name>: <reason>`); only listed tests may pass the red check;
+     (a scan, a negative check, a structure test; an accepted input the existing code already
+     accepts; an existing error or behaviour that wins) is listed under "Green against stubs"
+     in requirements.md (`- <test name>: <reason>`); only listed tests may pass the red check;
    - reference follow-up: what a reference should change because of this task (a bug it
      shares that is fixed here, a deliberate improvement): one bullet under "Reference
      follow-up" in requirements.md (`- <reference file>: <what should change> (<why>)`); the
      reference itself is never changed;
    - structure: which file each new concept goes in (one concept per file; the code map says
      where things live), so no file grows past ~400 lines or mixes two concepts.
-2. Ask only what those sources cannot decide: what the user wants (behavior, priorities,
-   trade-offs), not what the code can tell. Numbered, plain words.
-   A point is a question only when it is a real decision: two or more reasonable options with
-   different outcomes, and the docs, the code, `.framegate/project.md` and earlier answers don't
-   settle it. Otherwise it is not a question: only one sensible option -> decide it (a "decision
-   I made for you", one line); already answered or resolved, or a note -> leave it out; the same
-   question twice -> one. No limit on the number; order them by impact (what changes most if
-   answered differently first). Each: the problem in one line, then "A: ... (default) / B: ..."
-   on one line:
+2. Ask the user: one compact round, numbered, plain words, about 8 points at most, the most
+   consequential first. Each: the point in one line, then "A: ... (default) / B: ..." on one
+   line, A being the answer you recommend, so the user can say "ok" to all:
 
-       1. A free kick inside the box?
-          A: not allowed, the rules forbid it (default) / B: allowed as an indirect kick
+       1. An empty name?
+          A: refused with an error (default) / B: accepted and stored as "unnamed"
 
-   Repeat until nothing is open; usually one round.
+   Always a question, never your decision, unless the task text, the code or the docs
+   already state it:
+   - every new or changed public name, signature, parameter type, default value, error
+     type or message, stored or wire format (an existing pattern in the code that it
+     follows states it: name the pattern);
+   - what must not change;
+   - where the tests go, when existing test files cover the area;
+   - which docs the task may edit (as proposed doc updates);
+   - what the user wants where two or more reasonable options have different outcomes
+     (behavior, priorities, trade-offs).
+   Not a question: what those sources or an earlier answer state (leave it out), and a point
+   with no observable effect on callers or stored data (decide it: a "decision I made for
+   you", one line). The same question twice -> one. Repeat until nothing is open; usually
+   one round.
+   A reply that describes the task (a ticket, the requirement in the user's words) and does
+   not answer your questions is not "ok" and takes no default: it is the requirement. Do
+   step 1 again with it, drop the questions it settles, and ask the ones it leaves open
+   again, with the new ones it raises.
+   design.md, "Public interfaces": one row per new or changed public member with where its
+   shape comes from (`task`, `code: <pattern>`, `docs: <file>`, `asked` = the user
+   answered); `spec-check` fails a member without one.
 3. Write requirements.md, design.md and plan.md following the templates exactly (the ID format,
    "## Step N: title" headings and "Covers:" lines described above). Every ID must be covered by
    exactly one plan step. Fill the "Overlaps and sources of truth", fixture, "Input domain and
@@ -172,12 +226,9 @@ tell.
    on an earlier step's code, or changes the same method, gets a "Depends on: Step N" line.
    A port: the plan follows the files, not the IDs: one step per `code` target file, in
    import order (leaf modules first; a file after the files it imports), each step covering
-   the IDs its file serves (an ID two files serve goes to the later one). The code lands
-   whole files at a time anyway; steps cut by ID end in steps with nothing left to build.
-   Files in a plan step: a step may mention any file. A Markdown docs file it names by its
-   path (`README.md`, `CHANGELOG.md`, `.md` under a docs folder) becomes writable for that
-   step at the approval; everything else outside the source folders stays read-only.
-   `spec-check` prints "Documentation files the plan makes writable".
+   the IDs its file serves (an ID two files serve goes to the later one).
+   Files in a plan step: a step may mention any file; everything outside the source folders
+   stays read-only, the docs included (see "Sources" above).
 4. Create interface stubs in the source paths named above, in the stub style named above: full
    typed signatures, a one-line doc comment per public type and method saying what it is for
    (in words) plus the IDs it serves, bodies that only signal "not implemented". One concept
@@ -201,7 +252,9 @@ tell.
    ID, copied code that is not in the named file: read the code again and correct the spec's
    wording too; a forbidden marker in a stub, e.g. a lint or type suppression: write the stub
    so that it needs none). `framegate approve-spec` runs the same check and refuses while it
-   fails.
+   fails. When it lists "Files the plan names that are already over the size limit": ask
+   the user once per file: split it in this task (add a plan step) or later; for "later"
+   run `framegate deferred --later <file> --feature $ARGUMENTS`.
    Setup files: if the task needs a new package or source folder, a dependency or a tool
    setting, change those files now, in the spec phase: `framegate.toml` and the project's
    packaging / test / tool-config files (e.g. `pyproject.toml`, `requirements*.txt`,
@@ -234,8 +287,8 @@ tell.
        **Plan** — the steps in plain words, numbered as in plan.md, one line each, ending with the main file it builds or changes
        **How it is proven** — the 3 most important checks of the tests and gates (rest on request)
        **Not proven** — the 3 most important things to check by using it (feel, balance, UI ...)
-       **Decisions I made for you** — one line each, with what it rules out
-         ("Goals from rebounds count for the free kick: rules out crediting the rebounder.")
+       **Decisions I made for you** — one line each; only points with no observable effect
+         on callers or stored data ("None.")
        **Project details that matter** — existing code / data it relies on, invariants it
          must keep (saves, hashes, public APIs)
        **Setup files changed** — one line: the files `spec-check` lists, each with why
@@ -245,8 +298,8 @@ tell.
          OUTSIDE item as "outside the repository: by hand: <where>: <what>"
        **Questions** — the real decisions still open (step 2's rule), by impact ("None.")
 
-   "Decisions I made for you" is the part the user really checks: list the ones that change
-   what they will see or that close off an option; the mechanical ones stay in the spec.
+   Whatever changes what a caller sees or what is stored was asked in step 2 or is under
+   "Questions"; it is never under "Decisions I made for you".
 7. Ask: "Is the spec OK? Then I start the run." (default: yes, with the defaults of any open
    questions). An "ok" while questions are open: write their defaults into the spec and
    spec_brief.md first, say so in one line, then Part 2. Answers or changes: update the spec,

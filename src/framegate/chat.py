@@ -12,7 +12,7 @@ import time
 from typing import Any
 
 from framegate import brief as briefs
-from framegate import description, followup, ported, procs, publish, references, risk
+from framegate import description, doc_proposals, followup, ported, procs, publish, references, risk
 from framegate.orchestrator import (
     PROGRESS_CURSOR,
     PROGRESS_LOG,
@@ -42,7 +42,10 @@ BRIEF_SECTION_LINES = 8
 BRIEF_PROVEN_LINES = 3
 #: phase names in run log file names ({stamp}-{feature}-{PHASE}.json / .prompt.md / ...);
 #: PR: the SUMMARY phase's name before 0.9.1 (run files of a feature started with it)
-RUN_LOG_PHASES = "SPEC_UPDATE|TESTS|TEST_REVIEW|IMPLEMENT|DIAGNOSIS|REVIEW|TRIAGE|SUMMARY|PR|RETRO"
+RUN_LOG_PHASES = (
+    "SPEC_UPDATE|TESTS|TEST_REVIEW|IMPLEMENT|SIMPLIFY|DIAGNOSIS|REVIEW|TRIAGE|SUMMARY|PR|"
+    "DOC_CHECK|DOCS|RETRO"
+)
 #: every spec has it; a pipeline task of its own (pipeline.py) has only its list
 SPEC_FILE = "requirements.md"
 TAG_PREFIXES = (
@@ -373,7 +376,8 @@ def _tests_brief(orch: Orchestrator, feature: str, prog: dict[str, Any]) -> list
     if questions:
         lines.append(
             f'Decision: answer {_numbers("question", len(questions))} ("ok" takes every '
-            "default); the test writer and reviewer then re-run with your answers."
+            "default and approves the tests as they are; another option re-runs the test writer "
+            "and reviewer with it)."
         )
     else:
         lines.append('Decision: "ok" approves the tests (default); or say what is wrong.')
@@ -469,9 +473,10 @@ def _final_brief(
     if questions:
         lines.append(
             f'Decision: answer {_numbers("question", len(questions))} ("ok" takes every '
-            "default below)"
+            "default below and approves the task as it stands; another option starts a run)"
             + (
-                "; the provisional-steps item must be answered before the gate can be approved."
+                "; the provisional-steps item's default keeps its code with the contested tests "
+                "red (the deferred list)."
                 if prov
                 else '; "approve as is" leaves them open (retro, then DONE).'
             )
@@ -497,6 +502,7 @@ def _final_brief(
             list(rated.get("reasons") or []),
             dict(rated.get("facts") or {}),
             not_measured=dict(rated.get("not_measured") or {}),
+            blocked=list(rated.get("blocked") or []),
         )
         lines.append(rating.line(auto=orch.cfg.final_gate == "auto"))
     for title, names in (
@@ -519,6 +525,7 @@ def _final_brief(
             "answered, or a note; on request)."
         )
     lines += followup.all_brief_lines(orch.cfg, feature)
+    lines += doc_proposals.brief_lines(orch.cfg, feature)
     lines += _spec_diff_lines(orch, feature)
     lines.append(
         f"On request: the full summary ({out}/{feature}/final_summary.md), the gate report "

@@ -21,6 +21,8 @@ import re
 
 from framegate.adapters.base import CheckResult, LanguageAdapter
 from framegate.checks import test_smells
+from framegate.report import short_name
+from framegate.specs import feature_ids
 
 NAME = "unreached assertions (feature tests)"
 #: `# unreached: <why>` / `// unreached: <why>` on the assertion's line or the line above
@@ -48,9 +50,14 @@ def feature_test_files(adapter: LanguageAdapter, feature: str) -> list[str]:
 
 
 def find(
-    adapter: LanguageAdapter, feature: str, files: list[str], hits: dict[str, dict[int, int]]
+    adapter: LanguageAdapter,
+    feature: str,
+    files: list[str],
+    hits: dict[str, dict[int, int]],
+    only: set[str] | None = None,
 ) -> list[str]:
-    """`<file>:<line>: <test>: <the line>` for every assertion that never ran."""
+    """`<file>:<line>: <test>: <the line>` for every assertion that never ran. `only`: the
+    tests that count (by function name; None = all)."""
     added = test_smells.added_text(adapter, feature, set(files))
     found = []
     for rel in files:
@@ -61,6 +68,8 @@ def find(
         source = text.splitlines()
         for test in adapter.test_assertions(rel):
             if test_smells.is_old_test(f"{rel}::{test.name}", added):
+                continue
+            if only is not None and test.name not in only:
                 continue
             if not any(lines.get(n, 0) > 0 for n in range(test.first, test.last + 1)):
                 continue  # the test did not run here
@@ -75,6 +84,24 @@ def find(
     return found
 
 
+def before_code(adapter: LanguageAdapter, feature: str) -> CheckResult:
+    """The same in the TESTS phase, for the tests that pass before the code (a refactor's
+    characterization tests, a bug fix's must-not-change tests): one run of the feature's
+    tests that records the test files only. A red test stops at its first failing line, so
+    it says nothing here; a feature's tests are judged at the final gate."""
+    cfg = adapter.cfg
+    files = feature_test_files(adapter, feature)
+    if not files:
+        return CheckResult("PASS", "No test file added or changed by this feature.")
+    junit = cfg.feature_out(feature) / "unreached_tests.xml"
+    hits, cases, note = adapter.test_line_run(sorted(feature_ids(cfg, feature)), junit)
+    if not hits or cases is None:
+        return CheckResult("SKIPPED", f"SKIPPED: {note or 'the run recorded no test file'}")
+    red = {short_name(c.name).split("[")[0] for c in cases if c.outcome != "passed"}
+    green = {short_name(c.name).split("[")[0] for c in cases} - red
+    return _verdict(find(adapter, feature, files, hits, green))
+
+
 def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
     files = feature_test_files(adapter, feature)
     if not files:
@@ -82,7 +109,10 @@ def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
     hits, note = adapter.test_line_hits()
     if not hits:
         return CheckResult("SKIPPED", f"SKIPPED: {note}")
-    found = find(adapter, feature, files, hits)
+    return _verdict(find(adapter, feature, files, hits))
+
+
+def _verdict(found: list[str]) -> CheckResult:
     if not found:
         return CheckResult("PASS", "Every assertion of the feature's tests ran.")
     return CheckResult(

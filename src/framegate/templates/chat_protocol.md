@@ -11,7 +11,7 @@ not read specs, gate files or logs. Every message you write to them:
 - puts the decision and its default first (one line), details after, and only on request;
 - is short: one or two lines for states and errors, about one screen for a gate brief;
 - uses plain words: no spec ID, test name or file path without its meaning in words ("the
-  'no shot without a free kick' rule", not "FK-R-004").
+  'an empty name is refused' rule", not "ABC-E-004").
 "More detail" / "show me X": show the relevant part of the file (final_summary.md,
 final_gates.md, tests_gate.md, test_summary.md, the spec files, retro_proposals.md, the pull
 request's description `<specs>/<f>/pr_description.md`), not all of it.
@@ -38,8 +38,16 @@ you or the user refused (`refused: ...`). Gate answers and approvals are recorde
    belongs under `## Pipeline follow-up` of requirements.md and is done as a separate step.
    Something outside the repository (a CI variable, a secret, a real database) goes there
    as `- OUTSIDE [<where>]: <what> (<why>)`: a person does it by hand, never framegate.
+   No step of the task edits a documentation file either: what a doc should say goes
+   under `## Proposed doc updates`. At the final gate a proposal for a file under docs/ is a
+   question (default: later; "approve" applies it); README / CHANGELOG lines are listed
+   ("will be applied after approval"). After the approval one docs step applies them as its
+   own commit (`<f>: docs`); never edit a doc yourself for the task. A stale docstring or
+   comment in a source file is code text: one line in the final summary, never a question.
 2. Start the run in the background: Bash tool, `run_in_background: true`, command
    `framegate run <f>` (PowerShell tool the same if Bash is not available). Note its task id.
+   If it prints `runs detached`, its task ends at once and the run goes on: only
+   the live view and status tell its end; its output is the log file it names.
 3. Start the live view: Monitor tool, command `framegate watch <f>`, description
    `framegate <f>`, `timeout_ms: 1800000`.
 4. Tell the user in one line that the run started and they can keep chatting. End the turn.
@@ -64,8 +72,8 @@ fail for no reason. Reading files and git log/diff/status are fine.
   goes on at <when> at the latest, and "say so when you have refilled the limit". When the
   user says the limit is back (refilled, extra usage bought): run `framegate wake <f>` (the
   run tries again within seconds; it is not a second run). Never wake it on your own.
-- The run has ended when either the background task's completion notification arrives or a
-  `watch ended: ...` line comes. On the first of the two, run `framegate status <f> --brief`
+- The run has ended when either the background task's completion notification arrives (not
+  after `runs detached`) or a `watch ended: ...` line comes. On the first of the two, run `framegate status <f> --brief`
   and act on its first line once (the second signal is then ignored):
   - `waiting at the tests gate` / `waiting at the final gate`: section C.
   - `DONE`: section D.
@@ -75,7 +83,7 @@ fail for no reason. Reading files and git log/diff/status are fine.
   - `interrupted ...` (any other reason): one line: where it stopped; "Continue the run?"
     (default yes), then A.2.
   - `phase X, not running` after an error: read the last 20 lines of the background task's
-    output file (Read); tell the user in one or two lines what failed, in words, and the one
+    output file, or of the log file a detached run named (Read); tell the user in one or two lines what failed, in words, and the one
     decision needed with your default (e.g. "Retry the run? (default: yes, it looks like a
     timeout)"). The lines themselves on request. Do not retry blindly.
   - The user gives the task up before DONE: offer the retro of what happened (default
@@ -98,6 +106,7 @@ fail for no reason. Reading files and git log/diff/status are fine.
 |---|---|---|
 | any | "ok" / "yes" / "go" / "defaults" while the brief has numbered questions or items | write `<out>/<f>/answers.md` with every item's default as its answer (`A: Default: <the default, as the brief says it>`), then `framegate answer <f>` |
 | any | answers to some numbered items ("1 yes, 3: use 0") | write `<out>/<f>/answers.md` (below), then `framegate answer <f>`; items not named: their default, unless the user said "only these" |
+| any | an item says "No default: choose." | it has no default, also on "ok" / "defaults": ask the user, write the chosen letter as its answer |
 | tests | approval ("ok", "approve", "looks good", "go") with no numbered questions | `framegate approve <f>` |
 | tests | rejection with a reason | `framegate reject <f> --reason '<reason in the user's words>'` |
 | final | approval: "ok", "approve", "done", "finish", "looks good", "retro" with no numbered items, or "approve as is" | `framegate approve <f>` (retro, then DONE) |
@@ -116,30 +125,43 @@ fail for no reason. Reading files and git log/diff/status are fine.
      short question with your default and wait. A wish to change the spec at the final gate:
      say in one line that it means editing the spec and `framegate approve-spec <f>` (restarts
      from the tests), ask "Change the spec?" (default no).
-   - A parked item with a proposed fix: "ok" / "approve <n>" for it is the answer
-     `Approved: apply the proposed fix as written.`; the next run sends it to the phase that
-     owns the file (spec, tests, code).
+   - A parked item: its default leaves it parked (the deferred list). "apply the fix" /
+     "approve the fix <n>" (option B) is the answer `B: apply the proposed fix as
+     written.`; the next run sends it to the phase that owns the file (spec, tests, code).
+   - A parked item that says "Nothing of this task is built ... No default: choose.": leaving
+     it parked would end the task empty, so "ok" does not answer it. Ask: A (leave it parked,
+     the task ends with nothing built) or B (redo it; `B: approved` applies what the item
+     proposes, `B: <the user's words>` redoes it with them).
    - A parked item that says "This needs the setup: ...": there is nothing to approve. Offer
      `/framegate:setup` with the change it names (default), then answer the item with what
      was done; the step is redone once framegate.toml has changed.
-   - The provisional-steps item (code kept, test fixes proposed): "ok" / "yes" / "approve" for
-     it, or for the whole gate while it is listed, is the answer `Approved: apply all proposed
-     test fixes as written.` (`framegate approve` refuses while it is open). A "no" to one fix
-     is an answer too, in the user's words: that step's code is reverted and redone.
+   - A doc update the user approves with a text of their own: write the text after the
+     letter (`A: <the user's text>`). Before the docs step applies it, the text is checked
+     against the code; where it contradicts the code, the final gate comes once more with
+     that one item ("your text" / "code now"; A: as written, B: corrected to the code, C:
+     later, the default). Show it as it is and ask.
+   - The provisional-steps item (code kept, test fixes proposed): its default leaves the code
+     as it is and the contested tests red (the deferred list). "apply the test fixes" (option B)
+     is the answer `B: apply all the proposed test fixes.` (`framegate approve`
+     refuses while it is open). A "no" to one fix is an answer too, `C: <the user's words>`:
+     that step's code is reverted and redone.
 4. `answers.md` format (overwrite the file; keep the user's wording, do not improve it):
 
    ```
    # Answers (<tests|final> gate)
 
    1. Q: <the item as numbered in the brief>
-      A: <the user's words, or "Default: <the default>">
+      A: <the option's letter first when the item has options, then the user's words;
+         or "Default: <the default>">
    2. Q: ...
       A: ...
    ```
 
+   `framegate answer` fails with "name no option of their question": ask the user to choose
+   for the listed items, put the letter first, run it again.
 5. After the command succeeds, continue with A.2 (finish --no-retro ends in DONE: section D).
-   After answers at the final gate that only took the defaults, that run may end in DONE
-   without a second final gate (nothing changed: approved with the checks already shown).
+   Answers that only take defaults change nothing: `framegate answer` approves the gate as it
+   stands (no run before it; the next run does the retro, then DONE).
    A command that fails: its error in one line, in words, and the decision with a default.
 
 ## D. DONE: wrap-up and cleanup

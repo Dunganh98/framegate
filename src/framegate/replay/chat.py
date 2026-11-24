@@ -2,6 +2,7 @@
 
   python -m framegate.replay.chat "<message>" [--resume ID] [--allow PATTERN ...]
   python -m framegate.replay.chat --file task.md --resume ID
+  python -m framegate.replay.chat "<a line of your own>" --file task.md
   python -m framegate.replay.chat --wait [SECONDS]
 
 Sending starts headless Claude Code in ../sandbox as a process of its own and returns at once:
@@ -22,7 +23,6 @@ import subprocess
 import sys
 import time
 from collections.abc import Sequence
-from typing import Any
 
 from framegate import procs
 
@@ -85,12 +85,7 @@ def read_pid(mark: pathlib.Path) -> int:
 
 def detach(cmd: Sequence[str]) -> int:
     """Start `cmd` outside the caller's process tree and without its pipes; returns the pid."""
-    kw: dict[str, Any] = dict.fromkeys(("stdin", "stdout", "stderr"), subprocess.DEVNULL)
-    if sys.platform == "win32":
-        kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-    else:
-        kw["start_new_session"] = True
-    return subprocess.Popen(list(cmd), **kw).pid
+    return procs.detach(cmd).pid
 
 
 def send(argv: Sequence[str], folder: pathlib.Path) -> int:
@@ -171,7 +166,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     ap = argparse.ArgumentParser(prog="python -m framegate.replay.chat")
     ap.add_argument("message", nargs="?")
-    ap.add_argument("--file", help="send this file's text")
+    ap.add_argument("--file", help="send this file's text (after the message, if both)")
     ap.add_argument("--resume", default="", help="session id of the conversation")
     ap.add_argument("--allow", action="append", default=[], help="one more allowed tool pattern")
     ap.add_argument("--sandbox", default="../sandbox")
@@ -181,9 +176,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     folder = pathlib.Path.cwd()
     if args.wait is not None and not (args.message or args.file):
         return wait(folder, args.wait)
-    if bool(args.message) == bool(args.file) or args.wait is not None:
+    if not (args.message or args.file) or args.wait is not None:
         ap.error("give the message or --file, or --wait alone")
-    message = args.message or pathlib.Path(args.file).read_text(encoding="utf-8").strip()
+    if args.file and (args.message or "").startswith("/"):
+        ap.error("a slash command takes no --file: send the file's text as its own message")
+    text = pathlib.Path(args.file).read_text(encoding="utf-8").strip() if args.file else ""
+    message = "\n\n".join(x for x in (args.message, text) if x)
     return work(args, message, folder / args.turn) if args.turn else send(argv, folder)
 
 

@@ -161,12 +161,13 @@ def test_probe_before_the_config_exists(fake_tools: FakeTools) -> None:
         "(candidate: argos is installed editable in the interpreter)"
     ) in out
     assert "References: none" in out and lines[-1].startswith("Files: framegate.toml missing")
-    # every tool was asked in the project's interpreter, each once, and nothing else ran
+    # every tool was asked in the project's interpreter, each once; besides them only the
+    # environment facts and the declared frameworks it lacks were asked
     venv = str(root / ".venv")
     assert all(c[0].startswith(venv) for c in fake_tools.commands)
     asked = sorted(c[2] for c in fake_tools.commands if c[-1] == "--version")
     assert asked == ["black", "mypy", "pytest", "ruff"]
-    assert len(fake_tools.commands) == 5 and not (root / "framegate.toml").exists()
+    assert len(fake_tools.commands) == 6 and not (root / "framegate.toml").exists()
 
 
 def test_probe_with_a_config(demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch) -> None:

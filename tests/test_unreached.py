@@ -177,3 +177,27 @@ def test_csharp_assertion_lines_and_cobertura(tmp_path: pathlib.Path) -> None:
     src_only = tmp_path / "out/src.xml"
     cobertura_without(report, src_only, tmp_path, "tests/")
     assert sorted(cobertura_hits([src_only], tmp_path)) == ["src/App/Model.cs"]
+
+
+RED = """
+
+@pytest.mark.req("FT-R-001")
+def test_red_stops_at_its_first_line() -> None:
+    assert shots() == []
+    if shots():
+        assert shots()[0]["chance"] == 1
+"""
+
+
+def test_the_tests_phase_judges_the_tests_that_pass_before_the_code(
+    tmp_path: pathlib.Path,
+) -> None:
+    root = repo(tmp_path)
+    write(root, "tests/test_feat.py", TESTS + RED)
+    a = adapter_for(root, {"gates": GATES, "protected": {"paths": []}})
+    res = unreached.before_code(a, "f")
+    assert res.status == "FAIL" and res.summary == "1 assertion(s) never ran", res.output
+    assert 'tests/test_feat.py:10: test_save_chance: assert shot["chance"] > 0' in res.output
+    assert "test_red_stops" not in res.output  # a red test says nothing about its later lines
+    write(root, "src/pkg/a.py", SRC.replace('"goal"', '"saved"'))
+    assert unreached.before_code(a, "f").status == "PASS"

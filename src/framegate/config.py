@@ -1,4 +1,4 @@
-"""Load and validate framegate.toml. Defaults equal the constants of the original setup guide."""
+"""Load and validate framegate.toml."""
 
 from __future__ import annotations
 
@@ -17,6 +17,8 @@ else:  # pragma: no cover - exercised only on 3.10
     import tomli as tomllib
 
 CONFIG_FILE = "framegate.toml"
+#: the deferred-work list (deferred.py), committed with each task's final commit
+DEFERRED_FILE = ".framegate/deferred.md"
 
 #: The built-in deploy / CI paths: names that can only mean one thing. No feature, bug fix
 #: or refactor changes one; the pipeline task does (frame_diff.is_pipeline_file). Folders at
@@ -64,10 +66,13 @@ PHASES = (
     "TESTS",
     "TEST_REVIEW",
     "IMPLEMENT",
+    "SIMPLIFY",
     "REVIEW",
     "TRIAGE",
     "DIAGNOSIS",
     "SUMMARY",
+    "DOC_CHECK",
+    "DOCS",
     "RETRO",
 )
 #: phase names of earlier versions -> today's name. "PR" was the run that writes the final
@@ -114,6 +119,7 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "max_budget_usd": (int, float),
         "permission_mode": (str,),
         "test_review_rounds": (int,),
+        "test_check_rounds": (int,),
         "model": (str,),
         "effort": (str,),
         "step_batch_ids": (int,),
@@ -151,7 +157,16 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "max_assumptions": (int,),
         "min_features": (int,),
         "never_auto": (list,),
+        "allow_repair": (bool,),
+        "allow_valid_findings": (bool,),
+        "allow_doc_proposals": (bool,),
+        "allow_skipped_checks": (bool,),
+        "min_agreed": (int,),
+        "max_low_overruled": (int,),
+        "max_low_defects": (int,),
     },
+    "simplify": {"enabled": (bool,), "min_lines": (int,)},
+    "checks": {"rules": (list,), "rules_text": (str,)},
     "docs": {"code_map": (str,)},
     "protected": {
         "paths": (list,),
@@ -255,8 +270,11 @@ EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 DEFAULT_MODELS = {
     "TESTS": "sonnet",
     "IMPLEMENT": "sonnet",
+    "SIMPLIFY": "sonnet",
     "SPEC_UPDATE": "sonnet",
     "SUMMARY": "sonnet",
+    "DOCS": "sonnet",
+    "DOC_CHECK": "opus",
     "TEST_REVIEW": "opus",
     "REVIEW": "opus",
     "TRIAGE": "opus",
@@ -273,10 +291,13 @@ DEFAULT_MAX_TURNS = {
     "TESTS": 50,
     "TEST_REVIEW": 30,
     "IMPLEMENT": 80,
+    "SIMPLIFY": 40,
     "REVIEW": 40,
     "TRIAGE": 30,
     "DIAGNOSIS": 40,
     "SUMMARY": 30,
+    "DOCS": 30,
+    "DOC_CHECK": 30,
     "RETRO": 30,
     "SPEC_UPDATE": 30,
 }
@@ -288,10 +309,13 @@ DEFAULT_MAX_BUDGET_USD = {
     "TESTS": 2.0,
     "TEST_REVIEW": 1.5,
     "IMPLEMENT": 1.5,
+    "SIMPLIFY": 1.0,
     "REVIEW": 1.5,
     "TRIAGE": 1.5,
     "DIAGNOSIS": 2.0,
     "SUMMARY": 1.5,
+    "DOCS": 1.0,
+    "DOC_CHECK": 1.0,
     "RETRO": 3.0,
     "SPEC_UPDATE": 1.0,
 }
@@ -317,19 +341,34 @@ class Reference:
 @dataclass
 class Risk:
     """[risk]: when the engine rates a finished feature low risk (risk.py). Every limit must
-    hold; a limit of 0 switches that test off."""
+    hold; a limit of 0 switches that test off. The defaults are strict: loosening one is a
+    config change, backed by `framegate stats --risk`."""
 
     #: changed source lines (added + removed) and source files since the tests were approved
-    max_changed_lines: int = 200
-    max_changed_files: int = 8
+    max_changed_lines: int = 80
+    max_changed_files: int = 4
     #: removed lines in source files that existed before the feature (an additive change)
-    max_removed_lines: int = 30
+    max_removed_lines: int = 10
     #: assumptions the implementer logged (each is a spec gap it filled alone)
-    max_assumptions: int = 3
+    max_assumptions: int = 1
     #: finished features in this repository before any feature counts as low risk
     min_features: int = 3
-    #: paths (prefixes or globs) whose change is never low risk
-    never_auto: list[str] = field(default_factory=list)
+    #: a run with one of these is never low risk unless the project allows it: a final-gate
+    #: repair, a review finding judged valid, a proposed doc update, a skipped final check
+    allow_repair: bool = False
+    allow_valid_findings: bool = False
+    allow_doc_proposals: bool = False
+    allow_skipped_checks: bool = False
+    #: the track record `[gates] final = "auto"` needs (it never changes the rating): past
+    #: final gates here that were rated low and that a person approved as they stood
+    min_agreed: int = 5
+    #: past final gates rated low that a person answered with changes (-1 = not counted)
+    max_low_overruled: int = 0
+    #: escaped defects logged against tasks that were rated low (-1 = not counted)
+    max_low_defects: int = 0
+    #: paths (prefixes or globs) whose change is never low risk. None = the general
+    #: defaults by kind of path (risk.never_auto: deploy / CI, schema / migration, docs)
+    never_auto: list[str] | None = None
 
 
 @dataclass
@@ -370,6 +409,8 @@ class Config:
     permission_mode: str = "acceptEdits"
     #: how often the test reviewer's objections go back to the test writer before the gate
     test_review_rounds: int = 2
+    #: how often failed test checks go back to the test writer before the test reviewer runs
+    test_check_rounds: int = 2
     #: [agents] model / effort: one `claude --model` / `--effort` for every phase without its own
     #: (model None = DEFAULT_MODELS; effort None = Claude Code's default)
     model: str | None = None
@@ -439,6 +480,16 @@ class Config:
     #: code failures, test writer for a weak diff-coverage / mutation score) before the human
     final_repair: bool = True
     risk: Risk = field(default_factory=Risk)
+    #: [simplify] enabled: after the last plan step and before the review one agent run
+    #: makes the task's diff smaller with the behaviour unchanged (simplify.py)
+    simplify_enabled: bool = True
+    #: [simplify] min_lines: no pass when the task added fewer source lines than this
+    simplify_min_lines: int = 10
+    #: [checks] rules: the project's own rule commands (one string each), run as a check at
+    #: every step gate and the final gate (rules.py); `{files}` = the task's changed files
+    rule_commands: list[str] = field(default_factory=list)
+    #: [checks] rules_text: a command that prints the rules as text, for the agents' tasks
+    rules_text_command: str = ""
     diff_coverage: float = 90
     mutation_score: float = 80
     mutation_tool: str | None = None  # None -> the adapter's default tool
@@ -598,10 +649,14 @@ class Config:
             "TESTS": [p.tests, p.out],
             "TEST_REVIEW": [p.out],
             "IMPLEMENT": [*src, p.out],
+            "SIMPLIFY": list(src),
             "REVIEW": [p.review_tests, p.out],
             "TRIAGE": [p.review_tests, p.out],
             "DIAGNOSIS": [p.out],
             "SUMMARY": [p.out, self.code_map],
+            # plus the documentation files: the write guard (doc_proposals.is_doc)
+            "DOCS": [p.out],
+            "DOC_CHECK": [p.out],
             "RETRO": [p.out],
         }
         return [_as_prefix(x) for x in defaults.get(phase, [])]
@@ -889,6 +944,9 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
     cfg.test_review_rounds = agents.get("test_review_rounds", cfg.test_review_rounds)
     if cfg.test_review_rounds < 0:
         raise ConfigError("[agents] test_review_rounds must be >= 0")
+    cfg.test_check_rounds = agents.get("test_check_rounds", cfg.test_check_rounds)
+    if cfg.test_check_rounds < 0:
+        raise ConfigError("[agents] test_check_rounds must be >= 0")
     if "model" in agents:
         cfg.model = agents["model"].strip()
     if "effort" in agents:
@@ -925,14 +983,32 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
         "max_removed_lines",
         "max_assumptions",
         "min_features",
+        "min_agreed",
     ):
         value = risk.get(key, getattr(cfg.risk, key))
         if value < 0:
             raise ConfigError(f"[risk] {key} must be >= 0 (0 = this test is off)")
         setattr(cfg.risk, key, value)
-    cfg.risk.never_auto = [
-        _norm(x) for x in _str_list("[risk] never_auto", risk.get("never_auto", []))
-    ]
+    for key in ("max_low_overruled", "max_low_defects"):
+        value = risk.get(key, getattr(cfg.risk, key))
+        if value < -1:
+            raise ConfigError(f"[risk] {key} must be >= -1 (-1 = not counted)")
+        setattr(cfg.risk, key, value)
+    for key in ("repair", "valid_findings", "doc_proposals", "skipped_checks"):
+        name = f"allow_{key}"
+        setattr(cfg.risk, name, risk.get(name, getattr(cfg.risk, name)))
+    if "never_auto" in risk:
+        cfg.risk.never_auto = [_norm(x) for x in _str_list("[risk] never_auto", risk["never_auto"])]
+    simplify = data.get("simplify", {})
+    cfg.simplify_enabled = simplify.get("enabled", cfg.simplify_enabled)
+    cfg.simplify_min_lines = simplify.get("min_lines", cfg.simplify_min_lines)
+    if cfg.simplify_min_lines < 0:
+        raise ConfigError("[simplify] min_lines must be >= 0")
+    checks = data.get("checks", {})
+    cfg.rule_commands = [c.strip() for c in _str_list("[checks] rules", checks.get("rules", []))]
+    if not all(cfg.rule_commands):
+        raise ConfigError("[checks] rules: a command must not be empty")
+    cfg.rules_text_command = checks.get("rules_text", "").strip()
     cfg.diff_coverage = gates.get("diff_coverage", cfg.diff_coverage)
     cfg.mutation_score = gates.get("mutation_score", cfg.mutation_score)
     cfg.mutation_tool = gates.get("mutation_tool", cfg.mutation_tool)
