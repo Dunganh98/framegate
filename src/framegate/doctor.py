@@ -22,7 +22,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from framegate import publish, references, setup_checks, tree_check, unrunnable
+from framegate import publish, references, rules, setup_checks, tree_check, unrunnable
 from framegate.adapters import get_adapter
 from framegate.adapters.base import CheckResult, LanguageAdapter
 from framegate.checks import frame_diff, spec_lint
@@ -453,7 +453,7 @@ def run(
 
     #: the checks that fail on the code as it is (for --tree: their size, one proposal)
     lint_red: list[tuple[str, CheckResult]] = []
-    for check in adapter.lint_checks(None):
+    for check in [*adapter.lint_checks(None), *rules.checks(adapter, "")]:
         t0 = time.monotonic()
         res = check.run()
         secs = time.monotonic() - t0

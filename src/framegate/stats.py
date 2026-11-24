@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from framegate import defects, risk_review
 from framegate.config import Config
 from framegate.retro import split_questions
 from framegate.state import read_events
@@ -22,6 +23,7 @@ PHASE_ORDER = [
     "TESTS",
     "TEST_REVIEW",
     "IMPLEMENT",
+    "SIMPLIFY",
     "REVIEW",
     "TRIAGE",
     "SUMMARY",
@@ -74,6 +76,10 @@ class FeatureStats:
     spec_seconds: float = 0.0
     #: rounds in which every plan step was parked (no review, final checks or summary run)
     reviews_skipped: int = 0
+    #: the escaped defects logged against the task (defects.py), one line each
+    defects: list[str] = field(default_factory=list)
+    #: the simplify pass, in words (source lines before and after, or why it was dropped)
+    simplify: str = ""
 
     @property
     def cost(self) -> float:
@@ -133,6 +139,8 @@ class FeatureStats:
             "risk": self.risk,
             "auto_approved": self.auto_approved,
             "reviews_skipped": self.reviews_skipped,
+            "escaped_defects": len(self.defects),
+            "simplify": self.simplify,
         }
 
 
@@ -166,6 +174,8 @@ def feature_stats(feature: str, events: list[dict[str, Any]]) -> FeatureStats:
     spec_open: str | None = None
     for e in events:
         kind, ts = e.get("kind"), str(e.get("ts") or "")
+        if str(kind).startswith("escaped_defect"):  # logged long after the task: not its time
+            continue
         st.started = st.started or ts
         st.ended = ts or st.ended
         if waiting and kind != "waiting":  # the next event after a gate stop: the human acted
@@ -214,6 +224,8 @@ def feature_stats(feature: str, events: list[dict[str, Any]]) -> FeatureStats:
             st.auto_approved = st.auto_approved or bool(e.get("auto"))
         elif kind == "review_skipped":
             st.reviews_skipped += 1
+        elif kind == "simplify":
+            st.simplify = str(e.get("text") or e.get("status") or "")
         elif kind == "waiting":
             waiting = ts
         elif kind == "retro_coverage":
@@ -250,6 +262,9 @@ def collect(cfg: Config) -> list[FeatureStats]:
             if st.assumptions is None and str(row.get("assumptions") or "").isdigit():
                 st.assumptions = int(row["assumptions"])
         out.append(st)
+    found = defects.per_task(cfg)
+    for st in out:
+        st.defects = [d.line() for d in found.get(st.feature, [])]
     return out
 
 
@@ -284,6 +299,7 @@ def overview(stats: list[FeatureStats]) -> list[str]:
         "step fails",
         "questions",
         "assumed",
+        "defects",
         "risk",
     ]
     rows = [head]
@@ -301,6 +317,7 @@ def overview(stats: list[FeatureStats]) -> list[str]:
                 str(st.step_gates_failed),
                 str(st.questions),
                 "-" if st.assumptions is None else str(st.assumptions),
+                str(len(st.defects)) if st.done else "-",
                 (st.risk or "-") + (" (auto)" if st.auto_approved else ""),
             ]
         )
@@ -319,7 +336,8 @@ def overview(stats: list[FeatureStats]) -> list[str]:
     lines += [
         "",
         "agents / checks: time agents and gate checks ran; you: time a gate waited for you;",
-        "spec: from `framegate spec` to the approval (the chat's own cost is not in the log).",
+        "spec: from `framegate spec` to the approval (the chat's own cost is not in the log);",
+        "defects: bugs found after the task was accepted (`framegate defect`).",
     ]
     return lines
 
@@ -384,6 +402,10 @@ def detail(st: FeatureStats) -> list[str]:
             f"Rounds with every step parked (review, final checks and summary skipped): "
             f"{st.reviews_skipped}"
         )
+    if st.simplify:
+        lines.append(f"Simplify pass: {st.simplify}")
+    lines.append(f"Escaped defects: {len(st.defects)}")
+    lines += [f"  {x}" for x in st.defects]
     return lines
 
 
@@ -392,7 +414,12 @@ def run(
     feature: str | None = None,
     as_json: bool = False,
     echo: Callable[[str], None] = print,
+    risk: bool = False,
 ) -> int:
+    if risk:  # the rating next to the human's decision at each final gate
+        for line in risk_review.lines(cfg, feature):
+            echo(line)
+        return 0
     stats = collect(cfg)
     if feature:
         stats = [s for s in stats if s.feature == feature]
@@ -409,4 +436,11 @@ def run(
         return 0
     for line in detail(stats[0]) if feature else overview(stats):
         echo(line)
+    if not feature:
+        echo("")
+        for line in defects.stats_lines(cfg, [s.feature for s in stats if s.done]):
+            echo(line)
+        compared = risk_review.summary(risk_review.decisions(read_events(cfg)))
+        if compared:
+            echo(compared + " Detail: framegate stats --risk")
     return 0

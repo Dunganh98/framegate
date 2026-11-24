@@ -57,8 +57,17 @@ commands:
   backlog done|drop|reopen B3 [B5 ...] [--note TEXT]   mark it applied / dropped / open again
   gates <feature> --scope step|final [--skip-mutation]
   spec-brief <feature>    print the conventions brief for the SPEC session
-  stats [<feature>] [--json]  what the features cost, from the events: cost, agent / check
-                          time, final-gate runs; with a feature: per phase and per final run
+  stats [<feature>] [--json] [--risk]  what the features cost, from the events: cost,
+                          agent / check time, final-gate runs, escaped defects; with a
+                          feature: per phase and per final run; --risk: the risk rating
+                          next to what you decided at each final gate
+  defect <feature> --what TEXT [--found-by TEXT] [--severity low|medium|high]
+         [--fix <feature or commit>] [--file PATH ...] [--id SPEC-ID ...] [--force]
+                          record a bug found after the task was accepted, against the
+                          task that caused it (metrics/escaped_defects.md, committed);
+                          `stats` counts them, a later task's retro sees the open ones on
+                          its files or spec IDs
+  defect --close X3 [--fix ...]   the fix is in; defect [--all]: list the open (all) ones
   install-tools [--dry-run] [--update]  install what the workflow needs into the
                           project's environment (python: the framegate pytest plugin, pytest,
                           pytest-cov, hypothesis, diff-cover, the gate commands' tools);
@@ -68,6 +77,15 @@ commands:
   survey                  an agent reads the code and build files and maps the source and
                           test folders and what is not the project's code; every code file
                           must be accounted for (out/survey.json, read by probe); minutes
+  setup --plan [--survey]  the setup's first command (for /framegate:setup): installs the
+                          workflow tools, maps the folders (survey, once), probes, and
+                          prints one confirmation table with the decisions it needs
+  setup --apply [--set ROW=VALUE ...] [--red "TEST=REASON" ...]   its second: writes the
+                          confirmed plan (framegate.toml, templates), installs the gate
+                          commands' tools, runs doctor --tree --brief, creates the state
+                          branch once the tree is settled, prints what to commit and what
+                          is left; --set: a corrected row; --red: a red test the user
+                          agreed to list; can run again
   uses <symbol> [--file <path>]  every place in the source (not the tests) that reads
                           the function or variable, as file:line: line (for the spec:
                           check each use site when a requirement changes an input)
@@ -225,6 +243,20 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("stats", help="cost and time per feature, from the events")
     p.add_argument("feature", nargs="?")
     p.add_argument("--json", action="store_true", help="the numbers as JSON")
+    p.add_argument(
+        "--risk", action="store_true", help="the risk rating next to your final-gate decisions"
+    )
+    p = sub.add_parser("defect", help="log a bug found after a task was accepted")
+    p.add_argument("feature", nargs="?", help="the task that caused it")
+    p.add_argument("--what", default="", help="one line: what is wrong")
+    p.add_argument("--found-by", default="", help="who or what found it (user, CI, a later task)")
+    p.add_argument("--severity", default="medium", choices=["low", "medium", "high"])
+    p.add_argument("--fix", default="", help="the task or commit that fixed it")
+    p.add_argument("--file", action="append", default=[], help="a file the bug is in")
+    p.add_argument("--id", action="append", default=[], help="a spec ID it breaks")
+    p.add_argument("--force", action="store_true", help="also for a task with no record here")
+    p.add_argument("--close", default="", metavar="X<n>", help="mark a logged defect fixed")
+    p.add_argument("--all", action="store_true", help="list the fixed ones too")
     p = sub.add_parser(
         "install-tools", help="install the tools the workflow needs into the project env"
     )
@@ -237,6 +269,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("probe", help="the project facts every run depends on (instant checks)")
     p.add_argument("--json", action="store_true", help="the facts as JSON")
     sub.add_parser("survey", help="an agent maps source / test folders from the code (setup)")
+    p = sub.add_parser("setup", help="the setup as two commands: --plan, then --apply")
+    step = p.add_mutually_exclusive_group(required=True)
+    step.add_argument("--plan", action="store_true", help="probe and print the table")
+    step.add_argument("--apply", action="store_true", help="write the confirmed plan, check it")
+    p.add_argument("--survey", action="store_true", help="--plan: map the folders again")
+    p.add_argument("--set", action="append", default=[], metavar="ROW=VALUE")
+    p.add_argument("--red", action="append", default=[], metavar="TEST=REASON")
     p = sub.add_parser("preflight", help="the start step of the chat skills: versions, tools")
     p.add_argument("feature", nargs="?")
     p.add_argument("--plugin-version", default="", help="the version of the skill that asks")
@@ -338,6 +377,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             from framegate import survey
 
             return survey.run()
+        if args.command == "setup":
+            from framegate import setup_cmd
+
+            if args.plan:
+                return setup_cmd.plan(resurvey=args.survey)
+            return setup_cmd.apply(args.set, args.red)
         if args.command == "preflight":
             from framegate import preflight
 
@@ -411,7 +456,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "stats":
             from framegate import stats
 
-            return stats.run(cfg, args.feature, as_json=args.json)
+            return stats.run(cfg, args.feature, as_json=args.json, risk=args.risk)
+        if args.command == "defect":
+            from framegate import defects
+
+            return defects.run(cfg, args)
         if args.command == "deferred":
             from framegate import deferred
 

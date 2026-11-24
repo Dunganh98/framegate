@@ -43,8 +43,8 @@ BRIEF_PROVEN_LINES = 3
 #: phase names in run log file names ({stamp}-{feature}-{PHASE}.json / .prompt.md / ...);
 #: PR: the SUMMARY phase's name before 0.9.1 (run files of a feature started with it)
 RUN_LOG_PHASES = (
-    "SPEC_UPDATE|TESTS|TEST_REVIEW|IMPLEMENT|DIAGNOSIS|REVIEW|TRIAGE|SUMMARY|PR|DOC_CHECK|"
-    "DOCS|RETRO"
+    "SPEC_UPDATE|TESTS|TEST_REVIEW|IMPLEMENT|SIMPLIFY|DIAGNOSIS|REVIEW|TRIAGE|SUMMARY|PR|"
+    "DOC_CHECK|DOCS|RETRO"
 )
 #: every spec has it; a pipeline task of its own (pipeline.py) has only its list
 SPEC_FILE = "requirements.md"
@@ -502,6 +502,7 @@ def _final_brief(
             list(rated.get("reasons") or []),
             dict(rated.get("facts") or {}),
             not_measured=dict(rated.get("not_measured") or {}),
+            blocked=list(rated.get("blocked") or []),
         )
         lines.append(rating.line(auto=orch.cfg.final_gate == "auto"))
     for title, names in (

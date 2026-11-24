@@ -40,7 +40,16 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from framegate import procs, red_tree, references, suite_run, task_base, unrunnable, uses
+from framegate import (
+    procs,
+    red_tree,
+    references,
+    rules,
+    suite_run,
+    task_base,
+    unrunnable,
+    uses,
+)
 from framegate.adapters.base import (
     GATE_NAMES,
     NOT_MEASURED,
@@ -644,7 +653,7 @@ def checks(
     # an idle step (scope "idle"): the code is the one the last green gate checked, so only
     # the step's own tests are new; lint and the frame check are its results
     idle = scope == "idle"
-    c = [] if idle else lint_checks(adapter, feature)
+    c = [] if idle else [*lint_checks(adapter, feature), *rules.checks(adapter, feature)]
     if not idle:
         c.append(Check(frame_diff.CHECK_NAME, lambda: frame_diff.check(adapter, feature)))
     if scope in ("step", "fix", "idle"):

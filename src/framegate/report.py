@@ -25,6 +25,7 @@ PHASE_ORDER = [
     "TEST_REVIEW",
     "IMPLEMENT",
     "DIAGNOSIS",
+    "SIMPLIFY",
     "REVIEW",
     "TRIAGE",
     "SUMMARY",

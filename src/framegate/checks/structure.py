@@ -331,3 +331,26 @@ def missing_from_code_map(adapter: LanguageAdapter, feature: str) -> tuple[bool,
         return False, types
     text = path.read_text(encoding="utf-8", errors="replace")
     return True, [t for t in types if not re.search(rf"\b{re.escape(t)}\b", text)]
+
+
+def over_limit_lines(events: list[dict[str, Any]]) -> list[str]:
+    """For the final facts: crossed_lines, then the files that were over the limit before
+    and that this task made longer. Notes for the summary, never gate questions; each
+    file's split is on the deferred list."""
+    last = [e for e in events if e.get("kind") == "final_gates"]
+    shape = (last[-1].get("structure") if last else None) or {}
+    limit, before = int(shape.get("limit") or 0), shape.get("before") or {}
+    files = shape.get("files") or {}
+    longer = [
+        f"- {p}: over the size limit before this task, now longer "
+        f"({before[p]} -> {files.get(p)} lines, limit {limit})"
+        for p in shape.get("grown") or []
+        if limit and before.get(p) is not None and before[p] > limit
+    ]
+    out = crossed_lines(events)
+    if longer:
+        out += [*([""] if out else []), f"## Files over the size limit made longer: {len(longer)}"]
+        out += ["", *longer]
+    if out:
+        out += ["", "No question: say each in one line of the summary; its split is deferred."]
+    return out

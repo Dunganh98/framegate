@@ -67,8 +67,8 @@ def test_a_file_taken_over_the_limit_is_a_final_fact() -> None:
     assert structure.crossed_lines(events[:3]) == []
 
 
-def test_a_file_answered_at_spec_time_is_no_gate_question(demo_repo: DemoRepo) -> None:
-    """Seen live: asked at spec time, answered "later", asked again at the final gate."""
+def test_a_longer_file_over_the_limit_is_deferred_once_and_never_asked(demo_repo: DemoRepo) -> None:
+    """The owner's decision: a note in the final summary and a deferred entry, no question."""
     from framegate.orchestrator import Orchestrator
     from framegate.state import log_event
 
@@ -78,18 +78,28 @@ def test_a_file_answered_at_spec_time_is_no_gate_question(demo_repo: DemoRepo) -
     shape = {"limit": 5, "files": {REL: 9}, "before": {REL: 7}, "over": [REL], "grown": [REL]}
     log_event(cfg, "demo", "final_gates", passed=True, structure=shape)
     questions = r.root / "out/demo/open_questions.md"
-    orch.file_size_questions("demo", {})
-    assert f"[structure report] {REL} has 9 lines" in questions.read_text(encoding="utf-8")
-    questions.unlink()
-    (cfg.feature_out("demo") / deferred.NOTED).write_text(f'["{REL}"]', encoding="utf-8")
-    orch.file_size_questions("demo", {})
+    prog: dict[str, object] = {}
+    orch.note_file_sizes("demo", prog)
+    orch.note_file_sizes("demo", prog)  # a second summary round: noted once
     assert not questions.exists()
+    assert prog["size_noted"] == [REL]
+    (item,) = prog["deferred"]  # type: ignore[misc]
+    assert item["files"] == [REL] and item["kind"] == "refactor"
+    assert item["text"] == "split it into one file per concept (9 lines, limit 5)"
+    assert structure.over_limit_lines(r.events())[:3] == [
+        "## Files over the size limit made longer: 1",
+        "",
+        f"- {REL}: over the size limit before this task, now longer (7 -> 9 lines, limit 5)",
+    ]
+    # answered at spec time, or on the list already: no second entry
+    (cfg.feature_out("demo") / deferred.NOTED).write_text(f'["{REL}"]', encoding="utf-8")
+    again: dict[str, object] = {}
+    orch.note_file_sizes("demo", again)
+    assert again == {}
     (cfg.feature_out("demo") / deferred.NOTED).unlink()
     deferred.split_later(cfg, "demo", REL)
-    orch.file_size_questions("demo", {})
-    assert not questions.exists()
-    log = (r.root / "out/demo/progress.log").read_text(encoding="utf-8")
-    assert "answered at spec time or is on the deferred list: not asked" in log
+    orch.note_file_sizes("demo", again)
+    assert again == {} and len(deferred.read(cfg)[0]) == 1
 
 
 def test_spec_time_sizes_are_counted_as_the_gates_format(demo_repo: DemoRepo) -> None:

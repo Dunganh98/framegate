@@ -37,6 +37,7 @@ from framegate import (
     api_error,
     backlog,
     defaults,
+    defects,
     deferred,
     description,
     doc_proposals,
@@ -49,6 +50,8 @@ from framegate import (
     red_tree,
     references,
     risk,
+    rules,
+    simplify,
     task_base,
     unrunnable,
 )
@@ -237,6 +240,7 @@ BRIEF_PHASES = {
     "FIX_FINAL",
     "TESTS_STRENGTHEN",
     "STRUCTURE",
+    "SIMPLIFY",
     "DIAGNOSIS",
     "REVIEW",
     "TRIAGE",
@@ -250,6 +254,8 @@ TASK_PHASE = {
     "FIX_FINAL": "IMPLEMENT",
     "STRUCTURE": "IMPLEMENT",
 }
+#: task kinds that write source: they get the project's rules as a generated block (rules.py)
+RULES_TASKS = ("IMPLEMENT", "IMPLEMENT_STEPS", "FIX", "FIX_FINAL", "STRUCTURE", "SIMPLIFY")
 #: Only the plain command forms are pre-approved (--allowedTools); a `cd`/PATH prefix, a pipe
 #: or a `;`/`&&` chain makes the permission check deny the call (seen in live runs on Windows:
 #: `dotnet test ... | Select-String`, `...; echo`). The PreToolUse hook blocks them with this
@@ -326,6 +332,7 @@ FINAL_SRC_CHECKS = (
     "coverage run",
     "full test suite",
     removed_guards.NAME,
+    rules.NAME,
 )
 FINAL_TESTS_CHECKS = ("diff coverage", "mutation score", "unreached assertions")
 #: final checks that run the whole suite: their repair run is checked with the suite too
@@ -610,6 +617,9 @@ TASKS = {
     "have no IDs: use them as evidence. More detail: {out}/events.jsonl (feature={f}), "
     "{out}/{f}/, {out}/runs/*{f}*.json.",
 }
+
+
+TASKS[simplify.PHASE] = simplify.TASK
 
 
 def summarize_denials(raw: Any, limit: int = 300) -> list[dict[str, str]]:
@@ -937,6 +947,9 @@ class Orchestrator:
             allowed = self.allowed_tools(TASK_PHASE.get(kind, kind))
             task += "\n\n## Conventions\n" + self.adapter.conventions_brief(allowed).strip()
             task += "\n" + COMMAND_FORM
+        if kind in RULES_TASKS:
+            block = rules.text_block(self.adapter)
+            task += "\n\n" + block if block else ""
         return task
 
     def orientation(self, feature: str) -> str:
@@ -3352,6 +3365,7 @@ class Orchestrator:
     def phase_review(self, feature: str, prog: dict[str, Any]) -> None:
         sub = prog.get("sub") or "agent"
         if sub == "agent":
+            simplify.run(self, feature, prog)  # its own commit, or the code as it was
             task = self.task_text("REVIEW", feature)
             parked = self.parked_ids(prog, plan_steps(self.cfg, feature))
             if parked:
@@ -3948,49 +3962,40 @@ class Orchestrator:
                 commits=git(self.cfg, "rev-list", f"{base}..{head}").split(),
             )
 
-    def file_size_questions(self, feature: str, prog: dict[str, Any]) -> None:
-        """A question at the final gate for every source file over [gates] max_file_lines
-        that this feature made longer (from the last final-gate structure report). The
-        default, as for every question, changes nothing: leave it for later (the deferred
-        list); split it now is the other option. A file the feature changed without making it
-        longer is not asked about (the report lists it)."""
+    def note_file_sizes(self, feature: str, prog: dict[str, Any]) -> None:
+        """Every source file over [gates] max_file_lines that this feature made longer (the
+        last final-gate structure report) is a note, never a gate question: the final facts
+        list it (structure.over_limit_lines) and its split goes to the deferred list at the
+        end of the task (once per file; not one answered at spec time or listed already)."""
         last = [e for e in read_events(self.cfg, feature) if e.get("kind") == "final_gates"]
         shape = (last[-1].get("structure") if last else None) or {}
         over = (shape["grown"] if "grown" in shape else shape.get("over")) or []
-        if not over:
-            return
-        asked = "\n".join(self.open_questions(feature))
-        before = shape.get("before") or {}
         files = shape.get("files") or {}
         limit = int(shape.get("limit") or 0)
         done = deferred.split_answered(self.cfg, feature)
-        lines = []
-        for path in over:
-            if path in asked or path in (prog.get("size_answered") or []):
-                continue
-            if path in done:
-                self.progress(feature, f"[{STRUCTURE_WHO}] {path}: {SPLIT_ANSWERED}")
-                continue
-            was = before.get(path)
-            took = (
-                "this feature took it over the limit"
-                if was is None or was <= limit
-                else f"it had {was} lines before this feature"
-            )
-            lines.append(
-                f"{path} has {files.get(path)} lines (limit {limit}; {took}). Split it into one "
-                "file per concept? A: leave it for a later cleanup (the deferred list) (default) "
-                "/ B: split it now by concept (the implementer restructures it, the tests stay as "
-                "they are; one more check round)."
-            )
-        if not lines:
+        seen = [*(prog.get("size_noted") or []), *(prog.get("size_answered") or [])]
+        new = [p for p in over if p not in seen and p not in done]
+        if not new:
             return
-        with open(self.fdir(feature) / "open_questions.md", "a", encoding="utf-8") as fh:
-            for q in lines:
-                fh.write(f"- [{STRUCTURE_WHO}] {q}\n")
-        text = "\n".join(lines)
-        log_event(
-            self.cfg, feature, "questions", phase="SUMMARY", who=STRUCTURE_WHO, questions=text
+        prog["size_noted"] = [*(prog.get("size_noted") or []), *new]
+        prog["deferred"] = [
+            *(prog.get("deferred") or []),
+            *(
+                {
+                    "kind": "refactor",
+                    "text": f"{deferred.SPLIT} ({files.get(p)} lines, limit {limit})",
+                    "files": [p],
+                    "how": "noted in the final summary",
+                }
+                for p in new
+            ),
+        ]
+        save_progress(self.cfg, feature, prog)
+        log_event(self.cfg, feature, "size_noted", files=new, limit=limit)
+        self.progress(
+            feature,
+            f"[{STRUCTURE_WHO}] over the size limit, noted (no question; the deferred list): "
+            + ", ".join(new),
         )
 
     def tool_failure_questions(self, feature: str) -> None:
@@ -4046,7 +4051,7 @@ class Orchestrator:
     # ---------- SUMMARY: final summary, final brief, code map -> FINAL gate ----------
     def phase_summary(self, feature: str, prog: dict[str, Any]) -> None:
         d = self.fdir(feature)
-        self.file_size_questions(feature, prog)
+        self.note_file_sizes(feature, prog)
         self.tool_failure_questions(feature)
         self.check_doc_texts(feature, prog)
         self.doc_questions(feature, prog)
@@ -4096,7 +4101,7 @@ class Orchestrator:
         steps = d / "steps.md"
         again = answered.section(read_events(self.cfg, feature))
         again = ["", *again] if again else []
-        crossed = structure_check.crossed_lines(read_events(self.cfg, feature))
+        crossed = structure_check.over_limit_lines(read_events(self.cfg, feature))
         crossed = ["", *crossed] if crossed else []
         facts = final_facts(
             feature,
@@ -4117,6 +4122,15 @@ class Orchestrator:
                 *again,
                 *crossed,
                 *(["", *reach] if (reach := self.cause_reach_lines(prog)) else []),
+                *(
+                    ["", *done]
+                    if (
+                        done := simplify.facts_lines(
+                            since_spec_approval(read_events(self.cfg, feature))
+                        )
+                    )
+                    else []
+                ),
             ],
         )
         (d / "final_facts.md").write_text(facts, encoding="utf-8")
@@ -4307,7 +4321,12 @@ class Orchestrator:
 
     def auto_approve_final(self, feature: str, prog: dict[str, Any]) -> None:
         """[gates] final = "auto" and the engine rates the feature low risk: the final gate is
-        passed without a stop (retro, then DONE). Nothing is pushed."""
+        passed without a stop (retro, then DONE). Nothing is pushed. The brief and the
+        summary say that no person approved (risk.mark_unattended)."""
+        d = self.fdir(feature)
+        marked = risk.mark_unattended(
+            feature, [d / "final_brief.md", d / "final_summary.md"], d / "final_facts.md"
+        )
         log_event(
             self.cfg,
             feature,
@@ -4316,12 +4335,16 @@ class Orchestrator:
             approved=True,
             reason="low risk",
             auto=True,
+            by="engine",
+            person=False,
             risk=risk.LOW,
+            brief=self.rel(marked[0]),
         )
         self.progress(
             feature,
             "FINAL GATE: approved automatically (low risk: clean run, small change, coverage "
-            "and mutation measured). The brief is kept; retro next.",
+            f"and mutation measured). No person approved; the brief is kept "
+            f"({self.rel(marked[0])}); retro next.",
         )
         self.notify(f"framegate: {feature} approved automatically", "Low risk; retro, then DONE.")
         self.advance(feature, prog, "RETRO")
@@ -4645,6 +4668,8 @@ class Orchestrator:
         # what earlier retros proposed: the retro names a problem it sees again
         earlier = backlog.retro_section(self.cfg)
         text = ri.text.rstrip("\n") + ("\n\n" + earlier if earlier else "\n")
+        escaped = defects.task_section(self.adapter, feature)
+        text += "\n" + escaped if escaped else ""
         (d / "retro_input.md").write_text(text, encoding="utf-8")
         return ri.ids
 
@@ -5280,6 +5305,7 @@ class Orchestrator:
         )
         self.pin_references(feature)
         self.record_baseline(feature)
+        rules.record_baseline(self.adapter, feature)
         self.echo("Setup files committed with the spec: " + (", ".join(setup) or "none") + ".")
         self.echo(f"Tagged spec-approved/{feature}. Next: framegate run {feature}")
         return EXIT_OK

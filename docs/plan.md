@@ -188,7 +188,7 @@ Checked against the code on 2026-11-24.
 | Diagnosis, parking, provisional steps, redo of affected work only | built | |
 | Usage-limit wait; failure output cut down to what matters | built | |
 | Briefs at every human point; question filter; no-change defaults | built | |
-| Structure: findings and fixes, structure report, file-size questions, code map | built | |
+| Structure: findings and fixes, structure report, file-size questions, code map | built | A file the task took over the size limit is a note in the final summary and a deferred entry, not a question |
 | Modes: feature, bug fix, refactor, pipeline | built | Refactor includes the scope coverage report |
 | Mode: experiment (a metric with noise, a threshold with a tolerance) | planned | |
 | Adapters: Python, .NET, generic | built | |
@@ -200,17 +200,20 @@ Checked against the code on 2026-11-24.
 | State branch, publish, generated pull request description | built | Pull requests on GitHub and Azure DevOps |
 | CI job that runs the final gates | partly | GitHub Actions template; Azure Pipelines missing |
 | Run records and `framegate stats` (cost, time, tokens per run, check results, human decisions) | built | One event log and one metrics row per task |
-| Tool-call log, test failures per spec ID, escaped-defect log | planned | The metric's quality half is not recorded yet |
+| Escaped-defect log (`framegate defect`), counted in `framegate stats` and shown to later retros | built | |
+| Tool-call log, test failures per spec ID | planned | |
 | Assumptions logged with spec IDs and listed at the final gate | built | |
 | Structured decision log with a check that every run logged | planned | Free-text step notes today |
 | Retro with a backlog that counts repeats | built | |
 | Retro panel (two reviewers and a synthesizer) | planned | One retro run today |
 | Risk rating on every final brief, logged next to the human's decision | built | Computed from the run's records |
-| Final gate passed without a person on low risk | partly | Built behind a switch, off by default; the never-automatic path list is empty by default |
-| Simplify pass, fast lane | planned | |
+| Final gate passed without a person on low risk | partly | Built behind a switch, off by default. Strict limits, default never-automatic paths (deploy / CI, schema, docs), a track record it needs, `framegate stats --risk` as the evidence. Not switched on: no setting is loosened yet |
+| Simplify pass | built | One agent run before the review; kept only when every check stays green |
+| Fast lane | planned | |
 | Before-PR flow | partly | Publish and description built; rebase, re-check, CI rules and risk tier in the text are not |
-| Project's CI rules at the step gate | planned | |
-| Setup and chat relays as commands instead of model turns | planned | |
+| Project's CI rules at the step gate | built | Rule commands as checks at step, fix and final gates; the rules as a generated block in the agents' tasks |
+| Setup as commands instead of model turns | partly | `framegate setup --plan` / `--apply`; the knowledge file and the code map are still written by the chat |
+| Chat relays as commands instead of model turns | planned | |
 | Security pass by trigger | planned | |
 | Check on the real system | partly | Project checks run after the final checks, never blocking; an optional smoke task at setup. No harness with recorded data |
 | Early stop on friction signals | partly | Diagnosis after repeated failure is built; scoring signals before that is not |
@@ -232,8 +235,11 @@ that matters most, is not measured.
 
 **2. Risk-based approval, switched on.** A task with low risk, all checks green and no question
 passes the final gate without a person. Listed paths (schema, deploy, CI, docs) always need one.
-*Evidence:* most final gates in the replay rounds had 0 or 1 question. *Left to do:* compare the
-logged rating with the human's decisions, give the path list its defaults, then turn it on.
+*Evidence:* most final gates in the replay rounds had 0 or 1 question. It starts strict and is loosened only with evidence: every
+threshold is a setting with the strict value as its default, and a setting is relaxed when the
+logged ratings, the human's decisions and the escaped defects of past tasks support it.
+*Left to do:* compare the logged rating with the human's decisions, give the path list its
+defaults, then turn it on.
 
 **3. Simplify pass.** One agent shrinks the task's diff with the tests unchanged, before the
 review. *Evidence:* the task's diff is often larger than the original author's (21 source lines
@@ -253,7 +259,10 @@ base, run the checks and the project's CI rules again, and write the pull reques
 final summary with the risk rating. The project's CI rules are the hard gate before the pull
 request. The same commands run at the step gate on the changed files, so the implementer learns
 the rules from their output and from a summary generated from the CI config, not from guideline
-text.
+text. A merged task can be undone exactly and alone: one pull request holds one task and
+nothing else, it is merged as one commit, and one command builds the revert of that commit and
+reports what later changes stand in its way. What a revert does not undo (a migrated schema,
+deployed state, data already written) is named in the pull request text.
 
 **7. A check on the real system.** Unit tests are the weakest proof where correctness shows only
 on real data or a running system. Per task: cases that run the real system on recorded data,
@@ -294,7 +303,7 @@ deliver it in a sandbox cut before that commit. The commit's own tests are hidde
 result. Each candidate has a cost and a time cap, and nothing leaves its run folder. A round
 gives verdicts, cost, time, final-gate rounds and the retro proposals of every run, so two
 framegate versions can be compared on the same tasks. A replay does not measure the spec
-dialogue or the human's time at the gates; those are measured on real tasks.
+dialogue with a real user or the human's time at the gates; those are measured on real tasks.
 
 **The retro loop.** After every task the retro proposes fixes, each marked as the project's or
 framegate's, in the order of principle 4. The human picks by number. Picks go to the backlog

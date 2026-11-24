@@ -1036,6 +1036,7 @@ class LanguageAdapter(abc.ABC):
             "TESTS": READ_TOOLS + WRITE_TOOLS + tests + lint,
             "TEST_REVIEW": READ_TOOLS + ["Write"] + tests,
             "IMPLEMENT": READ_TOOLS + WRITE_TOOLS + tests + lint,
+            "SIMPLIFY": READ_TOOLS + WRITE_TOOLS + tests + lint + GIT_READ_TOOLS,
             "REVIEW": READ_TOOLS + WRITE_TOOLS + tests + GIT_READ_TOOLS,
             "TRIAGE": READ_TOOLS + WRITE_TOOLS + tests + GIT_READ_TOOLS,
             "DIAGNOSIS": READ_TOOLS + ["Write"] + tests + GIT_READ_TOOLS,

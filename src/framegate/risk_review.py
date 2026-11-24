@@ -88,6 +88,26 @@ def summary(rows: list[Decision]) -> str:
     )
 
 
+def outcome_lines(cfg: Config, rows: list[Decision]) -> list[str]:
+    """The outcome behind the ratings: escaped defects (defects.py) per rating of the task
+    they were logged against ([] = none logged)."""
+    from framegate import defects
+
+    found = defects.per_task(cfg)
+    if not found:
+        return []
+    last = {d.feature: d.level for d in rows}
+    out = []
+    for level in ("low", "elevated"):
+        tasks = sorted(t for t in found if last.get(t) == level)
+        n = sum(len(found[t]) for t in tasks)
+        out.append(
+            f"Escaped defects on tasks rated {level}: {n}"
+            + (f" ({', '.join(tasks)})" if tasks else "")
+        )
+    return out
+
+
 def lines(cfg: Config, feature: str | None = None) -> list[str]:
     rows = decisions(read_events(cfg))
     if feature:
@@ -104,6 +124,7 @@ def lines(cfg: Config, feature: str | None = None) -> list[str]:
         + (": " + ", ".join(d.feature for d in wrong) if wrong else "")
         + '. [gates] final = "auto" passes only gates rated low.'
     )
+    out += outcome_lines(cfg, rows)
     out.append("")
     for d in rows:
         why = f" ({'; '.join(d.reasons[:2])}" + (", ..." if len(d.reasons) > 2 else "")

@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+import json
+import pathlib
 from typing import Any
 
 import pytest
 
 from conftest import DemoRepo, git
-from framegate import chat, risk
+from framegate import chat, defects, risk, risk_review, stats
 from framegate.adapters import get_adapter
 from framegate.config import ConfigError, load_config, parse_config
 from framegate.orchestrator import EXIT_GATE, Orchestrator
@@ -34,6 +36,7 @@ def rated(demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch) -> Any:
     state = {"stats": dict(SMALL), "done": 3}
     monkeypatch.setattr(risk, "change_stats", lambda a, f: state["stats"] and dict(state["stats"]))
     monkeypatch.setattr(risk, "finished_features", lambda a, f: state["done"])
+    monkeypatch.setattr(risk, "track_blockers", lambda c, f: [])
 
     def run(
         events: list[dict[str, Any]] | None = None,
@@ -93,10 +96,22 @@ def test_clean_small_measured_feature_is_low_risk(rated: Any) -> None:
         ({"events": [CLEAN_GATES, {"kind": "answer"}]}, "the human answered questions"),
         ({"events": [CLEAN_GATES, {"kind": "escalation"}]}, "cap twice"),
         ({"events": [CLEAN_GATES, {"kind": "parked"}]}, "work was parked during the run"),
-        ({"assumptions": 4}, "4 assumptions (more than 3)"),
-        ({"stats": dict(SMALL, changed_lines=201)}, "201 changed source lines (more than 200)"),
-        ({"stats": dict(SMALL, changed_files=9)}, "9 changed source files (more than 8)"),
-        ({"stats": dict(SMALL, removed_lines=31)}, "31 removed lines in existing code"),
+        ({"assumptions": 2}, "2 assumptions (more than 1)"),
+        ({"stats": dict(SMALL, changed_lines=81)}, "81 changed source lines (more than 80)"),
+        ({"stats": dict(SMALL, changed_files=5)}, "5 changed source files (more than 4)"),
+        ({"stats": dict(SMALL, removed_lines=11)}, "11 removed lines in existing code"),
+        (
+            {"events": [dict(CLEAN_GATES, results={**CLEAN_GATES["results"], "x": "SKIPPED"})]},
+            "final check(s) skipped: x",
+        ),
+        (
+            {"events": [CLEAN_GATES, {"kind": "final_repair", "owner": "src"}]},
+            "the final gates needed a repair run",
+        ),
+        (
+            {"events": [CLEAN_GATES, {"kind": "triage", "findings": [{"verdict": "VALID"}]}]},
+            "1 review finding(s) judged valid",
+        ),
         ({"stats": None}, "the size of the change could not be measured"),
         ({"done": 2}, "2 finished feature(s) in this repository (low risk needs 3)"),
         (
@@ -124,6 +139,92 @@ def test_never_auto_paths_and_limits_from_config(
     assert a.reasons == [
         "touches paths marked never automatic: db/schema.sql, src/demo/payment.py"
     ]  # max_assumptions = 0 switches that test off
+
+
+def test_never_auto_defaults_by_kind_of_path(demo_repo: DemoRepo) -> None:
+    """Not set: deploy / CI, schema / migration and doc paths; framegate's own files (the
+    code map under docs/) do not count. A list in the config replaces the defaults."""
+    cfg = load_config(demo_repo.root)
+    assert cfg.risk.never_auto is None and cfg.final_gate == "human"
+    paths = [
+        ".github/workflows/ci.yml",
+        "deploy/Dockerfile",
+        "db/001_init.sql",
+        "app/migrations/0002_add.py",
+        "docs/usage.md",
+        "README.md",
+        "docs/code-map.md",  # framegate's own: every task updates it
+        "specs/demo/plan.md",
+        "src/demo/schema.py",
+        "src/demo/__init__.py",
+    ]
+    assert risk.never_auto_hits(cfg, paths) == sorted(paths[:6])
+    assert "schema / migration files" in risk.never_auto_words(cfg)
+
+    cfg.protected_extra = ["k8s/"]
+    assert risk.never_auto_hits(cfg, ["k8s/app.yml"]) == ["k8s/app.yml"]
+    own = parse_config(demo_repo.root, {"risk": {"never_auto": ["src/demo/pay*"]}})
+    assert risk.never_auto_hits(own, [*paths, "src/demo/pay.py"]) == ["src/demo/pay.py"]
+    none = parse_config(demo_repo.root, {"risk": {"never_auto": []}})
+    assert risk.never_auto_hits(none, paths) == [] and risk.never_auto_words(none) == "none"
+
+
+def gate_events(*rows: tuple[str, str, dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {"ts": f"2026-11-12T10:{n:02d}:00", "feature": f, "kind": kind, **data}
+        for n, (f, kind, data) in enumerate(rows)
+    ]
+
+
+def test_rating_is_compared_with_the_decision_at_each_final_gate(demo_repo: DemoRepo) -> None:
+    low, high = {"level": "low", "reasons": []}, {"level": "elevated", "reasons": ["3 open"]}
+    final = {"gate": "final", "approved": True}
+    events = gate_events(
+        ("a", "risk", low),
+        ("a", "human_gate", final),  # approved as it stood
+        ("b", "risk", low),
+        ("b", "answer", {"gate": "final", "ref": "ANS-1"}),  # rework
+        ("b", "risk", high),
+        ("b", "human_gate", final),
+        ("c", "risk", high),
+        ("c", "answer", {"gate": "final", "ref": "ANS-1"}),
+        ("c", "human_gate", {**final, "from_answers": "ANS-1"}),  # only defaults
+        ("d", "risk", low),
+        ("d", "human_gate", {**final, "auto": True}),
+        ("e", "human_gate", {"gate": "tests", "approved": True}),
+        ("e", "risk", low),  # still waiting: no row
+    )
+    rows = risk_review.decisions(events)
+    assert [(d.feature, d.level, d.decision) for d in rows] == [
+        ("a", "low", risk_review.AS_IT_STOOD),
+        ("b", "low", risk_review.CHANGES),
+        ("b", "elevated", risk_review.AS_IT_STOOD),
+        ("c", "elevated", risk_review.AS_IT_STOOD),
+        ("d", "low", risk_review.ENGINE),
+    ]
+    assert risk_review.summary(rows) == (
+        "Risk rating against your decision at 4 final gate(s): low 2 (1 approved as it stood, "
+        "1 answered with changes); elevated 2 (2 approved as it stood, 0 answered with changes)."
+    )
+    assert risk_review.summary([]) == ""
+
+    cfg = load_config(demo_repo.root)
+    cfg.out_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.out_dir / "events.jsonl").write_text(
+        "".join(json.dumps(e) + "\n" for e in events), encoding="utf-8"
+    )
+    lines: list[str] = []
+    assert stats.run(cfg, risk=True, echo=lines.append) == 0
+    text = "\n".join(lines)
+    assert '"low" disagreed with you 1 time(s): b.' in text
+    assert "Approved by the engine, no person: 1 gate(s)." in text
+    assert "b: elevated (3 open) -> approved as it stood" in text
+    lines.clear()
+    assert stats.run(cfg, echo=lines.append) == 0
+    assert any(x.endswith("Detail: framegate stats --risk") for x in lines)
+    lines.clear()
+    assert stats.run(cfg, "a", risk=True, echo=lines.append) == 0
+    assert sum("->" in x for x in lines) == 1
 
 
 def test_risk_config_is_validated(demo_repo: DemoRepo) -> None:
@@ -193,6 +294,15 @@ def test_low_risk_passes_the_final_gate_without_a_stop_in_auto_mode(
     assert r.progress()["phase"] == "DONE"
     gate = [e for e in r.events() if e["kind"] == "human_gate"]
     assert len(gate) == 1 and gate[0]["auto"] is True and gate[0]["risk"] == "low"
+    # no person approved: the event says so, and so do the brief and the summary
+    assert gate[0]["person"] is False and gate[0]["by"] == "engine"
+    assert gate[0]["brief"] == "out/demo/final_brief.md"
+    for name in ("final_brief.md", "final_summary.md"):
+        text = (r.root / "out/demo" / name).read_text("utf-8")
+        assert text.startswith("> APPROVED AUTOMATICALLY on "), name
+        assert "no person approved this final gate" in text.splitlines()[0]
+        assert text.count("APPROVED AUTOMATICALLY") == 1
+    assert "# Final summary" in (r.root / "out/demo/final_summary.md").read_text("utf-8")
     assert [c["phase"] for c in r.calls()][-2:] == ["SUMMARY", "RETRO"]
     assert "approved automatically (low risk" in (r.root / "out/demo/progress.log").read_text(
         "utf-8"
@@ -281,3 +391,63 @@ def test_a_refactor_does_not_count_moved_lines(
     assert stats is not None and stats["moved_lines"] >= 12
     assert stats["changed_lines"] == plain["changed_lines"] - 2 * stats["moved_lines"]
     assert stats["changed_lines"] <= 4 and stats["removed_lines"] <= 2
+
+
+def test_a_doc_proposal_is_a_reason_unless_the_project_allows_it(rated: Any) -> None:
+    cfg = load_config(pathlib.Path.cwd())
+    path = cfg.feature_out("demo") / "doc_proposals.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("- CHANGELOG.md: add() refuses bools\n", encoding="utf-8")
+    a = rated()
+    assert a.reasons == ["1 proposed doc update(s)"] and not a.auto
+    with open(cfg.root / "framegate.toml", "a", encoding="utf-8") as fh:
+        fh.write("\n[risk]\nallow_doc_proposals = true\n")
+    assert rated().low
+
+
+def test_the_track_record_blocks_the_automatic_approval_not_the_rating(
+    demo_repo: DemoRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Strict by default: no gate passes without a person before five past gates rated low
+    were approved as they stood, after one such gate was answered with changes, or once a
+    task rated low has an escaped defect."""
+    cfg = load_config(demo_repo.root)
+    assert (cfg.risk.min_agreed, cfg.risk.max_low_overruled, cfg.risk.max_low_defects) == (5, 0, 0)
+    low = {"level": "low", "reasons": []}
+    final = {"gate": "final", "approved": True}
+    rows: list[tuple[str, str, dict[str, Any]]] = []
+    for name in ("a", "b", "c", "d"):
+        rows += [(name, "risk", low), (name, "human_gate", final)]
+    rows += [("demo", "risk", low), ("demo", "human_gate", final)]  # the task itself: no count
+    cfg.out_dir.mkdir(parents=True, exist_ok=True)
+    events = cfg.out_dir / "events.jsonl"
+
+    def write(more: list[tuple[str, str, dict[str, Any]]]) -> list[str]:
+        text = "".join(json.dumps(e) + "\n" for e in gate_events(*rows, *more))
+        events.write_text(text, encoding="utf-8")
+        return risk.track_blockers(cfg, "demo")
+
+    assert write([]) == ["4 past final gate(s) rated low that you approved as they stood (needs 5)"]
+    fifth: list[tuple[str, str, dict[str, Any]]] = [("e", "risk", low), ("e", "human_gate", final)]
+    assert write(fifth) == []
+    overruled = [*fifth, ("f", "risk", low), ("f", "answer", {"gate": "final", "ref": "ANS-1"})]
+    assert write(overruled) == ["1 past gate(s) rated low that you answered with changes"]
+    cfg.risk.max_low_overruled = -1
+    assert write(overruled) == []
+    defects.add(cfg, "a", "wrong sum", force=True)
+    assert write(fifth) == ["1 escaped defect(s) on task(s) rated low"]
+    lines: list[str] = []
+    assert stats.run(cfg, risk=True, echo=lines.append) == 0
+    assert "Escaped defects on tasks rated low: 1 (a)" in lines
+    assert "Escaped defects on tasks rated elevated: 0" in lines
+
+    # the rating stays low; only the automatic approval is blocked, and the brief says so
+    monkeypatch.setattr(risk, "change_stats", lambda a, f: dict(SMALL))
+    monkeypatch.setattr(risk, "finished_features", lambda a, f: 3)
+    a = risk.assess(get_adapter(cfg), "demo", {}, [CLEAN_GATES], items=0, assumptions=0)
+    assert a.low and not a.auto and a.as_dict()["blocked"] == a.blocked
+    assert a.line(auto=True).endswith(
+        "; never automatic yet: 1 escaped defect(s) on task(s) rated low"
+    )
+    with pytest.raises(ConfigError, match=r"\[risk\] max_low_defects must be >= -1"):
+        parse_config(demo_repo.root, {"risk": {"max_low_defects": -2}})

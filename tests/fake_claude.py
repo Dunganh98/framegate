@@ -37,6 +37,9 @@ Scenario keys:
   repair_met: true -> the implementer changes the repair when the reviewer objects, and the
     second review is OK ("stays": it objects again)
   structure: true -> the first REVIEW run lists one structure finding in review.md
+  simplify: what the SIMPLIFY run does: "smaller" (with `uncovered`: removes the branch no
+    test reaches), "break" (a wrong add()), "outside" (smaller, and a line in the test file),
+    "ask" (questions.md and park.md, no code change). Without the key it changes nothing
   brief: true -> SUMMARY also writes out/demo/final_brief.md (plain-words sections, gate item 1
     asked as question 1); "filtered" -> asks item 2 first, then item 1, one untagged decision,
     item 3 left out as the same as item 2 (use with park_steps=[2],
@@ -558,6 +561,18 @@ def main() -> int:
             target.parent.mkdir(parents=True, exist_ok=True)
             with open(target, "a", encoding="utf-8") as f:
                 f.write(f"## Step {step or 'fix'} — add\nBuilt add().\n{note}")
+    elif phase == "SIMPLIFY":
+        how = scen.get("simplify")
+        if how in ("smaller", "outside"):  # the branch no test reaches goes
+            write(lang["impl"], LOOSE)
+        if how == "outside":
+            with open("tests/test_demo.py", "a", encoding="utf-8") as f:
+                f.write("\n# simplified\n")
+        if how == "break":
+            write(lang["impl"], WRONG)
+        if how == "ask":
+            write("out/demo/questions.md", "- [SIMPLIFY] May I drop the type check?\n")
+            write("out/demo/park.md", "May I drop the type check?\n")
     elif phase == "REVIEW" and "follow-up review of a final repair" in prompt:
         objection = scen.get("repair_objection")
         if scen.get("repair_met") is True and "objection met" in prompt:

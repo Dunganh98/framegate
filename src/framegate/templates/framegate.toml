@@ -136,12 +136,41 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 #                                  # hold; 0 = that test off). Also needed: final gates
 #                                  # passed with diff coverage and mutation measured, nothing
 #                                  # parked or open, no answer round, no cap hit twice
-# max_changed_lines = 200          # changed source lines (added + removed)
-# max_changed_files = 8
-# max_removed_lines = 30           # removed lines in source files that existed before
-# max_assumptions = 3              # assumptions the implementer logged
+#                                  # The defaults are strict; loosen one only with the
+#                                  # evidence of `framegate stats --risk`
+# max_changed_lines = 80           # changed source lines (added + removed)
+# max_changed_files = 4
+# max_removed_lines = 10           # removed lines in source files that existed before
+# max_assumptions = 1              # assumptions the implementer logged
 # min_features = 3                 # finished features in this repository (metrics file)
-# never_auto = ["src/billing/", "*.sql"]   # a change here is never low risk
+# allow_repair = false             # true: a final-gate repair in the run is no reason
+# allow_valid_findings = false     # true: a review finding judged valid (and fixed) is none
+# allow_doc_proposals = false      # true: a proposed doc update is none
+# allow_skipped_checks = false     # true: a skipped final check is none
+# min_agreed = 5                   # [gates] final = "auto" only: past final gates here rated
+#                                  # low that you approved as they stood; fewer: never automatic
+# max_low_overruled = 0            # same: past gates rated low that you answered with changes;
+#                                  # more: never automatic (-1 = not counted)
+# max_low_defects = 0              # same: escaped defects on tasks rated low (-1 = not counted)
+# never_auto = ["src/billing/", "*.sql"]   # a change here is never low risk. Not set:
+#                                  # the deploy / CI paths (built in and [protected] extra),
+#                                  # schema and migration files (*.sql, *.prisma, migrations/,
+#                                  # alembic/) and docs (docs/, README*, CHANGELOG*). A list
+#                                  # here replaces these; [] = none
+
+# [checks]                         # the project's own CI rules, as gate checks
+# rules = ["python ci/check_rules.py src tests"]   # run at every step gate and the final
+#                                  # gate; a failure goes back to the implementer. {files} =
+#                                  # the task's changed files. What failed before the task
+#                                  # is not held against it
+# rules_text = "python ci/check_rules.py --rules"   # prints the rules: the implementer's
+#                                  # task gets them (with the linter's rule selection)
+
+# [simplify]                       # after the last plan step, before the review: one agent run
+#                                  # makes the task's diff smaller, behaviour unchanged; its own
+#                                  # commit, dropped when a check fails after it
+# enabled = true
+# min_lines = 10                   # no pass when the task added fewer source lines
 
 [docs]
 # code_map = "docs/code-map.md"    # living code map: per module its purpose, key classes, how

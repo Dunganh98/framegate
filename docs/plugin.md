@@ -1,6 +1,6 @@
 # framegate Claude Code plugin
 
-The plugin is the Claude Code side of framegate: seven skills that drive the workflow from the chat
+The plugin is the Claude Code side of framegate: eight skills that drive the workflow from the chat
 (`/framegate:setup`, `/framegate:feature`, `/framegate:bugfix`, `/framegate:refactor`,
 `/framegate:pipeline`, `/framegate:resume`, `/framegate:status`, `/framegate:update`) and two hooks, all calling the
 `framegate` CLI (the Python package in `src/`). All logic lives in the package (including the
@@ -17,12 +17,13 @@ plugin/
   scripts/framegate-hook.js         # wrapper: node framegate-hook.js <event> -> framegate hook <event>
   scripts/session-start.js          # SessionStart: one line after an update (what changed)
   whats-new.json                    # version -> that one line
-  skills/setup/SKILL.md             # /framegate:setup: framegate probe, one table of the
-                                    # project's facts to confirm, framegate.toml,
-                                    # .framegate/project.md and the code map, framegate
-                                    # doctor --tree (the setup check and what is red on
-                                    # the code as it is), framegate commit-setup,
-                                    # optional smoke run
+    skills/setup/SKILL.md             # /framegate:setup: two commands whose output is
+                                    # shown as it is: framegate setup --plan (one table
+                                    # of the project's facts to confirm) and framegate
+                                    # setup --apply (framegate.toml, the setup check and
+                                    # what is red on the code as it is); then the chat
+                                    # writes .framegate/project.md and the code map,
+                                    # framegate commit-setup, optional smoke run
   skills/feature/SKILL.md           # /framegate:feature <f>: branch + spec dialogue, then the run
                                     # protocol (injected: framegate protocol)
   skills/bugfix/SKILL.md            # /framegate:bugfix <f>: bug report dialogue (spec --mode
@@ -36,6 +37,7 @@ plugin/
   skills/resume/SKILL.md            # /framegate:resume [f]: reattach after a session restart
   skills/status/SKILL.md            # /framegate:status [f]: where features stand, tag cleanup
   tests/framegate-hook.test.js      # node --test "plugin/tests/*.test.js"
+  tests/session-start.test.js
 ```
 
 ## Install
@@ -105,7 +107,8 @@ How a machine gets the new version:
   `/framegate:resume` runs the same check (a finished task and one in its spec phase are
   brought up to date, unless another task is in progress);
   `/framegate:status` does not run it (a glance, and its permission stays `framegate status`).
-  `/framegate:setup` installs the tool the same way and runs `install-tools --update`.
+  `/framegate:setup` installs the tool the same way; `framegate setup --plan` then installs
+  or updates the project's workflow tools.
   An editable install from a clone is replaced by the tagged version too: on a development
   machine keep the clone at the plugin's version.
 - Why the skills do not inject the check at load (`` !`framegate preflight ...` ``): a load
@@ -182,9 +185,9 @@ runs (see docs/claude-cli-notes.md).
 | Step | Mechanism |
 |---|---|
 | Skill load | `` !`framegate spec <f>` ``, `` !`framegate spec-brief <f>` ``, `` !`framegate protocol` `` are injected (pre-approved by `allowed-tools: Bash(framegate *) PowerShell(framegate *)`). A refusal (dirty tree, foreign branch, active run) exits 1 and aborts the invocation with the message shown |
-| Run | Bash tool `run_in_background: true`: `framegate run <f>`. One completion notification when it exits (exit 10 shows as status `failed`; the protocol reads the state from `framegate status <f> --brief`, not from the code) |
+| Run | Bash tool `run_in_background: true`: `framegate run <f>`. One completion notification when it exits (exit 10 shows as status `failed`; the protocol reads the state from `framegate status <f> --brief`, not from the code). When the command prints `runs detached` (`FRAMEGATE_DETACH_RUN=1`, set by a replay), its task ends at once and only the live view and the status tell the run's end |
 | Live view | Monitor tool: `framegate watch <f>`, `timeout_ms` 1800000. Each progress line = one event (lines within 200 ms batch). The watch exits when the run's lock is gone (`watch ended: <state>`); at the 30-min deadline the skill re-arms it, and `progress.cursor` makes it continue without repeats or gaps |
-| Spec gate | the skill drafts the spec from the docs, the code map, the code and `.framegate/project.md`, asks at most 5 questions per round (each with a default), writes `out/<f>/spec_brief.md` (task, plan, how it is proven, not proven, decisions made for the user, project details, questions) and shows it instead of the spec files |
+| Spec gate | the skill drafts the spec from the docs, the code map, the code and `.framegate/project.md`, asks one compact round of about 8 points at most (option A is the recommended default; every new or changed public shape is a question unless the task text, the code or the docs state it), writes `out/<f>/spec_brief.md` (task, plan, how it is proven, not proven, decisions made for the user, project details, questions) and shows it instead of the spec files |
 | Gate | `framegate gate-summary <f>` (the gate brief: decision + default first, about one screen in plain words) shown unchanged; the skill ends its turn (Claude Code's own "waiting for input"); framegate shows a Windows toast. The reply is mapped to approve / reject / answers.md + answer / finish (table in `src/framegate/templates/chat_protocol.md`), then the run starts again in the background |
 | Resume | `/framegate:resume [f]` injects `framegate status [f] --brief` (always exit 0) and the protocol; a run started by another session has no task notification, so its end is the watch's last line |
 | Wrap-up | the retro's `## Brief` (numbered proposals with take / skip / fold) and its knowledge facts, answered by number; one publish question whose default is yes and includes the pull request (GitHub remote: `gh pr create --body-file specs/<f>/pr_description.md`; any other host: push the branch, the link and the description file; with `[git] state_branch`: `framegate publish <f> --pr`, a branch with the product only, GitHub and Azure DevOps; nothing is pushed before the reply; a pull request that could not be created is said with its reason, never as done), `framegate cleanup <f>` (before or after: the description is kept with the spec); later `--tags` |
