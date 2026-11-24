@@ -15,6 +15,14 @@ For every spec ID (R, E, I) check:
   fail on a wrong implementation (only "no exception", only a type, `>= 0`, ...).
 - Wrong expectations: a value, exception type or message the spec does not say; a full
   message of the spec matched only by its first words.
+- Asserts that cannot hold: walk every assert of every test by hand with the spec's example
+  for its ID (the input, the result the spec gives): would code that does exactly what the
+  spec says satisfy it? An assert no such code can satisfy is an objection: two sides that
+  cannot be equal, a value compared with a copy that still holds what was changed, an
+  expectation another assert of the same test contradicts. That an assert exists and has the
+  right type says nothing about this. test_checks.md lists under "Asserts not reached at red"
+  the asserts no run has executed (a red test stops at its first failing line): walk those
+  first, each of them.
 - Departures from the spec: another test file, fixture form or expected value than the spec
   names. Every departure is an objection, also a well-meant one.
 - A refusal by type: a value that looks like the valid type (a subclass, an object that
@@ -59,11 +67,14 @@ Write {out}/{feature}/test_review.md:
     ## Notes
     <optional, short>
 
-One bullet per objection; "None." under Objections when the verdict is OK. "Spec conformance":
+One bullet per objection; "None." under Objections when the verdict is OK. Objections of an
+earlier round that are resolved go under `## Resolved`, never under Objections. "Spec conformance":
 one row per spec ID (yes / no / n/a in the two middle columns); every row that departs from
 the spec is also an objection. "What the tests check" is for the human at the gate: 3-8
 bullets, no spec IDs, no test names; behaviors, not test mechanics; also one bullet for what
-the tests do NOT check if that matters (speed, feel, UI). Your objections go back to the test
+the tests do NOT check if that matters (speed, feel, UI). What they do not check although the
+spec makes a claim about it (a suspected cause of a bug report, a row of the design's data
+flow or error handling) is an objection, not a note. Your objections go back to the test
 writer automatically. A question is only for a contradiction inside the spec or something
 that cannot be done as it says: then do not object, write the question to
 {out}/{feature}/questions.md (one bullet: the question in plain words, the ID with what it

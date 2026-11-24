@@ -25,13 +25,25 @@ spec.json keys:
                      the tests read outside the source folders
   source_paths       the folders to mutate; written to a [mutmut] section of setup.cfg for
                      the run (and taken out after) unless the project configures mutmut
+  line_scopes        {module: {"file": <source file>, "functions": {<mangled name>:
+                     {"changed": [lines] | null, "logging": [lines]}}}}: which lines of a
+                     function count (0 = its `def` line; null = all). A mutant on other lines
+                     only, or inside a logging call only, is left out of the score.
+
+The runner's test runs also load a pytest plugin of its own (HYPOTHESIS_PLUGIN), which
+switches off hypothesis's differing-executors health check for these runs only.
 
 result.json keys: ok, stage ("setup" | "run"), error, hint, setup_log, venv_reused, python,
-run_code, run_output, results (`mutmut results --all true`), shows {name: diff}, seconds.
+run_code, run_output, results (`mutmut results --all true`), shows {name: diff}, seconds,
+left_out {mutant name: "logging" | "unchanged"} (from line_scopes; mutmut's results name no
+line, so the lines come from its mutants/ copy of the file: every mutant is a copy of the
+function there).
 """
 
 from __future__ import annotations
 
+import ast
+import difflib
 import json
 import os
 import re
@@ -49,6 +61,28 @@ SURVIVOR_STATUSES = ("survived", "no tests", "suspicious")
 #: an `also_copy` file larger than this stays out of mutmut's folder (data, not a test input)
 COPY_MAX_BYTES = 5_000_000
 LINE = re.compile(r"^\s*(\S+__mutmut_\d+):\s*(.+?)\s*$")
+#: a pytest plugin for the runner's own test runs only (`-p`, written beside the spec)
+HYPOTHESIS_PLUGIN = "framegate_mutation_hypothesis"
+#: mutmut runs the tests several times in one process; hypothesis takes a test method called
+#: with a new instance each time for a test defect (health check "differing executors")
+HYPOTHESIS_PLUGIN_TEXT = '''\
+"""Loaded by framegate's mutation runner only: hypothesis's health check for differing
+executors is off for these runs (the tool repeats the tests in one process, not the test)."""
+try:
+    from hypothesis import HealthCheck, settings
+except ImportError:  # a project without hypothesis
+    settings = None
+
+
+def pytest_sessionstart(session):
+    check = getattr(HealthCheck, "differing_executors", None) if settings else None
+    if check is None:
+        return
+    now = settings()  # the profile the project loaded, if any
+    off = [c for c in now.suppress_health_check if c is not check] + [check]
+    settings.register_profile("framegate-mutation", parent=now, suppress_health_check=off)
+    settings.load_profile("framegate-mutation")
+'''
 
 
 def _run(cmd: list[str], cwd: str | None = None, timeout: float | None = None) -> tuple[int, str]:
@@ -239,6 +273,51 @@ def trial_mutmut(spec: dict, python: str) -> dict:
     return {"ok": True, "stage": "trial", "run_code": code, "run_output": _tail(out)}
 
 
+def mutant_lines(text: str) -> dict[str, list[int]]:
+    """mutmut's copy of a source file -> {mutant function: the lines of the original
+    function it changes, 0 = the `def` line}."""
+    lines = text.splitlines()
+    funcs = {
+        n.name: lines[n.lineno - 1 : n.end_lineno]
+        for n in ast.walk(ast.parse(text))
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and "__mutmut_" in n.name
+    }
+    out: dict[str, list[int]] = {}
+    for name, body in funcs.items():
+        base, _, n = name.rpartition("__mutmut_")
+        orig = funcs.get(base + "__mutmut_orig")
+        if not n.isdigit() or orig is None or not body:
+            continue
+        body = [body[0].replace(name, base + "__mutmut_orig", 1), *body[1:]]
+        ops = difflib.SequenceMatcher(None, orig, body, autojunk=False).get_opcodes()
+        out[name] = sorted(
+            {i for tag, i1, i2, _, _ in ops if tag != "equal" for i in range(i1, max(i2, i1 + 1))}
+        )
+    return out
+
+
+def left_out(scopes: dict, mutants: str) -> dict[str, str]:
+    """{mutant name: why it is not scored} (spec `line_scopes`); a mutant whose lines
+    cannot be told is scored."""
+    out: dict[str, str] = {}
+    for module, info in scopes.items():
+        try:
+            with open(os.path.join(mutants, info["file"]), encoding="utf-8") as fh:
+                found = mutant_lines(fh.read())
+        except (OSError, SyntaxError, ValueError, KeyError):
+            continue
+        for name, lines in found.items():
+            scope = info.get("functions", {}).get(name.rsplit("__mutmut_", 1)[0])
+            if not scope or not lines:
+                continue
+            changed = scope.get("changed")
+            if all(n in scope.get("logging", []) for n in lines):
+                out[f"{module}.{name}"] = "logging"
+            elif changed is not None and not any(n in changed for n in lines):
+                out[f"{module}.{name}"] = "unchanged"
+    return out
+
+
 def run_mutmut(spec: dict, python: str) -> dict:
     project = spec["project"]
     mutants = os.path.join(project, "mutants")
@@ -257,6 +336,7 @@ def run_mutmut(spec: dict, python: str) -> dict:
             timeout=float(spec.get("timeout", 7200)),
         )
         _, results = _run([python, "-m", "mutmut", "results", "--all", "true"], cwd=project)
+        skipped = left_out(spec.get("line_scopes") or {}, mutants)
         modules = set(spec.get("show_modules", []))
         functions = set(spec.get("show_functions", []))
         shows: dict[str, str] = {}
@@ -266,6 +346,8 @@ def run_mutmut(spec: dict, python: str) -> dict:
             if not m or m.group(2) not in SURVIVOR_STATUSES or len(shows) >= limit:
                 continue
             name = m.group(1)
+            if name in skipped:
+                continue
             if (
                 name.rsplit(".", 1)[0] not in modules
                 and name.rsplit("__mutmut_", 1)[0] not in functions
@@ -284,7 +366,18 @@ def run_mutmut(spec: dict, python: str) -> dict:
         "run_output": _tail(out),
         "results": results,
         "shows": shows,
+        "left_out": skipped,
     }
+
+
+def load_hypothesis_plugin(folder: str) -> None:
+    """Every pytest run started from here loads HYPOTHESIS_PLUGIN (PYTEST_ADDOPTS)."""
+    with open(os.path.join(folder, HYPOTHESIS_PLUGIN + ".py"), "w", encoding="utf-8") as fh:
+        fh.write(HYPOTHESIS_PLUGIN_TEXT)
+    rest = os.environ.get("PYTHONPATH", "")
+    os.environ["PYTHONPATH"] = folder + (os.pathsep + rest if rest else "")
+    extra = os.environ.get("PYTEST_ADDOPTS", "")
+    os.environ["PYTEST_ADDOPTS"] = f"{extra} -p {HYPOTHESIS_PLUGIN}".strip()
 
 
 def write_result(path: str, data: dict) -> None:
@@ -303,6 +396,7 @@ def main(argv: list[str]) -> int:
     if spec.get("pythonpath"):
         rest = os.environ.get("PYTHONPATH", "")
         os.environ["PYTHONPATH"] = spec["pythonpath"] + (os.pathsep + rest if rest else "")
+    load_hypothesis_plugin(os.path.dirname(os.path.abspath(spec_path)))
     result: dict = {"python": sys.executable}
     python = sys.executable
     if spec.get("venv"):

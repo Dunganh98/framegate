@@ -339,11 +339,12 @@ def build(
     assumptions: list[Any] | None = None,
     archive: str = "",
     stopped: str = "",
+    repair_review: str = "",
 ) -> RetroInput:
     """Render retro_input.md from the feature's events (in order), the implementer's
     assumptions (report.Assumption: where, spec_id, text) and questions_archive.md (every
     answer round, for the question -> answer lookup). `stopped`: the run did not reach DONE;
-    where it stands and why."""
+    where it stands and why. `repair_review`: what the reviewer wrote about the final repair."""
     sections: dict[str, list[str]] = {k: [] for k in ID_PREFIXES}
     answer_rounds = archive_rounds(archive)
     ids: list[str] = []
@@ -560,6 +561,9 @@ def build(
         out += chat
     if review_notes.strip():
         out += ["", "## Review notes (review.md, for context)", "", _block(review_notes, 2000)]
+    if repair_review.strip():
+        out += ["", "## Repair review (the reviewer on the final repair)", ""]
+        out += [_block(repair_review, 3000)]
     return RetroInput("\n".join(out).rstrip() + "\n", ids, counts)
 
 

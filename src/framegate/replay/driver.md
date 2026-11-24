@@ -36,6 +36,7 @@ your folder:
 
     python -m framegate.replay.chat "<message>" [--resume <session id>]
     python -m framegate.replay.chat --file task.md --resume <session id>
+    python -m framegate.replay.chat "<a line of your own>" --file task.md
     python -m framegate.replay.chat --wait
 
 - The first call starts the chat as a process of its own and returns at once. The chat goes on
@@ -65,11 +66,14 @@ your folder:
    What else `git status --short` shows (tool state such as `.serena/`, which framegate
    ignores) is logged once as a note. It never stops the run, and you do not ask the chat
    about it.
-2. **Start the task.** New session. Message: `/framegate:{{kind}} {{slug}}` and nothing else
-   (the skill takes the name only). Your next message is `task.md`, unchanged
-   (`--file task.md`), whatever the first answer says: the chat may ask for the requirement,
-   or present its own reading of the name with questions. Both are right, neither is a
-   finding. Answer no question before the task text is sent.
+2. **Start the task.** New session, two messages, as a user with the task text at hand:
+   - first the task text, with one line of yours in front (no `--resume`):
+     `python -m framegate.replay.chat "My task, which I start with my next message. Do nothing yet; reply only: ok" --file task.md`
+   - then, in that session, `/framegate:{{kind}} {{slug}}` and nothing else (the skill takes
+     the name only).
+
+   The chat then has the task text before it asks anything. If it did more than reply to the
+   first message, log it as a finding and go on.
 3. **Spec dialogue.** Answer by the policy. At the spec brief: `Spec OK`.
 4. **The run and its gates.** The chat starts `framegate run` in the background. The turn may
    end while the run goes on, or the run may end with the turn. After each turn check
@@ -100,8 +104,9 @@ your folder:
 | options, one of them marked as recommended or default | that option (one marked default and another recommended: the default), by its number or letter plus its words: `1: A: leave it for later` (never a bare `ok`: at a gate it can mean another option) |
 | options, and the chat says the recommended one will repeat a failure that already happened | the option the chat names as ending the repeat; log it as an assisted answer |
 | several numbered questions with defaults | one answer per number: `1: ok. 2: ok. 3: no.` The default for each, `no` for anything on the never-list. Never `ok, take every default`: the list may hold the smoke run or a pull request |
+| a gate item that says `No default: choose.` | a reviewer objects to a repair: the option that changes the code as the reviewer says; parked work with nothing built: the option that redoes it, `B: approved`. Letter first: `2: B`. Log `forced choice <number>: B` |
 | a question with no recommendation and no default | `No answer to <number or topic>: skip it. Decide what the code and the docs support, and record it as an assumption.` |
-| for the report / the requirement / more detail on the task, and no fact answers it | `task.md`; if it was sent already: `Everything I know is in the report.` |
+| for the report / the requirement / more detail on the task, and no fact answers it | `Everything I know is in the task text I sent.` |
 | whether to fix a `PROBLEM:` first or go on | `ok` (the default) |
 | anything about a pull request, publish, push, cleanup, or the smoke run | `no` |
 

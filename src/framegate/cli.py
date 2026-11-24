@@ -416,7 +416,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             from framegate import deferred
 
             if args.later:
-                entry = deferred.split_later(cfg, args.feature, args.later)
+                from framegate import task_base
+                from framegate.adapters import get_adapter
+
+                rel = args.later.replace("\\", "/")
+                n = task_base.formatted_lines(get_adapter(cfg), [rel]).get(rel)
+                entry = deferred.split_later(cfg, args.feature, rel, n)
                 print(entry.line() if entry else f"error: no file {args.later}")
                 return 0 if entry else 1
             lines = deferred.listing(cfg, args.file)
@@ -448,10 +453,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             for line in deferred.plan_note(cfg, args.feature):  # a note for the spec brief
                 print(line)
+            from framegate import task_base
             from framegate.checks import structure
 
             over = structure.plan_over_limit(adapter, args.feature)
-            for line in deferred.over_limit_note(cfg, args.feature, over):
+            for line in deferred.over_limit_note(
+                cfg, args.feature, over, lambda files: task_base.formatted_lines(adapter, files)
+            ):
                 print(line)
             # for the spec brief: the user approves these with the spec
             print("Setup files changed (committed with the spec): " + (", ".join(setup) or "none"))

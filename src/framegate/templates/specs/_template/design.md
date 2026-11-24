@@ -4,6 +4,14 @@
 
 ## Public interfaces
 <signatures exactly as in the stubs; every function lists the IDs it serves>
+<!-- One row per NEW or CHANGED public member: its name, signature, parameter types, default
+     values, error type / message, stored or wire format. Shape from: `task`, `code: <the
+     existing pattern it follows>`, `docs: <file>` or `asked` (the user answered).
+     `framegate spec-check` fails a row without one, and a public name of the stubs without
+     a row. -->
+| New / changed member | Shape from (task / code: <pattern> / docs: <file> / asked) |
+|---|---|
+| | |
 
 ## Input domain and copy semantics
 <!-- One row per public method / type above. Outside the domain: what happens (raise, clamp,

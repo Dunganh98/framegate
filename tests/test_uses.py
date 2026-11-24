@@ -69,3 +69,14 @@ def test_the_uses_command(
     out = capsys.readouterr().out.splitlines()
     assert out[0] == "2 use(s) of `scale` in the source (tests left out):"
     assert out[2] == "src/pkg/report.py:5: return sum(scale(x) for x in xs)"
+
+
+def test_the_test_files_that_mention_a_symbol(tmp_path: pathlib.Path) -> None:
+    project(tmp_path)
+    (tmp_path / "tests/test_box.py").write_text("# scale is not used here\nBox()\n", "utf-8")
+    (tmp_path / "tests/review").mkdir()
+    (tmp_path / "tests/review/test_probe.py").write_text("scale(2)\n", encoding="utf-8")
+    cfg = parse_config(tmp_path, {"paths": {"src": "src"}})
+    found = uses.test_files(cfg, get_adapter(cfg), ["scale", "Box", "rescale", "a.b"])
+    assert found == {"tests/test_box.py": ["Box"], "tests/test_core.py": ["scale"]}
+    assert uses.test_files(cfg, get_adapter(cfg), []) == {}

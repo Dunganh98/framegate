@@ -8,6 +8,8 @@
      the new code goes instead: "New file: <path> (<what goes there>)" (`framegate spec-brief`
      lists the files over the limit).
      No step changes a documentation file: see "Proposed doc updates" in requirements.md.
+     A docstring or comment the step's change makes wrong, in a file the step changes: name
+     its lines in the step ("Reword: <file>:<lines>"); the step rewords them.
      A port (requirements.md, "Ported from"): the steps follow the files, not the spec IDs.
      One step per `code` target file, in import order (a file comes after the files it
      imports); "Covers:" lists the IDs its file serves, and an ID that two files serve goes

@@ -339,4 +339,192 @@ def test_rejecting_the_code_a_doc_contradicts_starts_the_answer_run(demo_repo: D
     assert r.progress()["waiting"]["gate"] == "final"
     assert not (r.root / "out/demo/open_questions.md").exists()  # answered: not asked again
     assert r.af("finish", "demo", "--no-retro") == 0
-    assert f"- [ ] {CONTRA} (spec): not applied (you rejected the code)\n" in kept(r)
+    said = "(you rejected the code). Owner's note: add() adds floats too\n"
+    assert f"- [ ] {CONTRA} (spec): not applied {said}" in kept(r)
+
+
+def test_a_place_is_the_same_with_and_without_its_line_numbers() -> None:
+    """Seen live: the spec's and the run's proposal for one place, two deferred entries."""
+    spec = "docs/R.md, §9 flag lines (`[--force-retrain all|A,B]`): today: x -> proposed: y"
+    run = (
+        "docs/R.md, §9 flag lines (`[--force-retrain all|A,B]`, lines ~349 and ~360): today: "
+        "x -> proposed: z"
+    )
+    assert doc_proposals.key(spec) == doc_proposals.key(run)
+    near = "docs/R.md, the `_fit_one` body (around line 413): the doc says: a"
+    assert doc_proposals.key(near) == doc_proposals.key("docs/R.md, the `_fit_one` body: today: a")
+
+
+def test_the_words_after_the_letter_are_kept_with_the_proposal(demo_repo: DemoRepo) -> None:
+    """Seen live: "B: later. The row should then read ..." lost the wording."""
+    r = demo_repo
+    to_final_gate(r)
+    (r.root / "out/demo/answers.md").write_text(
+        "1. Q: design\n   A: A: apply it, and say integers, not later than v2.\n"
+        "2. Q: plan\n   A: B: later. It should then read 'a callable'.\n",
+        encoding="utf-8",
+    )
+    assert r.af("answer", "demo") == 0
+    prog = r.progress()
+    assert prog["doc_approved"] == [DESIGN] and prog["phase"] == "RETRO"  # a note starts no run
+    assert prog["doc_notes"][PLAN] == "later. It should then read 'a callable'."
+    (ev,) = [e for e in r.events() if e["kind"] == "answer"]
+    assert [(it["option"], it["note"][:5]) for it in ev["items"]] == [
+        ("A", "apply"),
+        ("B", "later"),
+    ]
+    assert r.af("run", "demo") == 0
+    task = next(c for c in r.calls() if c["phase"] == "DOCS")["prompt"]
+    assert f"- {DESIGN} Owner's note: apply it, and say integers, not later than v2.\n" in task
+    note = "Owner's note: later. It should then read 'a callable'."
+    assert f"- [ ] {PLAN} (run): not applied (later). {note}\n" in kept(r)
+    assert f"- [x] {DESIGN} (run): applied. Owner's note: apply it" in kept(r)
+    assert f"(it failed) {note} From demo" in (r.root / ".framegate/deferred.md").read_text("utf-8")
+
+
+# ---------- code text: a stale docstring or comment in a source file ----------
+STALE = (
+    'code text: src/demo/__init__.py:1: today: "Add two numbers" -> code now: add() takes ints only'
+)
+
+
+def test_a_docstring_or_comment_in_a_source_file_is_code_text_not_a_doc() -> None:
+    by_file = 'src/pkg/base.py:16-17: today: "dedup is ops" -> code now: the key declares it'
+    assert Proposal(STALE, "spec").code_text and Proposal(by_file, "run").code_text
+    for doc in (README, CHANGELOG, DESIGN, CONTRA, "the design should mention bools"):
+        assert not Proposal(doc, "run").code_text, doc
+    assert not Proposal("docs/a.md, on parser.py: today: x -> proposed: y", "run").code_text
+    p = Proposal(STALE, "spec")
+    assert (p.important, p.minor, p.contradicts) == (False, False, False)
+    for name in ("_template", "_template_bugfix", "_template_refactor"):
+        text = package_text("templates", f"specs/{name}/requirements.md")
+        assert "`- code text: <source file>:<lines>:" in text, name
+    assert "- code text: <source file>:<lines>: today:" in doc_proposals.FORMATS
+    assert "code text, not documentation" in package_text("roles", "implement.md")
+
+
+def test_code_text_is_no_gate_question_and_no_doc_update(demo_repo: DemoRepo) -> None:
+    """Seen live: a stale module docstring was written as a doc update and became an A / B /
+    C question at the final gate."""
+    r = demo_repo
+    r.add_toml(FAST)
+    spec = r.root / "specs/demo/requirements.md"
+    spec.write_text(REQUIREMENTS + f"\n## Proposed doc updates\n- {STALE}\n", encoding="utf-8")
+    assert r.af("approve-spec", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE
+    assert r.af("approve", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE and r.progress()["waiting"]["gate"] == "final"
+
+    assert not (r.root / "out/demo/open_questions.md").exists()
+    assert not [c for c in r.calls() if c["phase"] == "DOC_CHECK"]  # nothing to check
+    listed = f"## {doc_proposals.CODE_TITLE}: 1\n\n- {STALE} (spec)\n"
+    assert listed in (r.root / "out/demo/final_summary.md").read_text(encoding="utf-8")
+    facts = (r.root / "out/demo/final_facts.md").read_text(encoding="utf-8")
+    assert listed in facts and "No gate item: one short line in the summary" in facts
+    cfg = load_config(r.root)
+    assert doc_proposals.to_apply(cfg, "demo", [STALE]) == []
+    assert doc_proposals.brief_lines(cfg, "demo") == []
+    assert r.af("finish", "demo", "--no-retro") == 0
+    assert not [c for c in r.calls() if c["phase"] == "DOCS"]
+    assert kept(r).endswith(
+        f"- [ ] {STALE} (spec): code text, left as it is (no step changed the file)\n"
+    )
+    assert not (r.root / ".framegate/deferred.md").exists()
+
+
+# ---------- a proposal says what was built; the owner's text is checked too ----------
+FIXED = (
+    "docs/design.md, Calc: today: 'any number' -> proposed: 'ints and bools' (corrected: "
+    "bools pass, src/demo/__init__.py:3)"
+)
+
+
+def test_corrections_and_the_owners_text_question() -> None:
+    p = Proposal(DESIGN, "run")
+    assert doc_proposals.corrections(f"- {FIXED}\n- {PLAN}\n- {DESIGN}\n", [p]) == [FIXED]
+    assert doc_proposals.corrections("None.\n", [p]) == []
+    found = doc_proposals.text_conflicts("- 2: code now: release clears the id (a.py:3)\n- x\n")
+    assert found == {2: "release clears the id (a.py:3)"}
+    q = p.text_question("set to the epoch", "release clears the id (a.py:3).")
+    assert q == (
+        'docs/design.md, Calc: your text: "set to the epoch" -> code now: release clears the id '
+        f"(a.py:3).{doc_proposals.TEXT_ASK}"
+    )
+    assert doc_proposals.key(doc_proposals.asked(f"[doc update] {q}")) == doc_proposals.key(DESIGN)
+    verdicts = {
+        "A": "approved",
+        "B: corrected": "approved",
+        "C": "later",
+        "ok": "later",
+        "": "later",
+    }
+    assert {a: doc_proposals.verdict(q, a) for a in verdicts} == verdicts
+    assert "The code is the truth" in package_text("roles", "doc_check.md")
+
+
+def test_a_proposal_is_corrected_to_the_code_before_it_is_asked(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    to_final_gate(r, doc_check=f"- {FIXED}")
+    (check,) = [c for c in r.calls() if c["phase"] == "DOC_CHECK"]
+    assert f"- {DESIGN}\n- {PLAN}\n" in check["prompt"] and "DOC CHECKER" in check["role"]
+    asked = (r.root / "out/demo/open_questions.md").read_text(encoding="utf-8")
+    assert asked.startswith(f"- [doc update] {FIXED}{doc_proposals.ASK}\n")
+    assert f"- [doc update] {PLAN}" in asked and DESIGN not in asked
+    facts = (r.root / "out/demo/final_facts.md").read_text(encoding="utf-8")
+    assert f"- {FIXED} (run, corrected to the code)\n" in facts
+    (ev,) = [e for e in r.events() if e["kind"] == "doc_check"]
+    assert (ev["checked"], ev["corrected"], ev["failed"]) == (2, [FIXED], False)
+    # the approved one is applied as corrected
+    (r.root / "out/demo/answers.md").write_text("1. A\n2. B\n", encoding="utf-8")
+    assert r.af("answer", "demo") == 0 and r.af("run", "demo") == 0
+    assert (r.root / "docs/design.md").read_text(encoding="utf-8") == FIXED + "\n"
+
+
+def test_the_owners_text_that_contradicts_the_code_is_asked_not_applied(
+    demo_repo: DemoRepo,
+) -> None:
+    """Seen live: the owner's own text for a design doc named a mechanism the code does not
+    have; nothing checked it."""
+    r = demo_repo
+    code = "add() refuses bools too (src/demo/__init__.py:3)"
+    to_final_gate(r, doc_text_check=code)
+    (r.root / "out/demo/answers.md").write_text("1. A: say 'ints and bools'\n2. B\n", "utf-8")
+    assert r.af("answer", "demo") == 0 and r.progress()["phase"] == "RETRO"
+
+    # before the docs step applies it: checked, and back to the gate with one question
+    assert r.af("run", "demo") == EXIT_GATE and r.progress()["waiting"]["gate"] == "final"
+    check = [c for c in r.calls() if c["phase"] == "DOC_CHECK"][-1]
+    assert "1. docs/design.md, Calc: owner's text: \"say 'ints and bools'\"" in check["prompt"]
+    assert not [c for c in r.calls() if c["phase"] == "DOCS"] and docs_commit(r) == []
+    question = Proposal(DESIGN, "run").text_question("say 'ints and bools'", code)
+    asked = (r.root / "out/demo/open_questions.md").read_text(encoding="utf-8")
+    assert asked == f"- [doc update] {question}\n"
+    assert r.progress()["doc_approved"] == []
+
+    # "ok" takes the default: the doc stays as it is
+    (r.root / "out/demo/answers.md").write_text("1. B\n", encoding="utf-8")
+    assert r.af("answer", "demo") == 0 and r.progress()["doc_text_how"]
+    assert r.af("run", "demo") == 0
+    assert len([c for c in r.calls() if c["phase"] == "DOC_CHECK"]) == 2  # checked once
+    task = next(c for c in r.calls() if c["phase"] == "DOCS")["prompt"]
+    assert (
+        f"- {DESIGN} Owner's note: say 'ints and bools' The owner's text contradicts the code "
+        f"(code now: {code}): apply it corrected to what the code does.\n"
+    ) in task
+    assert docs_commit(r) == ["CHANGELOG.md", "README.md", "docs/design.md"]
+
+
+def test_the_default_leaves_the_doc_when_the_owners_text_contradicts_the_code(
+    demo_repo: DemoRepo,
+) -> None:
+    r = demo_repo
+    to_final_gate(r, doc_text_check="add() refuses bools too")
+    (r.root / "out/demo/answers.md").write_text("1. A: say 'ints and bools'\n2. B\n", "utf-8")
+    assert r.af("answer", "demo") == 0
+    assert r.af("run", "demo") == EXIT_GATE
+    (r.root / "out/demo/answers.md").write_text("1. ok\n", encoding="utf-8")
+    assert r.af("answer", "demo") == 0 and r.af("run", "demo") == 0
+    assert docs_commit(r) == ["CHANGELOG.md", "README.md"]
+    assert f"- [ ] {DESIGN} (run): not applied (later). Owner's note: say 'ints and bools'" in kept(
+        r
+    )

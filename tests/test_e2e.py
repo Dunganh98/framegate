@@ -620,12 +620,14 @@ def test_small_plan_in_one_implementer_run(demo_repo: DemoRepo) -> None:
 
 
 def test_a_parked_batch_is_redone_as_one(demo_repo: DemoRepo) -> None:
+    """A question that names no step's spec ID can be about any step of the run: the batch
+    parks as a whole (one that names a step: tests/test_step_tests.py)."""
     r = demo_repo
     r.two_steps()
     r.add_toml(FAST)
     r.defer_tests_gate()
     r.set_toml("agents", "step_batch_ids", "15")
-    r.scenario(park_steps=[2])
+    r.scenario(park_steps=[2], park_text="- Which sign has a negated zero?\n")
     assert r.af("approve-spec", "demo") == 0
     assert r.af("run", "demo") == EXIT_GATE and gate(r) == "final"
     parked = r.progress()["parked"]

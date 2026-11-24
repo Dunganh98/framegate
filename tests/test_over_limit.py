@@ -65,3 +65,41 @@ def test_a_file_taken_over_the_limit_is_a_final_fact() -> None:
         "- src/c.py: this task took it over the size limit (new, 450 lines, limit 400)",
     ]
     assert structure.crossed_lines(events[:3]) == []
+
+
+def test_a_file_answered_at_spec_time_is_no_gate_question(demo_repo: DemoRepo) -> None:
+    """Seen live: asked at spec time, answered "later", asked again at the final gate."""
+    from framegate.orchestrator import Orchestrator
+    from framegate.state import log_event
+
+    r = demo_repo
+    cfg = load_config(r.root)
+    orch = Orchestrator(cfg, echo=lambda s: None)
+    shape = {"limit": 5, "files": {REL: 9}, "before": {REL: 7}, "over": [REL], "grown": [REL]}
+    log_event(cfg, "demo", "final_gates", passed=True, structure=shape)
+    questions = r.root / "out/demo/open_questions.md"
+    orch.file_size_questions("demo", {})
+    assert f"[structure report] {REL} has 9 lines" in questions.read_text(encoding="utf-8")
+    questions.unlink()
+    (cfg.feature_out("demo") / deferred.NOTED).write_text(f'["{REL}"]', encoding="utf-8")
+    orch.file_size_questions("demo", {})
+    assert not questions.exists()
+    (cfg.feature_out("demo") / deferred.NOTED).unlink()
+    deferred.split_later(cfg, "demo", REL)
+    orch.file_size_questions("demo", {})
+    assert not questions.exists()
+    log = (r.root / "out/demo/progress.log").read_text(encoding="utf-8")
+    assert "answered at spec time or is on the deferred list: not asked" in log
+
+
+def test_spec_time_sizes_are_counted_as_the_gates_format(demo_repo: DemoRepo) -> None:
+    """Seen live: 598 lines at spec time, "it had 622 lines before" at the final gate."""
+    from framegate import task_base
+
+    r = demo_repo
+    adapter = get_adapter(load_config(r.root))
+    src = r.root / REL
+    src.write_text(src.read_text(encoding="utf-8") + "\n\nOLD = [1,\n       2]\n", "utf-8")
+    plain = len(src.read_text(encoding="utf-8").splitlines())
+    assert task_base.formatted_lines(adapter, [REL, "src/none.py"]) == {REL: plain - 1}
+    assert len(src.read_text(encoding="utf-8").splitlines()) == plain  # the file is untouched

@@ -33,8 +33,13 @@ Resolves:   <!-- optional: the deferred work this task does, e.g. D7, D9 (frameg
 | XXX-I-001 | |
 
 ## Suspected causes
-<!-- At least two candidate causes, each with where to look (file: method). The implementer
-     confirms one and rules the others out with evidence. -->
+<!-- At least two candidate causes, one bullet each:
+     `- H1: <what, the suspect expression in backticks> (<file>: <method>) -> <ID>`: the row
+     above whose test runs through that code, or `... -> ruled out: <evidence>`.
+     A fixture that stops before the named code (a fake that returns early, an empty input)
+     does not reach it: such a cause needs a row of its own. `framegate spec-check` fails a
+     cause with neither; after the last step a check lists every cause whose code no test of
+     the task ran. The implementer confirms one and rules the others out with evidence. -->
 - H1:
 - H2:
 
@@ -88,7 +93,12 @@ None.
      it: `... today: <what it says now, quoted> -> code now: <what the code does instead>`.
      The owner answers each at the final gate (default: later).
      A README, CHANGELOG or handover note: `- <file>: <what changes, one brief line>`; applied
-     after the final gate, no question. -->
+     after the final gate, no question.
+     A docstring or comment in a source file that the task's code will contradict is code
+     text, not a doc: when a plan step changes that file, name the lines in that step (the
+     step rewords them) and write nothing here; else `- code text: <source file>:<lines>:
+     today: <quoted> -> code now: <what the code does>` (one line in the final summary; no
+     question, no docs step). -->
 None.
 
 ## Non-goals

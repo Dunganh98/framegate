@@ -107,7 +107,12 @@ None.
      summarised> -> proposed: <the new text> (<why>)`; where the task's code now contradicts
      it: `... today: <what it says now, quoted> -> code now: <what the code does instead>`.
      The owner answers each at the final gate (default: later).
-     A README, CHANGELOG or handover note: `- <file>: <what changes, one brief line>`. -->
+     A README, CHANGELOG or handover note: `- <file>: <what changes, one brief line>`.
+     A docstring or comment in a source file that the task's code will contradict is code
+     text, not a doc: when a plan step changes that file, name the lines in that step (the
+     step rewords them) and write nothing here; else `- code text: <source file>:<lines>:
+     today: <quoted> -> code now: <what the code does>` (one line in the final summary; no
+     question, no docs step). -->
 None.
 
 ## Green against stubs

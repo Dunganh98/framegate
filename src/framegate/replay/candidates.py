@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 KINDS = ("feature", "bugfix", "refactor")
 REQUIRED = ("repo", "commit", "kind")
-LISTS = ("tests", "pythonpath", "probes")
+LISTS = ("tests", "pythonpath", "probes", "extra")
 FIELDS = (*REQUIRED, *LISTS, "python", "install", "setup", "max-usd", "max-hours")
 
 TEMPLATE = """\
@@ -69,6 +69,8 @@ class Candidate:
     facts: list[Fact] = field(default_factory=list)
     #: test files under probes/<name>/ next to the candidates file: pass before and after
     probes: list[str] = field(default_factory=list)
+    #: test files under extra/<name>/ next to the candidates file: fail before, pass after
+    extra: list[str] = field(default_factory=list)
 
 
 def _number(value: str) -> float | None:
@@ -119,6 +121,7 @@ def _candidate(
             caps["max-hours"],
             value("setup"),
             probes=lists["probes"],
+            extra=lists["extra"],
         ),
         [],
     )

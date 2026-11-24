@@ -111,3 +111,59 @@ def test_what_a_task_leaves_for_later(demo_repo: DemoRepo) -> None:
         ("tests", "approved with failing checks"),
     ]
     assert found[2].files == ["tests/t.py"]
+
+
+def test_a_second_entry_about_the_same_thing_is_refused(demo_repo: DemoRepo) -> None:
+    """Seen live: the spec-time "later" and the final gate's "later" for one file made two
+    entries; one doc place proposed by the spec and by the run made two."""
+    cfg = load_config(demo_repo.root)
+    rel, doc = "src/demo/state.py", "docs/DESIGN.md"
+    first = deferred.add(
+        cfg,
+        "t1",
+        [
+            Item("refactor", "split it into one file per concept (598 lines, limit 400)", [rel]),
+            Item("docs", f"{doc}, §9 flag lines (`[--x]`): today: a -> proposed: b", [doc]),
+        ],
+    )
+    again = deferred.add(
+        cfg,
+        "t1",
+        [
+            Item("refactor", "has 629 lines (limit 400; it had 622). Split it?", [rel]),
+            Item(
+                "docs",
+                f"{doc}, §9 flag lines (`[--x]`, lines ~3 and ~9): today: a -> proposed: c",
+                [doc],
+            ),
+            Item("docs", f"{doc}, §10: today: a -> proposed: c", [doc]),
+            Item("tests", "make x run", [rel]),
+        ],
+    )
+    assert [e.id for e in again] == ["D1", "D2", "D3", "D4"] and again[:2] == first
+    assert "598 lines" in again[0].text and len(deferred.read(cfg)[0]) == 4
+
+
+def test_the_letter_decides_and_the_words_after_it_are_a_note() -> None:
+    from framegate import defaults
+
+    q = "[summary agent] A bare string. A: leave it (default) / B: keep a lone string."
+    assert takes_default(q, "A: leave it.\nBut tell the pump team.")
+    assert not takes_default(q, "B\nas discussed")
+    assert defaults.chosen(q, "option B: do it") == ("B", "do it")
+    assert defaults.chosen(q, "2. the second") == ("B", "the second")
+    free = "No new validation in this task: a wrong value stays an error row."
+    assert defaults.chosen(q, free) == ("", free)
+    assert defaults.unclear(q, free)
+    # an option's own words name it (cut short, or with more after them)
+    assert defaults.chosen(q, "keep a lone string") == ("B", "")
+    assert defaults.chosen(q, "leave it\nbut log it") == ("A", "but log it")
+    assert defaults.chosen("X? A: 0 (default) / B: -0", "0") == ("", "0")  # both: no option
+    for plain in ("", "ok", "leave it", "Default: leave it (decided in the final brief)", "A"):
+        assert not defaults.unclear(q, plain), plain
+    assert not defaults.unclear("Seed? Default: keep seed 7.", "use seed 12")  # no options
+    assert not defaults.unclear(q, "Approved: apply the proposed fix as written.")
+    forced = f"X. A: keep it (no change) / B: change it. {defaults.NO_DEFAULT}"
+    assert defaults.unclear(forced, "ok") and defaults.unclear(forced, "")
+    assert takes_default(forced, "A: keep") and not takes_default(forced, "B")
+    assert not takes_default(forced, "ok") and not takes_default(forced, "Default: keep it")

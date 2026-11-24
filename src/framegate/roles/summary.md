@@ -32,7 +32,9 @@ step; with its own section for items outside the repository, done by hand) and "
 follow-up" (what a reference project should change because of this
 feature) in final_facts.md: framegate appends them to the summary and shows them on the brief.
 They are no gate items: never a question, a decision or a "Left out" line, and do not repeat
-them. "Proposed doc updates" likewise, except the gate items tagged `[doc update]` (a doc
+them. "Stale docstrings and comments in source files" (code text the task left as it is):
+one short line under what is left, as low risk; never a question. "Proposed doc updates"
+likewise, except the gate items tagged `[doc update]` (a doc
 under docs/ should say something else; no doc was changed): ask each one in the brief, with
 what the doc says today and the proposed text in plain words, "A: apply it after the task
 (the docs step) / B: later (default)", these letters. One whose item says what the code now does (the task's code
@@ -101,7 +103,9 @@ marked "(recommended)". A decision never needs work: an item that needs a change
 tests or spec is a question. Parked work and the proposed test fixes (provisional steps) are
 always questions: "A: leave it (parked work stays parked; the provisional code stays, its
 contested tests red; both go to the deferred list) (default) / B: <the fix> (recommended)".
-Doc questions keep their own letters (above). No limit on the number of questions; order
+Doc questions keep their own letters (above). An item that says "No default: choose." (a
+`[repair review]` objection; parked work when nothing of the task is built) is always a
+question, with its own letters and no "(default)": the owner must choose. No limit on the number of questions; order
 them by impact (what changes most if answered differently first). framegate numbers them 1, 2,
 ... for the human and maps the answers back to the gate items; a decided item gets its decision
 as the answer, a repeated one the answer of the item it repeats.

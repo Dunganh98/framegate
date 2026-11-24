@@ -37,8 +37,13 @@ def test_parse_test_review() -> None:
     )
     assert bad.verdict == "OBJECTIONS" and not bad.clean
     assert bad.objections == ["X-R-001 t1: weak -> stricter", "X-E-001 t2: wrong message"]
-    # OK with objections listed counts as objections; missing file / verdict never passes
-    assert not parse_test_review("Verdict: OK\n## Objections\n- a: b\n").clean
+    # the verdict line decides: bullets under an OK verdict are resolved items (seen live)
+    resolved = "Verdict: OK\n\n## Objections\nNone.\n\nRound 1, all resolved:\n- a: b\n- c: d\n"
+    assert parse_test_review(resolved).clean
+    assert parse_test_review("Verdict: OK\n## Objections\n- a: b\n").clean
+    none = parse_test_review("Verdict: OBJECTIONS\n## Objections\nNone.\n\n- resolved: x\n")
+    assert len(none.objections) == 1 and "without listed objections" in none.objections[0]
+    # a missing file / verdict never passes
     assert parse_test_review(None).verdict == "MISSING" and not parse_test_review(None).clean
     assert parse_test_review("no verdict here").verdict == "OBJECTIONS"
     assert parse_test_review("Verdict: OBJECTIONS\n").objections  # without bullets: still one

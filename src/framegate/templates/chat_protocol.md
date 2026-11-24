@@ -42,7 +42,8 @@ you or the user refused (`refused: ...`). Gate answers and approvals are recorde
    under `## Proposed doc updates`. At the final gate a proposal for a file under docs/ is a
    question (default: later; "approve" applies it); README / CHANGELOG lines are listed
    ("will be applied after approval"). After the approval one docs step applies them as its
-   own commit (`<f>: docs`); never edit a doc yourself for the task.
+   own commit (`<f>: docs`); never edit a doc yourself for the task. A stale docstring or
+   comment in a source file is code text: one line in the final summary, never a question.
 2. Start the run in the background: Bash tool, `run_in_background: true`, command
    `framegate run <f>` (PowerShell tool the same if Bash is not available). Note its task id.
    If it prints `runs detached`, its task ends at once and the run goes on: only
@@ -105,6 +106,7 @@ fail for no reason. Reading files and git log/diff/status are fine.
 |---|---|---|
 | any | "ok" / "yes" / "go" / "defaults" while the brief has numbered questions or items | write `<out>/<f>/answers.md` with every item's default as its answer (`A: Default: <the default, as the brief says it>`), then `framegate answer <f>` |
 | any | answers to some numbered items ("1 yes, 3: use 0") | write `<out>/<f>/answers.md` (below), then `framegate answer <f>`; items not named: their default, unless the user said "only these" |
+| any | an item says "No default: choose." | it has no default, also on "ok" / "defaults": ask the user, write the chosen letter as its answer |
 | tests | approval ("ok", "approve", "looks good", "go") with no numbered questions | `framegate approve <f>` |
 | tests | rejection with a reason | `framegate reject <f> --reason '<reason in the user's words>'` |
 | final | approval: "ok", "approve", "done", "finish", "looks good", "retro" with no numbered items, or "approve as is" | `framegate approve <f>` (retro, then DONE) |
@@ -124,27 +126,39 @@ fail for no reason. Reading files and git log/diff/status are fine.
      say in one line that it means editing the spec and `framegate approve-spec <f>` (restarts
      from the tests), ask "Change the spec?" (default no).
    - A parked item: its default leaves it parked (the deferred list). "apply the fix" /
-     "approve the fix <n>" (option B) is the answer `Approved: apply the proposed fix as
+     "approve the fix <n>" (option B) is the answer `B: apply the proposed fix as
      written.`; the next run sends it to the phase that owns the file (spec, tests, code).
+   - A parked item that says "Nothing of this task is built ... No default: choose.": leaving
+     it parked would end the task empty, so "ok" does not answer it. Ask: A (leave it parked,
+     the task ends with nothing built) or B (redo it; `B: approved` applies what the item
+     proposes, `B: <the user's words>` redoes it with them).
    - A parked item that says "This needs the setup: ...": there is nothing to approve. Offer
      `/framegate:setup` with the change it names (default), then answer the item with what
      was done; the step is redone once framegate.toml has changed.
+   - A doc update the user approves with a text of their own: write the text after the
+     letter (`A: <the user's text>`). Before the docs step applies it, the text is checked
+     against the code; where it contradicts the code, the final gate comes once more with
+     that one item ("your text" / "code now"; A: as written, B: corrected to the code, C:
+     later, the default). Show it as it is and ask.
    - The provisional-steps item (code kept, test fixes proposed): its default leaves the code
      as it is and the contested tests red (the deferred list). "apply the test fixes" (option B)
-     is the answer `Approved: apply all proposed test fixes as written.` (`framegate approve`
-     refuses while it is open). A "no" to one fix is an answer too, in the user's words: that
-     step's code is reverted and redone.
+     is the answer `B: apply all the proposed test fixes.` (`framegate approve`
+     refuses while it is open). A "no" to one fix is an answer too, `C: <the user's words>`:
+     that step's code is reverted and redone.
 4. `answers.md` format (overwrite the file; keep the user's wording, do not improve it):
 
    ```
    # Answers (<tests|final> gate)
 
    1. Q: <the item as numbered in the brief>
-      A: <the user's words, or "Default: <the default>">
+      A: <the option's letter first when the item has options, then the user's words;
+         or "Default: <the default>">
    2. Q: ...
       A: ...
    ```
 
+   `framegate answer` fails with "name no option of their question": ask the user to choose
+   for the listed items, put the letter first, run it again.
 5. After the command succeeds, continue with A.2 (finish --no-retro ends in DONE: section D).
    Answers that only take defaults change nothing: `framegate answer` approves the gate as it
    stands (no run before it; the next run does the retro, then DONE).

@@ -13,6 +13,7 @@ from collections.abc import Sequence
 import pytest
 
 from framegate.adapters import dotnet as dn
+from framegate.adapters import mutmut_runner
 from framegate.adapters.base import TestScope
 from framegate.config import ConfigError, parse_config
 from framegate.gates import feature_scope, gate_report, scope_lines
@@ -131,7 +132,9 @@ def test_mutmut_gets_the_scope(fake_mutmut: pathlib.Path) -> None:  # noqa: F811
     assert a._mutmut_spec(["demo"], "p", "r")["pytest_addopts"] == ""
     status, output, _ = run_fake(a, ["demo"], TestScope(["D-R-001"]))
     assert status == "PASS", output
-    assert (fake_mutmut / "addopts.txt").read_text(encoding="utf-8") == "--req D-R-001"
+    assert (fake_mutmut / "addopts.txt").read_text(encoding="utf-8") == (
+        f"--req D-R-001 -p {mutmut_runner.HYPOTHESIS_PLUGIN}"
+    )
 
 
 # ---------- .NET ----------

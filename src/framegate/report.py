@@ -28,6 +28,7 @@ PHASE_ORDER = [
     "REVIEW",
     "TRIAGE",
     "SUMMARY",
+    "DOC_CHECK",
     "DOCS",
     "RETRO",
 ]
@@ -113,12 +114,19 @@ def section_bullets(text: str, heading: str) -> list[str]:
     return [i for i in items if i.strip().lower().rstrip(".") not in ("none", "")]
 
 
+def _says_none(text: str) -> bool:
+    """Is the first line under `## Objections` "None."?"""
+    m = re.search(r"^##\s+Objections\b.*\n(?:[ \t]*\n)*(.*)$", text, re.M | re.I)
+    return bool(m and re.fullmatch(r"\W*none\W*", m.group(1), re.I))
+
+
 def parse_test_review(text: str | None) -> TestReview:
     if text is None or not text.strip():
         return TestReview("MISSING", ["The test reviewer wrote no verdict (test_review.md)."])
     m = VERDICT_RE.search(text)
     verdict = m.group(1).upper() if m else "MISSING"
-    objections = section_bullets(text, "Objections")
+    # the verdict line decides: under OK, bullets below "## Objections" are resolved items
+    objections = [] if verdict == "OK" or _says_none(text) else section_bullets(text, "Objections")
     if verdict not in ("OK", "OBJECTIONS"):
         objections = objections or [f"Unreadable verdict in test_review.md ({verdict})."]
         verdict = "OBJECTIONS"

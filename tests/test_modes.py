@@ -1,5 +1,5 @@
 """Modes: a bug fix starts with tests that fail on today's code, a refactor with tests that pass
-on it (design doc 9.5). The feature flow is the default and unchanged."""
+on it (docs/reference.md, "Modes"). The feature flow is the default and unchanged."""
 
 from __future__ import annotations
 
@@ -89,6 +89,28 @@ def test_spec_templates_per_mode(demo_repo: DemoRepo, capsys: pytest.CaptureFixt
     )
     assert r.af("approve-spec", "demo") == 1
     assert "known modes: feature, bugfix, refactor" in capsys.readouterr().err
+
+
+def test_a_spec_of_another_mode_than_it_was_started_with_is_refused(
+    demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Seen live: started as a bug fix, written in the feature layout (no `Mode:` line)."""
+    r = demo_repo
+    shutil.rmtree(r.root / "specs" / "demo")
+    assert r.af("spec", "demo", "--mode", "bugfix") == 0
+    req = r.root / "specs/demo/requirements.md"
+    req.write_text(REQUIREMENTS, encoding="utf-8")
+    capsys.readouterr()
+    assert r.af("approve-spec", "demo") == 1
+    err = capsys.readouterr().err
+    assert "is a feature spec, but the task was started as a bugfix" in err
+    assert "a `Mode: bugfix` line" in err and "framegate spec demo --mode feature" in err
+    assert not [e for e in r.events() if e["kind"] == "spec_approved"]
+    # the other way out: start it as what it is
+    assert r.af("spec", "demo", "--mode", "feature") == 0
+    (r.root / "specs/demo/design.md").write_text(DESIGN, encoding="utf-8")
+    (r.root / "specs/demo/plan.md").write_text(PLAN, encoding="utf-8")
+    assert r.af("approve-spec", "demo") == 0
 
 
 def test_bugfix_tests_must_fail_on_todays_code(demo_repo: DemoRepo) -> None:

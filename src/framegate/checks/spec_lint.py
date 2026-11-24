@@ -18,6 +18,10 @@ from an older template) is not checked.
   source file that holds one of the frame check's forbidden patterns (suppressions, skips).
   Seen live (runner-skeleton): a suppression comment written into a stub during the spec
   dialogue surfaced only at a step gate, where nobody could fix it.
+- "Shape from" column (design.md: Public interfaces): every new or changed public member
+  says where its shape comes from; see interface_source_problems.
+- "Suspected causes" (a bug report): every cause names the row whose test reaches it, or why
+  it is ruled out; see checks/suspected_causes.py.
 """
 
 from __future__ import annotations
@@ -423,11 +427,81 @@ def stub_marker_problems(adapter: LanguageAdapter) -> list[str]:
     ]
 
 
+#: a "Shape from" cell: the task, an existing pattern in the code, a doc, or the user's answer
+_SHAPE_SOURCE = re.compile(r"^[`*\s]*(?:(task|asked)\b|(?:code|docs)\b[`*\s]*:\s*\S)", re.I)
+_NONE_ROW = re.compile(r"^[`*\s]*none\b", re.I)
+#: a public definition in a stub line (name in group 1 or 2); `_name` is not public
+_PUBLIC_DEF = re.compile(
+    r"^\s*(?:(?:export|public|static|sealed|abstract|partial|async)\s+)*"
+    r"(?:def|class|function|interface|struct|record|enum)\s+([A-Za-z]\w*)"
+    r"|^\s*public\s+[^=;(]*?\b([A-Za-z]\w*)\s*[({]"
+)
+
+
+def interface_source_problems(
+    cfg: Config, feature: str, adapter: LanguageAdapter | None = None
+) -> list[str]:
+    """design.md, "Public interfaces": a new or changed public member whose "Shape from" cell
+    is not `task`, `code: <pattern>`, `docs: <file>` or `asked`, and (with the adapter) a
+    public name the stubs add that no row names. Seen live: a spec dialogue chose a default
+    value and a signature itself where the owner had decided another; nobody was asked."""
+    table = next(
+        (
+            t
+            for t in tables(_read(cfg.spec_dir(feature) / "design.md"))
+            if t.section.lower().startswith("public interfaces")
+            and t.column("shape from") is not None
+        ),
+        None,
+    )
+    if table is None:
+        return []  # written from an older template
+    col = table.column("shape from")
+    how = (
+        "Write `task`, `code: <the existing pattern it follows>`, `docs: <file>` or `asked` "
+        "(the user answered); a shape none of them gives is a question to the user first"
+    )
+    problems, named = [], ""
+    for row in table.rows:
+        member = next((c for i, c in enumerate(row) if i != col and c), "")
+        if not member or _NONE_ROW.match(member):
+            continue
+        named += " " + member
+        cell = _cell(row, col)
+        if not _SHAPE_SOURCE.match(cell):
+            problems.append(
+                f'design.md, Public interfaces, "{_clip(member)}": no source for its shape '
+                f'("{_clip(cell, 30)}"). {how}'
+            )
+    if adapter is None:
+        return problems
+    from framegate import references
+
+    if references.feature_port(cfg, feature) is not None:
+        return problems  # the stubs are the reference's own text
+    try:
+        lines = added_source_lines(adapter)
+    except GitError:
+        return problems
+    words = set(re.findall(r"\w+", named))
+    missing: dict[str, str] = {}
+    for path, num, text in lines:
+        m = _PUBLIC_DEF.match(text)
+        name = (m.group(1) or m.group(2)) if m else None
+        if name and name not in words:
+            missing.setdefault(name, f"{path}:{num}")
+    return problems + [
+        f"design.md, Public interfaces: the stubs add `{name}` ({where}) and no row names it. "
+        f"Add a row with where its shape comes from. {how}"
+        for name, where in missing.items()
+    ]
+
+
 def problems(cfg: Config, feature: str, adapter: LanguageAdapter | None = None) -> list[str]:
     """Everything the spec check finds; [] = fine. With the adapter also the forbidden
     markers in the stubs."""
     from framegate import deferred, references  # they read the spec with this module
-    from framegate.checks import plan_files, red_stubs
+    from framegate.checks import plan_files, red_stubs, suspected_causes
 
     plan = _read(cfg.spec_dir(feature) / "plan.md")
     return [
@@ -438,6 +512,8 @@ def problems(cfg: Config, feature: str, adapter: LanguageAdapter | None = None) 
         *assigned_as_problems(cfg, feature),
         *edge_case_fixture_problems(cfg, feature),
         *doc_text_problems(cfg, feature),
+        *suspected_causes.spec_problems(cfg, feature),
+        *interface_source_problems(cfg, feature, adapter),
         *(stub_marker_problems(adapter) if adapter is not None else []),
         *(plan_files.outside_problems(adapter, plan) if adapter is not None else []),
     ]

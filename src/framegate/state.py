@@ -214,6 +214,31 @@ def read_reqs(cfg: Config) -> list[str]:
 
 def clear_reqs(cfg: Config) -> None:
     cfg.reqs_path.unlink(missing_ok=True)
+    set_later_tests(cfg, [])
+
+
+def later_tests_path(cfg: Config) -> pathlib.Path:
+    """Tests of the current step's IDs that also need a later plan step (one `file::name`
+    per line). Under {out}/, as contested_tests.txt."""
+    return cfg.out_dir / "later_tests.txt"
+
+
+def set_later_tests(cfg: Config, places: list[str]) -> None:
+    """The tests the step gates and the Stop hook leave out because a later plan step
+    builds part of what they check; [] removes the file."""
+    p = later_tests_path(cfg)
+    if not places:
+        p.unlink(missing_ok=True)
+        return
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("".join(f"{n}\n" for n in dict.fromkeys(places)), encoding="utf-8")
+
+
+def read_later_tests(cfg: Config) -> list[str]:
+    p = later_tests_path(cfg)
+    if not p.is_file():
+        return []
+    return [x.strip() for x in p.read_text(encoding="utf-8").splitlines() if x.strip()]
 
 
 def contested_path(cfg: Config) -> pathlib.Path:

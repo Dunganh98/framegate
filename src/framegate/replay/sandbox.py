@@ -8,7 +8,8 @@
 The mechanical check: the commit's tests run on the parent and on the commit. A test that
 fails on the parent (or cannot be collected there) and passes on the commit proves the task.
 A candidate without such a test is dropped. Its probes (tests of the candidate's author, in
-probes/<name>/ next to the candidates file) must pass on both.
+probes/<name>/ next to the candidates file) must pass on both; its extra tests
+(extra/<name>/) must fail on the parent and pass on the commit.
 """
 
 from __future__ import annotations
@@ -210,15 +211,27 @@ def rule_path(path: pathlib.Path) -> str:
     return "//" + text.lstrip("/")
 
 
-def deny_rules(hidden: Sequence[str]) -> list[str]:
-    """`hidden`: folders as rule paths (rule_path)."""
-    rules = [f"Read({p}/**)" for p in hidden] + ["WebFetch", "WebSearch"]
+def deny_rules(hidden: Sequence[str], files: Sequence[str] = ()) -> list[str]:
+    """`hidden`: folders as rule paths (rule_path); `files`: single files."""
+    rules = [f"Read({p}/**)" for p in hidden] + [f"Read({p})" for p in files]
+    rules += ["WebFetch", "WebSearch"]
     return rules + [f"{tool}({cmd} *)" for tool in ("Bash", "PowerShell") for cmd in BLOCKED]
 
 
 #: what the setup would add to the settings on a yes. The chat may not edit that file in a
 #: headless session, so it is there from the start.
 CHAT_RULES = ["Bash(framegate *)", "PowerShell(framegate *)"]
+
+
+def author_paths(
+    base: pathlib.Path, file: pathlib.Path | None, out: pathlib.Path
+) -> list[pathlib.Path]:
+    """What no agent of a run may read of the candidates file's folder: all of it, or, when
+    the runs (or Claude Code's own files) are inside it, the file, probes/ and extra/."""
+    needed = (out, pathlib.Path.home() / ".claude")
+    if not any(p.resolve().is_relative_to(base.resolve()) for p in needed):
+        return [base]
+    return [*([file] if file else []), base / "probes", base / "extra"]
 
 
 def guard_hook(up: int) -> dict[str, Any]:
@@ -372,8 +385,11 @@ def build(
     src: pathlib.Path,
     env: Callable[[Candidate, pathlib.Path], pathlib.Path] = make_env,
     probes: pathlib.Path | None = None,
+    extra: pathlib.Path | None = None,
+    hide: Sequence[pathlib.Path] = (),
 ) -> None:
-    """Build and check the run folder. `probes`: the folder of the candidate's probe files.
+    """Build and check the run folder. `probes`, `extra`: the folders of the candidate's
+    probe and extra test files; `hide`: more that no agent may read (author_paths).
     Raises ReplayError with the reason to drop the candidate."""
 
     def git(*args: str) -> str:
@@ -401,6 +417,9 @@ def build(
     lost = [t for t in c.probes if not (probes and (probes / t).is_file())]
     if lost:
         raise ReplayError(f"probe file {lost[0]} is not in {probes}")
+    lost = [t for t in c.extra if not (extra and (extra / t).is_file())]
+    if lost:
+        raise ReplayError(f"extra test file {lost[0]} is not in {extra}")
     hidden = lay.answer / "hidden"
     for t in tests:
         shown = subprocess.run(["git", "-C", str(src), "show", f"{full}:{t}"], capture_output=True)
@@ -422,13 +441,15 @@ def build(
 
     with open(lay.sandbox / ".git" / "info" / "exclude", "a", encoding="utf-8") as f:
         f.write("\n.venv/\n.claude/settings.local.json\n")
-    secret = [rule_path(p) for p in (lay.answer.parent, lay.sources, src)]
-    secret += [rule_path(probes.parent)] if probes and c.probes else []
-    write_deny(
-        lay.sandbox, deny_rules([*secret, rule_path(lay.out / "runs") + "/*/driver"]), CHAT_RULES
-    )
+    folders = [lay.answer.parent, lay.sources, src, *(p for p in hide if not p.is_file())]
+    folders += [probes.parent] if probes and c.probes else []
+    folders += [extra.parent] if extra and c.extra else []
+    secret = list(dict.fromkeys(rule_path(p) for p in folders))
+    single = [rule_path(p) for p in hide if p.is_file()]
+    drivers = rule_path(lay.out / "runs") + "/*/driver"
+    write_deny(lay.sandbox, deny_rules([*secret, drivers], single), CHAT_RULES)
     # the driver works in its folder and talks to the sandbox: both are under the run folder
-    write_deny(lay.driver, deny_rules(secret), up=1)
+    write_deny(lay.driver, deny_rules(secret, single), up=1)
 
     py = env(c, lay.sandbox)
     check_guard(py, lay)
@@ -439,6 +460,8 @@ def build(
     found: dict[str, dict[str, str]] = {}
     tails: dict[str, str] = {}
     pins: dict[str, dict[str, str]] = {}
+    after: dict[str, dict[str, str]] = {}
+    after_tail = ""
     for name in ("base", "commit"):
         found[name], tails[name] = run_tests(py, check / name, roots, files, check / f"{name}.xml")
         if probes and c.probes:
@@ -449,7 +472,19 @@ def build(
             if broken or not pins[name]:
                 where = "the parent" if name == "base" else "the commit"
                 raise ReplayError(f"a probe does not pass on {where}: {broken[:3] or tail}")
+        if extra and c.extra:
+            shutil.copytree(extra, check / name, dirs_exist_ok=True)
+            xml = check / f"{name}-extra.xml"
+            after[name], after_tail = run_tests(py, check / name, roots, c.extra, xml)
         rmtree(check / name)
+    if extra and c.extra:
+        broken = sorted(n for n, v in after["commit"].items() if v != "pass")
+        if broken or not after["commit"]:
+            why = broken[:3] or after_tail
+            raise ReplayError(f"an extra test does not pass on the commit: {why}")
+        green = sorted(n for n in after["commit"] if after["base"].get(n, "fail") != "fail")
+        if green:
+            raise ReplayError(f"an extra test does not fail on the parent: {green[:3]}")
     proving = sorted(
         n
         for n, v in found["commit"].items()
@@ -471,6 +506,7 @@ def build(
             "proving": proving,
             "base_pass": sorted(n for n, v in found["base"].items() if v == "pass"),
             "probes": sorted(pins.get("commit", {})),
+            "extra": sorted(after.get("commit", {})),
         },
     )
     write_json(lay.run / "run.json", {"state": "prepared", "python": str(py)})

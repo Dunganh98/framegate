@@ -1,7 +1,8 @@
 """Gate runner: run the frame checks for a feature.
 
-scope step   fast checks after each implementation step (tests of current + earlier steps;
-             with [gates] step_tests = "suite" the whole everyday suite too)
+scope step   fast checks after each implementation step (tests of current + earlier steps,
+             and the existing test files that mention a function or class the task changed;
+             with [gates] step_tests = "suite" the whole everyday suite instead)
 scope fix    the same checks for a run after the review (review fixes, structure fixes, final
              repair) with the feature's tests and the review tests only: the final gates run
              the whole suite right after; with a cover base (structure fixes) also coverage
@@ -18,6 +19,10 @@ scope final  everything, including coverage on the diff, traceability and mutati
 
 Both scopes first format the changed source files ([gates] format_fix).
 
+A test tagged with spec IDs of more than one plan step runs at the gate of the latest of
+them: the step gates before it leave it out (later_spanning; the orchestrator writes the
+list, state.set_later_tests).
+
 Work that waits for the human's answer at the final gate has tests that fail by design: a parked
 step's tests (by spec ID) and a provisional step's contested tests (by name). The step gates
 leave the contested tests out; the final gate counts both as expected red, fails only on other
@@ -27,6 +32,7 @@ failures, and skips coverage, diff coverage and mutation until the redo.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import functools
 import json
 import re
@@ -34,7 +40,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from framegate import procs, red_tree, references, suite_run, task_base, unrunnable
+from framegate import procs, red_tree, references, suite_run, task_base, unrunnable, uses
 from framegate.adapters.base import (
     GATE_NAMES,
     NOT_MEASURED,
@@ -57,11 +63,20 @@ from framegate.checks import (
     traceability,
     unreached,
 )
+from framegate.checks.existing_members import base_ref
 from framegate.config import Config
 from framegate.failure_filter import filter_failure_output
 from framegate.report import short_name
 from framegate.specs import baseline_on, feature_ids, plan_steps
-from framegate.state import load_progress, log_event, read_contested, read_reqs, tag_exists
+from framegate.state import (
+    git,
+    load_progress,
+    log_event,
+    read_contested,
+    read_later_tests,
+    read_reqs,
+    tag_exists,
+)
 
 #: most lines of a failing check's output in the gate report (and so in the fix prompt)
 OUTPUT_LINES = 40
@@ -316,6 +331,68 @@ def later_step_tests(adapter: LanguageAdapter, feature: str, covered: list[str])
     return sorted(w for w, reqs in by_test.items() if reqs & ids and not reqs & done)
 
 
+def _step_tags(adapter: LanguageAdapter, feature: str) -> dict[str, set[str]]:
+    """Test place (`file::name`) -> the spec IDs of plan steps it is tagged with."""
+    plan_ids = {i for s in plan_steps(adapter.cfg, feature) for i in s.reqs}
+    by_test: dict[str, set[str]] = {}
+    for req, places in adapter.collect_req_tags().items():
+        if req in plan_ids:
+            for where in places:
+                by_test.setdefault(where, set()).add(req)
+    return by_test
+
+
+def spanning_tests(adapter: LanguageAdapter, feature: str) -> dict[str, list[int]]:
+    """The tests whose spec IDs belong to more than one plan step: place -> the steps. Such
+    a test can pass only once the latest of them is built."""
+    step_of = {i: s.num for s in plan_steps(adapter.cfg, feature) for i in s.reqs}
+    found = {
+        w: sorted({step_of[i] for i in ids}) for w, ids in _step_tags(adapter, feature).items()
+    }
+    return {w: steps for w, steps in sorted(found.items()) if len(steps) > 1}
+
+
+def later_spanning(adapter: LanguageAdapter, feature: str, covered: list[str]) -> list[str]:
+    """Where the tests are that carry one of the `covered` IDs and an ID of a plan step that
+    is not covered yet: they run at that later step's gate. [] when the scan fails."""
+    done = set(covered)
+    try:
+        tags = _step_tags(adapter, feature)
+    except Exception:  # a broken test file: the test run reports it
+        return []
+    return sorted(w for w, ids in tags.items() if ids & done and ids - done)
+
+
+def spanning_lines(adapter: LanguageAdapter, feature: str) -> list[str]:
+    """One line per test that spans plan steps, with the step whose gate runs it."""
+    return [
+        f"- {where}: spec IDs of steps {', '.join(map(str, steps))}; runs at the gate of "
+        f"step {steps[-1]}"
+        for where, steps in spanning_tests(adapter, feature).items()
+    ]
+
+
+def without_later(run: TestRun, places: list[str]) -> tuple[TestRun, list[str]]:
+    """`run` without the failures of the tests at `places` (they count as skipped), and
+    their names. A run without per-test results stays as it is."""
+    if not places or run.cases is None or run.incomplete:
+        return run, []
+    off = [
+        c.name for c in run.cases if c.outcome in ("failed", "error") and is_test_at(c.name, places)
+    ]
+    if not off:
+        return run, []
+    names = set(off)
+    cases = [dataclasses.replace(c, outcome="skipped") if c.name in names else c for c in run.cases]
+    red = any(c.outcome in ("failed", "error") for c in cases)
+    status = "passed" if run.status == "failed" and not red else run.status
+    return dataclasses.replace(run, status=status, cases=cases), off
+
+
+#: in a step gate's one-line result: tests left out because a later step builds their rest
+LATER_NOTE = "left out, they also need a later step"
+
+
 def is_test_at(case_name: str, places: list[str]) -> bool:
     """Is the test case (a name from the test report) one of `places` (`file::Class.name`)?
     The name must match, and so must its file or its class: a test of another feature with
@@ -339,7 +416,7 @@ def step_suite(adapter: LanguageAdapter, feature: str, covered: list[str]) -> Ch
     this feature's later steps, of contested tests, of tests that already failed when the
     spec was approved and of listed tests ([gates] unrunnable_tests) are left out."""
     cfg = adapter.cfg
-    later = later_step_tests(adapter, feature, covered)
+    later = later_step_tests(adapter, feature, covered) + read_later_tests(cfg)
     run, off = unrunnable.leave_out(cfg, adapter.run_tests(junit=cfg.out_dir / "step_suite.xml"))
     if run.status == "passed":
         return unrunnable.noted(CheckResult("PASS", run.output), off)
@@ -430,6 +507,81 @@ def review_tests(adapter: LanguageAdapter, feature: str, contested: list[str]) -
     )
 
 
+#: step and fix scope: the existing test files that name code the task changed. Seen live:
+#: three such tests failed first at the final regression (its fix gate: the suite, 464 s).
+EXISTING_TESTS = "existing tests of the changed code"
+EXISTING_FILES = 10
+
+
+def existing_test_files(
+    adapter: LanguageAdapter, feature: str
+) -> tuple[list[str], list[str], list[str]]:
+    """(the test files to run: those that mention most of the changed names first, at most
+    EXISTING_FILES; the files left out; the changed names). The names: what the code changed
+    since the tests approval. The files: there when the task started, not changed by it
+    and without a test of the feature (its tests of later steps are red by design)."""
+    cfg = adapter.cfg
+    tag = frame_diff.approved_tag(feature)
+    base = task_base.task_base(adapter, tag) or tag
+    changed = frame_diff.changed_src_files(adapter, tag)
+    names = sorted(
+        {s for f in changed for s in adapter.changed_symbols(f, changed_lines(cfg, base, f))}
+    )
+    start = base_ref(adapter, feature)
+    if not names or start is None or not tag_exists(cfg, f"spec-approved/{feature}"):
+        return [], [], names
+    listed = git(cfg, "-c", "core.quotepath=off", "ls-tree", "-r", "--name-only", start)
+    old = set(listed.splitlines()) - frame_diff.changed_files(cfg, start)[0]
+    tags = adapter.collect_req_tags()
+    old -= {w.split("::")[0] for i in feature_ids(cfg, feature) for w in tags.get(i, [])}
+    found = uses.test_files(cfg, adapter, names)
+    ranked = sorted((f for f in found if f in old), key=lambda f: (-len(found[f]), f))
+    return ranked[:EXISTING_FILES], ranked[EXISTING_FILES:], names
+
+
+def existing_tests(
+    adapter: LanguageAdapter,
+    feature: str,
+    found: tuple[list[str], list[str], list[str]],
+    contested: list[str],
+) -> CheckResult:
+    """Run those files whole (by file, never the suite). Contested tests, tests that failed
+    when the spec was approved and listed tests are left out, as in the suite."""
+    cfg = adapter.cfg
+    files, left, names = found
+    more = f" and {len(names) - 8} more" if len(names) > 8 else ""
+    head = (
+        f"{len(files)} existing test file(s) mention what the task changed "
+        f"({', '.join(names[:8])}{more}): {', '.join(files)}"
+    )
+    if left:
+        head += (
+            f"\nLeft out ({len(left)} more file(s), at most {EXISTING_FILES} run here; the "
+            f"final regression runs them): {', '.join(left)}"
+        )
+    run = adapter.run_tests(paths=files, junit=cfg.out_dir / "step_existing_tests.xml")
+    if run.status == "no_tests":
+        return CheckResult("PASS", head, "no tests")
+    run, off = unrunnable.leave_out(cfg, run)
+    known = regression_baseline(cfg, feature)
+    res = unrunnable.noted(
+        tests_expecting(run, ExpectedRed(contested=contested), set(), known), off
+    )
+    res.output = f"{head}\n{res.output}"
+    if res.status == "FAIL":
+        res.output += (
+            "\nThese tests were there before the task and name code it changed. Fix the code, "
+            "not the tests, unless the spec asks for the new behavior (then park with that "
+            "question)."
+        )
+        if not baseline_recorded(cfg, feature):
+            res.output += (
+                " A test that failed before the task (they were not recorded) is not yours to "
+                "fix: say so in your step note."
+            )
+    return res
+
+
 def task_files(adapter: LanguageAdapter, feature: str) -> set[str] | None:
     """The files the task changed: since the tests approval, and since the spec approval
     (the tests it wrote before that tag). None before both: nothing is known."""
@@ -499,14 +651,21 @@ def checks(
         reqs = read_reqs(adapter.cfg)
         contested = read_contested(adapter.cfg)
 
+        later = read_later_tests(adapter.cfg)
+
         def step_tests() -> CheckResult:
             cfg = adapter.cfg
-            if not contested and not cfg.unrunnable_tests:
+            if not contested and not cfg.unrunnable_tests and not later:
                 run = adapter.run_tests(req_ids=reqs)
                 return CheckResult("PASS" if run.status == "passed" else "FAIL", run.output)
             run = adapter.run_tests(req_ids=reqs, junit=cfg.out_dir / "step_tests.xml")
+            run, waits = without_later(run, later)
             run, off = unrunnable.leave_out(cfg, run)
             res = tests_expecting(run, ExpectedRed(contested=contested), set())
+            if waits:
+                res.summary = "; ".join(
+                    x for x in (f"{LATER_NOTE}: {len(waits)}", res.summary) if x
+                )
             return unrunnable.noted(res, off)
 
         fix = scope == "fix" and bool(reqs)  # without IDs the check runs everything
@@ -519,6 +678,22 @@ def checks(
             c.append(
                 Check(STEP_SUITE, lambda: step_suite(adapter, feature, reqs), needs_green=True)
             )
+        if (
+            scope != "idle"
+            and reqs
+            and feature
+            and not (scope == "step" and adapter.cfg.step_tests == "suite")
+        ):
+            try:
+                found = existing_test_files(adapter, feature)
+            except Exception:  # a scan problem: the final regression still runs them
+                found = [], [], []
+            if found[0]:
+                c.append(
+                    Check(
+                        EXISTING_TESTS, lambda: existing_tests(adapter, feature, found, contested)
+                    )
+                )
         if scope == "fix" and cover_base:
             # structure fixes: the lines they wrote must be reached as at the final gate
             c += adapter.coverage_checks(cover_base, final_scopes(adapter, feature)[0])
@@ -862,6 +1037,21 @@ def save_full_output(adapter: LanguageAdapter, feature: str, check: str, text: s
         return path.relative_to(cfg.root).as_posix()
     except (OSError, ValueError):
         return ""
+
+
+#: most lines of a check's output in a check file or a prompt (capped_output)
+CAPPED_LINES = 60
+
+
+def capped_output(adapter: LanguageAdapter, feature: str, check: str, text: str) -> str:
+    """A check's output for a check file or a prompt: its first CAPPED_LINES lines, the rest
+    in the full log (save_full_output). Seen live: 5,830 lint lines in test_checks.md."""
+    lines = text.splitlines()
+    if len(lines) <= CAPPED_LINES:
+        return text
+    log = save_full_output(adapter, feature, check, text)
+    more = f"... {len(lines) - CAPPED_LINES} more lines" + (f": {log}" if log else "")
+    return "\n".join([*lines[:CAPPED_LINES], more])
 
 
 def run_extra_checks(

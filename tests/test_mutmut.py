@@ -389,3 +389,164 @@ def test_runner_reuses_stamped_venv(tmp_path: pathlib.Path) -> None:
     ok, reused, log = mutmut_runner.ensure_venv({"venv": str(venv), "stamp": "abc"})
     assert ok and reused and "reusing" in log
     assert "uv" in mutmut_runner.INSTALL_HINT
+
+
+TOY = """\
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def add(a, b,
+        c=0):
+    logger.info("adding %s and %s",
+                a, b)
+    if a > 10:
+        print("big", a)
+    return a + b + c
+
+
+class Box:
+    log = logger
+
+    def size(self, n):
+        self.log.debug("size %d", n)
+        return n * 2
+"""
+#: mutmut's copy of TOY (mutants/src/toy.py), cut down to four mutants
+MUTANTS = """\
+def add(a, b,
+        c=0):
+    return a + b + c
+
+
+def x_add__mutmut_orig(a, b,
+        c=0):
+    logger.info("adding %s and %s",
+                a, b)
+    if a > 10:
+        print("big", a)
+    return a + b + c
+
+
+def x_add__mutmut_1(a, b,
+        c=1):
+    logger.info("adding %s and %s",
+                a, b)
+    if a > 10:
+        print("big", a)
+    return a + b + c
+
+
+def x_add__mutmut_2(a, b,
+        c=0):
+    logger.info(a, b)
+    if a > 10:
+        print("big", a)
+    return a + b + c
+
+
+def x_add__mutmut_3(a, b,
+        c=0):
+    logger.info("adding %s and %s",
+                a, b)
+    if a > 10:
+        print("big", a)
+    return a - b + c
+
+
+class Box:
+    def xǁBoxǁsize__mutmut_orig(self, n):
+        self.log.debug("size %d", n)
+        return n * 2
+
+    def xǁBoxǁsize__mutmut_1(self, n):
+        self.log.debug("size %d", None)
+        return n * 2
+"""
+
+
+def test_only_mutants_on_the_tasks_lines_outside_logging_calls_are_scored(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Seen live: 77.6% (< 80%) in three touched functions, most survivors log texts."""
+    from framegate.adapters.python import mutmut_line_scopes
+
+    scopes = mutmut_line_scopes(TOY, {12, 19, 20})  # `return a + b + c` and Box.size's body
+    assert scopes == {
+        "x_add": {"changed": [6], "logging": [2, 3, 5]},
+        "xǁBoxǁsize": {"changed": [1, 2], "logging": [1]},
+    }
+    assert mutmut_line_scopes(TOY, None)["x_add"]["changed"] is None  # an untracked file: all
+    assert mutmut_runner.mutant_lines(MUTANTS) == {
+        "x_add__mutmut_1": [1],
+        "x_add__mutmut_2": [2, 3],
+        "x_add__mutmut_3": [6],
+        "xǁBoxǁsize__mutmut_1": [1],
+    }
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/toy.py").write_text(MUTANTS, encoding="utf-8")
+    spec = {"toy": {"file": "src/toy.py", "functions": scopes}, "gone": {"file": "src/no.py"}}
+    left = mutmut_runner.left_out(spec, str(tmp_path))
+    assert left == {
+        "toy.x_add__mutmut_1": "unchanged",
+        "toy.x_add__mutmut_2": "logging",
+        "toy.xǁBoxǁsize__mutmut_1": "logging",
+    }
+    results = "".join(
+        f"    toy.{name}: survived\n" for name in mutmut_runner.mutant_lines(MUTANTS)
+    ).replace("mutmut_3: survived", "mutmut_3: killed")
+    t = tally_mutmut(results, [], ["toy.x_add", "toy.xǁBoxǁsize"], left)
+    assert (t.detected, t.total, t.unchanged, t.logging, t.survivors) == (1, 1, 1, 2, [])
+
+
+# ---------- hypothesis under the mutation runner ----------
+PROPERTY_TEST = """from hypothesis import given, settings, strategies as st
+
+
+class TestProp:
+    @settings(max_examples=5)
+    @given(st.integers())
+    def test_p(self, x):
+        assert x + 0 == x
+"""
+#: as mutmut does: the tests twice in one process
+TWICE = (
+    "import sys, pytest; args = ['-q', '-p', 'no:cacheprovider']; "
+    "sys.exit(pytest.main(args) or pytest.main(args))"
+)
+
+
+def test_the_runner_loads_its_hypothesis_plugin_for_its_own_runs(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PYTEST_ADDOPTS", "--req D-R-001")
+    monkeypatch.setenv("PYTHONPATH", "elsewhere")
+    mutmut_runner.load_hypothesis_plugin(str(tmp_path))
+    plugin = tmp_path / f"{mutmut_runner.HYPOTHESIS_PLUGIN}.py"
+    assert "differing_executors" in plugin.read_text(encoding="utf-8")
+    assert os.environ["PYTEST_ADDOPTS"] == f"--req D-R-001 -p {mutmut_runner.HYPOTHESIS_PLUGIN}"
+    assert os.environ["PYTHONPATH"] == str(tmp_path) + os.pathsep + "elsewhere"
+    compile(mutmut_runner.HYPOTHESIS_PLUGIN_TEXT, "plugin", "exec")
+
+
+def test_a_property_test_in_a_class_runs_twice_in_one_process_with_the_plugin(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("hypothesis")
+    import subprocess
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "test_prop.py").write_text(PROPERTY_TEST, encoding="utf-8")
+    monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
+
+    def twice() -> subprocess.CompletedProcess[str]:
+        cmd = [sys.executable, "-c", TWICE]
+        return subprocess.run(cmd, cwd=project, capture_output=True, text=True, check=False)
+
+    plain = twice()
+    assert plain.returncode != 0 and "differing_executors" in plain.stdout  # the problem
+    mutmut_runner.load_hypothesis_plugin(str(tmp_path))
+    fixed = twice()
+    assert fixed.returncode == 0, fixed.stdout

@@ -1,6 +1,6 @@
 # Decisions
 
-Standing decisions of the user, one line each. Details: docs/AGENTIC_WORKFLOW_SETUP.md.
+Standing decisions of the user, one line each. The merged principles: docs/plan.md, section 2. How each works: docs/reference.md.
 
 1. Two human gates, forward only: spec and final. Test-review leftovers go to the final gate.
 2. Between the gates never stop: assume (logged) or park; parked work is answered at the final gate.

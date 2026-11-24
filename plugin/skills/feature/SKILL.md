@@ -28,6 +28,9 @@ If the output above says the spec is **already approved**, do not start the dial
 ask: continue it (default; then the run protocol below, by state as in its section B), or change
 the spec (that needs `framegate approve-spec` again and restarts from the tests).
 
+The spec keeps the kind the task was started with (here: a feature, no `Mode:` line), also when
+the task turns out to be a bug; `framegate approve-spec` refuses another kind.
+
 ## Start check (your first step)
 
 This plugin is version 0.12.5. Before anything else run this command yourself (it is not run
@@ -80,6 +83,8 @@ If the user gave only a name (`$ARGUMENTS`), it is just the branch and folder na
 in step 1 what it refers to (the code map, the code, the docs) and ask in step 2 only what
 you still cannot decide, the requirement itself included if the code and the docs do not
 tell.
+A task text the user gave earlier in this conversation is the requirement: read it before
+you ask anything.
 
 Sources, by rank:
 - The code is the current state. Where docs and code disagree, the code says what exists.
@@ -102,6 +107,12 @@ Where the task's code now contradicts the doc: `today: <...> -> code now: <...>`
 then approves the code (the doc updated now or later) or rejects it with a solution. A
 README, CHANGELOG or handover note: one brief line of what changes; no question. After the
 final gate is approved, one docs step applies the brief ones and the approved ones.
+A docstring or comment in a source file that the task's code will contradict is code text,
+not a doc: the plan step that changes the file rewords it (name the lines in that step); in
+a file no step changes, one bullet `- code text: <source file>:<lines>: today: <quoted> ->
+code now: <what the code does>`, which the final summary lists (no question, no docs step).
+Each proposed text states what this task builds, nothing more: before the final gate it is
+checked against the code and corrected to it.
 Program output (an error message, a log line) is behaviour, not documentation: write every
 error message out in full for one concrete input, with one notation for placeholders in the
 whole spec (repr, str, or str in literal quotes); the tests match the whole message.
@@ -179,20 +190,34 @@ whole spec (repr, str, or str in literal quotes); the tests match the whole mess
      reference itself is never changed;
    - structure: which file each new concept goes in (one concept per file; the code map says
      where things live), so no file grows past ~400 lines or mixes two concepts.
-2. Ask only what those sources cannot decide: what the user wants (behavior, priorities,
-   trade-offs), not what the code can tell. Numbered, plain words.
-   A point is a question only when it is a real decision: two or more reasonable options with
-   different outcomes, and the docs, the code, `.framegate/project.md` and earlier answers don't
-   settle it. Otherwise it is not a question: only one sensible option -> decide it (a "decision
-   I made for you", one line); already answered or resolved, or a note -> leave it out; the same
-   question twice -> one. No limit on the number; order them by impact (what changes most if
-   answered differently first). Each: the problem in one line, then "A: ... (default) / B: ..."
-   on one line:
+2. Ask the user: one compact round, numbered, plain words, about 8 points at most, the most
+   consequential first. Each: the point in one line, then "A: ... (default) / B: ..." on one
+   line, A being the answer you recommend, so the user can say "ok" to all:
 
        1. An empty name?
           A: refused with an error (default) / B: accepted and stored as "unnamed"
 
-   Repeat until nothing is open; usually one round.
+   Always a question, never your decision, unless the task text, the code or the docs
+   already state it:
+   - every new or changed public name, signature, parameter type, default value, error
+     type or message, stored or wire format (an existing pattern in the code that it
+     follows states it: name the pattern);
+   - what must not change;
+   - where the tests go, when existing test files cover the area;
+   - which docs the task may edit (as proposed doc updates);
+   - what the user wants where two or more reasonable options have different outcomes
+     (behavior, priorities, trade-offs).
+   Not a question: what those sources or an earlier answer state (leave it out), and a point
+   with no observable effect on callers or stored data (decide it: a "decision I made for
+   you", one line). The same question twice -> one. Repeat until nothing is open; usually
+   one round.
+   A reply that describes the task (a ticket, the requirement in the user's words) and does
+   not answer your questions is not "ok" and takes no default: it is the requirement. Do
+   step 1 again with it, drop the questions it settles, and ask the ones it leaves open
+   again, with the new ones it raises.
+   design.md, "Public interfaces": one row per new or changed public member with where its
+   shape comes from (`task`, `code: <pattern>`, `docs: <file>`, `asked` = the user
+   answered); `spec-check` fails a member without one.
 3. Write requirements.md, design.md and plan.md following the templates exactly (the ID format,
    "## Step N: title" headings and "Covers:" lines described above). Every ID must be covered by
    exactly one plan step. Fill the "Overlaps and sources of truth", fixture, "Input domain and
@@ -262,8 +287,8 @@ whole spec (repr, str, or str in literal quotes); the tests match the whole mess
        **Plan** — the steps in plain words, numbered as in plan.md, one line each, ending with the main file it builds or changes
        **How it is proven** — the 3 most important checks of the tests and gates (rest on request)
        **Not proven** — the 3 most important things to check by using it (feel, balance, UI ...)
-       **Decisions I made for you** — one line each, with what it rules out
-         ("An empty name is refused: rules out unnamed entries.")
+       **Decisions I made for you** — one line each; only points with no observable effect
+         on callers or stored data ("None.")
        **Project details that matter** — existing code / data it relies on, invariants it
          must keep (saves, hashes, public APIs)
        **Setup files changed** — one line: the files `spec-check` lists, each with why
@@ -273,8 +298,8 @@ whole spec (repr, str, or str in literal quotes); the tests match the whole mess
          OUTSIDE item as "outside the repository: by hand: <where>: <what>"
        **Questions** — the real decisions still open (step 2's rule), by impact ("None.")
 
-   "Decisions I made for you" is the part the user really checks: list the ones that change
-   what they will see or that close off an option; the mechanical ones stay in the spec.
+   Whatever changes what a caller sees or what is stored was asked in step 2 or is under
+   "Questions"; it is never under "Decisions I made for you".
 7. Ask: "Is the spec OK? Then I start the run." (default: yes, with the defaults of any open
    questions). An "ok" while questions are open: write their defaults into the spec and
    spec_brief.md first, say so in one line, then Part 2. Answers or changes: update the spec,

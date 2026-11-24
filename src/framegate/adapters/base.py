@@ -570,6 +570,11 @@ class LanguageAdapter(abc.ABC):
         (e.g. it did not fail because of the stub), else None. Default: every failure counts."""
         return None
 
+    def failure_frames(self, case: TestCase) -> list[tuple[str, int]]:
+        """Where a failed case's stack trace passes, outermost first: (file, line), a file
+        of the repository as a repo-relative posix path. The default: not known."""
+        return []
+
     # ---------- ports (ported.py; None = this language has no support: said, not guessed) ----
     def reference_stub(self, source: bytes) -> tuple[bytes, list[str]] | None:
         """The stub of a ported code file: the reference file's text with every function body
@@ -884,6 +889,24 @@ class LanguageAdapter(abc.ABC):
         why there is none). The default: this adapter does not record the tests' lines."""
         return {}, f"the {self.name} adapter does not record which test lines ran"
 
+    def changed_symbols(self, rel: str, lines: set[int] | None) -> list[str]:
+        """The names of the functions and classes of source file `rel` that `lines` touch
+        (None = the whole file). The default: none known."""
+        return []
+
+    def function_body_lines(self, rel: str, name: str) -> set[int]:
+        """The lines of the bodies of the functions called `name` in source file `rel`
+        (without the signature and a docstring). The default: none known."""
+        return set()
+
+    def test_line_run(
+        self, req_ids: Sequence[str], junit: pathlib.Path
+    ) -> tuple[dict[str, dict[int, int]], list[TestCase] | None, str]:
+        """Run the tests tagged with `req_ids`, recording the test files' own lines only:
+        ({test file: {line: hits}}, the cases, a note: why there is none). The default: not
+        recorded by this adapter."""
+        return {}, None, f"the {self.name} adapter does not record which test lines ran"
+
     def test_assertions(self, rel: str) -> list[TestAssertions]:
         """The tests of a test file with the lines of their assertions; calls that always
         fail (`pytest.fail`, `Assert.Fail`, `assert False`) are left out: they are meant
@@ -1018,6 +1041,7 @@ class LanguageAdapter(abc.ABC):
             "DIAGNOSIS": READ_TOOLS + ["Write"] + tests + GIT_READ_TOOLS,
             "SUMMARY": READ_TOOLS + WRITE_TOOLS + GIT_READ_TOOLS,  # WRITE_TOOLS: the code map
             "DOCS": READ_TOOLS + WRITE_TOOLS,
+            "DOC_CHECK": READ_TOOLS + ["Write"],
             "RETRO": READ_TOOLS + ["Write"],
             "SPEC_UPDATE": READ_TOOLS + WRITE_TOOLS,
         }

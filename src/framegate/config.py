@@ -1,4 +1,4 @@
-"""Load and validate framegate.toml. Defaults equal the constants of the original setup guide."""
+"""Load and validate framegate.toml."""
 
 from __future__ import annotations
 
@@ -70,6 +70,7 @@ PHASES = (
     "TRIAGE",
     "DIAGNOSIS",
     "SUMMARY",
+    "DOC_CHECK",
     "DOCS",
     "RETRO",
 )
@@ -262,6 +263,7 @@ DEFAULT_MODELS = {
     "SPEC_UPDATE": "sonnet",
     "SUMMARY": "sonnet",
     "DOCS": "sonnet",
+    "DOC_CHECK": "opus",
     "TEST_REVIEW": "opus",
     "REVIEW": "opus",
     "TRIAGE": "opus",
@@ -283,6 +285,7 @@ DEFAULT_MAX_TURNS = {
     "DIAGNOSIS": 40,
     "SUMMARY": 30,
     "DOCS": 30,
+    "DOC_CHECK": 30,
     "RETRO": 30,
     "SPEC_UPDATE": 30,
 }
@@ -299,6 +302,7 @@ DEFAULT_MAX_BUDGET_USD = {
     "DIAGNOSIS": 2.0,
     "SUMMARY": 1.5,
     "DOCS": 1.0,
+    "DOC_CHECK": 1.0,
     "RETRO": 3.0,
     "SPEC_UPDATE": 1.0,
 }
@@ -613,6 +617,7 @@ class Config:
             "SUMMARY": [p.out, self.code_map],
             # plus the documentation files: the write guard (doc_proposals.is_doc)
             "DOCS": [p.out],
+            "DOC_CHECK": [p.out],
             "RETRO": [p.out],
         }
         return [_as_prefix(x) for x in defaults.get(phase, [])]

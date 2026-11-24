@@ -12,11 +12,17 @@ Scenario keys:
   test_review_objections: number of TEST_REVIEW runs that object (Verdict: OBJECTIONS)
   implement_fail: number of IMPLEMENT runs that write a wrong implementation
   park_steps: plan step numbers whose first IMPLEMENT run writes park.md (and half-done code)
+    park_text: the text of that park.md (default: a question that names DEMO-R-002)
   assume: true -> the first successful IMPLEMENT run logs one assumption in steps.md
   doc_proposals: true -> the first IMPLEMENT run adds two lines to out/demo/doc_proposals.md
     (CHANGELOG.md, docs/design.md) and the REVIEW run one (docs/plan.md). The DOCS run
     appends its task's update lines to the files they name; docs_bad: true -> it also
     changes a source file
+  spanning: true -> with two plan steps, TESTS also writes test_add_then_neg, tagged with an
+    ID of each step
+  doc_check: the bullet(s) the DOC_CHECK run writes to out/demo/doc_check.md (a corrected doc
+    proposal); doc_text_check: what the code does, written against item 1 of the owner's
+    texts (out/demo/doc_text_check.md). Without the key the run writes "None."
   followup: true -> every IMPLEMENT step note has one pipeline follow-up line (the
     Dockerfile), and REVIEW writes one of its own (the CI file) into review.md
   ref_followup: true -> every IMPLEMENT step note, the REVIEW run's review.md and the TRIAGE
@@ -28,6 +34,8 @@ Scenario keys:
   review_invalid: true -> the reviewer also writes an invalid finding (negative ints rejected);
     TRIAGE deletes it and marks it INVALID
   repair_objection: text -> the follow-up review of a final repair objects with it
+  repair_met: true -> the implementer changes the repair when the reviewer objects, and the
+    second review is OK ("stays": it objects again)
   structure: true -> the first REVIEW run lists one structure finding in review.md
   brief: true -> SUMMARY also writes out/demo/final_brief.md (plain-words sections, gate item 1
     asked as question 1); "filtered" -> asks item 2 first, then item 1, one untagged decision,
@@ -134,6 +142,14 @@ TESTS_STEP2 = """
 @pytest.mark.req("DEMO-R-002")
 def test_neg_negates() -> None:
     assert neg(4) == -4
+"""
+
+#: tagged with an ID of each plan step: it can pass only once step 2 is built
+TESTS_SPAN = """
+
+@pytest.mark.req("DEMO-R-001", "DEMO-R-002")
+def test_add_then_neg() -> None:
+    assert neg(add(1, 2)) == -3
 """
 
 REVIEW_INVALID = """\
@@ -433,6 +449,7 @@ def main() -> int:
         rel, text = lang["tests"]
         if two:
             text = text.replace("from demo import add", "from demo import add, neg") + TESTS_STEP2
+            text += TESTS_SPAN if scen.get("spanning") else ""
         if req.is_file() and "DEMO-E-002" in req.read_text(encoding="utf-8"):
             text += TESTS_E2
         amend = "answered questions at the final gate" in prompt
@@ -481,6 +498,7 @@ def main() -> int:
         strict = strict or "did not approve changing its contested tests" in prompt
         # the final-gate repair: an existing test the loose code broke
         strict = strict or "the final gates failed these checks" in prompt
+        strict = strict or "existing test file(s) mention what the task changed" in prompt
         loose = UNCOVERED if scen.get("uncovered") and lang is PYTHON else lang["loose"]
         fails = state.get("implement_failed", 0)
         park = [n for n in nums if n in scen.get("park_steps", []) and n not in parked]
@@ -503,7 +521,8 @@ def main() -> int:
             step = park[0]
             parked.append(step)
             write(lang["impl"], (lang["strict"] if strict else lang["loose"]) + NEG_PARTIAL)
-            write("out/demo/park.md", f"- [DEMO-R-002] Step {step}: should neg(0) be 0 or -0?\n")
+            asks = f"- [DEMO-R-002] Step {step}: should neg(0) be 0 or -0?\n"
+            write("out/demo/park.md", scen.get("park_text") or asks)
         elif fails < scen.get("implement_fail", 0):
             state["implement_failed"] = fails + 1
             write(lang["impl"], lang["wrong"] + neg)
@@ -511,6 +530,8 @@ def main() -> int:
             write(lang["impl"], lang["strict"] + neg)
         else:
             write(lang["impl"], (lang["strict"] if strict else loose) + neg)
+        if scen.get("repair_met") and "The reviewer objects to the repair" in prompt:
+            write(lang["impl"], lang["strict"] + neg + "\n\n# repair: objection met\n")
         if not out.joinpath("park.md").exists():
             note = "Assumptions: none\n"
             if scen.get("assume") and not state.get("assumed"):
@@ -539,6 +560,8 @@ def main() -> int:
                 f.write(f"## Step {step or 'fix'} — add\nBuilt add().\n{note}")
     elif phase == "REVIEW" and "follow-up review of a final repair" in prompt:
         objection = scen.get("repair_objection")
+        if scen.get("repair_met") is True and "objection met" in prompt:
+            objection = None
         write(
             "out/demo/repair_review.md",
             f"Verdict: OBJECTIONS\n\n## Objections\n- {objection}\n"
@@ -593,6 +616,14 @@ def main() -> int:
                 f"Fix owner: {owner}\n"
                 "Proposed fix: return a + b.\nEvidence:\n- ran the step tests\n",
             )
+    elif phase == "DOC_CHECK":
+        # the result file the task names: `doc_check` lines, or `doc_text_check` (the code
+        # now, for item 1); "None." without the scenario key
+        name = re.search(r"out/demo/(doc\w*_check)\.md", prompt).group(1)
+        found = scen.get(name)
+        if name == "doc_text_check" and found:
+            found = f"- 1: code now: {found}"
+        write(f"out/demo/{name}.md", (found or "None.") + "\n")
     elif phase == "DOCS":
         for line in re.findall(r"^- (.+)$", prompt.split("change nothing else:")[1], re.M):
             doc = re.match(r"[\w./-]+\.md", line)

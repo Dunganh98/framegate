@@ -17,6 +17,7 @@ from __future__ import annotations
 import datetime
 import json
 import re
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -65,6 +66,16 @@ class Entry:
     def key(self) -> tuple[str, tuple[str, ...], str]:
         return self.kind, tuple(sorted(self.files)), " ".join(defaults._words(self.text))
 
+    @property
+    def about(self) -> tuple[str, ...] | None:
+        """What a second entry may not repeat, whatever its words: a refactor's files, a
+        doc proposal's file and place (doc_proposals.key). None: only the same text."""
+        if self.kind == "refactor" and self.files:
+            return ("refactor", *sorted(self.files))
+        if self.kind == "docs" and self.files:
+            return ("docs", doc_proposals.key(f"{self.files[0]}, {self.text}"))
+        return None
+
     def line(self) -> str:
         where = f"{', '.join(self.files)}: " if self.files else ""
         return f"- {self.id} [{self.kind}] {where}{self.text} From {self.origin}"
@@ -107,11 +118,13 @@ def _write(cfg: Config, entries: list[Entry], nxt: int) -> None:
 
 def add(cfg: Config, feature: str, items: list[Item]) -> list[Entry]:
     """Record `items`; an item already listed (same kind, files and text) gets the new
-    "From" part. Returns the entries added or updated."""
+    "From" part; one about the same thing in other words (Entry.about) is refused: the
+    listed entry stands. Returns the entries added, updated or standing."""
     if not items:
         return []
     entries, nxt = read(cfg)
     by_key = {e.key: e for e in entries}
+    by_about = {e.about: e for e in reversed(entries) if e.about}
     today = datetime.date.today().isoformat()
     touched: list[Entry] = []
     for it in items:
@@ -120,10 +133,14 @@ def add(cfg: Config, feature: str, items: list[Item]) -> list[Entry]:
         old = by_key.get(e.key)
         if old:
             old.origin = e.origin
+        elif e.about in by_about:
+            old = by_about[e.about]
         else:
             e.n, nxt = nxt, nxt + 1
             entries.append(e)
             by_key[e.key] = e
+            if e.about:
+                by_about[e.about] = e
         if (old or e) not in touched:
             touched.append(old or e)
     _write(cfg, entries, nxt)
@@ -189,18 +206,41 @@ NOTED = "over_limit_noted.json"
 SPLIT = "split it into one file per concept"
 
 
-def over_limit_note(cfg: Config, feature: str, over: list[tuple[str, int]]) -> list[str]:
-    """For the spec brief, once per file: the files the plan names that are already over
-    the size limit (`over`: structure.plan_over_limit) and have no refactor entry yet."""
+def noted(cfg: Config, feature: str) -> list[str]:
+    """The files the spec check named as over the limit: the user was asked at spec time."""
     path = cfg.feature_out(feature) / NOTED
     try:
-        seen = [str(x) for x in json.loads(path.read_text(encoding="utf-8"))]
+        return [str(x) for x in json.loads(path.read_text(encoding="utf-8"))]
     except (OSError, ValueError, TypeError):
-        seen = []
+        return []
+
+
+def split_answered(cfg: Config, feature: str) -> set[str]:
+    """The files whose split question is answered: asked at spec time in this task, or on
+    the list as a refactor. No gate asks about them again."""
+    return {
+        *noted(cfg, feature),
+        *(f for e in read(cfg)[0] if e.kind == "refactor" for f in e.files),
+    }
+
+
+def over_limit_note(
+    cfg: Config,
+    feature: str,
+    over: list[tuple[str, int]],
+    sizes: Callable[[list[str]], dict[str, int]] | None = None,
+) -> list[str]:
+    """For the spec brief, once per file: the files the plan names that are already over
+    the size limit (`over`: structure.plan_over_limit) and have no refactor entry yet.
+    `sizes`: their lines as the gates count them (task_base.formatted_lines)."""
+    path = cfg.feature_out(feature) / NOTED
+    seen = noted(cfg, feature)
     listed = {f for e in read(cfg)[0] if e.kind == "refactor" for f in e.files}
     new = [(f, n) for f, n in over if f not in seen and f not in listed]
     if not new:
         return []
+    counted = sizes([f for f, _ in new]) if sizes else {}
+    new = [(f, counted.get(f, n)) for f, n in new]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps([*seen, *(f for f, _ in new)]), encoding="utf-8")
     return [
@@ -211,14 +251,14 @@ def over_limit_note(cfg: Config, feature: str, over: list[tuple[str, int]]) -> l
     ]
 
 
-def split_later(cfg: Config, feature: str, rel: str) -> Entry | None:
+def split_later(cfg: Config, feature: str, rel: str, lines: int | None = None) -> Entry | None:
     """The user's "later" to a file over the size limit: an entry of the list (None: no
-    such file)."""
+    such file). `lines`: its size as the gates count it."""
     rel = rel.replace("\\", "/")
     file = cfg.root / rel
     if not file.is_file():
         return None
-    n = len(file.read_text(encoding="utf-8", errors="replace").splitlines())
+    n = lines or len(file.read_text(encoding="utf-8", errors="replace").splitlines())
     text = f"{SPLIT} ({n} lines, limit {cfg.max_file_lines})"
     return add(cfg, feature or "the spec dialogue", [Item("refactor", text, [rel])])[0]
 
@@ -280,7 +320,8 @@ def task_items(
         if not doc_proposals.among(d, prog.get("doc_rejected") or []):
             ok = doc_proposals.among(d, prog.get("doc_approved") or [])
             how = "approved, the docs step did not apply it" if ok else 'answered "later"'
-            items.append(Item("docs", d.body, [d.file] if d.file else [], how))
+            text = d.body + doc_proposals.noted(d, prog.get("doc_notes") or {})
+            items.append(Item("docs", text, [d.file] if d.file else [], how))
     if cfg.unrunnable_tests:
         names = sorted(cfg.unrunnable_tests)
         files = sorted({t.split("::")[0] for t in names if "/" in t.split("::")[0]})

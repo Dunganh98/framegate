@@ -28,6 +28,7 @@ from framegate.replay.chat import claude_exe, read_pid
 from framegate.replay.sandbox import (
     Layout,
     ReplayError,
+    author_paths,
     build,
     make_env,
     prune,
@@ -216,6 +217,8 @@ class Options:
     retro: Callable[[Layout], str] = retro
     env: Callable[[Candidate, pathlib.Path], pathlib.Path] = make_env
     echo: Callable[[str], None] = field(default=lambda line: print(line, flush=True))
+    #: the candidates file: no agent of a run may read it
+    file: pathlib.Path | None = None
 
 
 def _prune(lay: Layout, opts: Options) -> None:
@@ -228,7 +231,7 @@ def run_one(c: Candidate, opts: Options, src: pathlib.Path) -> dict[str, Any]:
     row: dict[str, Any] = {"name": c.name, "kind": c.kind}
     run_json, score_json = lay.run / "run.json", lay.run / "score.json"
     state, earlier = read_json(run_json), read_json(score_json)
-    probes = opts.base / "probes" / c.name
+    probes, extra = opts.base / "probes" / c.name, opts.base / "extra" / c.name
     # a score that failed is no score: scored again, the run is not repeated
     retry = earlier.get("verdict") == scoring.FAILED and not (opts.force or opts.prepare_only)
     if opts.score_only or retry:
@@ -258,7 +261,8 @@ def run_one(c: Candidate, opts: Options, src: pathlib.Path) -> dict[str, Any]:
         if state.get("state") != "prepared" or opts.force:
             opts.echo(f"[{c.name}] building the sandbox")
             try:
-                build(c, lay, src, opts.env, probes)
+                hide = author_paths(opts.base, opts.file, opts.out)
+                build(c, lay, src, opts.env, probes, extra, hide)
             except ReplayError as e:
                 write_json(run_json, {"state": "dropped", "reason": str(e)})
                 opts.echo(f"[{c.name}] dropped: {e}")
@@ -281,13 +285,15 @@ def run_one(c: Candidate, opts: Options, src: pathlib.Path) -> dict[str, Any]:
         opts.echo(f"[{c.name}] ended at {stage}: retro")
         state["retro"] = opts.retro(lay)
         write_json(run_json, state)
-    row.update(scoring.score(lay, c.probes, probes), status="scored")
+    row.update(scoring.score(lay, c.probes, probes, c.extra, extra), status="scored")
     row.update({k: state[k] for k in ("stopped", "wall_s", "driver_usd", "retro") if k in state})
     failed = row["verdict"] == scoring.FAILED
     why = f"score failed ({str(row.get('result_tail', ''))[:200]}): run --score-only again"
     notes = [why] if failed else []
     broken = row.get("probes_failed") or []
     notes += [f"probes failed: {', '.join(broken)}"[:200]] if broken else []
+    late = row.get("extra_failed") or []
+    notes += [f"extra tests failed: {', '.join(late)}"[:200]] if late else []
     notes += [state.get("stopped") or ("" if stage == "DONE" else f"ended at {stage}")]
     notes += [outcome(lay.driver)] if stage != "DONE" else []
     notes += [f"retro {state['retro']}"] if "retro" in state else []
@@ -365,6 +371,7 @@ def main(args: argparse.Namespace) -> int:
         args.score_only,
         args.force,
         args.prune,
+        file=path,
     )
     chosen = [c for c in cands if not args.only or c.name in args.only]
     rows = {row["name"]: row for row in run_all(chosen, opts)}

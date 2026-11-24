@@ -247,3 +247,29 @@ def test_a_split_of_a_file_that_was_too_big_before_is_asked_not_done(demo_repo: 
     assert "- [structure report] src/demo/__init__.py had " in oq
     assert "lines before this feature (limit 2); the reviewer proposes: " in oq
     assert "A: leave it for a later cleanup (the deferred list) (default) / B: split it now." in oq
+
+
+def test_an_answer_that_names_no_option_is_asked_once(
+    demo_repo: DemoRepo, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Seen live: free text that meant the default started a spec update and a rework."""
+    r = demo_repo
+    r.add_toml(FAST)
+    r.set_toml("gates", "max_file_lines", "5")
+    r.scenario()
+    to_final_gate(r)
+    answers = r.root / "out/demo/answers.md"
+    answers.write_text("1. Q: split?\n   A: No restructuring in this task.\n", encoding="utf-8")
+    capsys.readouterr()
+    assert r.af("answer", "demo") == 1
+    err = capsys.readouterr().err
+    assert "1 answer(s) in out/demo/answers.md name no option of their question" in err
+    assert "- item 1 (src/demo/__init__.py has " in err and "names none of A / B" in err
+    assert r.progress()["waiting"]["gate"] == "final"
+    assert [e["kind"] for e in r.events()][-1] == "answer_unclear"
+    # the owner chose: the letter is the option, the words a note; no run
+    answers.write_text("1. Q: split?\n   A: A: no restructuring in this task.\n", "utf-8")
+    assert r.af("answer", "demo") == 0
+    assert r.progress()["phase"] == "RETRO"
+    (ev,) = [e for e in r.events() if e["kind"] == "answer"]
+    assert ev["items"][0]["option"] == "A" and ev["items"][0]["note"].startswith("no restruct")

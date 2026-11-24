@@ -969,3 +969,19 @@ def test_named_tests_without_line_ranges_fall_back_to_the_file(
     assert named_tests.check(adapter, "demo").status == "FAIL"
     write(r.root, "tests/test_old.py", NAMED_CLASSES.replace("3 == 3", "3 == 3.0"))
     assert named_tests.check(adapter, "demo").status == "PASS"
+
+
+def test_a_long_check_output_is_capped_with_the_full_log_beside_it(tmp_path: pathlib.Path) -> None:
+    """Seen live: 5,830 lint lines in test_checks.md."""
+    from framegate.gates import CAPPED_LINES, capped_output
+
+    a = adapter_for(tmp_path)
+    assert capped_output(a, "f", "Lint (x)", "a\nb") == "a\nb"
+    text = "\n".join(f"line {i}" for i in range(500))
+    shown = capped_output(a, "f", "Lint (the tests' own lines)", text).splitlines()
+    assert shown[: CAPPED_LINES - 1] == text.splitlines()[: CAPPED_LINES - 1]
+    assert shown[CAPPED_LINES:] == [
+        "... 440 more lines: out/f/check_logs/Lint_the_tests_own_lines.log"
+    ]
+    log = tmp_path / "out/f/check_logs/Lint_the_tests_own_lines.log"
+    assert log.read_text(encoding="utf-8") == text + "\n"

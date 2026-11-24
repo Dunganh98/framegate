@@ -4,6 +4,7 @@ not in the file the spec names. Both from the M5-moment-scan retro."""
 from __future__ import annotations
 
 from conftest import DemoRepo
+from framegate.adapters import get_adapter
 from framegate.checks import spec_lint
 from framegate.config import load_config
 from framegate.orchestrator import package_text
@@ -270,3 +271,63 @@ def test_a_new_test_file_the_ci_does_not_list_warns(demo_repo: DemoRepo) -> None
         CI_SPEC.format(follow_up="- .github/workflows/ci.yml: run test_new.py"), encoding="utf-8"
     )
     assert spec_lint.warnings(cfg, "demo") == []
+
+
+INTERFACES = """\
+# Demo — Design
+
+## Public interfaces
+add(a: int, b: int) -> int
+| New / changed member | Shape from (task / code: <pattern> / docs: <file> / asked) |
+|---|---|
+| `add(a: int, b: int = 0) -> int` | {source} |
+| `class Sum`, field `total` | code: as `Count` in src/demo/count.py |
+| | |
+"""
+
+
+def test_a_public_member_says_where_its_shape_comes_from(demo_repo: DemoRepo) -> None:
+    """Seen live: a spec dialogue chose a default value and a signature itself; the owner
+    had decided another one and was never asked."""
+    r = demo_repo
+    cfg = load_config(r.root)
+    adapter = get_adapter(cfg)
+    design = r.root / "specs/demo/design.md"
+
+    def found(source: str, text: str = INTERFACES) -> list[str]:
+        design.write_text(text.format(source=source), encoding="utf-8")
+        return spec_lint.interface_source_problems(cfg, "demo", adapter)
+
+    for ok in ("task", "`asked`", "asked (question 2)", "docs: docs/api.md", "code: like `sub`"):
+        assert found(ok) == [], ok
+    for bad in ("", "decided", "sensible default", "code", "docs:"):
+        (problem,) = found(bad)
+        assert problem.startswith(
+            'design.md, Public interfaces, "`add(a: int, b: int = 0) -> int`": no source'
+        ), bad
+        assert "a question to the user first" in problem
+    assert r.af("spec-check", "demo") == 1
+    # a public name of the stubs without a row; a private one needs none
+    stub = r.root / "src/demo/__init__.py"
+    stub.write_text(
+        stub.read_text(encoding="utf-8")
+        + "\n\ndef neg(a: int) -> int:\n    raise NotImplementedError\n"
+        + "\n\ndef _help() -> None:\n    raise NotImplementedError\n",
+        encoding="utf-8",
+    )
+    (problem,) = found("task")
+    assert problem.startswith(
+        "design.md, Public interfaces: the stubs add `neg` (src/demo/__init__.py:"
+    )
+    # a "None." row is no member; a design without the column (an older template): not checked
+    none = INTERFACES.split("| `add")[0] + "| None. | |\n"
+    assert len(found("", none)) == 2  # the stubs' add and neg
+    assert spec_lint.interface_source_problems(cfg, "demo") == []
+    assert found("", "## Public interfaces\nadd(a: int, b: int) -> int\n") == []
+    for kind in ("_template", "_template_bugfix", "_template_refactor"):
+        (table,) = [
+            t
+            for t in spec_lint.tables(package_text("templates", "specs", kind, "design.md"))
+            if t.section == "Public interfaces"
+        ]
+        assert table.column("shape from") == 1, kind

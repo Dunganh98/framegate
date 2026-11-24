@@ -3,10 +3,12 @@ names it as `tests/<file>::<Class>` or `tests/<file>::<Class>::<test>`; `(unchan
 after the name says it stays as it is. Seen live: the spec said a test class's fixtures must
 change, the test writer put everything in a new file, and only the test reviewer noticed.
 
-A test file the spec names for a spec ID must be touched: a line of a requirements, edge
-case or test section with a spec ID and a `tests/<file>` path (no `::`, not `(unchanged)`)
-says where that ID's test goes. Seen live: the spec said "in tests/test_cli.py", the test
-writer made a new file, and the reviewer's objection cost a round."""
+A test file the spec names for a spec ID must be touched. Only an explicit placement
+counts: a line `<ID>[, <ID>]: in tests/<file>` (the template's form), or a table column
+headed "Test file" / "Test in". A path in prose says nothing (seen live: "stays green:
+tests/test_contracts.py" in an acceptance criterion failed the check for four rounds).
+Seen live: the spec said "in tests/test_cli.py", the test writer made a new file, and the
+reviewer's objection cost a round."""
 
 from __future__ import annotations
 
@@ -39,10 +41,8 @@ def named(cfg: Config, feature: str) -> list[tuple[str, tuple[str, ...], bool]]:
     return [(rel, names, same) for (rel, names), same in found.items()]
 
 
-#: sections of requirements.md whose lines say where a spec ID's test goes
-FILE_SECTIONS = re.compile(
-    r"requirement|edge case|invariant|reproduction|must not change|test", re.I
-)
+#: the header of a table column that says where a row's test goes
+FILE_COLUMN = re.compile(r"^\W*tests?\s+(?:file|goes\s+in|in)\W*$", re.I)
 
 
 def named_files(cfg: Config, feature: str) -> dict[str, list[str]]:
@@ -50,18 +50,30 @@ def named_files(cfg: Config, feature: str) -> dict[str, list[str]]:
     path = cfg.spec_dir(feature) / "requirements.md"
     text = _COMMENT.sub("", path.read_text(encoding="utf-8")) if path.is_file() else ""
     folder = re.escape(cfg.paths.tests.replace("\\", "/").strip("/"))
-    name = re.compile(rf"({folder}/[\w./-]*\w\.\w+)`?(::|\s*\(unchanged\))?", re.I)
+    file = rf"`?({folder}/[\w./-]*\w\.\w+)(?![\w:]|\.\w)(?!`?\s*\(unchanged\))`?"
+    one = f"(?:{cfg.id_pattern})"
+    placed = re.compile(
+        rf"^\s*(?:[-*]\s+)?`?({one}(?:\s*(?:,|/|and)\s*{one})*)`?\s*:\s*in\s+{file}", re.I
+    )
+    cell = re.compile(rf"^{file}\W*$", re.I)
     ids = re.compile(cfg.id_pattern)
     found: dict[str, list[str]] = {}
-    inside = False
-    for line in text.splitlines():
-        if line.startswith("## "):
-            inside = bool(FILE_SECTIONS.search(line))
-        elif inside and (here := sorted(set(ids.findall(line)))):
-            for m in name.finditer(line.replace("\\", "/")):
-                if not m.group(2):
-                    found[m.group(1)] = sorted({*found.get(m.group(1), []), *here})
-    return found
+
+    def add(rel: str, here: list[str]) -> None:
+        found[rel] = sorted({*found.get(rel, []), *here})
+
+    column = -1
+    for line in text.replace("\\", "/").splitlines():
+        row = line.strip()
+        cells = [c.strip() for c in row.strip("|").split("|")] if row.startswith("|") else []
+        heads = [i for i, c in enumerate(cells) if FILE_COLUMN.match(c)]
+        if heads or not cells:
+            column = heads[0] if heads else -1
+        elif 0 <= column < len(cells) and (c := cell.match(cells[column])):
+            add(c.group(1), ids.findall(line))
+        if m := placed.match(line):
+            add(m.group(2), ids.findall(m.group(1)))
+    return {rel: here for rel, here in found.items() if here}
 
 
 def check(adapter: LanguageAdapter, feature: str) -> CheckResult:

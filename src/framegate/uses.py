@@ -1,5 +1,6 @@
 """`framegate uses <symbol>`: every place in the source (not the tests) that reads a
-function or a variable, as `file:line: line`.
+function or a variable, as `file:line: line`. `test_files`: the test files that mention a
+symbol (the step gate runs the existing ones of the code a task changed).
 
 For the spec writer: a requirement that changes what an input may be (None allowed, a new
 unit, another type) holds only when every use site was looked at. A search by the name's
@@ -69,6 +70,32 @@ def find(cfg: Config, adapter: LanguageAdapter, symbol: str, only: str = "") -> 
             hit = f"{rel}:{n}: {line.strip()}"
             (out.defined if defines and defines.search(line) else out.read).append(hit)
     return out
+
+
+def test_files(cfg: Config, adapter: LanguageAdapter, symbols: list[str]) -> dict[str, list[str]]:
+    """Test file under [paths] tests (the review tests left out) -> the `symbols` it
+    mentions as words (comment lines left out)."""
+    names = [s for s in symbols if re.fullmatch(r"\w+", s)]
+    start = cfg.root / cfg.paths.tests
+    if not names or not start.is_dir():
+        return {}
+    word = re.compile(rf"(?<!\w)(?:{'|'.join(map(re.escape, names))})(?!\w)")
+    review = (cfg.root / cfg.paths.review_tests).resolve()
+    suffixes = tuple(adapter.source_suffixes)
+    comment = tuple(adapter.comment_prefixes)
+    found: dict[str, list[str]] = {}
+    for p in sorted(start.rglob("*")):
+        rel = p.relative_to(cfg.root)
+        if not p.is_file() or (suffixes and not p.name.endswith(suffixes)):
+            continue
+        if SKIP_DIRS & set(rel.parts[:-1]) or review in p.resolve().parents:
+            continue
+        text = p.read_text(encoding="utf-8", errors="replace")
+        lines = [x for x in text.splitlines() if not (comment and x.lstrip().startswith(comment))]
+        hit = sorted(set(word.findall("\n".join(lines))))
+        if hit:
+            found[rel.as_posix()] = hit
+    return found
 
 
 def run(cfg: Config, adapter: LanguageAdapter, symbol: str, only: str = "") -> int:

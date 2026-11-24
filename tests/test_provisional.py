@@ -116,7 +116,7 @@ def test_a_contested_test_the_human_keeps_reverts_the_provisional_code(
     r = demo_repo
     contested_run_to_final_gate(r, accept=False)
     (r.root / "out/demo/answers.md").write_text(
-        "1. Q: Proposed test fixes\n   A: No: bools must be rejected, the test is right.\n",
+        "1. Q: Proposed test fixes\n   A: C: bools must be rejected, the test is right.\n",
         "utf-8",
     )
     assert r.af("answer", "demo") == 0

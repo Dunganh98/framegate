@@ -57,6 +57,17 @@ def test_the_mutation_check_keeps_them(
 
     monkeypatch.setattr(type(adapter), "mutation_check", fake)
     assert mutation.check(adapter, "demo").status == "FAIL"
-    assert mutation.check(adapter, "demo").status == "PASS"
+    # nothing changed since: the result is reused, no second run (seen live: 3 x 4.5 min)
+    again = mutation.check(adapter, "demo")
+    assert again.status == "FAIL" and again.summary == f"{FAIL.summary} ({mutation.REUSED})"
+    assert not again.tool_failure and path.read_text(encoding="utf-8").startswith(mutation.FAILED)
+    test = demo_repo.root / "tests/test_more.py"
+    test.write_text("def test_more() -> None:\n    assert 1\n", encoding="utf-8")
+    assert mutation.check(adapter, "demo").status == "PASS"  # a test changed: a new run
     text = path.read_text(encoding="utf-8")
     assert text.startswith("None.\n\n## Earlier run 1 (failed") and "- add: + -> -" in text
+    assert mutation.check(adapter, "demo").summary.endswith(f"({mutation.REUSED})")
+    src = demo_repo.root / "src/demo/__init__.py"
+    src.write_text(src.read_text(encoding="utf-8") + "X = 1\n", encoding="utf-8")
+    with pytest.raises(StopIteration):  # the source changed: it runs (the fake has no third)
+        mutation.check(adapter, "demo")

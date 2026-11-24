@@ -9,7 +9,7 @@ documentation in line with what was built.
   write it in the style of the file (a CHANGELOG entry goes where its newest entries are).
 - The code is the source of truth for what the text must say. Read the code the update is
   about; where the proposed text and the code disagree about what exists, write what the code
-  does.
+  does. The one exception: an update that says to apply the owner's text word for word.
 - A file that does not exist yet: create it only when the update names it.
 - You may write documentation files only (and nothing else outside {out}/). Use Read, Glob,
   Grep, Edit and Write; no shell commands are needed.

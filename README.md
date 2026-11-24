@@ -39,8 +39,7 @@ Release: one version for the CLI and the plugin (`pyproject.toml`, `src/framegat
    found (interpreter, test / lint / format commands, folders, branch) for you to confirm
    with "ok" or a correction; a few minutes. Commit the files it lists.
 2. **Start a feature:** `/framegate:feature <name>`, describe what you want, answer the few
-   questions (each has a default), check the spec brief (above all "Decisions I made for
-   you"), then say **"spec OK"**.
+   questions (each has a default), check the spec brief, then say **"spec OK"**.
 3. **Wait:** the agents run in the background; the chat shows progress and cost. If a step
    fails the same way twice, a diagnosis agent finds the cause: a code fix is retried at
    once, a test or spec fix waits for you at the final gate. If only a step's tests are
@@ -102,7 +101,7 @@ Coming from agentflow (the old name)? [docs/migrate-from-agentflow.md](docs/migr
 - [docs/reference.md](docs/reference.md): phases, gates, every command, config, retro, hooks
 - [docs/plugin.md](docs/plugin.md): the Claude Code plugin
 - [docs/adapters.md](docs/adapters.md): languages (Python, .NET, generic for any other)
-- [docs/AGENTIC_WORKFLOW_SETUP.md](docs/AGENTIC_WORKFLOW_SETUP.md): the design
+- [docs/plan.md](docs/plan.md): the plan (purpose, principles, status, roadmap)
 - [docs/decisions.md](docs/decisions.md): standing decisions, one line each
 - [docs/replay.md](docs/replay.md): `framegate replay`, real commits as measured tasks
 

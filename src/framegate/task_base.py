@@ -59,6 +59,37 @@ def formatted(adapter: LanguageAdapter, rev: str, name: str) -> str:
         return rev
 
 
+def formatted_lines(adapter: LanguageAdapter, files: Iterable[str]) -> dict[str, int]:
+    """The line counts of working-tree `files` as the gates would format them: what the
+    structure report calls a file's size "before" once the task has touched it. The plain
+    counts when nothing formats or git fails."""
+    cfg = adapter.cfg
+
+    def count(root: pathlib.Path) -> dict[str, int]:
+        return {
+            f: len((root / f).read_text(encoding="utf-8", errors="replace").splitlines())
+            for f in files
+            if (root / f).is_file()
+        }
+
+    plain = count(cfg.root)
+    lint, fmt = (
+        ([], []) if adapter.line_scoped_format or not plain else adapter.fix_commands(list(plain))
+    )
+    if not lint and not fmt:
+        return plain
+    try:
+        with scratch(cfg, git(cfg, "rev-parse", "HEAD").strip()) as tree:
+            for f in plain:
+                (tree / f).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(cfg.root / f, tree / f)
+            for cmd in [*lint, *fmt]:
+                run_command(cmd, tree, env=adapter.tool_env(), timeout=900)
+            return {**plain, **count(tree)}
+    except (GitError, OSError):
+        return plain
+
+
 def _formatted(adapter: LanguageAdapter, rev: str, name: str, changed: Iterable[str]) -> str:
     cfg = adapter.cfg
     commit = git(cfg, "rev-parse", f"{rev}^{{commit}}").strip()

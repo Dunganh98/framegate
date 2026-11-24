@@ -53,7 +53,11 @@ def test_final_gates_mutation_through_wsl(
         tracked = git(r.root, "ls-files")
         assert "mutants/" not in tracked and "out/.mutmut" not in tracked
 
+        # nothing changed since that run: its result is reused, mutmut does not run
         capsys.readouterr()
+        assert r.af("gates", "demo", "--scope", "final") == 0
+        assert f"{cold} (nothing changed since that run: result reused" in capsys.readouterr().out
+        (r.root / "out/demo/mutation_cache.json").unlink()
         t0 = time.time()
         assert r.af("gates", "demo", "--scope", "final") == 0
         gates = time.time() - t0

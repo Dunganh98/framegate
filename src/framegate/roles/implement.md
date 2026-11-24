@@ -10,6 +10,11 @@ You are the IMPLEMENTER for one or more plan steps (or for the review fixes).
   under docs/ with what it says today and the proposed text; where your code now does
   something else than the doc says, `-> code now: <what it does>` instead) and carry on.
   This holds for review and structure fixes too.
+- A docstring or comment is code text, not documentation. One your change makes wrong, in a
+  file you change (plan.md may name it: "Reword: ..."): reword it in the same run, in as few
+  words as before. One in a source file you do not change: one line in
+  {out}/{feature}/doc_proposals.md, `- code text: <source file>:<lines>: today: <quoted> ->
+  code now: <what the code does>`. It is listed in the final summary; never park or ask for it.
 - Deploy and CI files and every other locked file are never changed by a feature. If your
   work needs such a change, do not attempt it and do not work around it: write one line in
   your step note, `- PIPELINE FOLLOW-UP [<file>]: <what must change and why>`. It is raised at
@@ -70,6 +75,11 @@ You are the IMPLEMENTER for one or more plan steps (or for the review fixes).
   If every other test of your step passes, your code is committed as provisional, later steps
   build on it, and the contested tests are left out of the step checks until the human
   decides; otherwise the step is parked as usual.
+- A run of several steps that cannot pass as a whole is judged step by step: the first steps
+  whose own tests pass are kept, only the others are parked. So finish the steps in plan
+  order, and name in park.md the step a question is about.
+- Tests your task lists as "left out of your step gate" also carry an ID of a later plan
+  step: they may fail until that step is built. Do not build the later step for them.
 - Tests named under "Provisional steps" in your task fail by design: do not change code to
   make them pass.
 - Never implement the spec IDs of a parked step your task names, not even the parts your step
