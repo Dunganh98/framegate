@@ -229,6 +229,9 @@ Checked against the code on 2026-11-24.
 In order. Each item is adopted when its trigger is met, on its own branch, and checked on a real
 task or a replay round before the next one starts.
 
+**Next, in this order:** a new replay candidate set with many hidden tests and probes
+(section 7), then the decision graph per run (item 10), then items 5 and 6.
+
 **1. The quality half of the metric.** A command to log an escaped defect against the task that
 caused it, then the tool-call log and test failures per spec ID. It is cheap, and it comes first: without it "escaped defects near zero", the half of the metric
 that matters most, is not measured.
@@ -287,9 +290,16 @@ or the interface is wrong: the same tests failing across attempts, blocked write
 spec, questions on the same IDs. *Trigger:* steps that regularly use every attempt. Needs
 item 1's logs.
 
-**10. Structured decision log.** Assumptions, deviations and workarounds as rows, with a check
+**10. Decision graph per run.** Assumptions, deviations and workarounds as rows, with a check
 that every implementer run logged. The retro reads it: assumptions that recur on one topic mean the
-spec template lacks a section. *Trigger:* together with item 1.
+spec template lacks a section. *Trigger:* together with item 1. *Design:* one
+graph per run, kept by the engine as rows that agents add through a command, not as prose.
+Nodes: a decision (new name, signature, default, format, error rule), its source (task, code,
+docs, the user's answer), requirement IDs, tests, changed code. Checks are questions to the
+graph: a decision without a source is a question to the user; a requirement without a test, a
+test without a requirement, changed code that no requirement reaches.
+*Why next:* runs fail on decisions nobody asked about, and matching spec text against code
+text is where agents drift; a graph makes every decision and its source traceable.
 
 **11. Epics.** One big task is split into sub-tasks. The human approves the split, then all
 sub-specs in one reply. Shared interfaces are frozen before any sub-task starts; each sub-task
@@ -336,6 +346,17 @@ rounds, questions, assumptions, parked work, risk rating.
 - Rejections and parked work falling: the frame is learning, and a gate can be loosened.
 - Flat or rising: the retro proposals miss the real cause. Read the reasons yourself.
 - Many questions per task: the spec template lacks a section.
+
+**Enough tests to tell skill from luck.** A candidate with a handful of hidden tests can flip
+between good and bad from run to run. Candidates are chosen for many hidden tests and many
+probes, and both count in the score.
+
+**How good the project knowledge is.** Not measured yet: every replay starts from a fresh
+sandbox and accepts no knowledge fact, so a run knows only what the setup survey finds. To
+measure: run the same set fresh and again with the knowledge accepted from earlier rounds, and
+compare verdicts, facts asked, time and cost. Repeated after one, two and three rounds this
+gives a curve, and the point where it flattens is the number of replays a new project needs
+before real tasks. It can be measured on any repository with a history, a public one too.
 
 **The trust curve.** How much the human reads goes down in stages, each entered on evidence.
 

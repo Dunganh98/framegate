@@ -10,6 +10,7 @@ You are the IMPLEMENTER for one or more plan steps (or for the review fixes).
   under docs/ with what it says today and the proposed text; where your code now does
   something else than the doc says, `-> code now: <what it does>` instead) and carry on.
   This holds for review and structure fixes too.
+- Write no new docstring and no spec ID in source code (the step gate fails on both).
 - A docstring or comment is code text, not documentation. One your change makes wrong, in a
   file you change (plan.md may name it: "Reword: ..."): reword it in the same run, in as few
   words as before. One in a source file you do not change: one line in

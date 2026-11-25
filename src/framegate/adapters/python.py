@@ -10,6 +10,7 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -23,8 +24,8 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised only on 3.10
     import tomli as tomllib
 
-from framegate import __version__, known_red, pytools, release_requirement
-from framegate.adapters import python_port, python_probe, wsl
+from framegate import __version__, doc_blocks, known_red, pytools, release_requirement
+from framegate.adapters import python_callers, python_env, python_port, python_probe, wsl
 from framegate.adapters.base import (
     Check,
     CheckResult,
@@ -720,6 +721,32 @@ class PythonAdapter(LanguageAdapter):
         tests = self.cfg.paths.tests.rstrip("/") + "/"
         hits = {f: v for f, v in cobertura_hits([xml], self.root).items() if f.startswith(tests)}
         return hits, "" if hits else "the coverage run did not record the test files"
+
+    def install_command(self, requirement: str) -> list[str] | None:
+        return [self.python, "-m", "pip", "install", *shlex.split(requirement)]
+
+    def installed_packages(self) -> set[str] | None:
+        code, out = run_command([self.python, "-m", "pip", "freeze"], self.root, timeout=120)
+        return {x.strip() for x in out.splitlines() if "==" in x} if code == 0 else None
+
+    def restore_commands(self, gone: set[str], new: set[str]) -> list[list[str]]:
+        return python_env.restore_commands(self.python, gone, new)
+
+    def missing_module_tests(self, run: TestRun) -> dict[str, str]:
+        return python_env.missing_module_tests(self.root, run)
+
+    def doc_blocks(self, text: str) -> list[doc_blocks.Doc] | None:
+        return doc_blocks.python_docs(text)
+
+    def tests_reaching(self, names: Sequence[str]) -> list[str]:
+        from framegate import uses
+
+        found = uses.test_files(self.cfg, self, list(names))
+        out: list[str] = []
+        for rel in sorted(found):
+            text = (self.root / rel).read_text(encoding="utf-8", errors="replace")
+            out += [f"{rel}::{t}" for t in python_callers.tests_naming(text, set(names))]
+        return out
 
     def changed_symbols(self, rel: str, lines: set[int] | None) -> list[str]:
         try:

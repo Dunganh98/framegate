@@ -194,6 +194,7 @@ The details table (scored runs only):
 | `nothing built` | the engine ran and the run left no source change |
 | `ran as <mode>, not <kind>` | the task ran in another mode than the candidate's kind |
 | `approved with failed checks: <checks>` | the final gate was approved while final checks failed |
+| `existing test(s) left red: <tests>` | approved with an existing test the task turned red; the verdict reads `good, existing test red` |
 | the reason | for a dropped candidate, an error, or a run that cannot be scored |
 
 `framegate replay` exits 1 if a candidate ended in an error or its score failed.

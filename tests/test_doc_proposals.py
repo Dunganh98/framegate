@@ -555,3 +555,24 @@ def test_two_lines_with_the_same_file_section_and_text_are_one_proposal(
     ]
     run.write_text(f"- {two}\n- {other}\n", encoding="utf-8")
     assert len(doc_proposals.proposals(cfg, "demo")) == 2
+
+
+def test_a_doc_answer_given_in_the_spec_dialogue_is_kept_not_asked(demo_repo: DemoRepo) -> None:
+    r = demo_repo
+    line = "docs/design.md, Clock: today: local time -> proposed: UTC (the task)"
+    p = doc_proposals.spec_proposal(f"{line} [answered: Later]")
+    assert p == Proposal(line, "spec", "later")
+    assert doc_proposals.spec_proposal(line).answer == ""
+    asked = f"[{doc_proposals.WHO}] {p.question()}"
+    events = [{"kind": answered.SPEC_KIND, "items": [{"asked": asked, "a": "B: later"}]}]
+    assert answered.answers(events) == {answered.key(asked): "B: later"}
+
+    to_final_gate(r, extra=f"{line} [answered: later]")
+    questions = (r.root / "out/demo/open_questions.md").read_text(encoding="utf-8")
+    assert "docs/design.md, Clock" not in questions and "docs/plan.md" in questions
+    summary = (r.root / "out/demo/final_summary.md").read_text(encoding="utf-8")
+    assert "## Answered before: 1" in summary
+    assert "your answer 'B: later (answered in the spec dialogue)' stands" in summary
+    assert any(
+        doc_proposals.key(line) == doc_proposals.key(x) for x in r.progress()["doc_answered"]
+    )

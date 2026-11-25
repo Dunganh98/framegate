@@ -19,6 +19,8 @@ from framegate import doc_proposals
 
 STRUCTURE_WHO = "structure report"
 KIND = "asked_again"
+#: an answer the user gave in the spec dialogue, kept like a gate answer
+SPEC_KIND = "spec_answer"
 _TAG = re.compile(r"^\[([^\]]+)\]\s*")
 _NO_ANSWER = re.compile(r"^\W*no answer needed\b", re.I)
 _SAME_AS = re.compile(r"^\W*same as item \d+\s*:\s*", re.I)
@@ -59,7 +61,7 @@ def answers(events: list[dict[str, Any]]) -> dict[str, str]:
     """key -> the owner's last answer, over every answer round of the task."""
     out: dict[str, str] = {}
     for e in events:
-        if e.get("kind") != "answer":
+        if e.get("kind") not in ("answer", SPEC_KIND):
             continue
         for it in e.get("items") or []:
             asked, a = str(it.get("asked") or ""), _SAME_AS.sub("", str(it.get("a") or "").strip())

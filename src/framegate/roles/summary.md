@@ -95,7 +95,9 @@ options with different outcomes, and the spec, the code, .framegate/project.md a
 answers (answers.md, questions_archive.md) don't settle it. Otherwise it is not a question:
 - only one sensible option: decide it, one line under "Decisions I made";
 - already answered, already resolved (e.g. by a scan), or a note: "Left out" with the reason;
-- the same question from two agents: ask it once, the other under "Left out" as `same as [N]`.
+- the same question in two items, whatever the wording: ask it once, the other under
+  "Left out" as `same as [N]`. Only items with the same options and default (never an
+  item without a default with one that has one); the question keeps its item's options.
 The default (A) of every question is the option that changes nothing: the code, the tests and
 the spec as they are, the change left for later. Answers that take every default approve the
 task as it stands, with no further run; anything else starts one. A change you recommend is B,

@@ -12,7 +12,7 @@ a terminal.
 |---|---|---|
 | `/framegate:setup` | set up framegate in this repo with two commands: `framegate setup --plan` (one table of the project's facts to confirm) and `framegate setup --apply` (config, templates, the setup check); then the chat writes the project facts and the code map ("Setup: two commands" below) | once per repo |
 | `framegate setup --plan [--survey]` | installs the workflow tools, maps the folders (survey, once; `--survey` again), probes, and prints the confirmation table with the decisions it needs; keeps the plan in `out/setup_plan.json` | first command of `/framegate:setup` |
-| `framegate setup --apply [--set ROW=VALUE ...] [--red "TEST=REASON" ...]` | writes the confirmed plan (`framegate init` if needed, the framegate.toml keys that differ from the defaults), installs the tools the gate commands name, runs `doctor --tree --brief`, creates the state branch once the tree is settled, prints "Left to do"; `--set`: a corrected row; `--red`: a red test the user agreed to list; can run again; exit 1 while the setup is not ready | second command of `/framegate:setup` |
+| `framegate setup --apply [--set ROW=VALUE ...] [--red "TEST=REASON" ...]` | writes the confirmed plan (`framegate init` if needed, the framegate.toml keys that differ from the defaults), installs the tools the gate commands name, runs `doctor --tree --brief`, creates the state branch once the tree is settled, prints "Left to do"; `--set`: a corrected row; `--red`: a red test the user agreed to list; `--install REQUIREMENT`: a package the tests lack (a failed install puts the environment back and lists the tests that lack a module as unrunnable); can run again; exit 1 while the setup is not ready | second command of `/framegate:setup` |
 | `/framegate:feature <f>` | start or continue feature `<f>`: spec dialogue, run, gates, wrap-up | each feature |
 | `/framegate:bugfix <f>` | a bug fix: bug report dialogue, tests that fail on today's code, the fix, gates | each bug |
 | `/framegate:refactor <f>` | a refactor: scope dialogue, tests that pin today's behavior, small steps, gates | each refactor |
@@ -1070,7 +1070,7 @@ forget, silent if it fails. `cleanup` keeps `specs/<f>/`, the metrics row and th
 `out/events.jsonl`, refuses while the feature's run is active or before DONE (`--force`), and
 prints the `git push origin --delete` line for tags that were pushed (`[git] markers = "tags"`).
 
-**Markers, commits, known failures.** `spec-approved/<f>`, `tests-approved/<f>`, `spec-update/<f>`, `tests-update/<f>`, `knowledge-update/<f>` and `config-update/<f>` are private refs (`refs/<name>`) by default: `git diff tests-approved/<f>` resolves them like a tag, but no `git push`, `--tags` or `--all` publishes them to a shared remote. `[git] markers = "tags"` stores git tags instead (needed for a CI job that runs `framegate gates`); tags left by an older framegate are still read and replaced on the next write. A workflow commit stages only the workflow's paths (`[paths] src`, `tests`, `specs`, `metrics`, the knowledge file, the deferred-work list, the code map), never the whole working tree: your notes and unrelated edits stay out. Lint, format, typecheck and imports, in every mode (Python): the checks run on the whole tree, and a finding counts only in a file the task changed since the tests were approved, or since the spec was approved (the tests the task wrote). Findings in other files are left out of the verdict and of the output ("in files the task did not change (left out): N line(s)"). Limits: a type error the task causes in a file it did not change is not reported (the tests have to find it), and a failure that names no file (an import contract, a crashed tool) always counts. `[gates] regression_baseline` is about tests only: `approve-spec` runs the whole suite once and records the tests that already fail (`out/<f>/regression_baseline.json`; never a test tagged with one of the feature's own spec IDs; kept on a second approval). The step gates and the final regression check (with the default `coverage_scope = "feature"`) leave them out. Not set, it is on for a bug fix (the bug can have a failing test already) and off for a feature and a refactor, which start on a green tree; `true` / `false` in framegate.toml sets it for every mode. Formatting debt, in every mode: the format fix formats a changed file whole, so debt from before the task in a file the task touches is fixed with it, without a question. The lines the formatter rewrote outside the task's own lines are counted (`format_debt` event) and listed in final_facts.md ("Formatted beyond the task's lines"), for one line in the summary. They are committed apart, before the task's commit, as `<f>: format <files>` (`src/framegate/format_split.py`, `format_commit` event), so the task's commit shows the task's lines only; a file whose task lines and formatted lines touch stays whole in the task's commit. The reviewer is told which files were restyled: never a finding. A statement whose suppression comment the formatter would move off its line (python: `# noqa`, `# type: ignore`, `pragma: no cover`) stays unformatted; the "Format fix" line of the gate names it and the format check leaves it out. Files the task does not touch are left as they are.
+**Markers, commits, known failures.** `spec-approved/<f>`, `tests-approved/<f>`, `spec-update/<f>`, `tests-update/<f>`, `knowledge-update/<f>` and `config-update/<f>` are private refs (`refs/<name>`) by default: `git diff tests-approved/<f>` resolves them like a tag (the reviewer and the simplify pass get the formatted base `refs/framegate/task-base/tests-approved/<f>` instead, so lines only the formatter rewrote are no part of their diff), but no `git push`, `--tags` or `--all` publishes them to a shared remote. `[git] markers = "tags"` stores git tags instead (needed for a CI job that runs `framegate gates`); tags left by an older framegate are still read and replaced on the next write. A workflow commit stages only the workflow's paths (`[paths] src`, `tests`, `specs`, `metrics`, the knowledge file, the deferred-work list, the code map), never the whole working tree: your notes and unrelated edits stay out. Lint, format, typecheck and imports, in every mode (Python): the checks run on the whole tree, and a finding counts only in a file the task changed since the tests were approved, or since the spec was approved (the tests the task wrote). Findings in other files are left out of the verdict and of the output ("in files the task did not change (left out): N line(s)"). Limits: a type error the task causes in a file it did not change is not reported (the tests have to find it), and a failure that names no file (an import contract, a crashed tool) always counts. `[gates] regression_baseline` is about tests only: `approve-spec` runs the whole suite once and records the tests that already fail (`out/<f>/regression_baseline.json`; never a test tagged with one of the feature's own spec IDs; kept on a second approval). The step gates and the final regression check (with the default `coverage_scope = "feature"`) leave them out. Not set, it is on for a bug fix (the bug can have a failing test already) and off for a feature and a refactor, which start on a green tree; `true` / `false` in framegate.toml sets it for every mode. Formatting debt, in every mode: the format fix formats a changed file whole, so debt from before the task in a file the task touches is fixed with it, without a question. The lines the formatter rewrote outside the task's own lines are counted (`format_debt` event) and listed in final_facts.md ("Formatted beyond the task's lines"), for one line in the summary. They are committed apart, before the task's commit, as `<f>: format <files>` (`src/framegate/format_split.py`, `format_commit` event), so the task's commit shows the task's lines only; a file whose task lines and formatted lines touch stays whole in the task's commit. The reviewer is told which files were restyled: never a finding. A statement whose suppression comment the formatter would move off its line (python: `# noqa`, `# type: ignore`, `pragma: no cover`) stays unformatted; the "Format fix" line of the gate names it and the format check leaves it out. Files the task does not touch are left as they are.
 
 **The spec phase covers the setup.** Everything the human adds or changes happens before
 "spec OK"; after it the frame is locked and no agent (and no later hand edit) may change a
@@ -1434,6 +1434,17 @@ Between the gates nothing stops:
   default, or not named among numbered answers, stays as it is; a step that only waits for a
   redone one is redone with it. When no step of the task is built, leaving the item parked
   would end the task empty: the item says "No default: choose." and needs A or B.
+- An existing test that passed at the spec approval (the regression baseline) and fails in
+  the final regression is a gate item without a default: the final repair's parked item, or
+  a `[final gates]` item (A: finish with it red / B: one more repair run). A test that failed
+  at the spec approval already is listed in the final summary as a bug-fix follow-up and goes
+  to the deferred-work list. The `final_gates` event names both (`newly_red`, `red_before`).
+- A brief may ask two gate items as one (`same as [N]`) only when both have the same options
+  and default; an item without a default is never merged with one that has one and its
+  question marks no default. A breach is one rewrite by the summary agent (SUMMARY, Sonnet
+  by default), then the items are asked as they are (`gate_items_merged` event: the groups).
+- A doc proposal of the spec that ends with `[answered: later]` / `[answered: apply]` is no
+  gate item: the answer is kept and shown under "Answered before".
 - Final gates with parked steps or provisional steps: the whole-suite regression run counts
   the parked steps' tests (by spec ID) and the contested tests as expected red ("expected red
   (parked): N" in the report) and fails only on any other failure (listed as UNEXPECTED);
@@ -1618,11 +1629,20 @@ Models and speed:
   and tests that already failed when the spec was approved.
   Without that setting, a step gate and the gates of the runs after the review also run the
   existing tests of the changed code (check `existing tests of the changed code`): the test
-  files that were there when the task started, that the task did not change, that hold no
-  test of the feature and that mention a function or class the task changed; at most 10
-  files, those that mention most of the changed names first, run by file. Contested tests,
-  listed tests and tests recorded as failing at the spec approval are left out; the files
-  beyond 10 are left to the final regression.
+  files that were there when the task started and that mention a function or class the
+  task changed (also a file the task added tests to); at most 10 files, those that mention
+  most of the changed names first, run by file. Contested tests, listed tests, tests
+  recorded as failing at the spec approval and the task's own tests in these files (tagged
+  with its IDs, or not there at its start) are left out; the files beyond 10 are left to
+  the final regression.
+  Step and fix gates also fail on: a new docstring or a spec ID in the lines the run added
+  to non-test source (`[gates] docstring_check`, default on; Python docstrings, .NET `///`;
+  an existing docstring may be reworded, moved or deleted); a step note that logs a spec
+  row as an assumption (4 of 5 of its words, 6 or more, are one row's) or a `RULED OUT: H<n>`
+  line that names another suspected cause's file or function (check `step notes match the
+  spec`); a test run that leaves a new untracked file outside the out folder and the ignored
+  paths (`[gates] test_leftovers`, default on; also the tests phase's test run; the files
+  are listed and removed).
   The runs after the review (review fixes, structure fixes, a final-gate repair) are checked
   with the feature's tests (its spec IDs; with parked steps the done steps' IDs) and the
   review tests folder, not with the whole suite: the final gates run it right after (seen
@@ -1763,6 +1783,10 @@ reads columns of the spec templates' tables; a spec without them is not checked:
   program output (an error message, a log line) is behaviour and passes.
 - "Suspected causes" (bug fix): every cause ends with `-> <ID>` of a row of the report or
   `-> ruled out: <evidence>` ("Modes").
+- Existing tests of the buggy function (bug fix, Python): every existing test that reaches a
+  function design.md names under "Where the bug is" (`<file>: <function>`; also through a
+  helper or fixture of its file) is named under "Must not change" or in "Test data and
+  fixtures"; the others are listed.
 - `Resolves:` (requirements.md): every id is an open entry of the deferred-work list.
 - `Assigned as (code, copied)` (requirements.md, "Existing data this spec reads"): every
   backticked piece of code in the cell is in the file the "Set where" cell names (a path, or

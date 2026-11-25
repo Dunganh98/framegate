@@ -303,14 +303,19 @@ def final_facts(
         if e.get("kind") == "format_debt":
             for name, n in (e.get("files") or {}).items():
                 debt[str(name)] = debt.get(str(name), 0) + int(n)
+    apart = {str(f) for e in ev if e.get("kind") == "format_commit" for f in e.get("files") or []}
     if debt:
         out += ["", f"## Formatted beyond the task's lines: {len(debt)} file(s)", ""]
         out.append(
-            "These files were not formatted before the task. The format fix formatted them "
-            "whole, so the diff holds lines the task did not change in substance. Say so in "
-            "one line of the summary:"
+            "These files were not formatted before the task; the format fix formatted them "
+            "whole. One marked `apart` has that formatting in a commit of its own: the task's "
+            "diff, the reviewer's diff and the line counts leave it out. The others hold it in "
+            "the task's commit. Say so in one line of the summary:"
         )
-        out += [f"- {name}: {n} line(s)" for name, n in sorted(debt.items())]
+        out += [
+            f"- {name}: {n} line(s)" + (" (apart)" if name in apart else "")
+            for name, n in sorted(debt.items())
+        ]
 
     config = [c for e in ev if e.get("kind") == "config_update" for c in e.get("changes") or []]
     if config:

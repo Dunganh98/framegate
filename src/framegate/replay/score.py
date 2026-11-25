@@ -14,6 +14,7 @@ import subprocess
 from collections.abc import Sequence
 from typing import Any
 
+from framegate import newly_red
 from framegate.config import ConfigError, load_config
 from framegate.replay.sandbox import (
     KEPT,
@@ -64,8 +65,11 @@ FAILED = "score failed"
 BROKE = "broke a rule"
 #: what the engine's events say about the run's course; None: no events to read
 FLOW = ("questions", "late_bugs", "send_backs")
-#: more from the events: the mode the task ran in, the checks red at the final approval
-COURSE = ("mode", "approved_red")
+#: more from the events: the mode the task ran in, the checks red at the final approval,
+#: the existing tests the task turned red and left so
+COURSE = ("mode", "approved_red", "red_left")
+#: after the verdict "good" of a run approved with a newly red existing test
+RED_LEFT = ", existing test red"
 #: verdicts, the worst last
 ORDER = ("good", "not proven", "not run", "bad")
 #: files that are no code
@@ -354,6 +358,7 @@ def engine(sandbox: pathlib.Path, slug: str) -> dict[str, Any]:
     approvals = [e for e in own if e["kind"] == "spec_approved" and e.get("mode")]
     out["mode"] = str(approvals[-1]["mode"]) if approvals else None
     out["approved_red"] = approved_red(own)
+    out["red_left"] = newly_red.left(own)
     out["waited_s"] = round(waited_seconds(events, datetime.datetime.now()))
     retro = cfg.feature_out(slug) / "retro_proposals.md"
     out["retro"] = retro.read_text(encoding="utf-8", errors="replace") if retro.is_file() else ""
@@ -441,6 +446,8 @@ def _note(row: dict[str, Any]) -> str:
     notes += ["nothing built"] if empty else []
     notes += [f"ran as {mode}, not {row['kind']}"] if mode and mode != row["kind"] else []
     notes += [f"approved with failed checks: {', '.join(red)}"] if red else []
+    left = row.get("red_left") or []
+    notes += [f"existing test(s) left red: {', '.join(left)}"] if left else []
     return "; ".join(n for n in notes if n)
 
 
@@ -458,7 +465,7 @@ def _cells(row: dict[str, Any]) -> list[str]:
     return [
         row["name"],
         row["kind"],
-        row["verdict"],
+        row["verdict"] + (RED_LEFT if row.get("red_left") and row["verdict"] == "good" else ""),
         hidden,
         extra,
         probes,
@@ -508,7 +515,9 @@ def write_results(out: pathlib.Path, rows: list[dict[str, Any]]) -> None:
     """results.md, results.json and retro-proposals.md over all candidates."""
     write_json(out / "results.json", rows)
     note = (
-        "Verdict: good = every hidden test passes, no regression; Extra = after-only tests of "
+        "Verdict: good = every hidden test passes, no regression; good, existing test red = "
+        "good, and the final gate was approved with an existing test the task turned red (the "
+        "Note names it); Extra = after-only tests of "
         "the candidate's author, counted like hidden tests; not proven = a hidden test "
         "was skipped; broke a rule = the hidden tests pass, a probe (a rule of the task on "
         "what must not change) fails; bad = a hidden test fails or a test that passed before "

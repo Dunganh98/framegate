@@ -25,6 +25,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from framegate import defaults
+
 #: first line of an answers.md mapped to the gate items (`expand_answers`)
 MAPPED_HEADER = "# Answers (final gate, numbered by gate item)"
 _ENTRY = re.compile(r"^(?:[-*+]|\d+[.)])\s+(.*)$")
@@ -116,6 +118,37 @@ def question_entries(sections: dict[str, list[str]]) -> list[Entry]:
     ]
 
 
+def merge_problem(items: list[str], tag: int, same: int) -> str:
+    """Why gate item `tag` cannot take the answer of item `same` ("" = it can)."""
+    a, b = items[tag - 1], items[same - 1]
+    if defaults.no_default(a) != defaults.no_default(b):
+        return "one has no default, the other has one"
+    shape = [(defaults.options(q), defaults.default_option(q)[0]) for q in (a, b)]
+    return "" if shape[0] == shape[1] else "their options or defaults differ"
+
+
+def wording_problem(item: str, text: str, merged: bool) -> str:
+    """Why the brief's wording `text` of gate item `item` cannot stand ("" = it can): an
+    item without a default keeps none; one that stands for others keeps its own options."""
+    if defaults.no_default(item) and "(default)" in text.lower():
+        return "the item has no default: mark no option as (default)"
+    letters, default = defaults.options(item), defaults.default_option(item)[0]
+    if merged and letters and defaults.options(text) != letters:
+        return f"it stands for other items too: keep its own options ({' / '.join(letters)})"
+    if merged and default and defaults.default_option(text)[0] != default:
+        return f"it stands for other items too: keep its own default ({default})"
+    return ""
+
+
+def groups(p: BriefPlan) -> list[list[int]]:
+    """The merged gate items: [the item asked, the items that take its answer]."""
+    out: dict[int, list[int]] = {}
+    for tag, _, same in p.left_out:
+        if same is not None:
+            out.setdefault(same, [same]).append(tag)
+    return [sorted(g) for g in out.values()]
+
+
 def plan(sections: dict[str, list[str]], items: list[str], must_ask: set[int]) -> BriefPlan:
     """Which gate items (1..len(items)) the human is asked, which the summary agent decided or left
     out. `must_ask`: items that are always asked (parked work, the provisional steps)."""
@@ -149,7 +182,8 @@ def plan(sections: dict[str, list[str]], items: list[str], must_ask: set[int]) -
         placed.add(e.tag)
         m = _SAME_AS.search(e.text)
         same = int(m.group(1)) if m else None
-        if e.tag in must_ask and same not in asked:
+        unlike = same is not None and 1 <= same <= n_items and merge_problem(items, e.tag, same)
+        if unlike or (e.tag in must_ask and same not in asked):
             forced.append(e.tag)
         else:
             p.left_out.append((e.tag, e.text, same))
@@ -164,6 +198,12 @@ def plan(sections: dict[str, list[str]], items: list[str], must_ask: set[int]) -
         else:
             keep.append((tag, reason, same))
     p.left_out = keep
+    # a wording that breaks its item's default or options: the item as it is
+    stands = {same for _, _, same in keep}
+    p.questions = [
+        (t, items[t - 1] if wording_problem(items[t - 1], text, t in stands) else text)
+        for t, text in p.questions
+    ]
     return p
 
 
@@ -202,10 +242,16 @@ def _norm(text: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", text.splitlines()[0].lower())) if text else ""
 
 
-def check_brief(sections: dict[str, list[str]], n_items: int, must_ask: set[int]) -> list[str]:
+def check_brief(
+    sections: dict[str, list[str]],
+    n_items: int,
+    must_ask: set[int],
+    items: list[str] | None = None,
+) -> list[str]:
     """What the summary agent should rewrite in final_brief.md: questions without a gate-item number
     or with one option, duplicates, closed items or notes asked as questions, parked work left
-    out, gate items placed nowhere. [] = fine."""
+    out, gate items placed nowhere; with `items` also a merge or a wording that breaks an
+    item's default or options (merge_problem, wording_problem). [] = fine."""
     problems: list[str] = []
     seen: dict[int, str] = {}
     texts: dict[str, int | None] = {}
@@ -244,7 +290,8 @@ def check_brief(sections: dict[str, list[str]], n_items: int, must_ask: set[int]
         if e.tag in must_ask:
             problems.append(
                 f"decision [{e.tag}]: parked work or the provisional steps must be asked "
-                "(## Questions, your decision as the default)"
+                "(## Questions, your decision as the default); when it asks the same as "
+                "another question: ## Left out, `same as [N]`"
             )
     for e in entries(_section(sections, "left out")):
         if e.tag is None:
@@ -255,6 +302,24 @@ def check_brief(sections: dict[str, list[str]], n_items: int, must_ask: set[int]
                 f"left out [{e.tag}]: parked work or the provisional steps must be asked "
                 "(## Questions)"
             )
+    merged_into: set[int] = set()
+    for e in entries(_section(sections, "left out")) if items else []:
+        m = _SAME_AS.search(e.text)
+        same = int(m.group(1)) if m else 0
+        if e.tag is None or not (1 <= e.tag <= n_items and 1 <= same <= n_items):
+            continue
+        why = merge_problem(items or [], e.tag, same)
+        if why:
+            problems.append(
+                f"left out [{e.tag}]: it cannot take the answer of [{same}] ({why}); ask "
+                "it under ## Questions"
+            )
+        else:
+            merged_into.add(same)
+    for tag, text in seen.items() if items else []:
+        why = wording_problem((items or [])[tag - 1], text, tag in merged_into)
+        if why:
+            problems.append(f"question [{tag}]: {why}")
     missing = [n for n in range(1, n_items + 1) if n not in placed]
     if missing:
         problems.append(

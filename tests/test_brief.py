@@ -125,3 +125,53 @@ def test_check_reports_what_to_rewrite() -> None:
     for w in want:
         assert any(x.startswith(w) for x in problems), (w, problems)
     assert len(problems) == len(want)
+
+
+MERGE_ITEMS = [
+    "[doc update] docs/a.md, Phase 4: x. A: apply. B: later (default).",
+    "[doc update] docs/a.md, Phase 4 notes: y. A: apply. B: later (default).",
+    "[repair review] the repair drops a check. A: keep it (no change) / B: change it. "
+    "No default: choose.",
+    "[test reviewer] is the repair right? A: yes (default) / B: no",
+]
+
+
+def test_items_that_ask_the_same_are_one_question_within_the_guard() -> None:
+    good = (
+        "## Questions\n1. [1] Update docs/a.md?\n   A: apply / B: later (default)\n"
+        "2. [3] The repair drops a check.\n   A: keep it / B: change it\n"
+        "3. [4] Is the repair right?\n   A: yes (default) / B: no\n"
+        "## Left out\n- [2] same as [1]\n"
+    )
+    sections = brief.sections(good)
+    assert brief.check_brief(sections, 4, {1, 2, 3}, MERGE_ITEMS) == []
+    p = brief.plan(sections, MERGE_ITEMS, {1, 2, 3})
+    assert brief.groups(p) == [[1, 2]] and [t for t, _ in p.questions] == [1, 3, 4]
+    given = parse_answer_items(
+        "1. Q: docs\n   A: A: now\n2. Q: repair\n   A: B\n3. Q: right\n   A: A\n"
+    )
+    mapped = brief.expand_answers(p, given, MERGE_ITEMS)
+    items = {it["n"]: it for it in parse_answer_items(mapped)}
+    assert sorted(items) == [1, 2, 3, 4] and items[2]["a"] == "Same as item 1: A: now"
+
+    # an item without a default never takes the answer of one that has a default
+    bad = good.replace("3. [4] Is the repair right?\n   A: yes (default) / B: no\n", "")
+    bad = bad.replace("- [2] same as [1]\n", "- [2] same as [1]\n- [4] same as [3]\n")
+    problems = brief.check_brief(brief.sections(bad), 4, {1, 2, 3}, MERGE_ITEMS)
+    assert problems == [
+        "left out [4]: it cannot take the answer of [3] (one has no default, the other has "
+        "one); ask it under ## Questions"
+    ]
+    p = brief.plan(brief.sections(bad), MERGE_ITEMS, {1, 2, 3})
+    assert brief.groups(p) == [[1, 2]] and (4, MERGE_ITEMS[3]) in p.questions
+
+    # a merged question keeps its item's options and default; no default stays none
+    worse = good.replace("A: apply / B: later (default)", "A: later (default) / B: apply")
+    worse = worse.replace("A: keep it / B: change it", "A: keep it (default) / B: change it")
+    problems = brief.check_brief(brief.sections(worse), 4, {1, 2, 3}, MERGE_ITEMS)
+    assert problems == [
+        "question [1]: it stands for other items too: keep its own default (B)",
+        "question [3]: the item has no default: mark no option as (default)",
+    ]
+    p = brief.plan(brief.sections(worse), MERGE_ITEMS, {1, 2, 3})
+    assert dict(p.questions)[1] == MERGE_ITEMS[0] and dict(p.questions)[3] == MERGE_ITEMS[2]

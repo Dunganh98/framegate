@@ -41,6 +41,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from framegate import (
+    newly_red,
     procs,
     red_tree,
     references,
@@ -64,11 +65,14 @@ from framegate.adapters.base import (
     run_command,
 )
 from framegate.checks import (
+    added_docs,
     frame_diff,
+    leftovers,
     mutation,
     plan_rewords,
     removed_guards,
     step_notes,
+    steps_log,
     structure,
     test_smells,
     traceability,
@@ -303,17 +307,44 @@ def parked_test_names(adapter: LanguageAdapter, exp: ExpectedRed) -> tuple[set[s
 
 
 def regression_expecting(
-    adapter: LanguageAdapter, exp: ExpectedRed, known: set[str] | frozenset[str] = frozenset()
+    adapter: LanguageAdapter,
+    exp: ExpectedRed,
+    known: set[str] | frozenset[str] = frozenset(),
+    feature: str = "",
 ) -> CheckResult:
     """The whole suite with parked steps / contested tests / tests that already failed when
     the spec was approved / tests this machine cannot run ([gates] unrunnable_tests): their
-    failures are expected (counted, not failing); any other failure fails the check."""
+    failures are expected (counted, not failing); any other failure fails the check.
+    `feature`: its red existing tests are recorded (newly_red.py)."""
     names, problem = parked_test_names(adapter, exp)
     run, off = unrunnable.leave_out(adapter.cfg, suite_run.whole_suite(adapter))
+    if feature and baseline_recorded(adapter.cfg, feature) and not run.incomplete:
+        other = split_failures(run.cases or [], names, exp.contested)[2]
+        newly_red.record(
+            adapter.cfg,
+            feature,
+            [n for n in other if n not in known],
+            [n for n in other if n in known],
+        )
     res = unrunnable.noted(tests_expecting(run, exp, names, known), off)
     if problem and res.status == "FAIL":
         res.output += f"\n({problem})"
     return res
+
+
+def regression_recording(adapter: LanguageAdapter, feature: str) -> Check:
+    """adapter.regression_check with its failures recorded: nothing failed at the spec
+    approval, so each one is newly red (newly_red.py)."""
+
+    def run() -> CheckResult:
+        res = adapter.regression_run()
+        if res.incomplete:
+            return incomplete_result(res.incomplete, res.output)
+        red = [c.name for c in res.cases or [] if c.outcome in ("failed", "error")]
+        newly_red.record(adapter.cfg, feature, red, [])
+        return CheckResult("PASS" if res.status == "passed" else "FAIL", res.output)
+
+    return Check(adapter.regression_check().name, run)
 
 
 def _skipped(reason: str) -> Callable[[], CheckResult]:
@@ -529,8 +560,8 @@ def existing_test_files(
 ) -> tuple[list[str], list[str], list[str]]:
     """(the test files to run: those that mention most of the changed names first, at most
     EXISTING_FILES; the files left out; the changed names). The names: what the code changed
-    since the tests approval. The files: there when the task started, not changed by it
-    and without a test of the feature (its tests of later steps are red by design)."""
+    since the tests approval. The files: there when the task started, also one the task
+    added tests to (existing_tests leaves the task's own tests out)."""
     cfg = adapter.cfg
     tag = frame_diff.approved_tag(feature)
     base = task_base.task_base(adapter, tag) or tag
@@ -542,12 +573,40 @@ def existing_test_files(
     if not names or start is None or not tag_exists(cfg, f"spec-approved/{feature}"):
         return [], [], names
     listed = git(cfg, "-c", "core.quotepath=off", "ls-tree", "-r", "--name-only", start)
-    old = set(listed.splitlines()) - frame_diff.changed_files(cfg, start)[0]
-    tags = adapter.collect_req_tags()
-    old -= {w.split("::")[0] for i in feature_ids(cfg, feature) for w in tags.get(i, [])}
+    old = set(listed.splitlines())
     found = uses.test_files(cfg, adapter, names)
     ranked = sorted((f for f in found if f in old), key=lambda f: (-len(found[f]), f))
     return ranked[:EXISTING_FILES], ranked[EXISTING_FILES:], names
+
+
+def without_added(
+    adapter: LanguageAdapter, feature: str, run: TestRun, files: list[str]
+) -> TestRun:
+    """`run` without the failures of tests the task added to `files` (their name is not in
+    the file as the task's start has it): they count as skipped."""
+    cfg = adapter.cfg
+    start = base_ref(adapter, feature)
+    if start is None or run.cases is None or run.incomplete:
+        return run
+    changed = frame_diff.changed_files(cfg, start)[0]
+    texts = {f: git(cfg, "show", f"{start}:{f}") for f in files if f in changed}
+    stems = {f.rsplit("/", 1)[-1].rsplit(".", 1)[0]: t for f, t in texts.items()}
+
+    def added(name: str) -> bool:
+        parts = name_parts(name)
+        if not parts:
+            return False
+        word = re.compile(rf"(?<!\w){re.escape(parts[-1])}(?!\w)")
+        return any(s in parts and not word.search(t) for s, t in stems.items())
+
+    red = ("failed", "error")
+    cases = [
+        dataclasses.replace(c, outcome="skipped") if c.outcome in red and added(c.name) else c
+        for c in run.cases
+    ]
+    still = any(c.outcome in red for c in cases)
+    status = "passed" if run.status == "failed" and not still else run.status
+    return dataclasses.replace(run, status=status, cases=cases)
 
 
 def existing_tests(
@@ -557,7 +616,8 @@ def existing_tests(
     contested: list[str],
 ) -> CheckResult:
     """Run those files whole (by file, never the suite). Contested tests, tests that failed
-    when the spec was approved and listed tests are left out, as in the suite."""
+    when the spec was approved and listed tests are left out, as in the suite; so are the
+    task's own tests in these files (tagged with its IDs, or not there at its start)."""
     cfg = adapter.cfg
     files, left, names = found
     more = f" and {len(names) - 8} more" if len(names) > 8 else ""
@@ -574,6 +634,8 @@ def existing_tests(
     if run.status == "no_tests":
         return CheckResult("PASS", head, "no tests")
     run, off = unrunnable.leave_out(cfg, run)
+    run, _ = without_later(run, later_step_tests(adapter, feature, []))
+    run = without_added(adapter, feature, run, files)
     known = regression_baseline(cfg, feature)
     res = unrunnable.noted(
         tests_expecting(run, ExpectedRed(contested=contested), set(), known), off
@@ -659,7 +721,12 @@ def checks(
     c = [] if idle else [*lint_checks(adapter, feature), *rules.checks(adapter, feature)]
     if not idle:
         c.append(Check(frame_diff.CHECK_NAME, lambda: frame_diff.check(adapter, feature)))
+    if scope in ("step", "fix") and feature:
+        if adapter.cfg.docstring_check:
+            c.append(Check(added_docs.NAME, lambda: added_docs.check(adapter, feature)))
+        c.append(Check(steps_log.NAME, lambda: steps_log.check(adapter, feature)))
     if scope in ("step", "fix", "idle"):
+        watched = functools.partial(leftovers.watched, adapter)
         reqs = read_reqs(adapter.cfg)
         contested = read_contested(adapter.cfg)
 
@@ -681,14 +748,19 @@ def checks(
             return unrunnable.noted(res, off)
 
         fix = scope == "fix" and bool(reqs)  # without IDs the check runs everything
-        c.append(Check(FIX_TESTS if fix else "tests (current + earlier steps)", step_tests))
+        name = FIX_TESTS if fix else "tests (current + earlier steps)"
+        c.append(watched(Check(name, step_tests)))
         if fix:
             if review_tests_checked(adapter, feature):
-                c.append(Check(REVIEW_TESTS, lambda: review_tests(adapter, feature, contested)))
+                c.append(
+                    watched(Check(REVIEW_TESTS, lambda: review_tests(adapter, feature, contested)))
+                )
         elif scope == "step" and reqs and feature and adapter.cfg.step_tests == "suite":
             # without IDs the check above already ran everything
             c.append(
-                Check(STEP_SUITE, lambda: step_suite(adapter, feature, reqs), needs_green=True)
+                watched(
+                    Check(STEP_SUITE, lambda: step_suite(adapter, feature, reqs), needs_green=True)
+                )
             )
         if (
             scope != "idle"
@@ -702,8 +774,11 @@ def checks(
                 found = [], [], []
             if found[0]:
                 c.append(
-                    Check(
-                        EXISTING_TESTS, lambda: existing_tests(adapter, feature, found, contested)
+                    watched(
+                        Check(
+                            EXISTING_TESTS,
+                            lambda: existing_tests(adapter, feature, found, contested),
+                        )
                     )
                 )
         if steps and feature and scope != "fix":
@@ -728,7 +803,7 @@ def checks(
             c.append(
                 Check(
                     "regression: whole suite, no coverage",
-                    lambda: regression_expecting(adapter, waiting, known),
+                    lambda: regression_expecting(adapter, waiting, known, feature),
                 )
             )
             c += [
@@ -740,9 +815,11 @@ def checks(
                 c.append(
                     Check(
                         "regression: whole suite, no coverage",
-                        lambda: regression_expecting(adapter, ExpectedRed(), known),
+                        lambda: regression_expecting(adapter, ExpectedRed(), known, feature),
                     )
                 )
+            elif cov is not None and baseline_recorded(adapter.cfg, feature):
+                c.append(regression_recording(adapter, feature))
             elif cov is not None:
                 c.append(adapter.regression_check())
             # diff coverage counts the task's own lines, not the ones the formatter rewrote

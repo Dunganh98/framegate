@@ -9,7 +9,9 @@
          there is no framegate.toml, the keys that differ from the defaults, the tools the
          gate commands name, `framegate doctor --tree --brief`, the state branch once the
          tree is settled, then what to commit and what is left. It can run again with more
-         `--set` / `--red`: every run starts from the kept plan.
+         `--set` / `--red`: every run starts from the kept plan. `--install <requirement>`
+         installs a package the tests lack; when that fails, the environment is put
+         back and the tests that lack a module are listed (env_install.py).
 
 Nothing here decides for the user: a row is a proposal from the project's own files (probe),
 and only `ok` or a `--set` makes it a line of framegate.toml.
@@ -26,7 +28,7 @@ import sys
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from framegate import doctor, probe, publish, risk, rules, scaffold, survey
+from framegate import doctor, env_install, probe, publish, risk, rules, scaffold, survey
 from framegate.adapters.base import LanguageAdapter
 from framegate.checks.frame_diff import maybe_pipeline_file
 from framegate.config import (
@@ -539,6 +541,7 @@ def apply(
     red: Sequence[str] = (),
     start: pathlib.Path | None = None,
     echo: Echo = print,
+    install: Sequence[str] = (),
 ) -> int:
     start = (start or pathlib.Path(os.getcwd())).resolve()
     cfg, _, _ = probe.load(start)
@@ -598,6 +601,20 @@ def apply(
             echo(line)
         echo("error: the tools of the gate commands are not installed.")
         return 1
+    # a package the tests lack (--install): a failed install lists those tests and goes on
+    lacking: dict[str, str] = {}
+    for requirement in install:
+        lacking.update(env_install.install(adapter, requirement, echo))
+    if lacking:
+        plan["red"].update(lacking)
+        path.write_text(json.dumps(plan, indent=1), encoding="utf-8")
+        try:
+            write_config(root, [e for e in edits(plan) if e[1] == "unrunnable_tests"])
+            cfg = load_config(root)
+            adapter = get_adapter(cfg)
+        except (SetupError, ConfigError) as e:
+            echo(f"error: {e}")
+            return 1
     echo("")
     echo("Setup check (all tests ran once):")
     verdict, lines = _capture(lambda e: doctor.run(cfg, e, only_brief=True, tree=True))

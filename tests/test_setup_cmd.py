@@ -233,3 +233,78 @@ def test_plan_with_a_config_shows_the_configured_values(
     assert "| 13 | Project rule checks (every step gate) | python ci/check_rules.py core | " in out
     plan = json.loads((project / "out" / setup_cmd.PLAN_FILE).read_text("utf-8"))
     assert all(not r["edits"] for r in plan["rows"] if r["key"] != "locked")
+
+
+def test_a_failed_install_restores_the_environment_and_lists_the_tests(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from framegate import env_install, suite_run
+    from framegate.adapters import python_env
+    from framegate.adapters.base import TestCase, TestRun
+
+    for rel in ("tests/test_cae.py", "tests/test_mix.py"):
+        (tmp_path / rel).parent.mkdir(exist_ok=True)
+        (tmp_path / rel).write_text("", encoding="utf-8")
+    missing = "ModuleNotFoundError: No module named 'tensorflow.keras'"
+    run = TestRun(
+        "failed",
+        1,
+        "",
+        [
+            TestCase("tests.test_cae", "error", missing),
+            TestCase("tests.test_mix.TestA::test_net[1]", "failed", missing),
+            TestCase("tests.test_mix::test_sum", "failed", "AssertionError: 1 != 2"),
+        ],
+    )
+    assert python_env.missing_module_tests(tmp_path, run) == {
+        "tests/test_cae.py": "tensorflow",
+        "tests/test_mix.py::TestA::test_net": "tensorflow",
+    }
+    assert python_env.restore_commands("py", {"numpy==1.26.0"}, {"numpy==2.0.0", "absl-py==2"}) == [
+        ["py", "-m", "pip", "uninstall", "-y", "absl-py"],
+        ["py", "-m", "pip", "install", "--no-deps", "--force-reinstall", "numpy==1.26.0"],
+    ]
+
+    class Cfg:
+        root = tmp_path
+        unrunnable_tests: dict[str, str] = {}
+
+    class Adapter:
+        name = "python"
+        cfg = Cfg()
+        packages = [{"numpy==1.26.0"}, {"numpy==2.0.0"}, {"numpy==1.26.0"}]
+        ran: list[list[str]] = []
+
+        def install_command(self, requirement: str) -> list[str]:
+            return ["install", requirement]
+
+        def installed_packages(self) -> set[str]:
+            return self.packages.pop(0)
+
+        def restore_commands(self, gone: set[str], new: set[str]) -> list[list[str]]:
+            return [["restore", *sorted(gone)]]
+
+        def tool_env(self) -> None:
+            return None
+
+        def missing_module_tests(self, run: TestRun) -> dict[str, str]:
+            return python_env.missing_module_tests(tmp_path, run)
+
+    def fake(cmd: list[str], *a: Any, **k: Any) -> tuple[int, str]:
+        Adapter.ran.append(cmd)
+        return (1, "x\nERROR: path too long") if cmd[0] == "install" else (0, "")
+
+    monkeypatch.setattr(env_install, "run_command", fake)
+    monkeypatch.setattr(suite_run, "whole_suite", lambda a, skip_known_red=True: run)
+    said: list[str] = []
+    listed = env_install.install(Adapter(), ".[cae]", said.append)  # type: ignore[arg-type]
+    why = "installing .[cae] failed on this machine (ERROR: path too long)"
+    assert listed == {
+        "tests/test_cae.py": f"needs tensorflow: {why}",
+        "tests/test_mix.py::TestA::test_net": f"needs tensorflow: {why}",
+    }
+    assert Adapter.ran == [["install", ".[cae]"], ["restore", "numpy==1.26.0"]]
+    assert said == [
+        "Install of .[cae] failed (ERROR: path too long); the environment is restored; "
+        "2 test entry(ies) that lack a module are listed as unrunnable."
+    ]

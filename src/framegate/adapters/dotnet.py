@@ -18,6 +18,7 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from framegate import doc_blocks
 from framegate.adapters import csharp
 from framegate.adapters.base import (
     GATE_NAMES,
@@ -1509,6 +1510,9 @@ class DotnetAdapter(LanguageAdapter):
         path = work / "stryker-config.json"
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         return path
+
+    def doc_blocks(self, text: str) -> list[doc_blocks.Doc] | None:
+        return doc_blocks.line_docs(text, "///")
 
     # ---------- frame ----------
     def definition_pattern(self, name: str) -> str:

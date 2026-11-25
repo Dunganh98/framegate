@@ -27,6 +27,7 @@ from framegate.agent_commands import (
     rule_allows,
 )
 from framegate.config import GATE_COMMAND_KEYS, Config
+from framegate.doc_blocks import Doc
 from framegate.moved import moved_lines, moved_note
 from framegate.state import GitError
 
@@ -888,6 +889,33 @@ class LanguageAdapter(abc.ABC):
         """({test file: {line: hits}} from the last coverage run of the final gates, a note:
         why there is none). The default: this adapter does not record the tests' lines."""
         return {}, f"the {self.name} adapter does not record which test lines ran"
+
+    def install_command(self, requirement: str) -> list[str] | None:
+        """The command that installs a package into the project's environment (None: this
+        adapter cannot)."""
+        return None
+
+    def installed_packages(self) -> set[str] | None:
+        """The environment's packages as `name==version` (None: cannot tell)."""
+        return None
+
+    def restore_commands(self, gone: set[str], new: set[str]) -> list[list[str]]:
+        """The commands that bring back the `gone` packages and remove the `new` ones."""
+        return []
+
+    def missing_module_tests(self, run: TestRun) -> dict[str, str]:
+        """[gates] unrunnable_tests entry -> the module it lacks, for the failed tests of
+        `run` that fail on a missing module."""
+        return {}
+
+    def doc_blocks(self, text: str) -> list[Doc] | None:
+        """The doc comments of a source text (None: this adapter cannot tell)."""
+        return None
+
+    def tests_reaching(self, names: Sequence[str]) -> list[str]:
+        """The tests (`file::Class::test`) whose code, or a helper of their file, names one
+        of `names`. The default: none known."""
+        return []
 
     def changed_symbols(self, rel: str, lines: set[int] | None) -> list[str]:
         """The names of the functions and classes of source file `rel` that `lines` touch
