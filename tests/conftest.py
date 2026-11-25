@@ -43,14 +43,10 @@ Covers: DEMO-R-001, DEMO-E-001
 Build add().
 """
 
-STUB = '''\
-"""Demo feature."""
-
-
+STUB = """\
 def add(a: int, b: int) -> int:
-    """Add two integers. Serves DEMO-R-001, DEMO-E-001."""
     raise NotImplementedError
-'''
+"""
 
 #: two-step variant (DemoRepo.two_steps): step 2 adds neg(), declared to depend on step 1
 REQUIREMENTS2 = REQUIREMENTS.replace(
@@ -60,10 +56,7 @@ REQUIREMENTS2 = REQUIREMENTS.replace(
 )
 DESIGN2 = DESIGN + "neg(a: int) -> int (DEMO-R-002)\n"
 PLAN2 = PLAN + "\n## Step 2: neg\nCovers: DEMO-R-002\nDepends on: Step 1\nBuild neg().\n"
-STUB2 = STUB + (
-    '\n\ndef neg(a: int) -> int:\n    """Negate an integer. Serves DEMO-R-002."""\n'
-    "    raise NotImplementedError\n"
-)
+STUB2 = STUB + "\n\ndef neg(a: int) -> int:\n    raise NotImplementedError\n"
 
 PYPROJECT = """\
 [project]

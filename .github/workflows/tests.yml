@@ -33,6 +33,7 @@ jobs:
           uv run ruff check src tests
           uv run ruff format --check src tests
           uv run mypy src
+          uv run python ci/check_rules.py ci/allowlist.txt src tests tools ci
       - name: Tests (everything but the `slow` ones, which need WSL / dotnet builds)
         run: uv run pytest -m "not slow" -q -n auto --durations=15 --junitxml=report.xml
       - name: Failed tests as annotations (readable without the log)

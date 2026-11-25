@@ -88,8 +88,8 @@ stub_marker = "not implemented"               # in the failure message of a test
 # forbidden_patterns = ['@ts-ignore', 'eslint-disable']
 # protected = ["package.json", "package-lock.json", "tsconfig.json"]
 conventions = \"\"\"
-Stubs: full typed signatures, a doc comment naming the spec IDs,
-body `throw new Error("not implemented")`.
+Stubs: full typed signatures, body only `throw new Error("not implemented")`,
+no doc comment and no spec ID in source code.
 Tag every test with its spec IDs: it("...", req("XXX-R-001"), () => { ... }).
 \"\"\"
 """

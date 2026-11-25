@@ -49,3 +49,11 @@ Standing decisions of the user, one line each. The merged principles: docs/plan.
 45. Roadmap order: escaped-defect log, risk approval, simplify pass, commands instead of model turns, fast lane, before-PR flow with CI rules.
 46. Risk-based approval starts strict and is loosened only with evidence: one setting at a time, backed by `framegate stats --risk`.
 47. A merged task must be revertible exactly and alone: one pull request, one task, one merge commit.
+48. No new docstring and no spec ID in source: a step gate check in framegate and a frozen count in each project's CI; existing ones may only be reworded or removed (2026-11-25). Extends 42.
+49. A test that was green before the task and is red at its end is decided by the user, with no default; a test red before the task is a suggested follow-up (2026-11-25). Extends 38.
+50. A template or role changes only for a rule that holds for any feature and any run; a project's gap goes to its project knowledge or a project check, also in retro proposals (2026-11-25). Extends 31.
+51. framegate itself: one pull request at a time, in order; the full suite on GitHub Actions is green before the merge and before the tag; a red run is fixed first (2026-11-25).
+52. Roadmap order from here: a replay candidate set with many hidden tests and probes, the decision graph per run, fast lane, before-PR flow (2026-11-25). Replaces the order in 45.
+53. Every new error rule in a spec names its source (task, code, docs, asked); one without a source is a question to the user (2026-11-25).
+54. A spec-phase stub is a signature that raises not-implemented: no docstring, no spec ID; the link from ID to symbol lives in the design and the test tags (2026-11-25). Extends 48.
+55. framegate's own code is under the same ratchet as the projects (`ci/check_rules.py`); a release goes through `tools/release.py` (2026-11-25). Extends 51.

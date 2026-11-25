@@ -84,10 +84,11 @@ PYTEST_INCOMPLETE = {2: "pytest interrupted (exit 2)", 3: "pytest internal error
 
 BRIEF = """\
 Language: Python. Test framework: pytest (framegate plugin provides the `req` marker).
-- Stubs (SPEC phase): full type-annotated signatures, docstrings naming the spec IDs they
-  serve, body `raise NotImplementedError`. Stubs must import cleanly. Except the code files
-  of a port (the spec's "Ported from"): their stubs are the reference's text with the bodies
-  replaced, no spec IDs added (written in the SPEC phase by `framegate port-stubs`).
+- Stubs (SPEC phase): full type-annotated signatures, body only `raise NotImplementedError`.
+  No docstring and no spec ID in source code: design.md lists the IDs each member serves,
+  the tests carry them as tags. Stubs must import cleanly. Except the code files of a port
+  (the spec's "Ported from"): their stubs are the reference's text with the bodies replaced
+  (written in the SPEC phase by `framegate port-stubs`).
 - Tag every test with the spec IDs it covers: `@pytest.mark.req("XXX-R-001", "XXX-E-002")`
   directly on the test function (or class). Do not use module-level `pytestmark`.
 - Edge cases: assert the exact value, or `pytest.raises(ExcType, match="...")`.

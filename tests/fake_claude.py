@@ -99,8 +99,6 @@ import subprocess
 import sys
 import time
 
-STUB_DOC = '"""Add two integers. Serves DEMO-R-001, DEMO-E-001."""'
-
 TESTS = """\
 import pytest
 
@@ -190,14 +188,14 @@ def test_add_refuses_bool_contested() -> None:
         add(True, 1)
 """
 
-NEG_HEAD = '\n\ndef neg(a: int) -> int:\n    """Negate an integer. Serves DEMO-R-002."""\n'
+NEG_HEAD = "\n\ndef neg(a: int) -> int:\n"
 NEG_STUB = NEG_HEAD + "    raise NotImplementedError\n"
 NEG_DONE = NEG_HEAD + "    return -a  # neg-done\n"
 NEG_PARTIAL = NEG_HEAD + "    return 0  # partial\n"
 
 
 def impl(body: str) -> str:
-    return f'"""Demo feature."""\n\n\ndef add(a: int, b: int) -> int:\n    {STUB_DOC}\n{body}'
+    return f"def add(a: int, b: int) -> int:\n{body}"
 
 
 WRONG = impl("    return a - b\n")
@@ -288,10 +286,8 @@ CS_IMPL = """using System;
 
 namespace Demo
 {
-    /// <summary>Demo feature.</summary>
     public static class Calc
     {
-        /// <summary>Adds two ints. Serves DEMO-R-001, DEMO-E-001.</summary>
         public static int Add(int a, int b)
         {
 BODY
@@ -627,7 +623,7 @@ def main() -> int:
         if owner != "none":
             write(
                 "out/demo/diagnosis.md",
-                "Root cause: add() returns a - b (src/demo/__init__.py:5).\n"
+                "Root cause: add() returns a - b (src/demo/__init__.py:2).\n"
                 f"Fix owner: {owner}\n"
                 "Proposed fix: return a + b.\nEvidence:\n- ran the step tests\n",
             )

@@ -101,8 +101,8 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 #                                  # (only with the adapter's own format check)
 # extra_timeout = 1800             # seconds per [gates.extra] check
 # max_file_lines = 400             # a source file this feature made longer, and that is
-#                                  # over this, is a numbered item at the final gate (split
-#                                  # now / later); 0 = off. Every step gate and the final
+#                                  # over this, is a note in the final summary and one
+#                                  # deferred entry; 0 = off. Every step gate and the final
 #                                  # gates report the changed files' sizes (not blocking)
 # step_tests = "feature"           # a step gate runs only the tests of the step's IDs (and
 #                                  # the earlier steps'); the whole suite runs once, at the

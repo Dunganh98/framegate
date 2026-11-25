@@ -231,9 +231,9 @@ whole spec (repr, str, or str in literal quotes); the tests match the whole mess
    Files in a plan step: a step may mention any file; everything outside the source folders
    stays read-only, the docs included (see "Sources" above).
 4. Create interface stubs in the source paths named above, in the stub style named above: full
-   typed signatures, a one-line doc comment per public type and method saying what it is for
-   (in words) plus the IDs it serves, bodies that only signal "not implemented". One concept
-   per file. Stubs must compile or import cleanly.
+   typed signatures, bodies that only signal "not implemented". No doc comment and no spec ID
+   in a stub: design.md, "Public interfaces", lists the IDs each member serves, and the tests
+   carry them as tags. One concept per file. Stubs must compile or import cleanly.
    Except the code files of a port: do not write those stubs by hand. Run
    `framegate port-stubs $ARGUMENTS` once "Ported from" is filled: it writes every `code`
    target as the reference's own text at the spec's commit with the function bodies replaced

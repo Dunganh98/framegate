@@ -1,4 +1,4 @@
-"""Workflow driver with three human gates, forward only:
+"""Workflow driver with human gates at the spec and at the end, forward only:
 
 SPEC (approve-spec) -> TESTS (test writer <-> test reviewer, mechanical checks) -> TESTS gate ->
 IMPLEMENT (per plan step) -> REVIEW (adversarial reviewer -> triage by the test reviewer -> fixes

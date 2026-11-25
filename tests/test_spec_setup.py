@@ -222,11 +222,11 @@ def test_spec_check_finds_forbidden_markers_in_stubs(
     found = spec_lint.problems(adapter.cfg, "demo", adapter)
     assert len(found) == 2, found
     assert found[0].startswith("src/old.py:4: forbidden marker `type: ignore` in a stub")
-    assert found[1].startswith("src/demo/__init__.py:6: forbidden marker `pragma: no cover`")
+    assert found[1].startswith("src/demo/__init__.py:2: forbidden marker `pragma: no cover`")
     assert spec_lint.problems(adapter.cfg, "demo") == []  # without the adapter: the tables only
 
     assert r.af("spec-check", "demo") == 1
-    assert "src/demo/__init__.py:6: forbidden marker" in capsys.readouterr().out
+    assert "src/demo/__init__.py:2: forbidden marker" in capsys.readouterr().out
     assert r.af("approve-spec", "demo") == 1
     assert "forbidden marker" in capsys.readouterr().err
     assert not marker(r.root, "spec-approved/demo")
