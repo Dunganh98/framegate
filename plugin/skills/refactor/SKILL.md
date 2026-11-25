@@ -32,10 +32,10 @@ folder is a spec of another kind, tell the user and stop.
 
 ## Start check (your first step)
 
-This plugin is version 0.13.1. Before anything else run this command yourself (it is not run
+This plugin is version 0.13.2. Before anything else run this command yourself (it is not run
 at load: a command-line tool older than this plugin does not have it yet):
 
-    framegate preflight $ARGUMENTS --plugin-version 0.13.1
+    framegate preflight $ARGUMENTS --plugin-version 0.13.2
 
 It compares this plugin with the command-line tool and with the workflow tools in the
 project's environment, updates what it may and prints the rest. Act on every line, then go on:
@@ -63,7 +63,7 @@ project's environment, updates what it may and prints the rest. Act on every lin
   **already approved**, go on without a word (work in progress keeps its tool). Otherwise
   bring the tool to this plugin's version:
 
-      uv tool install --force "git+https://github.com/Dunganh98/framegate@v0.13.1"
+      uv tool install --force "git+https://github.com/Dunganh98/framegate@v0.13.2"
 
   then run the start check again and act on its lines as above (`framegate spec-brief
   $ARGUMENTS` again included).
