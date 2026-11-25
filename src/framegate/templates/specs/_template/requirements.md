@@ -106,7 +106,9 @@ None.
      A file under docs/: `- <file>, <where in it>: today: <what it says now, quoted or
      summarised> -> proposed: <the new text> (<why>)`; where the task's code now contradicts
      it: `... today: <what it says now, quoted> -> code now: <what the code does instead>`.
-     The owner answers each at the final gate (default: later).
+     The owner answers each at the final gate (default: later). One the user
+     answered in the spec dialogue ends with `[answered: later]` or `[answered:
+     apply]`: the gate shows that answer and does not ask again.
      A README, CHANGELOG or handover note: `- <file>: <what changes, one brief line>`.
      A docstring or comment in a source file that the task's code will contradict is code
      text, not a doc: when a plan step changes that file, name the lines in that step (the

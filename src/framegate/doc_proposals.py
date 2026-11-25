@@ -90,6 +90,8 @@ _SAME_AS = re.compile(r"^\W*same as item \d+\s*:\s*", re.I)
 _REJECT = re.compile(r"^\W*(?:C\b|reject)", re.I)
 _LATER = re.compile(r"^\W*(?:B\b|default\b)|\b(?:later|leave)\b", re.I)
 _CONTRA = re.compile(r"->\s*code now\s*:", re.I)
+#: the end of a spec's proposal the user answered in the spec dialogue
+_ANSWERED = re.compile(r"\s*\[answered:\s*(later|apply)\]\s*$", re.I)
 _LINE = re.compile(
     r"^(?P<head>.*?):\s*today\s*:\s*(?P<today>.*?)\s*->\s*(?:code now|proposed)\s*:\s*(?P<new>.*)$",
     re.I | re.S,
@@ -227,6 +229,8 @@ def write_denied(cfg: Config, phase: str, rel: str) -> str:
 class Proposal:
     text: str
     origin: str  # "spec" or "run"
+    #: "later" / "apply": answered in the spec dialogue ("" = the final gate asks)
+    answer: str = ""
 
     @property
     def file(self) -> str:
@@ -279,6 +283,18 @@ class Proposal:
         return self.body + (CONTRA_ASK if self.contradicts else ASK)
 
 
+def spec_proposal(line: str) -> Proposal:
+    """A bullet of the spec's section: its text, and the answer it ends with."""
+    m = _ANSWERED.search(line)
+    return Proposal(line[: m.start()] if m else line, "spec", m.group(1).lower() if m else "")
+
+
+def spec_answer(p: Proposal) -> str:
+    """The kept answer of `p` as an answer to its gate question."""
+    letter = "A: apply" if p.answer == "apply" else "B: later"
+    return f"{letter} (answered in the spec dialogue)"
+
+
 def asked(question: str) -> str:
     """The proposal of a final-gate item (`[doc update] <body><ASK>`: its body), "" for
     another."""
@@ -322,7 +338,7 @@ def proposals(cfg: Config, feature: str) -> list[Proposal]:
     spec = _bullets(_spec_section(_read(cfg.spec_dir(feature) / "requirements.md")))
     run = _bullets(_read(cfg.root / run_file(cfg, feature)))
     out: dict[str, Proposal] = {}
-    for p in [Proposal(x, "spec") for x in spec] + [Proposal(x, "run") for x in run]:
+    for p in [spec_proposal(x) for x in spec] + [Proposal(x, "run") for x in run]:
         if p.file and is_own(cfg, p.file):
             continue
         k = key(p.text)
@@ -331,7 +347,8 @@ def proposals(cfg: Config, feature: str) -> list[Proposal]:
     for fixed in _bullets(_read(cfg.feature_out(feature) / CORRECTIONS)):
         old = out.get(key(fixed))
         if old is not None and old.important:
-            out[key(fixed)] = Proposal(fixed, f"{old.origin}, corrected to the code")
+            origin = f"{old.origin}, corrected to the code"
+            out[key(fixed)] = Proposal(fixed, origin, old.answer)
     return merged(list(out.values()))
 
 

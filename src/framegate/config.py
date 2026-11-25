@@ -149,6 +149,8 @@ SCHEMA: dict[str, dict[str, tuple[type, ...]]] = {
         "max_file_lines": (int,),
         "step_tests": (str,),
         "unreached_assertions": (bool,),
+        "docstring_check": (bool,),
+        "test_leftovers": (bool,),
     },
     "risk": {
         "max_changed_lines": (int,),
@@ -469,6 +471,11 @@ class Config:
     #: [gates] unreached_assertions: the final gate fails on an assertion of a test the
     #: feature added that the feature's own tests never ran (needs the coverage run)
     unreached_assertions: bool = True
+    #: [gates] docstring_check: a step gate fails on a new docstring or a spec ID in the
+    #: lines a run adds to non-test source (checks/added_docs.py)
+    docstring_check: bool = True
+    #: [gates] test_leftovers: a test run that leaves a new untracked file fails its check
+    test_leftovers: bool = True
     #: [docs] code_map: the living code map (per module: purpose, key classes, how they work
     #: together, where to look for X); drafted by /framegate:setup, updated by the SUMMARY phase
     code_map: str = "docs/code-map.md"
@@ -1032,6 +1039,8 @@ def parse_config(root: pathlib.Path, data: dict[str, Any]) -> Config:
             f"[gates] step_tests must be one of {', '.join(STEP_TESTS)}, got '{cfg.step_tests}'"
         )
     cfg.unreached_assertions = gates.get("unreached_assertions", cfg.unreached_assertions)
+    cfg.docstring_check = gates.get("docstring_check", cfg.docstring_check)
+    cfg.test_leftovers = gates.get("test_leftovers", cfg.test_leftovers)
     cfg.max_file_lines = gates.get("max_file_lines", cfg.max_file_lines)
     if cfg.max_file_lines < 0:
         raise ConfigError("[gates] max_file_lines must be >= 0 (0 = no file size question)")

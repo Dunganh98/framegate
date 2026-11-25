@@ -27,7 +27,10 @@ Resolves:   <!-- optional: the deferred work this task does, e.g. D7, D9 (frameg
 <!-- Behavior next to the bug that a fix could break: the neighbouring cases, the other callers
      of the same code, saved data, hashes. Each row gets a test that PASSES today and after the
      fix. Every case that is green before the fix belongs here too, never in an R row (an R
-     test must fail today). -->
+     test must fail today).
+     An existing test that reaches a function design.md names under "Where the bug is":
+     named here when it keeps passing, in "Test data and fixtures" when it changes
+     (`framegate spec-check` lists the ones not named). -->
 | ID | Behavior to keep (given / when / then, exact) |
 |---|---|
 | XXX-I-001 | |
@@ -91,7 +94,9 @@ None.
      A file under docs/: `- <file>, <where in it>: today: <what it says now, quoted or
      summarised> -> proposed: <the new text> (<why>)`; where the task's code now contradicts
      it: `... today: <what it says now, quoted> -> code now: <what the code does instead>`.
-     The owner answers each at the final gate (default: later).
+     The owner answers each at the final gate (default: later). One the user
+     answered in the spec dialogue ends with `[answered: later]` or `[answered:
+     apply]`: the gate shows that answer and does not ask again.
      A README, CHANGELOG or handover note: `- <file>: <what changes, one brief line>`; applied
      after the final gate, no question.
      A docstring or comment in a source file that the task's code will contradict is code

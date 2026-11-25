@@ -266,3 +266,35 @@ def test_a_tool_failure_is_asked_not_repaired(
     run_again()
     assert final_gates(r)[-1]["passed"] is True and final_gates(r)[-1]["tool_failures"] == []
     assert not orch.open_questions("demo")
+
+
+def test_an_existing_test_in_a_file_the_task_added_tests_to_still_runs(
+    demo_repo: DemoRepo,
+) -> None:
+    """Seen live: the task's tests went into the file of the existing tests of the changed
+    function, the file was left out, and two of them were red until the final gate."""
+    r = demo_repo
+    (r.root / "tests/test_named.py").write_text(NAMED, encoding="utf-8")
+    git(r.root, "add", "tests")
+    git(r.root, "commit", "-q", "-m", "older tests")
+    git(r.root, "branch", "-f", "main", "HEAD")  # they were there before the task
+    assert r.af("approve-spec", "demo") == 0
+    own = (
+        '\n\n@pytest.mark.req("DEMO-R-001")\ndef test_of_a_later_step() -> None:\n'
+        "    assert add(2, 3) == 6\n\n\n"
+        "def test_added_untagged() -> None:\n    assert add(1, 1) == 3\n"
+    )
+    (r.root / "tests/test_named.py").write_text(NAMED + own, encoding="utf-8")
+    git(r.root, "add", "-A")
+    git(r.root, "commit", "-q", "-m", "tests")
+    git(r.root, "tag", "tests-approved/demo")
+    src = r.root / "src/demo/__init__.py"
+    src.write_text(src.read_text("utf-8").replace("raise NotImplementedError", "return a + b"))
+    adapter = get_adapter(load_config(r.root))
+    found = gates.existing_test_files(adapter, "demo")
+    assert found[0] == ["tests/test_named.py"]
+    res = gates.existing_tests(adapter, "demo", found, [])
+    assert res.status == "FAIL" and "UNEXPECTED failures" in res.output
+    listed = res.output.split("UNEXPECTED failures")[1]
+    assert "test_named_bool_rejected" in listed
+    assert "test_of_a_later_step" not in listed and "test_added_untagged" not in listed

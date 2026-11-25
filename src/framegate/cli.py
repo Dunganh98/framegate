@@ -276,6 +276,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--survey", action="store_true", help="--plan: map the folders again")
     p.add_argument("--set", action="append", default=[], metavar="ROW=VALUE")
     p.add_argument("--red", action="append", default=[], metavar="TEST=REASON")
+    p.add_argument("--install", action="append", default=[], metavar="REQUIREMENT")
     p = sub.add_parser("preflight", help="the start step of the chat skills: versions, tools")
     p.add_argument("feature", nargs="?")
     p.add_argument("--plugin-version", default="", help="the version of the skill that asks")
@@ -382,7 +383,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             if args.plan:
                 return setup_cmd.plan(resurvey=args.survey)
-            return setup_cmd.apply(args.set, args.red)
+            return setup_cmd.apply(args.set, args.red, install=args.install)
         if args.command == "preflight":
             from framegate import preflight
 

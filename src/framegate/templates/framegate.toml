@@ -110,6 +110,10 @@ language = "{language}"            # "python" | "dotnet" | "generic" (any langua
 # unreached_assertions = true      # the final gate fails on an assertion of a new test that
 #                                  # never ran in the feature's tests (`if (x) Assert...` on
 #                                  # data without x); false = off
+# docstring_check = true           # a step gate fails on a docstring or a spec ID in the
+#                                  # lines a run adds to source files; false = off
+# test_leftovers = true            # a test run that leaves a new untracked file outside the
+#                                  # out folder fails its check; false = off
 
 # [gates.extra]                    # project checks run after the final gates and shown at the
 #                                  # final gate with their exit code and output; never blocking

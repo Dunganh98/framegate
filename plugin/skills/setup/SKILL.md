@@ -86,7 +86,9 @@ prefix of the check's lines:
 - `PROBLEM: N test(s) fail on the untouched tree and are not listed:` and one line per test.
   Every red test ends as made to run, or listed with a reason after the user's OK. Sort them
   from those lines (read the test file if you cannot place one; do not run it): only lacks a
-  package (name the install command), cannot run on this machine (a database, a service,
+  package (name the requirement; on the user's yes: `--apply --install "<requirement>"`;
+  the command handles a failed install itself and says so in one line: show it, never
+  send the user to change the machine), cannot run on this machine (a database, a service,
   another operating system), red before any task (the project's own debt). Show them in one
   message and ask once:
 

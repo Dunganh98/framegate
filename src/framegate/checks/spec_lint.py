@@ -503,7 +503,7 @@ def problems(cfg: Config, feature: str, adapter: LanguageAdapter | None = None) 
     """Everything the spec check finds; [] = fine. With the adapter also the forbidden
     markers in the stubs."""
     from framegate import deferred, references  # they read the spec with this module
-    from framegate.checks import plan_files, red_stubs, spec_rows, suspected_causes
+    from framegate.checks import bug_tests, plan_files, red_stubs, spec_rows, suspected_causes
 
     plan = _read(cfg.spec_dir(feature) / "plan.md")
     return [
@@ -515,6 +515,7 @@ def problems(cfg: Config, feature: str, adapter: LanguageAdapter | None = None) 
         *edge_case_fixture_problems(cfg, feature),
         *doc_text_problems(cfg, feature),
         *suspected_causes.spec_problems(cfg, feature),
+        *(bug_tests.spec_problems(adapter, feature) if adapter is not None else []),
         *interface_source_problems(cfg, feature, adapter),
         *spec_rows.problems(cfg, feature),
         *(stub_marker_problems(adapter) if adapter is not None else []),

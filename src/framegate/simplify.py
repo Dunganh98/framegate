@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from framegate import references
+from framegate import references, task_base
 from framegate.checks.frame_diff import approved_tag
 from framegate.config import Config
 from framegate.specs import feature_mode
@@ -79,7 +79,7 @@ def skip_reason(orch: Orchestrator, feature: str, prog: dict[str, Any]) -> str:
     tag = approved_tag(feature)
     if not tag_exists(cfg, tag):
         return "the tests are not approved yet"
-    added = added_lines(cfg, tag)
+    added = added_lines(cfg, task_base.task_base(orch.adapter, tag) or tag)
     if added < cfg.simplify_min_lines:
         return f"the task added {added} source line(s) (fewer than {cfg.simplify_min_lines})"
     return ""
@@ -133,7 +133,9 @@ def run(orch: Orchestrator, feature: str, prog: dict[str, Any]) -> None:
         if why:
             _done(orch, feature, prog, "skipped", f"skipped: {why}")
             return
+        # against the approved files formatted as the gates format (task_base.py)
         tag = approved_tag(feature)
+        tag = task_base.task_base(orch.adapter, tag) or tag
         before, files = diff_size(cfg, tag)
         base = git(cfg, "rev-parse", "HEAD").strip()
     except GitError as e:

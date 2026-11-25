@@ -44,6 +44,7 @@ from framegate import (
     env_gaps,
     followup,
     format_split,
+    newly_red,
     notify,
     ported,
     procs,
@@ -71,6 +72,7 @@ from framegate.checks import (
     baseline,
     check_signature,
     existing_members,
+    leftovers,
     named_tests,
     plan_files,
     red_stubs,
@@ -586,7 +588,7 @@ TASKS = {
     "{out}/{f}/test_summary.md. Change no existing test beyond that. A question the spec does "
     "not settle goes to {out}/{f}/questions.md.",
     "REVIEW": "Feature '{f}': review the implementation against {specs}/{f}/. "
-    "Implementation diff: git diff tests-approved/{f}",
+    "Implementation diff: git diff {diff_base}",
     "TRIAGE": "Feature '{f}': triage the adversarial reviewer's findings against {specs}/{f}/. "
     "Failing review tests:\n{findings}\nReviewer notes: {out}/{f}/review.md. Delete the tests of "
     "INVALID findings from {review_tests}/ and write one line per finding to {out}/{f}/triage.md.",
@@ -933,6 +935,10 @@ class Orchestrator:
     def task_text(self, kind: str, feature: str, **extra: str) -> str:
         mode = feature_mode(self.cfg, feature)
         values = {**self.placeholders(feature), **extra}
+        if kind == "REVIEW":
+            # the approved files formatted as the gates format: no reformatted old line
+            tag = approved_tag(feature)
+            values.setdefault("diff_base", task_base.task_base(self.adapter, tag) or tag)
         task = TASKS.get(f"{kind}:{mode}", TASKS[kind]).format(**values)
         note = MODE_NOTES.get(mode, {}).get(kind)
         if note:
@@ -2686,7 +2692,7 @@ class Orchestrator:
         mode = feature_mode(self.cfg, feature)
         cap = functools.partial(capped_output, self.adapter, feature)
         checks: list[tuple[str, Callable[[LanguageAdapter, str], CheckResult]]] = [
-            (baseline.name(mode), baseline.check),
+            (baseline.name(mode), leftovers.watching(baseline.check)),
             ("Traceability", traceability.check),
             ("Test smells", test_smells.check),
             ("Lint (the tests' own lines)", test_lint.check),
@@ -3597,7 +3603,11 @@ class Orchestrator:
     def run_final_gates(self, feature: str, prog: dict[str, Any]) -> GateReport:
         """Run the final gates, write final_gates.md and log the result."""
         t0 = time.time()
+        newly_red.clear(self.cfg, feature)
         rep = self.gate(feature, prog, "final")
+        red, red_before = newly_red.read(self.cfg, feature)
+        prog.update(newly_red=red, red_before=red_before)
+        save_progress(self.cfg, feature, prog)
         timing = "\n".join(f"| {name} | {secs:.0f} |" for name, secs in rep.durations.items())
         (self.fdir(feature) / "final_gates.md").write_text(
             f"~~~\n{rep.report}\n~~~\n\nTime per check (s):\n\n| Check | Seconds |\n|---|---|\n"
@@ -3620,6 +3630,8 @@ class Orchestrator:
             tool_failures=rep.tool_failures,
             **({"fidelity": rep.fidelity} if rep.fidelity else {}),
             **({"not_measured": rep.not_measured} if rep.not_measured else {}),
+            **({"newly_red": red} if red else {}),
+            **({"red_before": red_before} if red_before else {}),
         )
         blind = [
             n + (" [tool failure]" if n in rep.tool_failures else "") for n in rep.not_measured
@@ -3837,7 +3849,7 @@ class Orchestrator:
         item: dict[str, Any] = {
             "kind": "finding",
             "step": None,
-            "label": "final gate fixes",
+            "label": newly_red.REPAIR_LABEL,
             "tests": [],
             "gate": "fix",  # (without IDs it runs everything)
         }
@@ -4062,6 +4074,23 @@ class Orchestrator:
         text = "\n".join(lines)
         log_event(self.cfg, feature, "questions", phase="SUMMARY", who=GATES_WHO, questions=text)
 
+    def red_test_question(self, feature: str, prog: dict[str, Any]) -> None:
+        """A final-gate item without a default for the existing tests that are newly red
+        (newly_red.py), unless the final repair's parked item stands for them (parked_ask)."""
+        red = prog.get("newly_red") or []
+        parked = [p.get("label") for p in prog.get("parked") or []]
+        asked = self.open_questions(feature)
+        old = [q for q in asked if newly_red.is_question(q)]
+        ask = red and newly_red.REPAIR_LABEL not in parked
+        new = [f"[{GATES_WHO}] {newly_red.question(red)}"] if ask else []
+        if old == new:
+            return
+        self.write_open_questions(feature, [q for q in asked if q not in old] + new)
+        if new:
+            log_event(
+                self.cfg, feature, "questions", phase="SUMMARY", who=GATES_WHO, questions=new[0]
+            )
+
     def commit_code_map(self, feature: str) -> bool:
         """Commit the summary agent's code map update (its only file outside the out folder)."""
         path = self.cfg.code_map
@@ -4085,6 +4114,8 @@ class Orchestrator:
         d = self.fdir(feature)
         self.note_file_sizes(feature, prog)
         self.tool_failure_questions(feature)
+        self.red_test_question(feature, prog)
+        self.keep_spec_doc_answers(feature, prog)
         self.check_doc_texts(feature, prog)
         self.doc_questions(feature, prog)
         self.write_final_facts(feature, prog)
@@ -4093,6 +4124,9 @@ class Orchestrator:
         self.agent("SUMMARY", feature, prog, self.task_text("SUMMARY", feature))
         self.collect_questions(feature, "SUMMARY", "summary agent")
         self.check_final_brief(feature, prog)
+        merged = briefs.groups(self.final_brief_plan(feature, prog))
+        if merged:  # gate items the brief asks as one (the others take its answer)
+            log_event(self.cfg, feature, "gate_items_merged", groups=merged)
         prog["code_map"] = self.code_map_state(feature, self.commit_code_map(feature))
         summary = d / "final_summary.md"
         text = (
@@ -4115,6 +4149,7 @@ class Orchestrator:
         for generated in (
             doc_proposals.section(self.cfg, feature),
             answered.section(read_events(self.cfg, feature)),
+            newly_red.section(prog.get("red_before") or []),
         ):
             if generated:
                 text += "\n\n" + "\n".join(generated)
@@ -4153,6 +4188,7 @@ class Orchestrator:
                 *doc_proposals.facts_lines(self.cfg, feature),
                 *again,
                 *crossed,
+                *(["", *red] if (red := newly_red.section(prog.get("red_before") or [])) else []),
                 *(["", *reach] if (reach := self.cause_reach_lines(prog)) else []),
                 *(
                     ["", *done]
@@ -4171,7 +4207,10 @@ class Orchestrator:
         """The end of a parked item that has no default: no step of the task is built, and
         the item is not one that only waits for another parked step."""
         waits = str(p.get("reason") or "").startswith("waits for parked step")
-        return NOTHING_BUILT_ASK if self.nothing_built(prog) and not waits else ""
+        if self.nothing_built(prog) and not waits:
+            return NOTHING_BUILT_ASK
+        red = prog.get("newly_red") or []
+        return newly_red.parked_ask(red) if red and p.get("label") == newly_red.REPAIR_LABEL else ""
 
     def final_items(self, feature: str, prog: dict[str, Any]) -> list[str]:
         """The numbered items of the final gate, in the order it shows them: parked work, the
@@ -4215,9 +4254,10 @@ class Orchestrator:
         one option, gate items placed nowhere -> the summary agent rewrites final_brief.md once."""
         if not (self.fdir(feature) / "final_brief.md").is_file():
             return  # the gate brief falls back to generated lines
-        n_items = len(self.final_items(feature, prog))
+        items = self.final_items(feature, prog)
+        n_items = len(items)
         problems = briefs.check_brief(
-            self.final_brief_sections(feature), n_items, self.must_ask(feature, prog)
+            self.final_brief_sections(feature), n_items, self.must_ask(feature, prog), items
         )
         log_event(self.cfg, feature, "brief_check", problems=problems, rewrite=bool(problems))
         if not problems:
@@ -4235,9 +4275,9 @@ class Orchestrator:
         )
         self.agent("SUMMARY", feature, prog, task)
         self.collect_questions(feature, "SUMMARY", "summary agent")
-        n_items = len(self.final_items(feature, prog))
+        items = self.final_items(feature, prog)
         left = briefs.check_brief(
-            self.final_brief_sections(feature), n_items, self.must_ask(feature, prog)
+            self.final_brief_sections(feature), len(items), self.must_ask(feature, prog), items
         )
         log_event(self.cfg, feature, "brief_check", problems=left, rewrite=False)
         if left:
@@ -4997,6 +5037,22 @@ class Orchestrator:
         self.final_gate(feature, prog)
         return left
 
+    def keep_spec_doc_answers(self, feature: str, prog: dict[str, Any]) -> None:
+        """A doc proposal the user answered in the spec dialogue (`[answered: ...]`) is no
+        gate item: the answer is kept (answered.py) and the summary shows it."""
+        for p in self.unasked_docs(feature, prog):
+            if not p.answer:
+                continue
+            q = f"[{doc_proposals.WHO}] {p.question()}"
+            a = doc_proposals.spec_answer(p)
+            body = doc_proposals.asked(q)
+            log_event(self.cfg, feature, answered.SPEC_KIND, items=[{"asked": q, "a": a}])
+            log_event(self.cfg, feature, answered.KIND, who="the spec", question=q[:1000], answer=a)
+            prog["doc_answered"] = [*(prog.get("doc_answered") or []), body]
+            if p.answer == "apply":
+                prog["doc_approved"] = [*(prog.get("doc_approved") or []), body]
+            save_progress(self.cfg, feature, prog)
+
     def doc_questions(self, feature: str, prog: dict[str, Any]) -> None:
         """A final-gate question for every important doc proposal (doc_proposals.py), with
         the default "later". One open or answered before (the same file and new text) is not
@@ -5127,6 +5183,7 @@ class Orchestrator:
         later = deferred.task_items(
             self.cfg, feature, feature_mode(self.cfg, feature), prog, read_events(self.cfg, feature)
         )
+        later += newly_red.deferred_items(prog.get("red_before") or [])
         for kind in followup.KINDS:
             todo = followup.write(self.cfg, feature, durable=True, kind=kind)
             if not todo:
@@ -5860,22 +5917,23 @@ class Orchestrator:
         worded = {it["n"]: f"{seen.get(it['n'], '')}\n{it['asked']}" for it in items}
         if gate == "final":
             # a parked item without a default: its own two options decide, and it needs an answer
-            forced = [
-                n
+            forced = {
+                n: p_ask
                 for n, p in enumerate(prog.get("parked") or [], start=1)
-                if self.parked_ask(prog, p)
-            ]
-            worded.update({n: NOTHING_BUILT_ASK for n in forced if n in worded})
+                if (p_ask := self.parked_ask(prog, p))
+            }
+            worded.update({n: q for n, q in forced.items() if n in worded})
             for it in items:
                 a = str(it["a"])
                 plain = defaults.takes_default("", a)  # "ok", "leave it", no answer
-                if it["n"] in forced and not plain and not defaults.chosen(NOTHING_BUILT_ASK, a)[0]:
+                p_ask = forced.get(it["n"], "")
+                if p_ask and not plain and not defaults.chosen(p_ask, a)[0]:
                     it["a"] = f"B: {a}"  # the owner's own words: what to redo it with
             missing = [n for n in forced if n not in worded]
             if missing and items:
                 raise WorkflowError(
                     f"Item(s) {', '.join(map(str, missing))} of the final gate have no default "
-                    f"(nothing of this task is built) and no answer in {out}/{feature}/answers.md"
+                    f"and no answer in {out}/{feature}/answers.md"
                     ". Ask the user to choose (A: leave it parked / B: redo it), write the "
                     f"letter first, then framegate answer {feature} again."
                 )
@@ -6041,6 +6099,8 @@ class Orchestrator:
                 rerun = any(
                     answered.who(it["asked"]) == GATES_WHO and not dflt[it["n"]] for it in items
                 )
+                if any(newly_red.is_question(it["asked"]) and not dflt[it["n"]] for it in items):
+                    prog["final_repair"] = []  # one more repair run, as chosen
                 prog.update(
                     waiting=None,
                     parked=[],

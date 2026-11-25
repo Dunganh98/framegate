@@ -124,3 +124,54 @@ def test_the_bug_report_template_gives_the_line_form() -> None:
     text = package_text("templates", "specs/_template_bugfix/requirements.md")
     assert "(<file>: <method>) -> <ID>" in text and "-> ruled out: <evidence>" in text
     assert suspected_causes.parse(text) == []  # the bare `- H1:` bullets are no causes
+
+
+OLD_TESTS = """\
+from pkg.a import load
+
+
+def _rows(mark: int) -> list[int]:
+    return load([1, 2, 3], mark)
+
+
+class TestLoad:
+    def test_through_a_helper(self) -> None:
+        assert _rows(1) == [2, 3]
+
+    def test_direct(self) -> None:
+        assert load([], 0) == []
+
+
+def test_unrelated() -> None:
+    assert True
+"""
+
+
+def test_a_bug_spec_names_every_existing_test_of_the_buggy_function(
+    tmp_path: pathlib.Path,
+) -> None:
+    from framegate.checks import bug_tests
+
+    repo(tmp_path)
+    write(tmp_path, "tests/test_old.py", OLD_TESTS)
+    design = "# fix\n\n## Where the bug is\nThe rows come in (src/pkg/a.py: load).\n\n## Fix\nx\n"
+    write(tmp_path, "specs/f/design.md", design)
+    adapter = adapter_for(tmp_path, {"gates": GATES})
+    assert bug_tests.functions(adapter, design) == ["load"]
+    (problem,) = bug_tests.spec_problems(adapter, "f")
+    assert problem.startswith("requirements.md: 2 existing test(s) reach load")
+    assert problem.endswith(
+        ": tests/test_old.py::TestLoad::test_through_a_helper, "
+        "tests/test_old.py::TestLoad::test_direct"
+    )  # not the task's own tagged test, not the unrelated one
+    assert problem in spec_lint.problems(adapter.cfg, "f", adapter)
+    spec = tmp_path / "specs/f/requirements.md"
+    text = spec.read_text("utf-8")
+    keep = "\n## Must not change\n| ID | Behavior |\n|---|---|\n| SC-I-001 | test_direct stays |\n"
+    data = "\n## Test data and fixtures\n- `tests/test_old.py::TestLoad::test_through_a_helper`\n"
+    spec.write_text(text + keep, "utf-8")
+    assert "1 existing test(s)" in bug_tests.spec_problems(adapter, "f")[0]
+    spec.write_text(text + keep + data, "utf-8")
+    assert bug_tests.spec_problems(adapter, "f") == []
+    spec.write_text(text.replace("Mode: bugfix", "Mode: feature"), "utf-8")
+    assert bug_tests.spec_problems(adapter, "f") == []

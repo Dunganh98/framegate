@@ -71,3 +71,16 @@ def test_sizes_and_risk_counts_use_the_formatted_start(
     assert base and changed_lines(adapter.cfg, base, rel) == {len(text.splitlines())}
     fmt = next(c for c in gates.lint_checks(adapter, "demo") if c.name == "format").run()
     assert fmt.status == "PASS" and gates.KEPT_NOTE in fmt.summary
+
+
+def test_the_reviewer_and_the_facts_leave_the_format_commit_out(demo_repo: DemoRepo) -> None:
+    from framegate import orchestrator, report
+
+    assert "git diff {diff_base}" in orchestrator.TASKS["REVIEW"]
+    events = [
+        {"kind": "format_debt", "files": {"src/a.py": 46, "src/b.py": 3}},
+        {"kind": "format_commit", "files": ["src/a.py"], "kept": ["src/b.py"]},
+    ]
+    facts = report.final_facts("demo", [], {}, events, [], "", "")
+    assert "- src/a.py: 46 line(s) (apart)\n- src/b.py: 3 line(s)\n" in facts
+    assert "the reviewer's diff and the line counts leave it out" in facts
