@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import re
 
+from framegate import references
 from framegate.adapters.base import CheckResult, LanguageAdapter, changed_lines
 from framegate.checks.frame_diff import changed_src_files
 from framegate.config import Config
@@ -35,14 +36,16 @@ def _at(cfg: Config, base: str, rel: str) -> str:
         return ""
 
 
-def problems(adapter: LanguageAdapter, base: str = "HEAD") -> list[str]:
-    """`file:line: what` per added line with a spec ID and per new docstring."""
+def problems(adapter: LanguageAdapter, feature: str = "", base: str = "HEAD") -> list[str]:
+    """`file:line: what` per added line with a spec ID and per new docstring. Not in the
+    target files of a port."""
     cfg = adapter.cfg
     suffixes = tuple(adapter.source_suffixes)
+    ported = references.port_targets(cfg, feature)  # they carry the reference's text
     files = [
         f
         for f in changed_src_files(adapter, base)
-        if (not suffixes or f.endswith(suffixes)) and not _is_test(cfg, f)
+        if (not suffixes or f.endswith(suffixes)) and not _is_test(cfg, f) and f not in ported
     ]
     try:
         gone = git(cfg, "diff", "--name-only", "--diff-filter=D", base, "--", *cfg.src_roots)
@@ -69,7 +72,7 @@ def problems(adapter: LanguageAdapter, base: str = "HEAD") -> list[str]:
 
 
 def check(adapter: LanguageAdapter, feature: str) -> CheckResult:
-    found = problems(adapter)
+    found = problems(adapter, feature)
     if not found:
         return CheckResult("PASS", "")
     return CheckResult("FAIL", "\n".join([ADVICE, *(f"  {x}" for x in found)]), str(len(found)))

@@ -935,6 +935,10 @@ class Orchestrator:
     def task_text(self, kind: str, feature: str, **extra: str) -> str:
         mode = feature_mode(self.cfg, feature)
         values = {**self.placeholders(feature), **extra}
+        if kind == "REVIEW":
+            # the approved files formatted as the gates format: no reformatted old line
+            tag = approved_tag(feature)
+            values.setdefault("diff_base", task_base.task_base(self.adapter, tag) or tag)
         task = TASKS.get(f"{kind}:{mode}", TASKS[kind]).format(**values)
         note = MODE_NOTES.get(mode, {}).get(kind)
         if note:
@@ -3400,10 +3404,7 @@ class Orchestrator:
         sub = prog.get("sub") or "agent"
         if sub == "agent":
             simplify.run(self, feature, prog)  # its own commit, or the code as it was
-            # the approved files formatted as the gates format: no reformatted old line
-            tag = approved_tag(feature)
-            base = task_base.task_base(self.adapter, tag) or tag
-            task = self.task_text("REVIEW", feature, diff_base=base)
+            task = self.task_text("REVIEW", feature)
             parked = self.parked_ids(prog, plan_steps(self.cfg, feature))
             if parked:
                 task += (

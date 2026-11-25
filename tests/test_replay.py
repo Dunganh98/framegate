@@ -517,6 +517,7 @@ def test_a_run_without_scorecard_data_shows_dashes(tmp_path: pathlib.Path) -> No
         "send_backs": None,
         "mode": None,
         "approved_red": None,
+        "red_left": None,
         "facts": 1,
         "facts_used": None,
         "spec_questions": None,

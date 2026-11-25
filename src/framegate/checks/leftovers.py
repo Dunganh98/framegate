@@ -9,6 +9,7 @@ import dataclasses
 from collections.abc import Callable
 
 from framegate.adapters.base import Check, CheckResult, LanguageAdapter
+from framegate.checks.structure import SKIP_DIRS
 from framegate.config import Config, drop_machine_files
 from framegate.state import GitError, git
 
@@ -19,14 +20,24 @@ ADVICE = (
 )
 
 
-def untracked(cfg: Config) -> set[str] | None:
-    """The untracked, not ignored files outside framegate's out and metrics folders."""
+def untracked(adapter: LanguageAdapter) -> set[str] | None:
+    """The untracked, not ignored files outside framegate's own files and the folders a
+    build or a test runner fills (bytecode, build output: SKIP_DIRS, the adapter's ignores)."""
+    cfg = adapter.cfg
     try:
         listed = git(cfg, "-c", "core.quotepath=off", "ls-files", "--others", "--exclude-standard")
     except GitError:
         return None
-    own = tuple(p.strip("/") + "/" for p in (cfg.paths.out, cfg.paths.metrics) if p.strip("/"))
-    return {f for f in drop_machine_files(cfg, listed.splitlines()) if not f.startswith(own)}
+    p = cfg.paths
+    own = tuple(x.strip("/") + "/" for x in (p.out, p.metrics) if x.strip("/"))
+    made = SKIP_DIRS | {e.strip("/") for e in adapter.gitignore_entries()}
+    return {
+        f
+        for f in drop_machine_files(cfg, listed.splitlines())
+        if not f.startswith(own)
+        and f not in (p.phase_file, p.reqs_file)
+        and not made & set(f.split("/")[:-1])
+    }
 
 
 def _remove(cfg: Config, files: list[str]) -> None:
@@ -43,9 +54,10 @@ def _remove(cfg: Config, files: list[str]) -> None:
                 break
 
 
-def judged(cfg: Config, before: set[str] | None, res: CheckResult) -> CheckResult:
+def judged(adapter: LanguageAdapter, before: set[str] | None, res: CheckResult) -> CheckResult:
     """`res` of a test run; FAIL with the files it left since `before` (they are removed)."""
-    after = untracked(cfg) if before is not None else None
+    cfg = adapter.cfg
+    after = untracked(adapter) if before is not None else None
     new = sorted((after or set()) - (before or set()))
     if not new:
         return res
@@ -62,8 +74,8 @@ def watched(adapter: LanguageAdapter, check: Check) -> Check:
         return check
 
     def run() -> CheckResult:
-        before = untracked(cfg)
-        return judged(cfg, before, check.run())
+        before = untracked(adapter)
+        return judged(adapter, before, check.run())
 
     return dataclasses.replace(check, run=run)
 
@@ -76,7 +88,7 @@ def watching(
     def wrapped(adapter: LanguageAdapter, feature: str) -> CheckResult:
         if not adapter.cfg.test_leftovers:
             return run(adapter, feature)
-        before = untracked(adapter.cfg)
-        return judged(adapter.cfg, before, run(adapter, feature))
+        before = untracked(adapter)
+        return judged(adapter, before, run(adapter, feature))
 
     return wrapped
