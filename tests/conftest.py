@@ -43,7 +43,12 @@ Covers: DEMO-R-001, DEMO-E-001
 Build add().
 """
 
+#: six lines, the body on line 6: size and line-number tests count on it
 STUB = """\
+# Demo package.
+# One function.
+
+
 def add(a: int, b: int) -> int:
     raise NotImplementedError
 """

@@ -74,9 +74,8 @@ BRIEF = """\
 Language: C# / .NET; tests: xUnit via `dotnet test` ({configuration}).
 - Language level: as in the project's CLAUDE.md / .csproj LangVersion; safe default C# 9
   (block namespaces, nullable on).
-- Stubs (SPEC phase): full signatures, body only `throw new NotImplementedException();`.
-  No XML doc comment and no spec ID in source code: design.md lists the IDs each member
-  serves, the tests carry them as traits. Stubs must compile.
+- Stubs (SPEC phase): full signatures, body only `throw new NotImplementedException();`,
+  no XML doc comment, no spec ID in source code. Stubs must compile.
 - Tag tests, one attribute per ID, string literals: `[Trait("Req", "XXX-R-001")]` on the
   [Fact]/[Theory] (on the class = all its tests).
 - Tests must fail against the stubs because of the NotImplementedException.

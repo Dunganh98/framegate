@@ -221,7 +221,7 @@ docstring tests/test_usage_limit.py 3
 docstring tests/test_uses.py 1
 file-size src/framegate/adapters/base.py 1186
 file-size src/framegate/adapters/csharp.py 585
-file-size src/framegate/adapters/dotnet.py 1658
+file-size src/framegate/adapters/dotnet.py 1657
 file-size src/framegate/adapters/generic.py 424
 file-size src/framegate/adapters/mutmut_runner.py 421
 file-size src/framegate/adapters/python.py 1491

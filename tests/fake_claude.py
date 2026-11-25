@@ -195,7 +195,7 @@ NEG_PARTIAL = NEG_HEAD + "    return 0  # partial\n"
 
 
 def impl(body: str) -> str:
-    return f"def add(a: int, b: int) -> int:\n{body}"
+    return f"# Demo package.\n# One function.\n\n\ndef add(a: int, b: int) -> int:\n{body}"
 
 
 WRONG = impl("    return a - b\n")
@@ -623,7 +623,7 @@ def main() -> int:
         if owner != "none":
             write(
                 "out/demo/diagnosis.md",
-                "Root cause: add() returns a - b (src/demo/__init__.py:2).\n"
+                "Root cause: add() returns a - b (src/demo/__init__.py:6).\n"
                 f"Fix owner: {owner}\n"
                 "Proposed fix: return a + b.\nEvidence:\n- ran the step tests\n",
             )
